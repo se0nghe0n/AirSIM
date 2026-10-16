@@ -305,7 +305,7 @@ struct CloudPCMAdaptiveJitterBuffer {
         }
     }
 
-    mutating func dequeue(maxFrames: Int) -> [CloudPCMBufferedFrame] {
+    mutating func dequeue(maxFrames: Int, concealIfEmpty: Bool = true) -> [CloudPCMBufferedFrame] {
         guard isPrimed, maxFrames > 0 else { return [] }
         if expectedSequence == nil { expectedSequence = frames.keys.min() }
         var ready: [CloudPCMBufferedFrame] = []
@@ -329,7 +329,7 @@ struct CloudPCMAdaptiveJitterBuffer {
                 expectedSequence = next
             } else { break }
         }
-        if ready.isEmpty, frames.isEmpty {
+        if concealIfEmpty, ready.isEmpty, frames.isEmpty {
             underrunCount &+= 1
             missingFrames += 1
             stableFrames = 0
@@ -365,6 +365,40 @@ struct CloudPCMAdaptiveJitterBuffer {
     }
 
     mutating func reset() { self = CloudPCMAdaptiveJitterBuffer() }
+}
+
+/// Network and render callbacks refill real audio immediately. Only the playout
+/// timer may conceal a shortage, and only after scheduled audio is exhausted.
+struct CloudPCMPlayoutBuffer {
+    private(set) var jitter = CloudPCMAdaptiveJitterBuffer()
+    private(set) var window = CloudPCMPlaybackWindow()
+    private(set) var scheduledPackets: UInt64 = 0
+    private(set) var renderedPackets: UInt64 = 0
+
+    mutating func enqueue(sequence: UInt32, pcm: Data, arrivedAt: Date) {
+        jitter.enqueue(sequence: sequence, pcm: pcm, arrivedAt: arrivedAt)
+    }
+
+    mutating func refill(allowConcealment: Bool = false) -> [CloudPCMBufferedFrame] {
+        let ready = jitter.dequeue(
+            maxFrames: window.availablePackets,
+            concealIfEmpty: allowConcealment && window.scheduledPackets == 0
+        )
+        for _ in ready { window.schedulePacket() }
+        scheduledPackets &+= UInt64(ready.count)
+        return ready
+    }
+
+    mutating func rendered(canRefill: Bool = true) -> [CloudPCMBufferedFrame] {
+        window.didRenderPacket()
+        renderedPackets &+= 1
+        return canRefill ? refill() : []
+    }
+
+    mutating func discardReservation() {
+        window.didRenderPacket()
+        scheduledPackets = scheduledPackets > 0 ? scheduledPackets - 1 : 0
+    }
 }
 
 enum CloudCallRetryPolicy {
@@ -1356,8 +1390,13 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var uplinkTimer: DispatchSourceTimer?
     private var playbackTimer: DispatchSourceTimer?
     private var uplinkGeneration = UUID()
-    private var jitterBuffer = CloudPCMAdaptiveJitterBuffer()
-    private var playbackWindow = CloudPCMPlaybackWindow()
+    private var playout = CloudPCMPlayoutBuffer()
+    private var receivedDownlinkPackets: UInt64 = 0
+    private var lastReceiveCallbackAt: TimeInterval?
+    private var maximumReceiveGapMS: Double = 0
+    private var maximumReceiveDispatchMS: Double = 0
+    private var maximumReceiveBurstPackets = 0
+    private var maximumRenderDispatchMS: Double = 0
     private var playbackGeneration = UUID()
     private var downlinkSequence: UInt32 = 0
     private var receivedDownlink = false
@@ -1605,8 +1644,13 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         engine = nil
         player = nil
         encoder = nil
-        playbackWindow = CloudPCMPlaybackWindow()
-        jitterBuffer.reset()
+        playout = CloudPCMPlayoutBuffer()
+        receivedDownlinkPackets = 0
+        lastReceiveCallbackAt = nil
+        maximumReceiveGapMS = 0
+        maximumReceiveDispatchMS = 0
+        maximumReceiveBurstPackets = 0
+        maximumRenderDispatchMS = 0
         downlinkSequence = 0
         receivedDownlink = false
         lastQualityTraceAt = 0
@@ -1628,11 +1672,12 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private func receiveNext(_ socket: URLSessionWebSocketTask) {
         socket.receive { [weak self, weak socket] result in
             guard let self, let socket else { return }
+            let receivedAt = ProcessInfo.processInfo.systemUptime
             queue.async {
                 guard !self.stopped, self.webSocket === socket else { return }
                 switch result {
                 case let .success(.data(data)):
-                    self.schedulePlayback(data)
+                    self.schedulePlayback(data, receivedAt: receivedAt)
                     self.receiveNext(socket)
                 case let .success(.string(text)):
                     self.consumeControl(text)
@@ -1680,11 +1725,19 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "tx_captured": String(uplinkSender.capturedPackets),
                 "tx_sent": String(uplinkSender.sentPackets),
                 "tx_max_write_ms": String(Int(uplinkSender.maximumSendDurationMS)),
-                "rx_queue": String(jitterBuffer.bufferedFrameCount),
-                "rx_target_ms": String(jitterBuffer.targetFrameCount * 20),
-                "rx_drop": String(jitterBuffer.droppedFrameCount),
-                "underruns": String(jitterBuffer.underrunCount),
-                "concealed": String(jitterBuffer.concealedFrameCount),
+                "rx_queue": String(playout.jitter.bufferedFrameCount),
+                "rx_target_ms": String(playout.jitter.targetFrameCount * 20),
+                "rx_drop": String(playout.jitter.droppedFrameCount),
+                "underruns": String(playout.jitter.underrunCount),
+                "concealed": String(playout.jitter.concealedFrameCount),
+                "rx_received": String(receivedDownlinkPackets),
+                "rx_scheduled": String(playout.scheduledPackets),
+                "rx_rendered": String(playout.renderedPackets),
+                "rx_pending": String(playout.window.scheduledPackets),
+                "rx_max_gap_ms": String(Int(maximumReceiveGapMS)),
+                "rx_max_queue_ms": String(Int(maximumReceiveDispatchMS)),
+                "rx_max_burst": String(maximumReceiveBurstPackets),
+                "render_max_queue_ms": String(Int(maximumRenderDispatchMS)),
             ]
             Task {
                 await AgentVerboseTraceRecorder.shared.recordEvent(
@@ -1692,6 +1745,10 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                     title: "Cloud PCM Buffer Statistics", detail: "", fields: fields, isFailure: false
                 )
             }
+            maximumReceiveGapMS = 0
+            maximumReceiveDispatchMS = 0
+            maximumReceiveBurstPackets = 0
+            maximumRenderDispatchMS = 0
         }
         if let inFlight = uplinkSender.inFlightAt, now - inFlight >= 6 {
             stopped = true
@@ -1723,26 +1780,39 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    private func schedulePlayback(_ pcm: Data) {
+    private func schedulePlayback(_ pcm: Data, receivedAt: TimeInterval) {
         guard !pcm.isEmpty, pcm.count.isMultiple(of: 320) else { return }
         receivedDownlink = true
-        let droppedBefore = jitterBuffer.droppedFrameCount
-        let now = Date(timeIntervalSince1970: ProcessInfo.processInfo.systemUptime)
+        let now = ProcessInfo.processInfo.systemUptime
+        if let previous = lastReceiveCallbackAt {
+            maximumReceiveGapMS = max(maximumReceiveGapMS, max(0, receivedAt - previous) * 1_000)
+        }
+        lastReceiveCallbackAt = receivedAt
+        maximumReceiveDispatchMS = max(maximumReceiveDispatchMS, max(0, now - receivedAt) * 1_000)
+        maximumReceiveBurstPackets = max(maximumReceiveBurstPackets, pcm.count / 320)
+        receivedDownlinkPackets &+= UInt64(pcm.count / 320)
+        let droppedBefore = playout.jitter.droppedFrameCount
+        let arrivedAt = Date(timeIntervalSince1970: receivedAt)
         for offset in stride(from: 0, to: pcm.count, by: 320) {
-            jitterBuffer.enqueue(sequence: downlinkSequence,
-                                 pcm: Data(pcm[offset..<(offset + 320)]), arrivedAt: now)
+            playout.enqueue(sequence: downlinkSequence,
+                            pcm: Data(pcm[offset..<(offset + 320)]), arrivedAt: arrivedAt)
             downlinkSequence &+= 1
         }
         onDownlinkFrame?(pcm.count, Self.peak(of: pcm),
-                         jitterBuffer.bufferedFrameCount + playbackWindow.scheduledPackets,
-                         Int(jitterBuffer.droppedFrameCount - droppedBefore), connectionID)
+                         playout.jitter.bufferedFrameCount + playout.window.scheduledPackets,
+                         Int(playout.jitter.droppedFrameCount - droppedBefore), connectionID)
+        guard let player, engine?.isRunning == true else { return }
+        schedulePackets(playout.refill(), player: player)
     }
 
     private func drainPlayback() {
         guard let player, engine?.isRunning == true else { return }
-        let ready = jitterBuffer.dequeue(maxFrames: playbackWindow.availablePackets)
-        for frame in ready { schedulePacket(frame.pcm, player: player) }
-        if !ready.isEmpty, !player.isPlaying { player.play() }
+        schedulePackets(playout.refill(allowConcealment: true), player: player)
+    }
+
+    private func schedulePackets(_ frames: [CloudPCMBufferedFrame], player: AVAudioPlayerNode) {
+        for frame in frames { schedulePacket(frame.pcm, player: player) }
+        if !frames.isEmpty, !player.isPlaying { player.play() }
     }
 
     private func schedulePacket(_ pcm: Data, player: AVAudioPlayerNode) {
@@ -1757,7 +1827,10 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
               let buffer = AVAudioPCMBuffer(
                   pcmFormat: format,
                   frameCapacity: AVAudioFrameCount(frames)
-              ), let output = buffer.floatChannelData?[0] else { return }
+              ), let output = buffer.floatChannelData?[0] else {
+            playout.discardReservation()
+            return
+        }
         buffer.frameLength = AVAudioFrameCount(frames)
         pcm.withUnsafeBytes { raw in
             let bytes = raw.bindMemory(to: UInt8.self)
@@ -1766,15 +1839,18 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 output[frame] = Float(Int16(bitPattern: bits)) / 32_768
             }
         }
-        playbackWindow.schedulePacket()
         let generation = playbackGeneration
         player.scheduleBuffer(buffer, completionCallbackType: CloudPCMPlaybackWindow.completionType) { [weak self] _ in
+            let completedAt = ProcessInfo.processInfo.systemUptime
             self?.queue.async {
                 guard let self, self.playbackGeneration == generation else { return }
-                self.playbackWindow.didRenderPacket()
+                self.maximumRenderDispatchMS = max(self.maximumRenderDispatchMS,
+                    max(0, ProcessInfo.processInfo.systemUptime - completedAt) * 1_000)
+                let currentPlayer = self.engine?.isRunning == true ? self.player : nil
+                // Release completed reservations even during a temporary engine pause.
+                let ready = self.playout.rendered(canRefill: currentPlayer != nil)
                 self.onDownlinkPlayback?(self.connectionID)
-                // Only the playout clock consumes the jitter buffer. A callback/network
-                // burst must not drain the reserve or prematurely declare an underrun.
+                if let currentPlayer { self.schedulePackets(ready, player: currentPlayer) }
             }
         }
     }

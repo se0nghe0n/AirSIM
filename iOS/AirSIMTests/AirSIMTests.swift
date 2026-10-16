@@ -809,6 +809,98 @@ final class AirSIMTests: XCTestCase {
         XCTAssertEqual(buffer.dequeue(maxFrames: 50).map(\.sequence), Array(63..<75).map(UInt32.init))
     }
 
+    func testCloudPlayoutRefillsOnCompletionWithoutWaitingForTimer() {
+        var playout = CloudPCMPlayoutBuffer()
+        let now = Date(timeIntervalSince1970: 0)
+        for sequence in 0..<6 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320), arrivedAt: now)
+        }
+        XCTAssertEqual(playout.refill().map(\.sequence), [0, 1])
+        // The timer runs just before render completion and sees a full window.
+        XCTAssertTrue(playout.refill(allowConcealment: true).isEmpty)
+        XCTAssertEqual(playout.rendered().map(\.sequence), [2],
+                       "Freed capacity must refill during the completion, not the next 20 ms tick")
+        XCTAssertEqual(playout.window.scheduledPackets, 2)
+        XCTAssertEqual(playout.jitter.underrunCount, 0)
+    }
+
+    func testCloudPlayoutDoesNotConcealWhileRealAudioIsScheduled() {
+        var playout = CloudPCMPlayoutBuffer()
+        let now = Date(timeIntervalSince1970: 0)
+        for sequence in 0..<4 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320), arrivedAt: now)
+        }
+        _ = playout.refill()
+        _ = playout.rendered()
+        _ = playout.rendered()
+        XCTAssertEqual(playout.jitter.bufferedFrameCount, 0)
+        XCTAssertEqual(playout.window.scheduledPackets, 2)
+        XCTAssertTrue(playout.rendered().isEmpty)
+        XCTAssertTrue(playout.refill(allowConcealment: true).isEmpty)
+        XCTAssertEqual(playout.jitter.underrunCount, 0,
+                       "An empty network reserve is not starvation while the player still has audio")
+        XCTAssertTrue(playout.rendered().isEmpty)
+        for _ in 0..<10 { XCTAssertTrue(playout.refill().isEmpty) }
+        XCTAssertEqual(playout.jitter.underrunCount, 0,
+                       "Network/render probes cannot synthesize missing audio")
+        XCTAssertEqual(playout.refill(allowConcealment: true).count, 1)
+        XCTAssertEqual(playout.jitter.concealedFrameCount, 1)
+    }
+
+    func testCloudPlayoutBoundsConcealmentAndRecoversAfterLongGap() {
+        var playout = CloudPCMPlayoutBuffer()
+        let now = Date(timeIntervalSince1970: 0)
+        for sequence in 0..<4 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320), arrivedAt: now)
+        }
+        _ = playout.refill()
+        for _ in 0..<4 { _ = playout.rendered() }
+        for _ in 0..<2 {
+            XCTAssertEqual(playout.refill(allowConcealment: true).count, 1)
+            _ = playout.rendered()
+        }
+        XCTAssertTrue(playout.refill(allowConcealment: true).isEmpty)
+        XCTAssertFalse(playout.jitter.isPrimed)
+        XCTAssertEqual(playout.jitter.concealedFrameCount, 2)
+        for sequence in 4..<14 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 2, count: 320),
+                            arrivedAt: now.addingTimeInterval(1))
+        }
+        XCTAssertEqual(playout.refill().map(\.sequence), [4, 5])
+        XCTAssertEqual(playout.jitter.concealedFrameCount, 2)
+    }
+
+    func testCloudPlayoutReleasesCompletedCapacityWhileEnginePaused() {
+        var playout = CloudPCMPlayoutBuffer()
+        for sequence in 0..<4 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320),
+                            arrivedAt: Date(timeIntervalSince1970: 0))
+        }
+        _ = playout.refill()
+        XCTAssertTrue(playout.rendered(canRefill: false).isEmpty)
+        XCTAssertTrue(playout.rendered(canRefill: false).isEmpty)
+        XCTAssertEqual(playout.window.scheduledPackets, 0)
+        XCTAssertEqual(playout.jitter.bufferedFrameCount, 2)
+        XCTAssertEqual(playout.refill().map(\.sequence), [2, 3])
+        XCTAssertEqual(playout.jitter.underrunCount, 0)
+    }
+
+    func testCloudPlayoutBurstRemainsBoundedWithoutCallbackInducedConcealment() {
+        var playout = CloudPCMPlayoutBuffer()
+        let now = Date(timeIntervalSince1970: 0)
+        for sequence in 0..<100 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320), arrivedAt: now)
+        }
+        XCTAssertEqual(playout.jitter.droppedFrameCount, 88)
+        XCTAssertEqual(playout.refill().map(\.sequence), [88, 89])
+        for _ in 0..<12 {
+            _ = playout.rendered()
+            XCTAssertLessThanOrEqual(playout.window.scheduledPackets, 2)
+        }
+        XCTAssertEqual(playout.jitter.concealedFrameCount, 0)
+        XCTAssertEqual(playout.jitter.underrunCount, 0)
+    }
+
     func testCloudPlaybackReserveRefillsOnRenderedFrames() {
         var window = CloudPCMPlaybackWindow()
         for _ in 0..<2 { window.schedulePacket() }
