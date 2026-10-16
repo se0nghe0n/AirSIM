@@ -406,11 +406,11 @@
 			};
 			buildConfigurationList = F10000000000000000000001 /* Build configuration list for PBXProject "AirSIM" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = zh_CN;
+			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
-				zh_CN,
 				en,
+				zh_CN,
 				Base,
 			);
 			mainGroup = D10000000000000000000001;
