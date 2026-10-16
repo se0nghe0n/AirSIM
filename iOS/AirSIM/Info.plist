@@ -44,7 +44,7 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>AirSIMPushRelayURL</key>
-	<string>$(AIRSIM_PUSH_RELAY_URL)</string>
+	<string>https://airsim-q25.n-587.workers.dev</string>
 	<key>AirSIMAPNSEnvironment</key>
 	<string>$(AIRSIM_APNS_ENVIRONMENT)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
