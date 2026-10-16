@@ -39,7 +39,7 @@ public final class AgentClient {
         if (standalone != null) return standalone.health();
         String payload = request("GET", "/api/health", null, 5_000);
         if (!payload.matches("(?s).*\\\"product\\\"\\s*:\\s*\\\"airsim\\\".*")) {
-            throw new IllegalStateException("目标不是 AirSIM Agent");
+            throw new IllegalStateException("Target is not an AirSIM Agent");
         }
         return payload;
     }

@@ -126,6 +126,6 @@ final class StandaloneSMSStore {
         SharedPreferences.Editor editor = preferences.edit().putString(RECORDS, records.toString())
                 .putString(RECENT_IDS, tombstones.toString());
         if (advanceRevision) editor.putLong(REVISION, revision() + 1);
-        if (!editor.commit()) throw new IllegalStateException("无法保存接收短信");
+        if (!editor.commit()) throw new IllegalStateException("Unable to save received SMS");
     }
 }

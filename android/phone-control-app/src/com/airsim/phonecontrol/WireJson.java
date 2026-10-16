@@ -23,7 +23,7 @@ public final class WireJson {
 	}
 
 	public static String smsEvent(String eventId, String deliveryId, String sender, String content, String timestamp) {
-		String displaySender = sender == null || sender.isBlank() ? "未知号码" : sender;
+		String displaySender = sender == null || sender.isBlank() ? "Unknown number" : sender;
 		return "{" + field("event_id", eventId) + "," + field("delivery_id", deliveryId) + ","
 				+ field("sender", displaySender) + "," + field("content", content) + ","
 				+ field("timestamp", timestamp) + "}";

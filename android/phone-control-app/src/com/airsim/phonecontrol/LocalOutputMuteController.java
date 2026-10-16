@@ -32,7 +32,7 @@ final class LocalOutputMuteController {
         try {
             if (!backend.isMuted()) backend.setMuted(true);
             verifiedMuted = backend.isMuted();
-            if (!verifiedMuted) throw new IOException("系统不支持已验证的本机通话静音");
+            if (!verifiedMuted) throw new IOException("System does not support verified local call muting");
             return "local_output_muted previous_muted=" + previousMuted + " verified=true";
         } catch (Exception failure) {
             verifiedMuted = false;
@@ -49,7 +49,7 @@ final class LocalOutputMuteController {
         if (backend.isMuted() != previousMuted) backend.setMuted(previousMuted);
         if (backend.volume() != previousVolume) backend.setVolume(previousVolume);
         if (backend.isMuted() != previousMuted || backend.volume() != previousVolume) {
-            throw new IOException("本机通话声音状态恢复未通过校验");
+            throw new IOException("Local call audio restoration verification failed");
         }
         boolean restoredMuted = previousMuted;
         started = false;

@@ -25,27 +25,27 @@ final class SMSCommandExecutor {
     static AgentCommandDispatcher.Result execute(Context context, AgentCommand command) {
         String destination = SMSPayloadPolicy.normalizeDestination(command.number);
         if (destination.isEmpty() || !SMSPayloadPolicy.validBody(command.message)) {
-            return AgentCommandDispatcher.Result.failure("号码或短信内容无效");
+            return AgentCommandDispatcher.Result.failure("Invalid number or SMS content");
         }
         if (context.checkSelfPermission(Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            return AgentCommandDispatcher.Result.failure("AirSIM 缺少短信发送权限；请在三星应用权限中允许短信");
+            return AgentCommandDispatcher.Result.failure("AirSIM lacks SMS permission. Allow SMS in Android app permissions.");
         }
         if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING)) {
-            return AgentCommandDispatcher.Result.failure("此设备不支持系统短信发送");
+            return AgentCommandDispatcher.Result.failure("This device does not support system SMS sending");
         }
 
         try {
             int subscriptionID = SmsManager.getDefaultSmsSubscriptionId();
             if (subscriptionID == SubscriptionManager.INVALID_SUBSCRIPTION_ID) {
-                return AgentCommandDispatcher.Result.failure("请在三星 SIM 卡设置中选择默认短信 SIM");
+                return AgentCommandDispatcher.Result.failure("Select the default SMS SIM in Android SIM settings");
             }
             SmsManager manager = managerForSubscription(context, subscriptionID);
             if (manager == null) {
-                return AgentCommandDispatcher.Result.failure("系统短信服务不可用");
+                return AgentCommandDispatcher.Result.failure("System SMS service unavailable");
             }
             ArrayList<String> parts = manager.divideMessage(command.message);
             if (parts == null || parts.isEmpty()) {
-                return AgentCommandDispatcher.Result.failure("短信分段失败");
+                return AgentCommandDispatcher.Result.failure("SMS segmentation failed");
             }
 
             SMSConfirmation confirmation = new SMSConfirmation(parts.size());
@@ -87,12 +87,12 @@ final class SMSCommandExecutor {
                 if (!outcome.complete()) {
                     BridgeLog.info("sms_send_timeout trace=" + trace + " confirmed="
                             + outcome.confirmedSegments() + " total=" + parts.size());
-                    return AgentCommandDispatcher.Result.failure("等待系统短信发送回执超时；请先确认短信是否发出，勿立即重试");
+                    return AgentCommandDispatcher.Result.failure("Timed out waiting for SMS delivery result. Check whether it was sent before retrying.");
                 }
                 if (!outcome.success()) {
                     BridgeLog.info("sms_send_rejected trace=" + trace + " result=" + outcome.errorCode());
                     return AgentCommandDispatcher.Result.failure(
-                            "系统短信发送失败（代码 " + outcome.errorCode() + "）");
+                            "System SMS sending failed (code " + outcome.errorCode() + ")");
                 }
                 BridgeLog.info("sms_send_confirmed trace=" + trace + " segments=" + parts.size());
                 return AgentCommandDispatcher.Result.success(parts.size());
@@ -102,10 +102,10 @@ final class SMSCommandExecutor {
             }
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
-            return AgentCommandDispatcher.Result.failure("短信发送等待被中断；请先确认短信是否发出，勿立即重试");
+            return AgentCommandDispatcher.Result.failure("SMS wait interrupted. Check whether it was sent before retrying.");
         } catch (RuntimeException error) {
             BridgeLog.error("sms_send_failed", error);
-            return AgentCommandDispatcher.Result.failure("Android 短信发送失败：" + error.getClass().getSimpleName());
+            return AgentCommandDispatcher.Result.failure("Android SMS sending failed: " + error.getClass().getSimpleName());
         }
     }
 

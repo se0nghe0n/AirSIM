@@ -57,13 +57,13 @@ public final class AgentReleaseManager {
         ReleaseAssetSelector.Selection selection = ReleaseAssetSelector.select(URLs);
         byte[] debianPackage = download(selection.packageURL(), MAX_PACKAGE_BYTES);
         String signature = new String(download(selection.signatureURL(), 4096), StandardCharsets.US_ASCII).trim();
-        if (signature.isEmpty()) throw new IllegalStateException("Release 签名为空");
+        if (signature.isEmpty()) throw new IllegalStateException("Release signature is empty");
         return new DownloadedRelease(selection, debianPackage, signature);
     }
 
     private static byte[] download(String value, int maximumBytes) throws Exception {
         URI uri = URI.create(value);
-        if (!"https".equals(uri.getScheme())) throw new IllegalArgumentException("Release 下载必须使用 HTTPS");
+        if (!"https".equals(uri.getScheme())) throw new IllegalArgumentException("Release download must use HTTPS");
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(value).openConnection();
@@ -77,10 +77,10 @@ public final class AgentReleaseManager {
                 throw new IllegalStateException("Release HTTP " + status);
             }
             if (!"https".equals(connection.getURL().getProtocol())) {
-                throw new IllegalStateException("Release 重定向离开 HTTPS");
+                throw new IllegalStateException("Release redirect left HTTPS");
             }
             int length = connection.getContentLength();
-            if (length > maximumBytes) throw new IllegalStateException("Release 文件过大");
+            if (length > maximumBytes) throw new IllegalStateException("Release file is too large");
             try (InputStream input = connection.getInputStream();
                  ByteArrayOutputStream output = new ByteArrayOutputStream(Math.max(0, length))) {
                 byte[] buffer = new byte[8192];
@@ -88,7 +88,7 @@ public final class AgentReleaseManager {
                 int total = 0;
                 while ((count = input.read(buffer)) >= 0) {
                     total += count;
-                    if (total > maximumBytes) throw new IllegalStateException("Release 文件过大");
+                    if (total > maximumBytes) throw new IllegalStateException("Release file is too large");
                     output.write(buffer, 0, count);
                 }
                 return output.toByteArray();

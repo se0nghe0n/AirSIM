@@ -35,7 +35,7 @@ public final class AgentWatchdogService extends Service {
         super.onCreate();
         BridgeLog.info("watchdog_created");
         ShizukuBridgeManager.get(this).ensureStarted();
-        startForeground(BridgeNotification.WATCHDOG_ID, BridgeNotification.status(this, "正在连接 Linux Agent"),
+        startForeground(BridgeNotification.WATCHDOG_ID, BridgeNotification.status(this, "Connecting to Linux Agent"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
         running = true;
         VoWLANGatewayService.start(this);
@@ -54,7 +54,7 @@ public final class AgentWatchdogService extends Service {
                 if (!AppConfig.configured(this)) {
                     if (!waitingForConfiguration) BridgeLog.info("watchdog_waiting_for_configuration");
                     waitingForConfiguration = true;
-                    update("等待配置控制令牌");
+                    update("Waiting for control token configuration");
                     Thread.sleep(2_000);
                     continue;
                 }
@@ -64,7 +64,7 @@ public final class AgentWatchdogService extends Service {
                 String payload = new AgentClient(this).nextCommand();
                 failures = 0;
                 getSystemService(android.app.NotificationManager.class).cancel(BridgeNotification.RECOVERY_ID);
-                update(payload.isEmpty() ? "Linux Agent 在线" : "正在执行设备命令");
+                update(payload.isEmpty() ? "Linux Agent online" : "Executing device command");
                 if (!payload.isEmpty()) {
                     AgentCommand command = AgentCommand.parse(payload);
                     BridgeLog.info("command_received action=" + command.action + " command_id="
@@ -96,7 +96,7 @@ public final class AgentWatchdogService extends Service {
                 return;
             } catch (Exception error) {
                 failures++;
-                update("Linux Agent 离线，自动重试 " + failures);
+                update("Linux Agent offline; retrying automatically: " + failures);
                 BridgeLog.error("watchdog_cycle_failed failures=" + failures, error);
 				long now = System.currentTimeMillis();
 				if (RecoveryPolicy.shouldAttempt(failures, lastRecoveryAttempt, now)) {
@@ -147,7 +147,7 @@ public final class AgentWatchdogService extends Service {
 					.setPendingIntentBackgroundActivityStartMode(
 							backgroundStartMode);
 			launcher.send(this, 0, null, null, null, null, senderOptions.toBundle());
-			update("正在恢复 Android Linux VM");
+			update("Restoring Android Linux VM");
 			BridgeLog.info("terminal_recovery_requested");
 		} catch (PendingIntent.CanceledException | RuntimeException error) {
 			BridgeLog.error("terminal_recovery_failed", error);

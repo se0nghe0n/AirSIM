@@ -61,7 +61,7 @@ public final class PairingServer implements Closeable {
                 String address = preferredPrivateIPv4() + ":" + server.getLocalPort();
                 listener.onStarted(created.code(), address, created.expiresAtMillis());
                 timer.schedule(() -> {
-                    listener.onFailed("配对窗口已过期");
+                    listener.onFailed("Pairing window expired");
                     closeQuietly();
                 }, PairingSession.LIFETIME_MILLIS, TimeUnit.MILLISECONDS);
                 while (!server.isClosed() && System.currentTimeMillis() <= created.expiresAtMillis()) {
@@ -159,7 +159,7 @@ public final class PairingServer implements Closeable {
             @Override public void onServiceRegistered(NsdServiceInfo ignored) {}
             @Override public void onRegistrationFailed(NsdServiceInfo ignored, int code) {
                 BridgeLog.info("pairing_advertisement_failed code=" + code);
-                listener.onFailed("热点发现发布失败（" + code + "）");
+                listener.onFailed("Hotspot discovery publishing failed (" + code + ")");
             }
             @Override public void onServiceUnregistered(NsdServiceInfo ignored) {}
             @Override public void onUnregistrationFailed(NsdServiceInfo ignored, int code) {}
@@ -172,7 +172,7 @@ public final class PairingServer implements Closeable {
         int state = 0;
         while (output.size() < MAX_HEADERS) {
             int value = input.read();
-            if (value < 0) throw new IOException("请求头不完整");
+            if (value < 0) throw new IOException("Incomplete request headers");
             output.write(value);
             state = (state == 0 && value == '\r') ? 1
                     : (state == 1 && value == '\n') ? 2
@@ -180,7 +180,7 @@ public final class PairingServer implements Closeable {
                     : (state == 3 && value == '\n') ? 4 : 0;
             if (state == 4) return output.toByteArray();
         }
-        throw new IOException("请求头过大");
+        throw new IOException("Request headers too large");
     }
 
     private static int contentLength(String[] lines) throws IOException {
@@ -188,12 +188,12 @@ public final class PairingServer implements Closeable {
             if (line.regionMatches(true, 0, "Content-Length:", 0, 15)) {
                 int value;
                 try { value = Integer.parseInt(line.substring(15).trim()); }
-                catch (NumberFormatException error) { throw new IOException("Content-Length 无效", error); }
-                if (value < 1 || value > MAX_BODY) throw new IOException("请求体大小无效");
+                catch (NumberFormatException error) { throw new IOException("Invalid Content-Length", error); }
+                if (value < 1 || value > MAX_BODY) throw new IOException("Invalid request body size");
                 return value;
             }
         }
-        throw new IOException("缺少 Content-Length");
+        throw new IOException("Missing Content-Length");
     }
 
     private static byte[] readExactly(BufferedInputStream input, int length) throws IOException {
@@ -201,7 +201,7 @@ public final class PairingServer implements Closeable {
         int offset = 0;
         while (offset < length) {
             int count = input.read(output, offset, length - offset);
-            if (count < 0) throw new IOException("请求体不完整");
+            if (count < 0) throw new IOException("Incomplete request body");
             offset += count;
         }
         return output;
@@ -232,7 +232,7 @@ public final class PairingServer implements Closeable {
                 if (address instanceof Inet4Address && address.isSiteLocalAddress() && !host.startsWith("10.185.5.")) return host;
             }
         }
-        throw new IOException("未找到 VoWLAN IPv4 地址，请连接 Wi-Fi 或开启移动热点");
+        throw new IOException("No VoWLAN IPv4 address found. Connect to Wi-Fi or enable the mobile hotspot.");
     }
 
     private static int interfacePriority(String name) {

@@ -60,12 +60,12 @@ public final class BridgeLog {
 
     public static String read() {
         Context context = applicationContext;
-        if (context == null) return "日志尚未初始化";
+        if (context == null) return "Logs not initialized";
         synchronized (LOCK) {
             String previous = readFile(new File(context.getFilesDir(), PREVIOUS_FILE_NAME));
             String current = readFile(new File(context.getFilesDir(), FILE_NAME));
             String value = previous + current;
-            return value.isEmpty() ? "暂无 Debug 日志" : value;
+            return value.isEmpty() ? "No debug logs" : value;
         }
     }
 
@@ -110,7 +110,7 @@ public final class BridgeLog {
             while ((count = input.read(buffer)) >= 0) output.write(buffer, 0, count);
             return new String(output.toByteArray(), StandardCharsets.UTF_8);
         } catch (Exception error) {
-            return "[日志读取失败: " + error.getClass().getSimpleName() + "]\n";
+            return "[Failed to read logs: " + error.getClass().getSimpleName() + "]\n";
         }
     }
 

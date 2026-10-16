@@ -103,16 +103,16 @@ public final class MainActivity extends Activity {
     private String lastRenderedDebugLog;
     private String lastRenderedDebugFilter;
     private TextView agentRefreshResult;
-    private String agentRefreshMessage = "点击刷新以查看 Agent 的实际返回结果";
+    private String agentRefreshMessage = "Tap Refresh to view the latest Agent response";
     private int agentRefreshColor = MUTED;
     private int agentRefreshGeneration;
-    private String activeDebugFilter = "全部";
+    private String activeDebugFilter = "All";
     private boolean realtimeLogging = true;
     private boolean agentOnline;
-    private String agentDetail = "待检测";
+    private String agentDetail = "Not checked";
     private boolean pushConfigured;
-    private String pushDetail = "尚未检查";
-    private String pushDiagnostic = "尚未读取 Agent 的 Push 状态";
+    private String pushDetail = "Not checked";
+    private String pushDiagnostic = "Agent push status has not been checked";
 	private boolean cloudEnabled;
 	private boolean cloudRelayConfigured;
 	private String cloudLastError = "";
@@ -275,10 +275,10 @@ public final class MainActivity extends Activity {
         bar.setPadding(dp(10), dp(6), dp(10), dp(8));
         bar.setBackground(rounded(SURFACE, 28, BORDER, 1));
         navigationItems.clear();
-        bar.addView(navigationItem("状态", android.R.drawable.presence_online, Page.STATUS), weighted());
-        bar.addView(navigationItem("通话", android.R.drawable.sym_action_call, Page.CALLS), weighted());
-        bar.addView(navigationItem("调试", android.R.drawable.ic_menu_info_details, Page.DEBUG), weighted());
-        bar.addView(navigationItem("设置", android.R.drawable.ic_menu_preferences, Page.SETTINGS), weighted());
+        bar.addView(navigationItem("Status", android.R.drawable.presence_online, Page.STATUS), weighted());
+        bar.addView(navigationItem("Calls", android.R.drawable.sym_action_call, Page.CALLS), weighted());
+        bar.addView(navigationItem("Debug", android.R.drawable.ic_menu_info_details, Page.DEBUG), weighted());
+        bar.addView(navigationItem("Settings", android.R.drawable.ic_menu_preferences, Page.SETTINGS), weighted());
         return bar;
     }
 
@@ -334,7 +334,7 @@ public final class MainActivity extends Activity {
 
     private View statusPage() {
         LinearLayout root = pageRoot();
-        root.addView(pageTitle("AirSIM Bridge", "运行中"));
+        root.addView(pageTitle("AirSIM Bridge", "Running"));
 
         boolean paired = VoWLANPairingStore.configured(this);
         LinearLayout hero = card(SURFACE_HIGH, 24);
@@ -347,7 +347,7 @@ public final class MainActivity extends Activity {
         hero.addView(wifi, new LinearLayout.LayoutParams(dp(58), dp(58)));
         LinearLayout heroCopy = column(dp(14));
         TextView heroTitle = label(
-                paired ? (vowlanReady() ? "VoWLAN 已就绪" : "VoWLAN 准备中") : "VoWLAN 尚未配对",
+                paired ? (vowlanReady() ? "VoWLAN ready" : "Preparing VoWLAN") : "VoWLAN not paired",
                 25, vowlanReady() ? CYAN : WARNING, Gravity.START);
         heroTitle.setTypeface(Typeface.DEFAULT_BOLD);
         heroCopy.addView(heroTitle);
@@ -366,7 +366,7 @@ public final class MainActivity extends Activity {
         LinearLayout connectionCard = card(SURFACE, 18);
         connectionCard.setOrientation(LinearLayout.VERTICAL);
         connectionCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        connectionCard.addView(overline("当前连接模式"));
+        connectionCard.addView(overline("Current connection mode"));
         TextView connectionTitle = label(connectionMode, 18, connectionColor, Gravity.START);
         connectionTitle.setTypeface(Typeface.DEFAULT_BOLD);
         connectionCard.addView(connectionTitle, matchWithTop(5));
@@ -376,7 +376,7 @@ public final class MainActivity extends Activity {
         LinearLayout bluetoothCard = card(SURFACE, 18);
         bluetoothCard.setOrientation(LinearLayout.VERTICAL);
         bluetoothCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        bluetoothCard.addView(overline("蓝牙通话（诊断已脱敏）"));
+        bluetoothCard.addView(overline("Bluetooth calls (redacted diagnostics)"));
         bluetoothCard.addView(label(
                 com.airsim.phonecontrol.voble.VoBLEGatewayService.diagnosticsSummary(),
                 14, MUTED, Gravity.START), matchWithTop(5));
@@ -384,12 +384,12 @@ public final class MainActivity extends Activity {
 
         LinearLayout firstHealthRow = row();
         HealthTile agentTile = healthTile(
-                RuntimeMode.agentLabel(this), agentOnline ? "在线" : agentDetail,
+                RuntimeMode.agentLabel(this), agentOnline ? "Online" : agentDetail,
                 android.R.drawable.ic_menu_manage, agentOnline);
         agentTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.AGENT));
         firstHealthRow.addView(agentTile.view, weightedWithEnd(5));
         pcmHealthTile = healthTile(
-                "PCM 音频桥", pcmBridgeRunning() ? "运行中" : "待启动",
+                "PCM audio bridge", pcmBridgeRunning() ? "Running" : "Not running",
                 android.R.drawable.ic_media_play, pcmBridgeRunning());
         pcmHealthTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.PCM));
         firstHealthRow.addView(pcmHealthTile.view, weightedWithStart(5));
@@ -402,7 +402,7 @@ public final class MainActivity extends Activity {
         pushTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.PUSH));
         secondHealthRow.addView(pushTile.view, weightedWithEnd(5));
         HealthTile shizukuTile = healthTile(
-                "Shizuku", shizukuReady() ? "已授权" : "待授权",
+                "Shizuku", shizukuReady() ? "Authorized" : "Authorization required",
                 android.R.drawable.ic_lock_idle_lock, shizukuReady());
         shizukuTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.SHIZUKU));
         secondHealthRow.addView(shizukuTile.view, weightedWithStart(5));
@@ -410,14 +410,14 @@ public final class MainActivity extends Activity {
 
         root.addView(modeSelector(), matchWithTop(14));
 
-        TextView pairing = primaryButton(paired ? "重新配对 iPhone" : "配对新 iPhone", BLUE);
+        TextView pairing = primaryButton(paired ? "Pair iPhone again" : "Pair a new iPhone", BLUE);
         pairing.setCompoundDrawablesWithIntrinsicBounds(android.R.drawable.ic_input_add, 0, 0, 0);
         pairing.setCompoundDrawableTintList(ColorStateList.valueOf(Color.WHITE));
         pairing.setCompoundDrawablePadding(dp(8));
         pairing.setOnClickListener(ignored -> openPairingPage());
         root.addView(pairing, matchWithTop(14));
 
-        root.addView(sectionTitle("最近活动"), matchWithTop(22));
+        root.addView(sectionTitle("Recent activity"), matchWithTop(22));
         LinearLayout recent = card(SURFACE, 18);
         recent.setPadding(dp(16), dp(14), dp(16), dp(14));
         recent.setOrientation(LinearLayout.HORIZONTAL);
@@ -440,26 +440,26 @@ public final class MainActivity extends Activity {
 
     private View callsPage() {
         LinearLayout root = pageRoot();
-        root.addView(pageTitle("通话控制", null));
-        root.addView(description("三星 Telecom 本机控制；iPhone 通话优先使用 VoWLAN，局域网不可用时由云端中继。"), matchWithTop(8));
+        root.addView(pageTitle("Call control", null));
+        root.addView(description("Local Android Telecom control. iPhone calls use VoWLAN when available, then fall back to the cloud relay."), matchWithTop(8));
 
         LinearLayout dialCard = card(SURFACE, 24);
         dialCard.setOrientation(LinearLayout.VERTICAL);
         dialCard.setPadding(dp(18), dp(18), dp(18), dp(18));
-        dialCard.addView(overline("拨号号码"));
-        number = input("输入电话号码", InputType.TYPE_CLASS_PHONE);
+        dialCard.addView(overline("Phone number"));
+        number = input("Enter phone number", InputType.TYPE_CLASS_PHONE);
         dialCard.addView(number, matchWithTop(8));
-        TextView call = primaryButton("通过系统 Telecom 拨号", PRIMARY);
+        TextView call = primaryButton("Call via system Telecom", PRIMARY);
         call.setTextColor(BG);
         call.setOnClickListener(ignored -> placeSystemCall());
         dialCard.addView(call, matchWithTop(14));
         root.addView(dialCard, matchWithTop(18));
 
-        root.addView(sectionTitle("当前通话"), matchWithTop(22));
+        root.addView(sectionTitle("Current call"), matchWithTop(22));
         LinearLayout actions = row();
-        TextView answer = secondaryButton("三星接听");
+        TextView answer = secondaryButton("Answer on Android");
         answer.setOnClickListener(ignored -> localCall("answer"));
-        TextView hangup = secondaryButton("挂断通话");
+        TextView hangup = secondaryButton("End call");
         hangup.setTextColor(DANGER);
         hangup.setOnClickListener(ignored -> localCall("end"));
         actions.addView(answer, weightedWithEnd(5));
@@ -470,7 +470,7 @@ public final class MainActivity extends Activity {
         roleCard.setOrientation(LinearLayout.VERTICAL);
         roleCard.setPadding(dp(16), dp(14), dp(16), dp(14));
         roleCard.addView(label(roleText(), 15, TEXT, Gravity.START));
-        roleCard.addView(description("紧急呼叫始终由系统预装拨号器处理。"), matchWithTop(4));
+        roleCard.addView(description("Emergency calls are always handled by the system dialer."), matchWithTop(4));
         roleCard.setOnClickListener(ignored -> requestDialerRole());
         root.addView(roleCard, matchWithTop(18));
         return scroll(root);
@@ -478,25 +478,25 @@ public final class MainActivity extends Activity {
 
     private View debugPage() {
         LinearLayout root = pageRoot();
-        root.addView(pageTitle("Debug 诊断", null));
+        root.addView(pageTitle("Debug diagnostics", null));
 		if (CrashReportStore.hasReport(getFilesDir())) {
 			LinearLayout crashCard = card(Color.rgb(57, 31, 36), 22);
 			crashCard.setOrientation(LinearLayout.VERTICAL);
 			crashCard.setPadding(dp(16), dp(15), dp(16), dp(15));
-			TextView title = label("检测到上次闪退", 16, DANGER, Gravity.START);
+			TextView title = label("Previous crash detected", 16, DANGER, Gravity.START);
 			title.setTypeface(Typeface.DEFAULT_BOLD);
 			crashCard.addView(title);
-			crashCard.addView(label("报告已脱敏并保存在本机，只有点击发送后才会离开设备。",
+			crashCard.addView(label("The redacted report is stored on this device. It is only shared when you tap Send.",
 					12, MUTED, Gravity.START), matchWithTop(4));
 			LinearLayout crashActions = row();
-			TextView send = secondaryButton("发送闪退报告");
+			TextView send = secondaryButton("Send crash report");
 			send.setTextColor(PRIMARY);
 			send.setOnClickListener(ignored -> shareCrashReport());
-			TextView remove = secondaryButton("删除报告");
+			TextView remove = secondaryButton("Delete report");
 			remove.setTextColor(DANGER);
 			remove.setOnClickListener(ignored -> {
 				CrashReportStore.clear(getFilesDir());
-				toast("闪退报告已删除");
+				toast("Crash report deleted");
 				showPage(Page.DEBUG);
 			});
 			crashActions.addView(send, weightedWithEnd(5));
@@ -516,9 +516,9 @@ public final class MainActivity extends Activity {
         root.addView(logCard, matchWithTop(14));
 
         LinearLayout actions = row();
-        TextView copy = secondaryButton("复制日志");
+        TextView copy = secondaryButton("Copy logs");
         copy.setOnClickListener(ignored -> copyDebugLog());
-        TextView export = secondaryButton("导出诊断");
+        TextView export = secondaryButton("Export diagnostics");
         export.setOnClickListener(ignored -> exportDebugLog());
         actions.addView(copy, weightedWithEnd(5));
         actions.addView(export, weightedWithStart(5));
@@ -529,8 +529,8 @@ public final class MainActivity extends Activity {
         live.setGravity(Gravity.CENTER_VERTICAL);
         live.setPadding(dp(16), dp(14), dp(12), dp(14));
         LinearLayout liveCopy = column(0);
-        liveCopy.addView(label("实时记录", 15, TEXT, Gravity.START));
-        liveCopy.addView(label("自动刷新最新的日志信息", 12, MUTED, Gravity.START));
+        liveCopy.addView(label("Live logging", 15, TEXT, Gravity.START));
+        liveCopy.addView(label("Automatically refresh the latest logs", 12, MUTED, Gravity.START));
         live.addView(liveCopy, weighted());
         Switch toggle = new Switch(this);
         toggle.setChecked(realtimeLogging);
@@ -544,9 +544,9 @@ public final class MainActivity extends Activity {
         root.addView(live, matchWithTop(12));
 
         LinearLayout destructive = row();
-        TextView refresh = secondaryButton("立即刷新");
+        TextView refresh = secondaryButton("Refresh now");
         refresh.setOnClickListener(ignored -> refreshDebugLog());
-        TextView clear = secondaryButton("清空日志");
+        TextView clear = secondaryButton("Clear logs");
         clear.setTextColor(DANGER);
         clear.setOnClickListener(ignored -> { BridgeLog.clear(); refreshDebugLog(); });
         destructive.addView(refresh, weightedWithEnd(5));
@@ -558,7 +558,7 @@ public final class MainActivity extends Activity {
 
     private View settingsPage() {
         LinearLayout root = pageRoot();
-        root.addView(pageTitle("设置", null));
+        root.addView(pageTitle("Settings", null));
 
         boolean standaloneRuntime = RuntimeMode.isStandalone(this);
         root.addView(sectionTitle(RuntimeMode.agentLabel(this)), matchWithTop(18));
@@ -566,24 +566,24 @@ public final class MainActivity extends Activity {
         agentCard.setOrientation(LinearLayout.VERTICAL);
         agentCard.setPadding(dp(16), dp(16), dp(16), dp(16));
         if (standaloneRuntime) {
-            agentCard.addView(label("Agent 运行在本 APK 的前台服务中，不使用 AVF、Linux Terminal、8575 或 8576。",
+            agentCard.addView(label("The Agent runs in this app's foreground service. It does not use AVF, Linux Terminal, or ports 8575 and 8576.",
                     14, TEXT, Gravity.START));
         } else {
-            endpoint = input("Agent 地址", InputType.TYPE_CLASS_TEXT);
+            endpoint = input("Agent address", InputType.TYPE_CLASS_TEXT);
             endpoint.setText(AppConfig.endpoint(this));
             agentCard.addView(endpoint);
-            token = input("控制令牌", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            token = input("Control token", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
             token.setText(AppConfig.token(this));
             agentCard.addView(token, matchWithTop(10));
         }
         selectedMode = AppConfig.mode(this);
         agentCard.addView(modeSelector(), matchWithTop(12));
-        TextView save = primaryButton(standaloneRuntime ? "保存模式并启动内置 Agent" : "保存配置并启动守护", BLUE);
+        TextView save = primaryButton(standaloneRuntime ? "Save mode and start built-in Agent" : "Save settings and start watchdog", BLUE);
         save.setOnClickListener(ignored -> saveConfiguration());
         agentCard.addView(save, matchWithTop(12));
         root.addView(agentCard, matchWithTop(10));
 
-        root.addView(sectionTitle("默认通话卡"), matchWithTop(22));
+        root.addView(sectionTitle("Default calling SIM"), matchWithTop(22));
         LinearLayout callAccountCard = card(SURFACE, 22);
         callAccountCard.setOrientation(LinearLayout.VERTICAL);
         callAccountCard.setPadding(dp(16), dp(16), dp(16), dp(16));
@@ -592,51 +592,51 @@ public final class MainActivity extends Activity {
         boolean available = accountKey.isEmpty() || accounts.accounts().stream()
                 .anyMatch(account -> account.key().equals(accountKey));
         callAccountCard.addView(label(DefaultCallAccount.selectedLabel(this)
-                + (available ? "" : " · 当前不可用"), 14, available ? TEXT : WARNING, Gravity.START));
-        callAccountCard.addView(description("用于 AirSIM 蓝牙、VoWLAN 与云端拨号，不改变系统通话卡或短信卡。"
-                + "指定卡关闭或移除时会停止拨号，请重新选择。"), matchWithTop(6));
+                + (available ? "" : " · Currently unavailable"), 14, available ? TEXT : WARNING, Gravity.START));
+        callAccountCard.addView(description("Used for AirSIM Bluetooth, VoWLAN, and cloud calls. Does not change the system calling or SMS SIM."
+                + "If the selected SIM is disabled or removed, calling stops until you select another SIM."), matchWithTop(6));
         if (!accounts.error().isEmpty()) {
             callAccountCard.addView(description(accounts.error()), matchWithTop(6));
         } else if (accounts.accounts().isEmpty()) {
-            callAccountCard.addView(description("没有已启用的蜂窝通话卡"), matchWithTop(6));
+            callAccountCard.addView(description("No enabled calling SIMs"), matchWithTop(6));
         }
-        TextView chooseAccount = secondaryButton("选择默认通话卡");
+        TextView chooseAccount = secondaryButton("Choose default calling SIM");
         chooseAccount.setOnClickListener(ignored -> chooseDefaultCallAccount());
         callAccountCard.addView(chooseAccount, matchWithTop(10));
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
-            TextView grantAccountPermission = secondaryButton("授权读取通话卡");
+            TextView grantAccountPermission = secondaryButton("Allow access to calling SIMs");
             grantAccountPermission.setOnClickListener(ignored -> requestPermissions(
                     new String[] {Manifest.permission.READ_PHONE_STATE}, CALL_ACCOUNT_PERMISSION_REQUEST));
             callAccountCard.addView(grantAccountPermission, matchWithTop(10));
         }
         root.addView(callAccountCard, matchWithTop(10));
 
-        root.addView(sectionTitle("VoBLE 蓝牙认证"), matchWithTop(22));
+        root.addView(sectionTitle("VoBLE Bluetooth authentication"), matchWithTop(22));
         LinearLayout voBLECard = card(SURFACE, 22);
         voBLECard.setOrientation(LinearLayout.VERTICAL);
         voBLECard.setPadding(dp(16), dp(16), dp(16), dp(16));
         boolean voBLEPaired = com.airsim.phonecontrol.voble.VoBLEGatewayService
                 .hasStoredCredential(this);
-        voBLECard.addView(label(voBLEPaired ? "已保存 iPhone 认证凭据" : "尚未保存认证凭据",
+        voBLECard.addView(label(voBLEPaired ? "iPhone credentials saved" : "No credentials saved",
                 14, voBLEPaired ? PRIMARY : MUTED, Gravity.START));
-        voBLECard.addView(description("管理六位安全码认证、旧凭据恢复与双端取消配对。"),
+        voBLECard.addView(description("Manage six-digit code verification, credential recovery, and unpairing on both devices."),
                 matchWithTop(6));
-        TextView configureVoBLE = secondaryButton("打开 VoBLE 认证配置");
+        TextView configureVoBLE = secondaryButton("Open VoBLE authentication settings");
         configureVoBLE.setOnClickListener(ignored -> openVoBLEAuthenticationPage());
         voBLECard.addView(configureVoBLE, matchWithTop(10));
         root.addView(voBLECard, matchWithTop(10));
 
-		root.addView(sectionTitle("短信收件箱兜底"), matchWithTop(22));
+		root.addView(sectionTitle("SMS inbox fallback"), matchWithTop(22));
 		LinearLayout smsCard = card(SURFACE, 22);
 		smsCard.setOrientation(LinearLayout.VERTICAL);
 		smsCard.setPadding(dp(16), dp(16), dp(16), dp(16));
 		boolean inboxGranted = checkSelfPermission(Manifest.permission.READ_SMS)
 				== PackageManager.PERMISSION_GRANTED;
-		smsCard.addView(label(inboxGranted ? "已授权 · 仅扫描新收到的短信"
-				: "未授权 · 继续使用短信广播接收", 14, TEXT, Gravity.START));
-		smsCard.addView(description("可选权限；用于广播未送达时补取新短信，不导入历史短信。"), matchWithTop(6));
+		smsCard.addView(label(inboxGranted ? "Authorized · Scans newly received messages only"
+				: "Not authorized · SMS broadcasts are still used", 14, TEXT, Gravity.START));
+		smsCard.addView(description("Optional permission to retrieve new messages when broadcasts are missed. Existing messages are not imported."), matchWithTop(6));
 		if (!inboxGranted) {
-			TextView permissionAction = secondaryButton("在系统设置中授权读取短信");
+			TextView permissionAction = secondaryButton("Allow SMS access in system settings");
 			permissionAction.setOnClickListener(ignored -> startActivity(new Intent(
 					Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
 					Uri.parse("package:" + getPackageName()))));
@@ -645,7 +645,7 @@ public final class MainActivity extends Activity {
 		root.addView(smsCard, matchWithTop(10));
 
 		if (!standaloneRuntime) {
-		root.addView(sectionTitle("AVF Linux 首次安装"), matchWithTop(22));
+		root.addView(sectionTitle("Initial AVF Linux setup"), matchWithTop(22));
 		LinearLayout bootstrapCard = card(SURFACE, 22);
 		bootstrapCard.setOrientation(LinearLayout.VERTICAL);
 		bootstrapCard.setPadding(dp(16), dp(16), dp(16), dp(16));
@@ -656,32 +656,32 @@ public final class MainActivity extends Activity {
 		installCommand.setPadding(0, dp(10), 0, dp(4));
 		bootstrapCard.addView(installCommand);
 		LinearLayout bootstrapActions = row();
-		TextView copyInstall = secondaryButton("复制一键安装命令");
+		TextView copyInstall = secondaryButton("Copy installation command");
 		copyInstall.setOnClickListener(ignored -> copyAVFInstallCommand());
 		TextView openLinux = secondaryButton(avf.state() == AVFStartupPolicy.State.RUNNING
-				? "打开 Linux Terminal" : "启动 Linux Terminal");
+				? "Open Linux Terminal" : "Start Linux Terminal");
 		openLinux.setOnClickListener(ignored -> openAVFTerminalOrSettings());
 		bootstrapActions.addView(copyInstall, weightedWithEnd(5));
 		bootstrapActions.addView(openLinux, weightedWithStart(5));
 		bootstrapCard.addView(bootstrapActions, matchWithTop(10));
-		TextView developerOptions = secondaryButton("打开开发者选项");
+		TextView developerOptions = secondaryButton("Open developer options");
 		developerOptions.setOnClickListener(ignored -> AVFEnvironmentActions.openDeveloperOptions(this));
 		bootstrapCard.addView(developerOptions, matchWithTop(10));
 		root.addView(bootstrapCard, matchWithTop(10));
 
-		root.addView(sectionTitle("AVF Agent 管理"), matchWithTop(22));
+		root.addView(sectionTitle("AVF Agent management"), matchWithTop(22));
 		LinearLayout installerCard = card(SURFACE, 22);
 		installerCard.setOrientation(LinearLayout.VERTICAL);
 		installerCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-		installerStatus = label("正在读取 installerd 状态…", 13, MUTED, Gravity.START);
+		installerStatus = label("Reading installerd status…", 13, MUTED, Gravity.START);
 		installerCard.addView(installerStatus);
-		TextView updateAgent = primaryButton("检查并安装最新 Agent", BLUE);
+		TextView updateAgent = primaryButton("Check and install latest Agent", BLUE);
 		updateAgent.setOnClickListener(ignored -> runAgentMaintenance("update"));
 		installerCard.addView(updateAgent, matchWithTop(12));
 		LinearLayout installerActions = row();
-		TextView repairAgent = secondaryButton("修复当前版本");
+		TextView repairAgent = secondaryButton("Repair current version");
 		repairAgent.setOnClickListener(ignored -> runAgentMaintenance("repair"));
-		TextView rollbackAgent = secondaryButton("回滚上一版本");
+		TextView rollbackAgent = secondaryButton("Roll back to previous version");
 		rollbackAgent.setTextColor(WARNING);
 		rollbackAgent.setOnClickListener(ignored -> runAgentMaintenance("rollback"));
 		installerActions.addView(repairAgent, weightedWithEnd(5));
@@ -691,20 +691,20 @@ public final class MainActivity extends Activity {
 		refreshInstallerStatus();
 		}
 
-        root.addView(sectionTitle("Shizuku 权限与 PCM 桥"), matchWithTop(22));
+        root.addView(sectionTitle("Shizuku permission and PCM bridge"), matchWithTop(22));
         LinearLayout shizukuCard = card(SURFACE, 22);
         shizukuCard.setOrientation(LinearLayout.VERTICAL);
         shizukuCard.setPadding(dp(16), dp(16), dp(16), dp(16));
         shizukuStatus = label("", 14, TEXT, Gravity.START);
         shizukuCard.addView(shizukuStatus);
-        shizukuCard.addView(description("首次通过无线调试启动并授权；之后 AirSIM 会自动恢复 PCM 桥。"), matchWithTop(6));
+        shizukuCard.addView(description("Start Shizuku with wireless debugging and authorize AirSIM once. AirSIM then restores the PCM bridge automatically."), matchWithTop(6));
         LinearLayout shizukuActions = row();
-        TextView authorize = secondaryButton("授权并启动");
+        TextView authorize = secondaryButton("Authorize and start");
         authorize.setOnClickListener(ignored -> {
             ShizukuBridgeManager.get(this).requestPermission();
             refreshShizukuStatus();
         });
-        TextView open = secondaryButton("打开 Shizuku");
+        TextView open = secondaryButton("Open Shizuku");
         open.setOnClickListener(ignored -> {
             ShizukuBridgeManager.get(this).openShizuku();
             refreshShizukuStatus();
@@ -714,11 +714,11 @@ public final class MainActivity extends Activity {
         shizukuCard.addView(shizukuActions, matchWithTop(12));
         root.addView(shizukuCard, matchWithTop(10));
 
-        root.addView(sectionTitle("电话角色与诊断"), matchWithTop(22));
-        TextView dialer = secondaryButton("设为默认电话应用");
+        root.addView(sectionTitle("Dialer role and diagnostics"), matchWithTop(22));
+        TextView dialer = secondaryButton("Set as default phone app");
         dialer.setOnClickListener(ignored -> requestDialerRole());
         root.addView(dialer, matchWithTop(10));
-        TextView agent = secondaryButton("刷新 Agent 状态");
+        TextView agent = secondaryButton("Refresh Agent status");
         agent.setOnClickListener(ignored -> refreshAgent(true));
         root.addView(agent, matchWithTop(10));
         agentRefreshResult = label(agentRefreshMessage, 12, agentRefreshColor, Gravity.START);
@@ -727,13 +727,13 @@ public final class MainActivity extends Activity {
         root.addView(agentRefreshResult, matchWithTop(6));
 
         CheckBox debugEnabled = new CheckBox(this);
-        debugEnabled.setText("启用 Debug 模式");
+        debugEnabled.setText("Enable debug mode");
         debugEnabled.setTextColor(TEXT);
         debugEnabled.setButtonTintList(ColorStateList.valueOf(PRIMARY));
         debugEnabled.setChecked(AppConfig.debugEnabled(this));
         debugEnabled.setOnCheckedChangeListener((ignored, enabled) -> {
             BridgeLog.setDebugEnabled(this, enabled);
-            toast(enabled ? "Debug 日志已开启" : "Debug 日志已关闭");
+            toast(enabled ? "Debug logging enabled" : "Debug logging disabled");
         });
         root.addView(debugEnabled, matchWithTop(14));
         refreshShizukuStatus();
@@ -765,17 +765,17 @@ public final class MainActivity extends Activity {
     private View voBLEAuthenticationPage() {
         LinearLayout root = pageRoot();
         TextView back = label("‹", 40, TEXT, Gravity.START);
-        back.setContentDescription("返回设置");
+        back.setContentDescription("Back to settings");
         back.setOnClickListener(ignored -> {
             bottomBar.setVisibility(View.VISIBLE);
             showPage(Page.SETTINGS);
         });
         root.addView(back, new LinearLayout.LayoutParams(dp(56), dp(52)));
 
-        TextView title = label("VoBLE 认证", 30, TEXT, Gravity.START);
+        TextView title = label("VoBLE authentication", 30, TEXT, Gravity.START);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title, matchWithTop(8));
-        root.addView(description("蓝牙是独立连接模式；认证凭据不会影响 VoWLAN 或云端 Relay。"),
+        root.addView(description("Bluetooth is a separate connection mode. Its credentials do not affect VoWLAN or cloud Relay."),
                 matchWithTop(6));
 
         boolean permissions = hasVoBLEPermissions();
@@ -784,7 +784,7 @@ public final class MainActivity extends Activity {
         LinearLayout statusCard = card(SURFACE, 22);
         statusCard.setOrientation(LinearLayout.VERTICAL);
         statusCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        statusCard.addView(overline("认证状态"));
+        statusCard.addView(overline("Authentication status"));
         voBLEAuthenticationStatusView = label(
                 MainScreenPresentation.voBLEAuthenticationStatus(
                         paired,
@@ -792,13 +792,13 @@ public final class MainActivity extends Activity {
                         com.airsim.phonecontrol.voble.VoBLEGatewayService.pendingPairingCode()),
                 19, paired ? PRIMARY : WARNING, Gravity.START);
         statusCard.addView(voBLEAuthenticationStatusView, matchWithTop(7));
-        statusCard.addView(label(permissions ? "蓝牙权限：已授权" : "蓝牙权限：需要授权",
+        statusCard.addView(label(permissions ? "Bluetooth permission: granted" : "Bluetooth permission: required",
                 13, permissions ? MUTED : WARNING, Gravity.START), matchWithTop(7));
         voBLEDiagnosticsView = label(
                 com.airsim.phonecontrol.voble.VoBLEGatewayService.diagnosticsSummary(),
                 13, MUTED, Gravity.START);
         statusCard.addView(voBLEDiagnosticsView, matchWithTop(7));
-        statusCard.addView(overline("六位安全码"), matchWithTop(18));
+        statusCard.addView(overline("Six-digit security code"), matchWithTop(18));
         voBLEPairingCodeView = label(
                 MainScreenPresentation.voBLEPairingCode(
                         com.airsim.phonecontrol.voble.VoBLEGatewayService.pendingPairingCode()),
@@ -810,37 +810,37 @@ public final class MainActivity extends Activity {
         LinearLayout flowCard = card(SURFACE, 22);
         flowCard.setOrientation(LinearLayout.VERTICAL);
         flowCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        flowCard.addView(overline("认证流程"));
-        flowCard.addView(label("1. iPhone 扫描并连接此 Android Agent\n"
-                        + "2. 两端核对同一组六位安全码\n"
-                        + "3. 确认后保存应用层密钥并开放拨号与 PCM 音频",
+        flowCard.addView(overline("Authentication steps"));
+        flowCard.addView(label("1. Scan and connect to this Android Agent from iPhone\n"
+                        + "2. Check that both devices show the same six-digit code\n"
+                        + "3. Confirm to save the app key and enable calls and PCM audio",
                 14, TEXT, Gravity.START), matchWithTop(8));
-        flowCard.addView(description("如果 iPhone 显示 already paired 或认证失败，表示两端旧密钥不一致。"
-                + "请在此页清除旧凭据，再回到 iPhone 重新配对。"), matchWithTop(10));
+        flowCard.addView(description("If iPhone shows already paired or authentication fails, the devices' saved keys do not match."
+                + "Clear the old credentials here, then pair again from iPhone."), matchWithTop(10));
         root.addView(flowCard, matchWithTop(12));
 
-        TextView restart = secondaryButton("重启 VoBLE 服务");
+        TextView restart = secondaryButton("Restart VoBLE service");
         restart.setOnClickListener(ignored -> {
             com.airsim.phonecontrol.voble.VoBLEGatewayService.start(this);
-            toast("VoBLE 服务已启动");
+            toast("VoBLE service started");
             openVoBLEAuthenticationPage();
         });
         root.addView(restart, matchWithTop(16));
 
-        voBLEClearCredentialButton = secondaryButton("清除 VoBLE 配对凭据");
+        voBLEClearCredentialButton = secondaryButton("Clear VoBLE pairing credentials");
         voBLEClearCredentialButton.setTextColor(paired ? DANGER : MUTED);
         voBLEClearCredentialButton.setEnabled(paired);
         voBLEClearCredentialButton.setOnClickListener(ignored -> new AlertDialog.Builder(this)
-                .setTitle("清除旧的 VoBLE 配对？")
-                .setMessage("仅删除蓝牙认证密钥并结束当前 VoBLE 会话；不会清除 VoWLAN、Relay 或通话记录。")
-                .setPositiveButton("清除并重新配对", (dialog, which) -> {
+                .setTitle("Clear old VoBLE pairing?")
+                .setMessage("Deletes Bluetooth authentication keys and ends the current VoBLE session. VoWLAN, Relay, and call history are kept.")
+                .setPositiveButton("Clear and pair again", (dialog, which) -> {
                     com.airsim.phonecontrol.voble.VoBLEGatewayService.clearStoredCredential(this);
                     handler.postDelayed(() -> {
-                        toast("VoBLE 旧凭据已清除");
+                        toast("Old VoBLE credentials cleared");
                         openVoBLEAuthenticationPage();
                     }, 150);
                 })
-                .setNegativeButton("取消", null)
+                .setNegativeButton("Cancel", null)
                 .show());
         root.addView(voBLEClearCredentialButton, matchWithTop(10));
         return scroll(root);
@@ -875,23 +875,23 @@ public final class MainActivity extends Activity {
     private View pairingPage() {
         LinearLayout root = pageRoot();
         TextView back = label("‹", 40, TEXT, Gravity.START);
-        back.setContentDescription("返回");
+        back.setContentDescription("Back");
         back.setOnClickListener(ignored -> {
             stopPairingServer();
             showPage(Page.STATUS);
         });
         root.addView(back, new LinearLayout.LayoutParams(dp(56), dp(52)));
 
-        TextView title = label("一次性配对", 30, TEXT, Gravity.START);
+        TextView title = label("One-time pairing", 30, TEXT, Gravity.START);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title, matchWithTop(8));
-        root.addView(description("让 iPhone 与三星连接同一 Wi‑Fi 或三星热点"), matchWithTop(6));
+        root.addView(description("Connect iPhone and Android to the same Wi-Fi or Android hotspot"), matchWithTop(6));
 
         LinearLayout pairingCard = card(SURFACE, 28);
         pairingCard.setOrientation(LinearLayout.VERTICAL);
         pairingCard.setGravity(Gravity.CENTER_HORIZONTAL);
         pairingCard.setPadding(dp(20), dp(24), dp(20), dp(24));
-        pairingCard.addView(label("配对码（一次性）", 14, MUTED, Gravity.CENTER));
+        pairingCard.addView(label("Pairing code (one-time)", 14, MUTED, Gravity.CENTER));
         pairingCodeView = label(
                 MainScreenPresentation.formatPairingCode(pairingCode), 42, TEXT, Gravity.CENTER);
         pairingCodeView.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
@@ -900,19 +900,19 @@ public final class MainActivity extends Activity {
         pairingCodeView.setPadding(dp(18), dp(18), dp(18), dp(18));
         pairingCard.addView(pairingCodeView, matchWithTop(18));
 
-        pairingCountdownView = label("正在生成安全密钥…", 14, Color.rgb(135, 183, 238), Gravity.CENTER);
+        pairingCountdownView = label("Generating secure key…", 14, Color.rgb(135, 183, 238), Gravity.CENTER);
         pairingCard.addView(pairingCountdownView, matchWithTop(16));
 
         ImageView link = icon(android.R.drawable.ic_menu_share, CYAN, 92);
         link.setPadding(dp(22), dp(22), dp(22), dp(22));
         pairingCard.addView(link, new LinearLayout.LayoutParams(dp(112), dp(112)));
 
-        pairingStatus = label("正在检查局域网并生成临时密钥…", 15, TEXT, Gravity.CENTER);
+        pairingStatus = label("Checking local network and generating temporary key…", 15, TEXT, Gravity.CENTER);
         pairingStatus.setMaxLines(4);
         pairingCard.addView(pairingStatus, matchWithTop(10));
         root.addView(pairingCard, matchWithTop(20));
 
-        TextView cancel = secondaryButton("取消配对");
+        TextView cancel = secondaryButton("Cancel pairing");
         cancel.setTextColor(DANGER);
         cancel.setOnClickListener(ignored -> {
             stopPairingServer();
@@ -920,7 +920,7 @@ public final class MainActivity extends Activity {
         });
         root.addView(cancel, matchWithTop(18));
 
-        TextView note = label("临时密钥 · 仅可使用一次", 13, MUTED, Gravity.CENTER);
+        TextView note = label("Temporary key · Single use only", 13, MUTED, Gravity.CENTER);
         note.setCompoundDrawablesWithIntrinsicBounds(android.R.drawable.ic_lock_idle_lock, 0, 0, 0);
         note.setCompoundDrawableTintList(ColorStateList.valueOf(MUTED));
         note.setCompoundDrawablePadding(dp(8));
@@ -932,7 +932,7 @@ public final class MainActivity extends Activity {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
         LinearLayout filterRow = row();
-        String[] filters = {"全部", "Agent", "VoWLAN", "PCM", "Telecom"};
+        String[] filters = {"All", "Agent", "VoWLAN", "PCM", "Telecom"};
         for (String filter : filters) {
             boolean selected = filter.equals(activeDebugFilter);
             TextView chip = label(filter, 13, selected ? BG : TEXT, Gravity.CENTER);
@@ -960,8 +960,8 @@ public final class MainActivity extends Activity {
         LinearLayout segment = row();
         segment.setPadding(dp(3), dp(3), dp(3), dp(3));
         segment.setBackground(rounded(SURFACE_HIGH, 24, BORDER, 1));
-        segment.addView(segmentItem("远端静默", AppConfig.MODE_REMOTE_SILENT), weighted());
-        segment.addView(segmentItem("本机显示", AppConfig.MODE_LOCAL_AND_PUSH), weighted());
+        segment.addView(segmentItem("Remote only", AppConfig.MODE_REMOTE_SILENT), weighted());
+        segment.addView(segmentItem("Show on this device", AppConfig.MODE_LOCAL_AND_PUSH), weighted());
         return segment;
     }
 
@@ -1019,7 +1019,7 @@ public final class MainActivity extends Activity {
         HealthTile tile = pcmHealthTile;
         if (tile == null || currentPage != Page.STATUS) return;
         int color = running ? PRIMARY : WARNING;
-        tile.state.setText(running ? "运行中" : "待启动");
+        tile.state.setText(running ? "Running" : "Not running");
         tile.state.setTextColor(color);
         tile.icon.setImageTintList(ColorStateList.valueOf(color));
         tile.icon.setBackground(rounded(running ? Color.rgb(17, 66, 57) : Color.rgb(76, 58, 25),
@@ -1046,9 +1046,9 @@ public final class MainActivity extends Activity {
 
     private void placeSystemCall() {
         String value = number == null ? "" : number.getText().toString().trim();
-        if (value.isEmpty()) { toast("请输入号码"); return; }
+        if (value.isEmpty()) { toast("Enter a phone number"); return; }
         if (!dialerRoleHeld()) {
-            toast("请先将 AirSIM 设为默认电话应用");
+            toast("Set AirSIM as the default phone app first");
             requestDialerRole();
             return;
         }
@@ -1056,14 +1056,14 @@ public final class MainActivity extends Activity {
             getSystemService(TelecomManager.class).placeCall(Uri.parse("tel:" + value),
                     DefaultCallAccount.dialExtras(this));
         } catch (RuntimeException error) {
-            toast(error.getMessage() == null ? "系统拨号失败" : error.getMessage());
+            toast(error.getMessage() == null ? "System call failed" : error.getMessage());
         }
     }
 
     private void chooseDefaultCallAccount() {
         DefaultCallAccount.Snapshot snapshot = DefaultCallAccount.snapshot(this);
         String[] choices = new String[snapshot.accounts().size() + 1];
-        choices[0] = "跟随系统默认";
+        choices[0] = "Use system default";
         String key = DefaultCallAccount.selectedKey(this);
         int checked = key.isEmpty() ? 0 : -1;
         for (int i = 0; i < snapshot.accounts().size(); i++) {
@@ -1071,14 +1071,14 @@ public final class MainActivity extends Activity {
             choices[i + 1] = account.label() + (account.number().isEmpty() ? "" : "\n" + account.number());
             if (key.equals(account.key())) checked = i + 1;
         }
-        new AlertDialog.Builder(this).setTitle("默认通话卡")
+        new AlertDialog.Builder(this).setTitle("Default calling SIM")
                 .setSingleChoiceItems(choices, checked, (dialog, which) -> {
                     if (which == 0) DefaultCallAccount.followSystem(this);
                     else DefaultCallAccount.select(this, snapshot.accounts().get(which - 1));
                     dialog.dismiss();
                     showPage(Page.SETTINGS);
-                    toast("已保存默认通话卡");
-                }).setNegativeButton("取消", null).show();
+                    toast("Default calling SIM saved");
+                }).setNegativeButton("Cancel", null).show();
     }
 
     private void continueStartupSetup() {
@@ -1115,22 +1115,22 @@ public final class MainActivity extends Activity {
         String action;
         switch (prompt) {
             case INSTALL -> {
-                title = "需要安装 Shizuku";
-                message = "AirSIM 的通话音频桥需要 Shizuku。当前未检测到安装；安装后请启动服务并授权 AirSIM。"
-                        + "\n\n官方下载：\n" + ShizukuBridgeManager.DOWNLOAD_URL;
-                action = "下载 Shizuku";
+                title = "Shizuku installation required";
+                message = "AirSIM's call audio bridge requires Shizuku. Install it, start its service, and authorize AirSIM."
+                        + "\n\nOfficial download:\n" + ShizukuBridgeManager.DOWNLOAD_URL;
+                action = "Download Shizuku";
             }
             case START -> {
-                title = "Shizuku 尚未运行";
-                message = "已安装 Shizuku，但服务尚未启动。请打开 Shizuku，使用无线调试或 Root 启动服务，再返回 AirSIM。"
-                        + "\n\n未就绪时，通话音频无法转送到 iPhone。";
-                action = "打开 Shizuku";
+                title = "Shizuku is not running";
+                message = "Shizuku is installed but its service has not started. Open Shizuku, start it using wireless debugging or Root, then return to AirSIM."
+                        + "\n\nCall audio cannot be forwarded to iPhone until it is ready.";
+                action = "Open Shizuku";
             }
             case AUTHORIZE -> {
-                title = "需要 Shizuku 授权";
-                message = "Shizuku 已运行，但 AirSIM 尚未获授权。请允许 AirSIM 使用 Shizuku，以启动通话音频桥。"
-                        + "\n\n若此前拒绝过，请在 Shizuku 的「已授权应用」中允许 AirSIM。";
-                action = "授权";
+                title = "Shizuku authorization required";
+                message = "Shizuku is running, but AirSIM is not authorized. Allow AirSIM to use Shizuku to start the call audio bridge."
+                        + "\n\nIf previously denied, allow AirSIM under Authorized applications in Shizuku.";
+                action = "Authorize";
             }
             default -> throw new IllegalArgumentException("No Shizuku prompt to present");
         }
@@ -1144,7 +1144,7 @@ public final class MainActivity extends Activity {
                         awaitingAction[0] = openShizukuStartupAction(prompt);
                     }
                 })
-                .setNegativeButton("稍后", null).create();
+                .setNegativeButton("Later", null).create();
         shizukuStartupDialog.setOnDismissListener(dialog -> {
             shizukuStartupDialog = null;
             if (!awaitingAction[0] && !isFinishing() && !isDestroyed()) {
@@ -1169,7 +1169,7 @@ public final class MainActivity extends Activity {
                     ? new Intent(Intent.ACTION_VIEW, Uri.parse(ShizukuBridgeManager.DOWNLOAD_URL))
                     : getPackageManager().getLaunchIntentForPackage(ShizukuBridgeManager.MANAGER_PACKAGE);
             if (intent == null) {
-                toast("无法打开 Shizuku，请从官方下载页安装");
+                toast("Unable to open Shizuku. Install it from the official download page.");
                 return false;
             }
             // Keep the return callback in this Activity's task, even if the
@@ -1179,7 +1179,7 @@ public final class MainActivity extends Activity {
             return true;
         } catch (RuntimeException error) {
             BridgeLog.error("shizuku_startup_action_failed", error);
-            toast("无法打开页面，请复制弹窗中的官方下载地址");
+            toast("Unable to open page. Copy the official download address from the dialog.");
             return false;
         }
     }
@@ -1194,7 +1194,7 @@ public final class MainActivity extends Activity {
     private void requestDialerRole() {
         RoleManager manager = getSystemService(RoleManager.class);
         if (manager == null || !manager.isRoleAvailable(RoleManager.ROLE_DIALER)) {
-            toast("设备不支持默认拨号器角色");
+            toast("This device does not support the default dialer role");
             continueAfterSystemRoleRequest();
             return;
         }
@@ -1224,10 +1224,10 @@ public final class MainActivity extends Activity {
             DialerRoleSetupPolicy.Action next = DialerRoleSetupPolicy.afterPrivilegedAttempt(
                     success && dialerRoleHeld());
             if (next == DialerRoleSetupPolicy.Action.COMPLETE) {
-                toast("默认电话角色已由系统启用");
+                toast("System enabled the default phone role");
                 checkAVFEnvironmentAtStartup();
             } else {
-                toast(detail + "，请在默认应用中选择 AirSIM");
+                toast(detail + ". Select AirSIM in default apps.");
                 openDefaultAppsSettings();
             }
         });
@@ -1247,16 +1247,16 @@ public final class MainActivity extends Activity {
 
     private void localCall(String action) {
         if (!dialerRoleHeld()) {
-            toast("当前通话属于其他默认电话应用；请先选择 AirSIM");
+            toast("This call belongs to another default phone app. Select AirSIM first.");
             requestDialerRole();
             return;
         }
         String callId = CallRepository.idForAction(action);
-        if (callId.isEmpty()) { toast("当前没有可控制的通话"); return; }
+        if (callId.isEmpty()) { toast("No call available to control"); return; }
         Executors.newSingleThreadExecutor().execute(() -> {
             CallRepository.ActionResult result = CallRepository.execute(
                     MainActivity.this, new AgentCommand(UUID.randomUUID().toString(), action, callId, ""));
-            runOnUiThread(() -> toast(result.success ? "Telecom 已确认" : result.error));
+            runOnUiThread(() -> toast(result.success ? "Telecom confirmed" : result.error));
         });
     }
 
@@ -1266,9 +1266,9 @@ public final class MainActivity extends Activity {
 
     private void refreshAgent(boolean showResult) {
         final int generation = ++agentRefreshGeneration;
-        agentDetail = "检测中";
-        if (showResult) setAgentRefreshMessage("正在请求 " + AppConfig.endpoint(this)
-                + " 的 Agent 状态…", MUTED);
+        agentDetail = "Checking";
+        if (showResult) setAgentRefreshMessage("Requesting " + AppConfig.endpoint(this)
+                + " Agent status…", MUTED);
         updateVisibleStatus();
         Executors.newSingleThreadExecutor().execute(() -> {
             String address = AppConfig.endpoint(this);
@@ -1279,26 +1279,26 @@ public final class MainActivity extends Activity {
                 String payload = paired ? client.status() : client.health();
                 JSONObject result = new JSONObject(payload);
                 boolean healthy = result.optBoolean("ok", false);
-                String profile = result.optString("runtime_profile", "未知");
+                String profile = result.optString("runtime_profile", "Unknown");
                 String detail = paired
-                        ? "接口：GET " + path + " · HTTP 200\nAgent：" + address
-                                + "\n运行模式：" + profile
-                                + " · 待执行命令：" + result.optInt("pending_commands", 0)
-                                + "\n最近活动：" + result.optString("last_seen", "未记录")
-                        : "接口：GET " + path + " · HTTP 200\nAgent：" + address
-                                + "\n版本：" + result.optString("version", "未知")
-                                + " · 运行模式：" + profile
-                                + "\n控制令牌：尚未配置";
+                        ? "Endpoint: GET " + path + " · HTTP 200\nAgent: " + address
+                                + "\nRuntime mode: " + profile
+                                + " · Pending commands: " + result.optInt("pending_commands", 0)
+                                + "\nLast active: " + result.optString("last_seen", "Not recorded")
+                        : "Endpoint: GET " + path + " · HTTP 200\nAgent: " + address
+                                + "\nVersion: " + result.optString("version", "Unknown")
+                                + " · Runtime mode: " + profile
+                                + "\nControl token: not configured";
                 BridgeLog.info("agent_status_refresh path=" + path + " ok=" + healthy
                         + " profile=" + profile + " endpoint=" + address);
                 runOnUiThread(() -> {
                     if (generation != agentRefreshGeneration) return;
                     agentOnline = paired && healthy;
                     agentDetail = healthy
-                            ? (paired ? "在线" : "可达 · 尚未配对控制令牌")
-                            : "可达 · Agent 报告未就绪";
+                            ? (paired ? "Online" : "Reachable · Control token not paired")
+                            : "Reachable · Agent reports not ready";
                     if (showResult) setAgentRefreshMessage(
-                            (healthy ? "刷新成功" : "Agent 未就绪") + "\n" + detail,
+                            (healthy ? "Refresh successful" : "Agent not ready") + "\n" + detail,
                             healthy ? PRIMARY : WARNING);
                     updateVisibleStatus();
                 });
@@ -1315,10 +1315,10 @@ public final class MainActivity extends Activity {
                     runOnUiThread(() -> {
                         if (generation != agentRefreshGeneration) return;
                         pushConfigured = false;
-                        pushDetail = "状态不可读";
+                        pushDetail = "Status unavailable";
                         cloudRelayConfigured = false;
                         cloudLastError = DebugRedactor.sanitize(pushError);
-                        pushDiagnostic = "读取 /api/push/status 失败："
+                        pushDiagnostic = "Failed to read /api/push/status: "
                                 + DebugRedactor.sanitize(pushError);
                         updateVisibleStatus();
                     });
@@ -1328,15 +1328,15 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (generation != agentRefreshGeneration) return;
                     agentOnline = false;
-                    agentDetail = "离线 · " + error.getClass().getSimpleName();
+                    agentDetail = "Offline · " + error.getClass().getSimpleName();
                     pushConfigured = false;
-                    pushDetail = "Agent 不可达";
+                    pushDetail = "Agent unreachable";
                     cloudRelayConfigured = false;
-                    cloudLastError = RuntimeMode.agentLabel(this) + "不可达";
-                    pushDiagnostic = "先恢复" + RuntimeMode.agentLabel(this)
-                            + "；当前无法查询 /api/push/status。";
-                    if (showResult) setAgentRefreshMessage("刷新失败 · GET " + path
-                            + "\nAgent：" + address + "\n原因："
+                    cloudLastError = RuntimeMode.agentLabel(this) + " unreachable";
+                    pushDiagnostic = "Restore " + RuntimeMode.agentLabel(this)
+                            + "; /api/push/status cannot currently be queried.";
+                    if (showResult) setAgentRefreshMessage("Refresh failed · GET " + path
+                            + "\nAgent: " + address + "\nReason: "
                             + DebugRedactor.sanitize(error.getClass().getSimpleName() + " · "
                                     + String.valueOf(error.getMessage())), DANGER);
                     updateVisibleStatus();
@@ -1364,23 +1364,23 @@ public final class MainActivity extends Activity {
         cloudRelayConfigured = enabled && result.optBoolean("configured", false) && !relay.isEmpty();
         cloudLastError = DebugRedactor.sanitize(lastError);
         pushConfigured = enabled && calls && messages;
-        pushDetail = !enabled ? "云端已关闭" : pushConfigured ? "推送已配置" : "配置不完整";
-        pushDiagnostic = "云端开关：" + (enabled ? "开启" : "关闭")
-                + "\n来电 Push：" + (calls ? "已配置" : "未就绪")
-                + " · 短信 Push：" + (messages ? "已配置" : "未就绪")
-                + "\nRelay：" + (relay.isEmpty() ? "未配置" : relay)
-                + "\nAPNs 环境：" + result.optString("environment", "未知")
-                + " · WAN：" + result.optString("wan_interface", "未检测到")
-                + (lastError.isEmpty() ? "" : "\n最近错误：" + DebugRedactor.sanitize(lastError))
-                + "\n注意：已配置不等于公网 Relay 已验证可达。";
+        pushDetail = !enabled ? "Cloud disabled" : pushConfigured ? "Push configured" : "Configuration incomplete";
+        pushDiagnostic = "Cloud: " + (enabled ? "On" : "Off")
+                + "\nIncoming call push: " + (calls ? "Configured" : "Not ready")
+                + " · SMS push: " + (messages ? "Configured" : "Not ready")
+                + "\nRelay: " + (relay.isEmpty() ? "Not configured" : relay)
+                + "\nAPNs environment: " + result.optString("environment", "Unknown")
+                + " · WAN: " + result.optString("wan_interface", "Not detected")
+                + (lastError.isEmpty() ? "" : "\nLatest error: " + DebugRedactor.sanitize(lastError))
+                + "\nNote: configured does not mean the public Relay is verified reachable.";
     }
 
     private void showFeatureDetails(Feature feature) {
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(featureTitle(feature))
                 .setMessage(featureDetails(feature, ""))
-                .setPositiveButton("关闭", null)
-                .setNeutralButton("重新检查", (ignored, which) -> showFeatureDetails(feature))
+                .setPositiveButton("Close", null)
+                .setNeutralButton("Check again", (ignored, which) -> showFeatureDetails(feature))
                 .create();
         dialog.show();
         if (feature != Feature.AGENT && feature != Feature.PUSH) return;
@@ -1396,7 +1396,7 @@ public final class MainActivity extends Activity {
                     try {
                         cloudLogs = cloudAgentLogs(new JSONObject(client.debugSnapshot()));
                     } catch (Exception error) {
-                        cloudLogs = "Agent 云端事件读取失败：" + DebugRedactor.sanitize(
+                        cloudLogs = "Failed to read Agent cloud events: " + DebugRedactor.sanitize(
                                 error.getClass().getSimpleName() + " · " + error.getMessage());
                     }
                     String liveCloudLogs = cloudLogs;
@@ -1404,19 +1404,19 @@ public final class MainActivity extends Activity {
                         updatePushStatus(result);
                         updateVisibleStatus();
                         if (dialog.isShowing()) dialog.setMessage(featureDetails(feature,
-                                "实时查询：/api/push/status · HTTP 200\n\nAgent 云端事件（新到旧）\n"
+                                "Live query: /api/push/status · HTTP 200\n\nAgent cloud events (newest first)\n"
                                         + liveCloudLogs));
                     });
                     return;
                 }
-                live = "实时查询：" + (AppConfig.configured(this) ? "/api/android/status" : "/api/health")
-                        + " · HTTP 200\n返回：ok=" + result.optBoolean("ok", false)
-                        + " · runtime_profile=" + result.optString("runtime_profile", "未知")
+                live = "Live query: " + (AppConfig.configured(this) ? "/api/android/status" : "/api/health")
+                        + " · HTTP 200\nResponse: ok=" + result.optBoolean("ok", false)
+                        + " · runtime_profile=" + result.optString("runtime_profile", "Unknown")
                         + (AppConfig.configured(this)
                             ? " · pending_commands=" + result.optInt("pending_commands", 0)
-                            : " · version=" + result.optString("version", "未知"));
+                            : " · version=" + result.optString("version", "Unknown"));
             } catch (Exception error) {
-                live = "实时查询失败：" + DebugRedactor.sanitize(
+                live = "Live query failed: " + DebugRedactor.sanitize(
                         error.getClass().getSimpleName() + " · " + error.getMessage());
                 BridgeLog.error("feature_diagnostic_failed feature=" + feature, error);
             }
@@ -1429,7 +1429,7 @@ public final class MainActivity extends Activity {
 
     private String cloudAgentLogs(JSONObject snapshot) {
         JSONArray events = snapshot.optJSONArray("events");
-        if (events == null) return "Agent 未返回事件列表";
+        if (events == null) return "Agent returned no event list";
         StringBuilder output = new StringBuilder();
         int count = 0;
         for (int index = events.length() - 1; index >= 0 && count < 10; index--) {
@@ -1443,20 +1443,20 @@ public final class MainActivity extends Activity {
                     .append(" · ").append(DebugRedactor.sanitize(event.optString("summary", "")));
             String payload = event.optString("payload", "");
             if (!payload.isEmpty()) output.append("\n  ").append(
-                    payload.contains("://") ? "[可能包含媒体凭据，链接详情已省略]"
+                    payload.contains("://") ? "[Link omitted because it may contain media credentials]"
                             : DebugRedactor.sanitize(payload));
             count++;
         }
-        return output.length() == 0 ? "暂无 Push / Cloud 事件" : output.toString();
+        return output.length() == 0 ? "No push / cloud events" : output.toString();
     }
 
     private String featureTitle(Feature feature) {
         return switch (feature) {
-            case VOWLAN -> "VoWLAN 连接详情";
-            case AGENT -> RuntimeMode.agentLabel(this) + " 详情";
-            case PCM -> "PCM 音频桥详情";
-            case PUSH -> "Push / Relay 详情";
-            case SHIZUKU -> "Shizuku 详情";
+            case VOWLAN -> "VoWLAN connection details";
+            case AGENT -> RuntimeMode.agentLabel(this) + " details";
+            case PCM -> "PCM audio bridge details";
+            case PUSH -> "Push / Relay details";
+            case SHIZUKU -> "Shizuku details";
         };
     }
 
@@ -1470,64 +1470,64 @@ public final class MainActivity extends Activity {
             case VOWLAN -> {
                 boolean paired = VoWLANPairingStore.configured(this);
                 String address = localVoWLANAddress();
-                String pcmBackend = RuntimeMode.isStandalone(this) ? "本机 PCM 端口 7580" : "AVF PCM 端口 7580";
-                String reason = !paired ? "尚未与 iPhone 配对"
-                        : address.isEmpty() ? "没有可用的同网 Wi-Fi 或三星热点地址"
-                        : currentVoWLAN.contains("avf=missing") ? "AVF 虚拟网卡未出现"
-                        : currentVoWLAN.contains("agent_ready=false") ? "Agent 未通过 VoWLAN 就绪检查"
-                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + "未就绪"
-                        : !vowlanReady() ? "VoWLAN 服务尚未完成当前检查：" + currentVoWLAN
-                        : "当前检查项满足；仍需实际通话验证";
-                details = "配对：" + (paired ? "已保存密钥" : "未配对")
-                        + "\n本机局域网：" + (address.isEmpty() ? "未发现" : address)
-                        + "\n状态原因：" + reason
-                        + "\n当前检查：" + currentVoWLAN
-                        + "\n最近检查：" + (latestVoWLAN.isEmpty() ? "无" : latestVoWLAN);
+                String pcmBackend = RuntimeMode.isStandalone(this) ? "Local PCM port 7580" : "AVF PCM port 7580";
+                String reason = !paired ? "Not paired with iPhone"
+                        : address.isEmpty() ? "No address available on the same Wi-Fi or Android hotspot"
+                        : currentVoWLAN.contains("avf=missing") ? "AVF virtual network interface not found"
+                        : currentVoWLAN.contains("agent_ready=false") ? "Agent failed the VoWLAN readiness check"
+                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + "Not ready"
+                        : !vowlanReady() ? "VoWLAN service has not completed the current check: " + currentVoWLAN
+                        : "Current checks pass; an actual call is still needed to verify";
+                details = "Pairing: " + (paired ? "Key saved" : "Not paired")
+                        + "\nLocal network: " + (address.isEmpty() ? "Not found" : address)
+                        + "\nStatus reason: " + reason
+                        + "\nCurrent check: " + currentVoWLAN
+                        + "\nLatest check: " + (latestVoWLAN.isEmpty() ? "None" : latestVoWLAN);
                 keywords = new String[]{"vowlan", "pairing"};
             }
             case AGENT -> {
                 boolean standalone = RuntimeMode.isStandalone(this);
-                details = "状态：" + agentDetail
-                        + (standalone ? "\n运行位置：本 APK 前台服务"
-                                : "\n地址：" + AppConfig.endpoint(this)
-                                + "\n控制令牌：" + (AppConfig.configured(this) ? "已配置" : "未配置"))
-                        + "\n原因：" + (agentOnline ? "最近一次状态检查通过"
-                            : standalone ? "检查前台服务、通知权限与系统省电限制"
-                            : "检查 AVF Linux 是否运行、地址是否为 :8575，以及控制令牌是否匹配")
+                details = "Status: " + agentDetail
+                        + (standalone ? "\nRuns in: this app's foreground service"
+                                : "\nAddress: " + AppConfig.endpoint(this)
+                                + "\nControl token: " + (AppConfig.configured(this) ? "Configured" : "Not configured"))
+                        + "\nReason: " + (agentOnline ? "Latest status check passed"
+                            : standalone ? "Check the foreground service, notification permission, and battery restrictions"
+                            : "Check AVF Linux is running, address uses :8575, and control token matches")
                         + "\n" + agentRefreshMessage;
                 keywords = new String[]{"agent", "watchdog", "http_request", "avf"};
             }
             case PCM -> {
                 String shizuku = ShizukuBridgeManager.get(this).status();
-                String pcmBackend = RuntimeMode.isStandalone(this) ? "本机 PCM 端口 7580" : "AVF PCM 端口 7580";
-                String reason = !shizukuReady() ? "Shizuku 未连接或未授权，PCM 用户服务不可用"
-                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + "未响应"
-                        : !pcmBridgeRunning() ? "PCM 音频桥进程尚未运行"
-                        : "当前检查项满足；仍需实际通话验证双向音频";
-                details = "Shizuku：" + shizuku + "\n桥状态：" + (pcmBridgeRunning() ? "运行中" : "待启动")
-                        + "\n状态原因：" + reason
-                        + "\n当前 VoWLAN 检查：" + currentVoWLAN
-                        + "\n最近 VoWLAN 检查：" + (latestVoWLAN.isEmpty() ? "无" : latestVoWLAN);
+                String pcmBackend = RuntimeMode.isStandalone(this) ? "Local PCM port 7580" : "AVF PCM port 7580";
+                String reason = !shizukuReady() ? "Shizuku is disconnected or unauthorized; PCM user service unavailable"
+                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + " did not respond"
+                        : !pcmBridgeRunning() ? "PCM audio bridge process is not running"
+                        : "Current checks pass; verify two-way audio with an actual call";
+                details = "Shizuku: " + shizuku + "\nBridge status: " + (pcmBridgeRunning() ? "Running" : "Not running")
+                        + "\nStatus reason: " + reason
+                        + "\nCurrent VoWLAN check: " + currentVoWLAN
+                        + "\nLatest VoWLAN check: " + (latestVoWLAN.isEmpty() ? "None" : latestVoWLAN);
                 keywords = new String[]{"pcm", "shizuku", "vowlan_state"};
             }
             case PUSH -> {
-                details = "状态：" + pushDetail + "\n" + pushDiagnostic
-                        + "\n原因：" + (agentOnline ? "请核对开关、Relay 地址、APNs token 与最近错误"
-                            : "Agent 不可达时无法确认云端注册或心跳");
+                details = "Status: " + pushDetail + "\n" + pushDiagnostic
+                        + "\nReason: " + (agentOnline ? "Check settings, Relay address, APNs token, and latest errors"
+                            : "Cannot verify cloud registration or heartbeat while Agent is unreachable");
                 keywords = new String[]{"push", "relay", "pairing"};
             }
             case SHIZUKU -> {
                 String shizuku = ShizukuBridgeManager.get(this).status();
-                details = "状态：" + shizuku + "\n原因：" + (shizukuReady()
-                        ? "Binder 已连接；是否有声音仍需检查 PCM 路由"
-                        : "检查 Shizuku 是否运行、AirSIM 授权及 PCM 用户服务是否成功绑定");
+                details = "Status: " + shizuku + "\nReason: " + (shizukuReady()
+                        ? "Binder connected; check PCM routing to verify audio"
+                        : "Check Shizuku is running, AirSIM is authorized, and PCM user service is bound");
                 keywords = new String[]{"shizuku", "local_output"};
             }
-            default -> throw new IllegalStateException("未知功能");
+            default -> throw new IllegalStateException("Unknown feature");
         }
         String recent = MainScreenPresentation.recentMatchingLogLines(log, 12, keywords);
         return details + (live.isEmpty() ? "" : "\n\n" + live)
-                + "\n\n相关日志（新到旧）\n" + recent;
+                + "\n\nRelated logs (newest first)\n" + recent;
     }
 
 	private void checkAVFEnvironmentAtStartup() {
@@ -1547,25 +1547,25 @@ public final class MainActivity extends Activity {
 		boolean needsInstall = snapshot.state() == AVFStartupPolicy.State.RUNNING && !agentConfigured;
 		boolean canLaunch = snapshot.state() == AVFStartupPolicy.State.READY_TO_START;
 		AlertDialog dialog = new AlertDialog.Builder(this)
-				.setTitle(needsInstall ? "配置 AirSIM AVF Agent" : "需要启动 AVF Linux 环境")
+				.setTitle(needsInstall ? "Set up AirSIM AVF Agent" : "Start the AVF Linux environment")
 				.setMessage(avfEnvironmentSummary(snapshot)
 						+ (needsInstall
-						? "\n\n若尚未安装，复制首次安装命令到 Linux Terminal；" +
-								"若 Agent 已运行，先执行 sudo airsim-avf-pair 配对并检查 installerd。"
-						: "\n\n启动 Linux 后，在 Terminal 中粘贴 AirSIM 一键安装命令。"))
-				.setPositiveButton(needsInstall ? "复制首次安装命令"
-						: canLaunch ? "启动 Linux Terminal" : "打开开发者选项",
+						? "\n\nIf not installed, copy the initial installation command into Linux Terminal. " +
+								"If the Agent is running, run sudo airsim-avf-pair to pair and check installerd."
+						: "\n\nAfter starting Linux, paste the AirSIM installation command into Terminal."))
+				.setPositiveButton(needsInstall ? "Copy initial installation command"
+						: canLaunch ? "Start Linux Terminal" : "Open developer options",
 						(ignored, which) -> {
 							if (needsInstall) copyAVFInstallCommand();
 							else if (canLaunch) openAVFTerminalOrSettings();
 							else AVFEnvironmentActions.openDeveloperOptions(this);
 						})
-				.setNeutralButton(needsInstall ? "打开 Linux Terminal" : "复制安装命令",
+				.setNeutralButton(needsInstall ? "Open Linux Terminal" : "Copy installation command",
 						(ignored, which) -> {
 							if (needsInstall) openAVFTerminalOrSettings();
 							else copyAVFInstallCommand();
 						})
-				.setNegativeButton("稍后", null)
+				.setNegativeButton("Later", null)
 				.create();
 		dialog.setOnDismissListener(ignored -> completeStartupSetup());
 		dialog.show();
@@ -1573,51 +1573,51 @@ public final class MainActivity extends Activity {
 
 	private String avfEnvironmentSummary(AVFEnvironmentDetector.Snapshot snapshot) {
 		return switch (snapshot.state()) {
-			case RUNNING -> "AVF Linux 已启动，可连接 Agent。";
-			case READY_TO_START -> "系统已提供 AVF 和 Linux Terminal，但虚拟 Linux 尚未启动。";
-			case TERMINAL_DISABLED -> "系统包含 Linux Terminal，但当前被开发者选项停用。";
+			case RUNNING -> "AVF Linux is running and ready to connect to Agent.";
+			case READY_TO_START -> "AVF and Linux Terminal are available, but the Linux VM has not started.";
+			case TERMINAL_DISABLED -> "Linux Terminal is included but disabled in developer options.";
 			case TERMINAL_MISSING -> snapshot.restrictedChinaOEM()
-					? "当前国产 ROM 未提供 AOSP Linux Terminal 组件；AirSIM 无法用普通应用权限强制补装或开启。"
-					: "系统声明支持 AVF，但未安装 AOSP Linux Terminal 组件。";
+					? "This ROM does not include AOSP Linux Terminal. AirSIM cannot install or enable it with normal app permissions."
+					: "The system declares AVF support but AOSP Linux Terminal is not installed.";
 			case AVF_UNSUPPORTED -> snapshot.restrictedChinaOEM()
-					? "当前国产 ROM 没有向第三方应用公开 AVF Linux 能力，无法由 AirSIM 强制开启。"
-					: "当前系统没有公开 AVF 能力，请检查系统版本和厂商支持。";
+					? "This ROM does not expose AVF Linux to third-party apps. AirSIM cannot force it on."
+					: "This system does not expose AVF. Check the system version and manufacturer support.";
 		};
 	}
 
 	private void openAVFTerminalOrSettings() {
 		if (!AVFEnvironmentActions.openTerminal(this)) {
 			AVFEnvironmentActions.openDeveloperOptions(this);
-			toast("未找到可启动的 Linux Terminal，请在开发者选项中启用");
+			toast("No launchable Linux Terminal found. Enable it in developer options.");
 		}
 	}
 
 	private void copyAVFInstallCommand() {
 		getSystemService(ClipboardManager.class).setPrimaryClip(
-				ClipData.newPlainText("AirSIM AVF 一键安装", AVFStartupPolicy.installCommand()));
-		toast("AVF 一键安装命令已复制");
+				ClipData.newPlainText("AirSIM AVF installation", AVFStartupPolicy.installCommand()));
+		toast("AVF installation command copied");
 	}
 
 	private void refreshInstallerStatus() {
 		if (installerStatus == null) return;
 		if (!AppConfig.configured(this)) {
-			installerStatus.setText("尚未配对控制令牌。先在 AVF Linux Terminal 完成首次签名安装，" +
-					"再运行 sudo airsim-avf-pair，将令牌保存到上方配置。" +
-					"已有 Agent 但安装服务不可用时，先在 Terminal 检查 airsim-installerd 服务，不要清除 Linux 数据。");
+			installerStatus.setText("Control token not paired. Complete the initial signed installation in AVF Linux Terminal, " +
+					"then run sudo airsim-avf-pair and save the token above." +
+					"If Agent is installed but the installer service is unavailable, check airsim-installerd in Terminal. Do not clear Linux data.");
 			return;
 		}
 		Executors.newSingleThreadExecutor().execute(() -> {
 			try {
 				String value = new AgentReleaseManager(this).status();
 				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("installerd 在线\n" + value);
+					if (installerStatus != null) installerStatus.setText("installerd online\n" + value);
 				});
 			} catch (Exception error) {
 				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("installerd 不可用 · " +
+					if (installerStatus != null) installerStatus.setText("installerd unavailable · " +
 							error.getClass().getSimpleName() +
-							"。请在 Linux Terminal 检查 sudo systemctl status airsim-installerd；" +
-							"不要清除 Linux 数据。");
+							". In Linux Terminal, run sudo systemctl status airsim-installerd; " +
+							"do not clear Linux data.");
 				});
 			}
 		});
@@ -1626,11 +1626,11 @@ public final class MainActivity extends Activity {
 	private void runAgentMaintenance(String action) {
 		if (!AppConfig.configured(this)) {
 			if (installerStatus != null) installerStatus.setText(
-					"尚未配对。先完成 AVF Linux 首次安装并运行 sudo airsim-avf-pair，" +
-					"保存控制令牌后再更新、修复或回滚。");
+					"Not paired. Complete initial AVF Linux setup and run sudo airsim-avf-pair, " +
+					"then save the control token before updating, repairing, or rolling back.");
 			return;
 		}
-		if (installerStatus != null) installerStatus.setText("Agent 操作进行中 · " + action);
+		if (installerStatus != null) installerStatus.setText("Agent operation in progress · " + action);
 		Executors.newSingleThreadExecutor().execute(() -> {
 			try {
 				AgentReleaseManager manager = new AgentReleaseManager(this);
@@ -1640,29 +1640,29 @@ public final class MainActivity extends Activity {
 					default -> manager.installLatest();
 				};
 				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("Agent 操作完成\n" + result);
-					toast("AVF Agent 操作完成");
+					if (installerStatus != null) installerStatus.setText("Agent operation completed\n" + result);
+					toast("AVF Agent operation completed");
 					refreshAgent();
 				});
 			} catch (Exception error) {
 				BridgeLog.error("avf_agent_maintenance_failed action=" + action, error);
 				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("Agent 操作失败 · " + error.getMessage());
-					toast("AVF Agent 操作失败");
+					if (installerStatus != null) installerStatus.setText("Agent operation failed · " + error.getMessage());
+					toast("AVF Agent operation failed");
 				});
 			}
 		});
 	}
 
     private void updateVisibleStatus() {
-        if (status != null) status.setText(roleText() + "\nAgent：" + agentDetail);
+        if (status != null) status.setText(roleText() + "\nAgent: " + agentDetail);
         if (currentPage == Page.STATUS && contentHost != null
                 && bottomBar.getVisibility() == View.VISIBLE) showPage(Page.STATUS);
     }
 
     private void startPairing() {
         stopPairingServer();
-        if (pairingStatus != null) pairingStatus.setText("正在检查局域网并生成临时密钥…");
+        if (pairingStatus != null) pairingStatus.setText("Checking local network and generating temporary key…");
         pairingServer = new PairingServer(this, new PairingServer.Listener() {
             @Override public void onStarted(String code, String address, long expiresAtMillis) {
                 BridgeLog.info("pairing_started address=" + address + " expires_at=" + expiresAtMillis);
@@ -1671,7 +1671,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     if (pairingCodeView != null) pairingCodeView.setText(
                             MainScreenPresentation.formatPairingCode(code));
-                    if (pairingStatus != null) pairingStatus.setText("等待 iPhone 连接…\n" + address);
+                    if (pairingStatus != null) pairingStatus.setText("Waiting for iPhone to connect…\n" + address);
                     startPairingCountdown();
                 });
             }
@@ -1688,13 +1688,13 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     cancelPairingCountdown();
                     if (pairingCodeView != null) {
-                        pairingCodeView.setText("配对成功");
+                        pairingCodeView.setText("Pairing successful");
                         pairingCodeView.setTextSize(28);
                     }
-                    if (pairingCountdownView != null) pairingCountdownView.setText("VoWLAN 密钥已安全保存");
+                    if (pairingCountdownView != null) pairingCountdownView.setText("VoWLAN key securely saved");
                     if (pairingStatus != null) pairingStatus.setText(pairedLocally
-                            ? "本地模式已启用，不使用 Relay 或 Push"
-                            : "iOS Push 身份已写入 Android Agent");
+                            ? "Local mode enabled; Relay and push are not used"
+                            : "iOS push identity saved to Android Agent");
                     refreshAgent();
                 });
             }
@@ -1703,8 +1703,8 @@ public final class MainActivity extends Activity {
                 BridgeLog.error("pairing_failed", new IllegalStateException(message));
                 runOnUiThread(() -> {
                     cancelPairingCountdown();
-                    if (pairingCountdownView != null) pairingCountdownView.setText("配对窗口已关闭");
-                    if (pairingStatus != null) pairingStatus.setText("配对失败：" + message);
+                    if (pairingCountdownView != null) pairingCountdownView.setText("Pairing window closed");
+                    if (pairingStatus != null) pairingStatus.setText("Pairing failed: " + message);
                 });
             }
         });
@@ -1718,11 +1718,11 @@ public final class MainActivity extends Activity {
             @Override public void onTick(long millisUntilFinished) {
                 long seconds = millisUntilFinished / 1_000;
                 if (pairingCountdownView != null) pairingCountdownView.setText(
-                        String.format(java.util.Locale.CHINA, "%02d:%02d 后失效", seconds / 60, seconds % 60));
+                        String.format(java.util.Locale.US, "%02d:%02d until expiry", seconds / 60, seconds % 60));
             }
 
             @Override public void onFinish() {
-                if (pairingCountdownView != null) pairingCountdownView.setText("配对窗口已失效");
+                if (pairingCountdownView != null) pairingCountdownView.setText("Pairing window expired");
             }
         }.start();
     }
@@ -1759,7 +1759,7 @@ public final class MainActivity extends Activity {
         debugRows.removeAllViews();
         String visible = MainScreenPresentation.recentLogLines(
                 log, activeDebugFilter, 60);
-        if (visible.startsWith("暂无") || visible.startsWith("此分类")) {
+        if (visible.startsWith("No debug logs") || visible.startsWith("No logs in this category")) {
             TextView empty = description(visible);
             empty.setGravity(Gravity.CENTER);
             empty.setPadding(dp(8), dp(28), dp(8), dp(28));
@@ -1810,29 +1810,29 @@ public final class MainActivity extends Activity {
         String value = BridgeLog.read();
         getSystemService(ClipboardManager.class).setPrimaryClip(
                 ClipData.newPlainText("AirSIM Debug Log", value));
-        toast("日志已复制");
+        toast("Logs copied");
     }
 
     private void exportDebugLog() {
         Intent share = new Intent(Intent.ACTION_SEND);
         share.setType("text/plain");
-        share.putExtra(Intent.EXTRA_SUBJECT, "AirSIM Android 诊断");
+        share.putExtra(Intent.EXTRA_SUBJECT, "AirSIM Android diagnostics");
         share.putExtra(Intent.EXTRA_TEXT, BridgeLog.read());
-        startActivity(Intent.createChooser(share, "导出诊断"));
+        startActivity(Intent.createChooser(share, "Export diagnostics"));
     }
 
 	private void shareCrashReport() {
 		String payload = CrashReportSharePayload.compose(
 				CrashReportStore.read(getFilesDir()), BridgeLog.read());
 		if (payload.isBlank()) {
-			toast("暂无闪退报告");
+			toast("No crash report");
 			return;
 		}
 		Intent share = new Intent(Intent.ACTION_SEND);
 		share.setType("text/plain");
-		share.putExtra(Intent.EXTRA_SUBJECT, "AirSIM Android 闪退报告");
+		share.putExtra(Intent.EXTRA_SUBJECT, "AirSIM Android crash report");
 		share.putExtra(Intent.EXTRA_TEXT, payload);
-		startActivity(Intent.createChooser(share, "发送闪退报告"));
+		startActivity(Intent.createChooser(share, "Send crash report"));
 	}
 
 	private void maybeShowCrashReportPrompt() {
@@ -1840,11 +1840,11 @@ public final class MainActivity extends Activity {
                 || !CrashReportStore.hasReport(getFilesDir())) return;
 		crashPromptShown = true;
 		new AlertDialog.Builder(this)
-				.setTitle("检测到上次闪退")
-				.setMessage("AirSIM 已在本机保存脱敏报告。不会自动上传，是否现在发送给开发者？")
-				.setPositiveButton("发送", (ignored, which) -> shareCrashReport())
-				.setNeutralButton("查看", (ignored, which) -> showPage(Page.DEBUG))
-				.setNegativeButton("稍后", null)
+				.setTitle("Previous crash detected")
+				.setMessage("AirSIM saved a redacted report on this device. It is not uploaded automatically. Send it to the developer now?")
+				.setPositiveButton("Send", (ignored, which) -> shareCrashReport())
+				.setNeutralButton("View", (ignored, which) -> showPage(Page.DEBUG))
+				.setNegativeButton("Later", null)
 				.show();
 	}
 
@@ -1857,7 +1857,7 @@ public final class MainActivity extends Activity {
             }
             AgentWatchdogService.start(this);
             toast(RuntimeMode.isStandalone(this)
-                    ? "模式已保存，内置 Agent 正在启动" : "配置已保存，守护服务正在启动");
+                    ? "Mode saved; starting built-in Agent" : "Settings saved; starting watchdog service");
             refreshAgent();
         } catch (IllegalArgumentException error) {
             toast(error.getMessage());
@@ -1865,7 +1865,7 @@ public final class MainActivity extends Activity {
     }
 
     private String roleText() {
-        return "默认电话角色：" + (dialerRoleHeld() ? "已启用" : "未启用");
+        return "Default phone role: " + (dialerRoleHeld() ? "Enabled" : "Disabled");
     }
 
     private boolean dialerRoleHeld() {
@@ -1876,7 +1876,7 @@ public final class MainActivity extends Activity {
 
     private String vowlanNetworkLine() {
         String host = localVoWLANAddress();
-        return host.isEmpty() ? "同一 Wi‑Fi / 三星热点" : "同一 Wi‑Fi · " + host;
+        return host.isEmpty() ? "Same Wi-Fi / Android hotspot" : "Same Wi-Fi · " + host;
     }
 
     private boolean vowlanReady() {
@@ -1908,7 +1908,7 @@ public final class MainActivity extends Activity {
 
     private boolean shizukuReady() {
         String value = ShizukuBridgeManager.get(this).status();
-        return value.contains("Shizuku 已连接");
+        return value.contains("Shizuku connected");
     }
 
     private boolean pcmBridgeRunning() {
@@ -1917,9 +1917,9 @@ public final class MainActivity extends Activity {
 
     private String latestActivity() {
         String line = MainScreenPresentation.recentLogLines(BridgeLog.read(), "", 1);
-        return "暂无 Debug 日志".equals(line)
-                ? "等待连接活动"
-                : "刚刚 · " + MainScreenPresentation.activitySummary(line);
+        return "No debug logs".equals(line)
+                ? "Waiting for connection activity"
+                : "Just now · " + MainScreenPresentation.activitySummary(line);
     }
 
     private LinearLayout pageRoot() {
@@ -2081,7 +2081,7 @@ public final class MainActivity extends Activity {
         } else if (request == DEFAULT_APPS_REQUEST) {
             if (dialerRoleHeld()) checkAVFEnvironmentAtStartup();
             else {
-                toast("AirSIM 仍未获得默认电话角色");
+                toast("AirSIM still does not have the default phone role");
                 completeStartupSetup();
             }
         } else if (request == SHIZUKU_SETUP_REQUEST) {

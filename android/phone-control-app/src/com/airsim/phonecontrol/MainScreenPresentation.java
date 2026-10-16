@@ -8,13 +8,13 @@ public final class MainScreenPresentation {
             boolean cloudEnabled,
             boolean relayConfigured,
             String lastError) {
-        if (vowlanReady) return "VoWLAN 模式";
+        if (vowlanReady) return "VoWLAN mode";
         if (cloudEnabled && relayConfigured && lastError != null && !lastError.isBlank()) {
-            return "云端链路异常";
+            return "Cloud connection error";
         }
-        if (cloudEnabled && relayConfigured) return "云端模式";
-        if (cloudEnabled) return "云端尚未配置";
-        return "VoWLAN 未连接";
+        if (cloudEnabled && relayConfigured) return "Cloud mode";
+        if (cloudEnabled) return "Cloud not configured";
+        return "VoWLAN disconnected";
     }
 
     public static String connectionModeDetail(
@@ -22,13 +22,13 @@ public final class MainScreenPresentation {
             boolean cloudEnabled,
             boolean relayConfigured,
             String lastError) {
-        if (vowlanReady) return "三星局域网控制与 PCM 已就绪；通话优先走 VoWLAN";
+        if (vowlanReady) return "Android local network control and PCM ready; calls prefer VoWLAN";
         if (cloudEnabled && relayConfigured && lastError != null && !lastError.isBlank()) {
-            return "Relay / Agent 最近错误：" + lastError;
+            return "Latest Relay / Agent error: " + lastError;
         }
-        if (cloudEnabled && relayConfigured) return "云端 Relay 已配置，等待 Agent 心跳验证";
-        if (cloudEnabled) return "云端已开启，但 Relay 或设备注册不完整";
-        return "请连接同一 Wi-Fi / 三星热点，或开启并配置云端 Relay";
+        if (cloudEnabled && relayConfigured) return "Cloud Relay configured; waiting for Agent heartbeat verification";
+        if (cloudEnabled) return "Cloud enabled, but Relay or device registration is incomplete";
+        return "Connect to the same Wi-Fi / Android hotspot, or enable and configure cloud Relay";
     }
 
     public static String formatPairingCode(String code) {
@@ -40,19 +40,19 @@ public final class MainScreenPresentation {
 
     public static String voBLEAuthenticationStatus(
             boolean credentialStored, boolean authenticated, String pairingCode) {
-        if (authenticated) return "已认证并连接";
-        if (!"--- ---".equals(formatPairingCode(pairingCode))) return "请在两端核对安全码";
-        if (credentialStored) return "已保存认证凭据 · 等待 iPhone 连接";
-        return "等待 iPhone 发起首次配对";
+        if (authenticated) return "Authenticated and connected";
+        if (!"--- ---".equals(formatPairingCode(pairingCode))) return "Verify security code on both devices";
+        if (credentialStored) return "Credentials saved · Waiting for iPhone";
+        return "Waiting for initial pairing from iPhone";
     }
 
     public static String voBLEPairingCode(String pairingCode) {
         String formatted = formatPairingCode(pairingCode);
-        return "--- ---".equals(formatted) ? "等待 iPhone 发起配对" : formatted;
+        return "--- ---".equals(formatted) ? "Waiting for pairing from iPhone" : formatted;
     }
 
     public static String recentLogLines(String log, String filter, int maximum) {
-        if (log == null || log.isBlank() || maximum <= 0) return "暂无 Debug 日志";
+        if (log == null || log.isBlank() || maximum <= 0) return "No debug logs";
         String category = filter == null ? "" : filter.trim();
         String[] lines = log.split("\\R");
         StringBuilder visible = new StringBuilder();
@@ -60,18 +60,18 @@ public final class MainScreenPresentation {
         for (int index = lines.length - 1; index >= 0 && count < maximum; index--) {
             String line = lines[index].trim();
             if (line.isEmpty()) continue;
-            if (!category.isEmpty() && !"全部".equals(category)
+            if (!category.isEmpty() && !"All".equals(category)
                     && !line.toLowerCase(java.util.Locale.ROOT)
                     .contains(category.toLowerCase(java.util.Locale.ROOT))) continue;
             if (visible.length() > 0) visible.append('\n');
             visible.append(line);
             count++;
         }
-        return visible.length() == 0 ? "此分类暂无日志" : visible.toString();
+        return visible.length() == 0 ? "No logs in this category" : visible.toString();
     }
 
     public static String recentMatchingLogLines(String log, int maximum, String... keywords) {
-        if (log == null || log.isBlank() || maximum <= 0) return "暂无相关日志";
+        if (log == null || log.isBlank() || maximum <= 0) return "No related logs";
         String[] lines = log.split("\\R");
         StringBuilder visible = new StringBuilder();
         int count = 0;
@@ -82,7 +82,7 @@ public final class MainScreenPresentation {
             visible.append(line);
             count++;
         }
-        return visible.length() == 0 ? "暂无相关日志" : visible.toString();
+        return visible.length() == 0 ? "No related logs" : visible.toString();
     }
 
     public static String latestContaining(String log, String keyword) {
@@ -105,34 +105,34 @@ public final class MainScreenPresentation {
     }
 
     public static String activitySummary(String line) {
-        if (line == null || line.isBlank()) return "无事件内容";
+        if (line == null || line.isBlank()) return "No event details";
         String value = line.toLowerCase(java.util.Locale.ROOT);
-        if (value.contains("pairing_completed")) return "VoWLAN 配对完成";
-        if (value.contains("pairing_started")) return "等待 iPhone 配对";
-        if (value.contains("watchdog_created")) return "Agent 守护服务已启动";
-        if (value.contains("watchdog_configuration_available")) return "Linux Agent 配置已载入";
-        if (value.contains("application_started")) return "应用服务已启动";
-        if (value.contains("shizuku_user_service_connected")) return "Shizuku PCM 桥已连接";
-        if (value.contains("shizuku_binder_received")) return "Shizuku 已连接";
-        if (value.contains("shizuku_permission_granted")) return "Shizuku 权限已授予";
-        if (value.contains("vowlan_service_created")) return "VoWLAN 服务已启动";
-        if (value.contains("vowlan_service_start_requested")) return "VoWLAN 服务启动中";
-        if (value.contains("vowlan_ready")) return "VoWLAN 局域网服务已就绪";
+        if (value.contains("pairing_completed")) return "VoWLAN pairing complete";
+        if (value.contains("pairing_started")) return "Waiting for iPhone pairing";
+        if (value.contains("watchdog_created")) return "Agent watchdog started";
+        if (value.contains("watchdog_configuration_available")) return "Linux Agent settings loaded";
+        if (value.contains("application_started")) return "App service started";
+        if (value.contains("shizuku_user_service_connected")) return "Shizuku PCM bridge connected";
+        if (value.contains("shizuku_binder_received")) return "Shizuku connected";
+        if (value.contains("shizuku_permission_granted")) return "Shizuku permission granted";
+        if (value.contains("vowlan_service_created")) return "VoWLAN service started";
+        if (value.contains("vowlan_service_start_requested")) return "Starting VoWLAN service";
+        if (value.contains("vowlan_ready")) return "VoWLAN local network service ready";
         if (value.contains("vowlan_state") && value.contains("paired=true")
                 && value.contains("agent_ready=true") && value.contains("pcm_ready=true")) {
-            return "VoWLAN 健康检查通过";
+            return "VoWLAN health check passed";
         }
         if (value.contains("http_request_finished") && value.contains("status=200")
                 && value.contains("/api/android/status")) {
-            return "Linux Agent 状态接口返回 HTTP 200";
+            return "Linux Agent status returned HTTP 200";
         }
-        if (value.contains("telecom_call_added")) return "系统通话已接入";
-        if (value.contains("telecom_call_removed")) return "系统通话已结束";
+        if (value.contains("telecom_call_added")) return "System call connected";
+        if (value.contains("telecom_call_removed")) return "System call ended";
         if (value.contains("command_result") && value.contains("success=true")) {
-            return "Android 指令执行成功";
+            return "Android command succeeded";
         }
         String event = eventBody(line).split("\\s+", 2)[0];
-        if (event.isBlank()) return "无事件内容";
+        if (event.isBlank()) return "No event details";
         return event;
     }
 
@@ -142,7 +142,7 @@ public final class MainScreenPresentation {
         if (fields.length >= 3 && isLogLevel(fields[1]) && fields[2].startsWith("[")) {
             return fields[0] + " · " + fields[1] + " · " + fields[2];
         }
-        return "原始记录";
+        return "Raw log";
     }
 
     public static String eventBody(String line) {

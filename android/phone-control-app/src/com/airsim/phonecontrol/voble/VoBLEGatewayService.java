@@ -126,8 +126,8 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
         createNotificationChannel();
         Notification notification = new Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("AirSIM 蓝牙通话")
-                .setContentText("等待已认证的 iPhone")
+                .setContentTitle("AirSIM Bluetooth calls")
+                .setContentText("Waiting for an authenticated iPhone")
                 .setOngoing(true).build();
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification,
@@ -500,7 +500,7 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
     private void createNotificationChannel() {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) manager.createNotificationChannel(new NotificationChannel(
-                CHANNEL_ID, "AirSIM 蓝牙通话", NotificationManager.IMPORTANCE_LOW));
+                CHANNEL_ID, "AirSIM Bluetooth calls", NotificationManager.IMPORTANCE_LOW));
     }
 
     private void showPairingCode(String sas) {
@@ -509,8 +509,8 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
         if (manager == null) return;
         manager.notify(NOTIFICATION_ID, new Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("AirSIM 蓝牙配对")
-                .setContentText("安全码 " + sas + " · 请与 iPhone 核对")
+                .setContentTitle("AirSIM Bluetooth pairing")
+                .setContentText("Security code " + sas + " · Verify on iPhone")
                 .setOngoing(true).build());
     }
 
@@ -520,8 +520,8 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
         if (manager == null) return;
         manager.notify(NOTIFICATION_ID, new Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-                .setContentTitle("AirSIM 蓝牙通话")
-                .setContentText("已连接经过认证的 iPhone")
+                .setContentTitle("AirSIM Bluetooth calls")
+                .setContentText("Authenticated iPhone connected")
                 .setOngoing(true).build());
     }
 

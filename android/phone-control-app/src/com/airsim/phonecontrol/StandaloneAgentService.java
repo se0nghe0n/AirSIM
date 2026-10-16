@@ -50,7 +50,7 @@ public final class StandaloneAgentService extends Service {
         store = new StandaloneAgentStore(this);
         relay = new StandaloneRelayClient();
         startForeground(BridgeNotification.WATCHDOG_ID,
-                BridgeNotification.status(this, "内置 Agent 正在启动"),
+                BridgeNotification.status(this, "Starting built-in Agent"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
         running = true;
         ShizukuBridgeManager.get(this).ensureStarted();
@@ -70,7 +70,7 @@ public final class StandaloneAgentService extends Service {
                 SMSInboxScanner.scanIfDue(this);
                 JSONObject registration = store.registration();
                 if (registration == null || !store.cloudEnabled()) {
-                    update(registration == null ? "内置 Agent 在线 · 等待 iPhone 配对" : "内置 Agent 在线 · 云端已关闭");
+                    update(registration == null ? "Built-in Agent online · Waiting for iPhone pairing" : "Built-in Agent online · Cloud disabled");
                     Thread.sleep(2_000);
                     continue;
                 }
@@ -83,7 +83,7 @@ public final class StandaloneAgentService extends Service {
                     pollCommands(registration);
                 }
                 failures = 0;
-                update("内置 Agent 在线 · Relay 已连接");
+                update("Built-in Agent online · Relay connected");
                 Thread.sleep(2_000);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
@@ -92,7 +92,7 @@ public final class StandaloneAgentService extends Service {
                 failures++;
                 store.recordError(error.getClass().getSimpleName() + ": " + error.getMessage());
                 BridgeLog.error("standalone_agent_cycle_failed failures=" + failures, error);
-                update("内置 Agent 正在重连 · " + failures);
+                update("Built-in Agent reconnecting · " + failures);
                 try { Thread.sleep(RelayRetryPolicy.delayMillis(failures, error)); }
                 catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
             }
@@ -138,7 +138,7 @@ public final class StandaloneAgentService extends Service {
                 String expires = command.optString("expires_at", "");
                 if (expires.isEmpty() || Instant.now().isAfter(Instant.parse(expires))) {
                     result = new JSONObject().put("command_id", commandID).put("status", "failed")
-                            .put("error", "云端命令已过期");
+                            .put("error", "Cloud command expired");
                 } else {
                     result = StandaloneAgentGateway.get(this).executeCloudCommand(command);
                     if (result.optString("status").equals("completed") && "dial".equals(command.optString("type"))) {

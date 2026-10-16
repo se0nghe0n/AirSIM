@@ -19,7 +19,7 @@ import java.util.List;
 public final class DefaultCallAccount {
     public record Account(String key, String label, String number, PhoneAccountHandle handle) {}
     public record Snapshot(List<Account> accounts, String error) {}
-    private static final String SYSTEM = "跟随系统默认";
+    private static final String SYSTEM = "Use system default";
     private DefaultCallAccount() {}
 
     private static SharedPreferences preferences(Context context) {
@@ -29,16 +29,16 @@ public final class DefaultCallAccount {
     public static Snapshot snapshot(Context context) {
         if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE)
                 != PackageManager.PERMISSION_GRANTED) {
-            return new Snapshot(List.of(), "请授权电话状态权限后选择通话卡");
+            return new Snapshot(List.of(), "Grant phone state permission to choose a calling SIM");
         }
         try {
             TelecomManager telecom = context.getSystemService(TelecomManager.class);
-            if (telecom == null) return new Snapshot(List.of(), "系统电话服务不可用");
+            if (telecom == null) return new Snapshot(List.of(), "System phone service unavailable");
             List<Account> accounts = new ArrayList<>();
             for (PhoneAccountHandle handle : telecom.getCallCapablePhoneAccounts()) {
                 PhoneAccount account = telecom.getPhoneAccount(handle);
                 if (account == null || !account.hasCapabilities(PhoneAccount.CAPABILITY_SIM_SUBSCRIPTION)) continue;
-                String label = account.getLabel() == null ? "蜂窝通话卡" : account.getLabel().toString();
+                String label = account.getLabel() == null ? "Calling SIM" : account.getLabel().toString();
                 String number = "";
                 // Metadata is optional. Never infer subscription IDs from opaque Telecom IDs.
                 try {
@@ -76,7 +76,7 @@ public final class DefaultCallAccount {
             }
             return new Snapshot(List.copyOf(accounts), "");
         } catch (RuntimeException error) {
-            return new Snapshot(List.of(), "无法读取通话卡，请检查电话状态权限及系统设置");
+            return new Snapshot(List.of(), "Cannot read calling SIMs. Check phone state permission and system settings.");
         }
     }
 
@@ -84,7 +84,7 @@ public final class DefaultCallAccount {
         return preferences(context).getString("key", "");
     }
     public static String selectedLabel(Context context) {
-        return selectedKey(context).isEmpty() ? SYSTEM : preferences(context).getString("label", "蜂窝通话卡");
+        return selectedKey(context).isEmpty() ? SYSTEM : preferences(context).getString("label", "Calling SIM");
     }
     public static void select(Context context, Account account) {
         preferences(context).edit().putString("key", account.key()).putString("label", account.label()).apply();
@@ -104,6 +104,6 @@ public final class DefaultCallAccount {
                 return extras;
             }
         }
-        throw new IllegalStateException("默认通话卡已关闭或移除，请在 AirSIM 设置中重新选择");
+        throw new IllegalStateException("Default calling SIM is disabled or removed. Choose another in AirSIM settings.");
     }
 }

@@ -16,7 +16,7 @@ public final class DiagnosticFileTests {
                 @Override public File getFilesDir() { return directory.toFile(); }
             };
             BridgeLog.initialize(context);
-            equal("暂无 Debug 日志", BridgeLog.read());
+            equal("No debug logs", BridgeLog.read());
             Files.write(directory.resolve("airsim-debug.previous.log"),
                     "旧日志：蓝牙\n".getBytes(StandardCharsets.UTF_8));
             Files.write(directory.resolve("airsim-debug.log"),
@@ -25,7 +25,7 @@ public final class DiagnosticFileTests {
             CrashReportStore.write(directory.toFile(), "异常：测试\n");
             equal("异常：测试\n", CrashReportStore.read(directory.toFile()));
             BridgeLog.clear();
-            equal("暂无 Debug 日志", BridgeLog.read());
+            equal("No debug logs", BridgeLog.read());
             equal("异常：测试\n", CrashReportStore.read(directory.toFile()));
         } finally {
             try (var paths = Files.walk(directory)) {

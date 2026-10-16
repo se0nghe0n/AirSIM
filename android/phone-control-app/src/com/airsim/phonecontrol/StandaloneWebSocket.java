@@ -41,7 +41,7 @@ final class StandaloneWebSocket implements Closeable {
 
     static StandaloneWebSocket connect(URI target, String bearerToken) throws Exception {
         if (!"wss".equalsIgnoreCase(target.getScheme()) || target.getHost() == null
-                || target.getRawUserInfo() != null) throw new IllegalArgumentException("WSS 地址无效");
+                || target.getRawUserInfo() != null) throw new IllegalArgumentException("Invalid WSS address");
         int port = target.getPort() < 0 ? 443 : target.getPort();
         SSLSocket socket = (SSLSocket) SSLSocketFactory.getDefault().createSocket(target.getHost(), port);
         SSLParameters parameters = socket.getSSLParameters();
@@ -82,7 +82,7 @@ final class StandaloneWebSocket implements Closeable {
         if (!"websocket".equalsIgnoreCase(values.get("upgrade"))
                 || !expected.equals(values.get("sec-websocket-accept"))) {
             socket.close();
-            throw new IOException("WebSocket 握手校验失败");
+            throw new IOException("WebSocket handshake validation failed");
         }
         socket.setSoTimeout(0);
         return new StandaloneWebSocket(socket, input, output);

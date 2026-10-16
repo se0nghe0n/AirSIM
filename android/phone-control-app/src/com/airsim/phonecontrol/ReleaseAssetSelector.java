@@ -18,17 +18,17 @@ public final class ReleaseAssetSelector {
         for (Map.Entry<String, String> asset : assets.entrySet()) {
             if (!PACKAGE_NAME.matcher(asset.getKey()).matches()) continue;
             if (packageName != null) {
-                throw new IllegalArgumentException("Release 中存在多个 AirSIM arm64 Debian 包");
+                throw new IllegalArgumentException("Release contains multiple AirSIM arm64 Debian packages");
             }
             packageName = asset.getKey();
             packageURL = requireHTTPS(asset.getValue());
         }
         if (packageName == null) {
-            throw new IllegalArgumentException("Release 中没有 AirSIM arm64 Debian 包");
+            throw new IllegalArgumentException("Release has no AirSIM arm64 Debian package");
         }
         String signatureURL = assets.get(packageName + ".sig");
         if (signatureURL == null) {
-            throw new IllegalArgumentException("Release 中缺少 Debian 包签名");
+            throw new IllegalArgumentException("Release is missing the Debian package signature");
         }
         return new Selection(packageName, packageURL, requireHTTPS(signatureURL));
     }
@@ -37,11 +37,11 @@ public final class ReleaseAssetSelector {
         try {
             URI uri = URI.create(value);
             if (!"https".equals(uri.getScheme()) || uri.getHost() == null) {
-                throw new IllegalArgumentException("Release 资源必须使用 HTTPS");
+                throw new IllegalArgumentException("Release assets must use HTTPS");
             }
             return uri.toString();
         } catch (RuntimeException error) {
-            throw new IllegalArgumentException("Release 资源地址无效", error);
+            throw new IllegalArgumentException("Invalid release asset address", error);
         }
     }
 }

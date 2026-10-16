@@ -329,12 +329,12 @@ final class StandaloneCloudMediaManager implements Closeable {
 
         private void validate() {
             if (callID.isBlank() || callUUID.isBlank() || secret.isBlank()) {
-                throw new IllegalArgumentException("云端通话描述缺少身份或密钥");
+                throw new IllegalArgumentException("Cloud call description is missing identity or key");
             }
             URI relay = URI.create(relayURL);
             if (!"https".equalsIgnoreCase(relay.getScheme()) || relay.getHost() == null
                     || relay.getRawUserInfo() != null) {
-                throw new IllegalArgumentException("云端通话 Relay 必须是无凭据的 HTTPS 地址");
+                throw new IllegalArgumentException("Cloud call Relay must be an HTTPS address without embedded credentials");
             }
         }
 

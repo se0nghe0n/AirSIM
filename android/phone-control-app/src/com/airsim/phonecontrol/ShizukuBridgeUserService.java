@@ -211,7 +211,7 @@ public final class ShizukuBridgeUserService extends Binder {
         // Attribute public AudioManager operations to the actual shell UID, not the APK UID.
         Context shell = context.createPackageContext("com.android.shell", 0);
         AudioManager audio = shell.getSystemService(AudioManager.class);
-        if (audio == null) throw new IOException("系统通话音频服务不可用");
+        if (audio == null) throw new IOException("System call audio service unavailable");
         return new LocalOutputMuteController.Backend() {
             public boolean isMuted() { return audio.isStreamMute(AudioManager.STREAM_VOICE_CALL); }
             public int volume() { return audio.getStreamVolume(AudioManager.STREAM_VOICE_CALL); }

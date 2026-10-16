@@ -75,7 +75,7 @@ assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentClient.java" \
   'http_request_finished' \
   'Agent HTTP response status and timing are missing from debug diagnostics'
 assert_contains "$ROOT/src/com/airsim/phonecontrol/MainActivity.java" \
-  'Debug 日志' \
+  'Debug logging' \
   'the Android app has no user-visible debug log controls'
 assert_contains "$ROOT/src/com/airsim/phonecontrol/MainActivity.java" \
   'BridgeLog.clear()' \

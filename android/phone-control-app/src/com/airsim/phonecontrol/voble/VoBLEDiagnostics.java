@@ -30,10 +30,10 @@ public final class VoBLEDiagnostics {
     }
 
     public static String summary(Snapshot value) {
-        if (value == null) return "VoBLE 待启动";
-        if (!value.authenticated()) return "VoBLE 等待认证";
-        if (!value.pcmReady()) return "VoBLE 已认证 · PCM 待启动";
-        return "VoBLE 已认证 · PCM 运行中 · 丢帧 " + Math.max(0, value.droppedFrames());
+        if (value == null) return "VoBLE not running";
+        if (!value.authenticated()) return "VoBLE waiting for authentication";
+        if (!value.pcmReady()) return "VoBLE authenticated · PCM not running";
+        return "VoBLE authenticated · PCM running · Dropped frames: " + Math.max(0, value.droppedFrames());
     }
 
     public static Map<String, String> sanitize(Map<String, String> input) {

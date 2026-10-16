@@ -31,7 +31,7 @@ public final class VoWLANGatewayService extends Service {
     private NsdManager.RegistrationListener advertisement;
     private String activeHotspot = "";
     private String lastDiagnosticState = "";
-    private static volatile String currentDiagnosticState = "尚未检查";
+    private static volatile String currentDiagnosticState = "Not checked";
 
     static String currentDiagnosticState() {
         return currentDiagnosticState;
@@ -45,9 +45,9 @@ public final class VoWLANGatewayService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
-        currentDiagnosticState = "服务正在启动";
+        currentDiagnosticState = "Service starting";
         BridgeLog.info("vowlan_service_created");
-        startForeground(BridgeNotification.VOWLAN_ID, BridgeNotification.vowlan(this, "正在发现 VoWLAN 网络"),
+        startForeground(BridgeNotification.VOWLAN_ID, BridgeNotification.vowlan(this, "Discovering VoWLAN network"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
         running = true;
         worker.execute(this::lifecycleLoop);
@@ -96,23 +96,23 @@ public final class VoWLANGatewayService extends Service {
                 if (VoWLANNetworkPolicy.shouldAdvertise(
                         hotspot != null, paired, agentReady, pcmReady, dialerRoleHeld)) {
                     ensureStarted(hotspot, avf);
-                    update("VoWLAN 就绪 · " + hotspot.getHostAddress());
+                    update("VoWLAN ready · " + hotspot.getHostAddress());
                 } else {
                     stopGateways();
-                    update(!dialerRoleHeld ? "请将 AirSIM 设为默认电话应用"
-                            : !paired ? "VoWLAN 未配对"
-                            : hotspot == null ? "正在等待同网 Wi-Fi 或三星热点"
-                            : !agentReady ? RuntimeMode.agentLabel(this) + " 尚未就绪" : "PCM 音频桥尚未就绪");
+                    update(!dialerRoleHeld ? "Set AirSIM as the default phone app"
+                            : !paired ? "VoWLAN not paired"
+                            : hotspot == null ? "Waiting for the same Wi-Fi or Android hotspot"
+                            : !agentReady ? RuntimeMode.agentLabel(this) + " not ready" : "PCM audio bridge not ready");
                 }
                 Thread.sleep(5_000);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception error) {
-                currentDiagnosticState = "服务异常：" + error.getClass().getSimpleName();
+                currentDiagnosticState = "Service error: " + error.getClass().getSimpleName();
                 BridgeLog.error("vowlan_lifecycle_failed", error);
                 stopGateways();
-                update("VoWLAN 正在恢复");
+                update("Restoring VoWLAN");
                 try { Thread.sleep(2_000); }
                 catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
             }
@@ -248,7 +248,7 @@ public final class VoWLANGatewayService extends Service {
 
     @Override public void onDestroy() {
         BridgeLog.info("vowlan_service_destroyed");
-        currentDiagnosticState = "服务已停止";
+        currentDiagnosticState = "Service stopped";
         running = false;
         worker.shutdownNow();
         stopGateways();

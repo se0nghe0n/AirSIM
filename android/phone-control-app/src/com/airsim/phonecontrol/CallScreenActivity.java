@@ -57,9 +57,9 @@ public final class CallScreenActivity extends Activity {
         detailLayout.topMargin = dp(16);
         root.addView(detail, detailLayout);
 
-        answer = button("接听", Color.rgb(38, 202, 93), "answer");
-        reject = button("拒接", Color.rgb(225, 63, 66), "reject");
-        end = button("挂断", Color.rgb(225, 63, 66), "end");
+        answer = button("Answer", Color.rgb(38, 202, 93), "answer");
+        reject = button("Decline", Color.rgb(225, 63, 66), "reject");
+        end = button("End call", Color.rgb(225, 63, 66), "end");
         root.addView(answer, buttonLayout());
         root.addView(reject, buttonLayout());
         root.addView(end, buttonLayout());
@@ -93,8 +93,8 @@ public final class CallScreenActivity extends Activity {
             return;
         }
         boolean ringing = "incoming".equals(TelecomStateMapper.toWireState(state));
-        title.setText(ringing ? "AirSIM 来电" : "AirSIM 通话中");
-        detail.setText(ringing ? "来电已转送 iPhone；也可在此处理" : "通话音频优先由 iPhone 接管");
+        title.setText(ringing ? "AirSIM incoming call" : "AirSIM call in progress");
+        detail.setText(ringing ? "Call forwarded to iPhone; you can also answer here" : "Call audio is routed to iPhone when available");
         answer.setVisibility(ringing ? View.VISIBLE : View.GONE);
         reject.setVisibility(ringing ? View.VISIBLE : View.GONE);
         end.setVisibility(ringing ? View.GONE : View.VISIBLE);
@@ -106,7 +106,7 @@ public final class CallScreenActivity extends Activity {
         button.setTextColor(Color.WHITE);
         button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(color));
         button.setOnClickListener(ignored -> {
-            detail.setText("正在处理…");
+            detail.setText("Processing…");
             sendBroadcast(CallNotificationActionReceiver.actionIntent(this, callId, action));
         });
         return button;

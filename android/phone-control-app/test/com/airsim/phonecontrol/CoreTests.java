@@ -122,7 +122,7 @@ public final class CoreTests {
 					"airsim-avf-agent_0.4.2-1_arm64.deb", "https://example.test/agent.deb"));
 			throw new AssertionError("release without detached signature must fail");
 		} catch (IllegalArgumentException expected) {
-			assertContains(expected.getMessage(), "签名");
+			assertContains(expected.getMessage(), "signature");
 		}
 
 		java.util.concurrent.atomic.AtomicReference<String> installerRequest = new java.util.concurrent.atomic.AtomicReference<>("");
@@ -344,7 +344,7 @@ public final class CoreTests {
 		assertContains(smsEvent, "\"delivery_id\":\"android-sms-7\"");
 		assertContains(smsEvent, "\"content\":\"验证码 \\\"246810\\\"\"");
 		assertContains(WireJson.smsEvent("event-8", "android-sms-8", "  ",
-				"运营商提醒", "2026-10-12T06:00:00Z"), "\"sender\":\"未知号码\"");
+				"运营商提醒", "2026-10-12T06:00:00Z"), "\"sender\":\"Unknown number\"");
 
         assertEquals(1000L, RetryPolicy.delayMillis(0));
         assertEquals(8000L, RetryPolicy.delayMillis(3));
@@ -553,30 +553,30 @@ public final class CoreTests {
 			assertContains(expected.getMessage(), "package");
 		}
 		assertEquals("266 145", MainScreenPresentation.formatPairingCode("266145"));
-		assertEquals("等待 iPhone 发起首次配对",
+		assertEquals("Waiting for initial pairing from iPhone",
 				MainScreenPresentation.voBLEAuthenticationStatus(false, false, ""));
-		assertEquals("请在两端核对安全码",
+		assertEquals("Verify security code on both devices",
 				MainScreenPresentation.voBLEAuthenticationStatus(false, false, "266145"));
-		assertEquals("已认证并连接",
+		assertEquals("Authenticated and connected",
 				MainScreenPresentation.voBLEAuthenticationStatus(true, true, ""));
 		assertEquals("266 145", MainScreenPresentation.voBLEPairingCode("266145"));
-		assertEquals("等待 iPhone 发起配对", MainScreenPresentation.voBLEPairingCode(""));
+		assertEquals("Waiting for pairing from iPhone", MainScreenPresentation.voBLEPairingCode(""));
 		assertEquals(
 				"22:45 VoWLAN 健康检查通过\n22:43 VoWLAN 广播已发现",
 				MainScreenPresentation.recentLogLines(
 						"22:42 Agent 心跳正常\n22:43 VoWLAN 广播已发现\n22:44 PCM bridge ready\n22:45 VoWLAN 健康检查通过",
 						"VoWLAN",
 						2));
-		assertEquals("Linux Agent 状态接口返回 HTTP 200",
+		assertEquals("Linux Agent status returned HTTP 200",
 				MainScreenPresentation.activitySummary(
 						"2026-09-25T10:11:12Z http_request_finished method=GET path=/api/android/status status=200"));
-		assertEquals("VoWLAN 配对完成",
+		assertEquals("VoWLAN pairing complete",
 				MainScreenPresentation.activitySummary("pairing_completed peer=iphone"));
-		assertEquals("Shizuku PCM 桥已连接",
+		assertEquals("Shizuku PCM bridge connected",
 				MainScreenPresentation.activitySummary("shizuku_user_service_connected uid=2000"));
-		assertEquals("Agent 守护服务已启动",
+		assertEquals("Agent watchdog started",
 				MainScreenPresentation.activitySummary("watchdog_created"));
-		assertEquals("VoWLAN 服务已启动",
+		assertEquals("VoWLAN service started",
 				MainScreenPresentation.activitySummary("vowlan_service_created"));
 		assertEquals("vowlan_state", MainScreenPresentation.activitySummary(
 				"vowlan_state paired=true agent_ready=false pcm_ready=true"));
@@ -590,13 +590,13 @@ public final class CoreTests {
 				MainScreenPresentation.eventBody(detailed));
 		assertTrue(MainScreenPresentation.isErrorLog(detailed));
 		assertEquals("plain log entry", MainScreenPresentation.eventBody("plain log entry"));
-		assertEquals("VoWLAN 模式", MainScreenPresentation.connectionModeTitle(
+		assertEquals("VoWLAN mode", MainScreenPresentation.connectionModeTitle(
 				true, true, true, ""));
-		assertEquals("云端模式", MainScreenPresentation.connectionModeTitle(
+		assertEquals("Cloud mode", MainScreenPresentation.connectionModeTitle(
 				false, true, true, ""));
-		assertEquals("云端链路异常", MainScreenPresentation.connectionModeTitle(
+		assertEquals("Cloud connection error", MainScreenPresentation.connectionModeTitle(
 				false, true, true, "推送中继返回 HTTP 401"));
-		assertEquals("云端 Relay 已配置，等待 Agent 心跳验证",
+		assertEquals("Cloud Relay configured; waiting for Agent heartbeat verification",
 				MainScreenPresentation.connectionModeDetail(false, true, true, ""));
 		assertEquals("vowlan_state paired=true pcm_ready=false",
 				MainScreenPresentation.latestContaining(
@@ -940,7 +940,7 @@ public final class CoreTests {
 		var diagnosticSnapshot = new com.airsim.phonecontrol.voble.VoBLEDiagnostics.Snapshot(
 				"Standalone", true, true, "G.711-mu/8000/mono", 4, 3, 2, "");
 		assertTrue(com.airsim.phonecontrol.voble.VoBLEDiagnostics.summary(diagnosticSnapshot)
-				.contains("PCM 运行中"));
+				.contains("PCM running"));
 		try {
 			com.airsim.phonecontrol.voble.VoBLEPCMBackendResolver.resolve(
 					com.airsim.phonecontrol.voble.VoBLEPCMBackendResolver.Runtime.AVF, "");

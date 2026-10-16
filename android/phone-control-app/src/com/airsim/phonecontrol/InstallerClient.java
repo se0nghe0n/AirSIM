@@ -41,11 +41,11 @@ public final class InstallerClient {
 
 	private String installWithMode(byte[] debianPackage, String signatureBase64, String mode) throws Exception {
         if (debianPackage == null || debianPackage.length == 0 || debianPackage.length > MAX_PACKAGE_BYTES) {
-            throw new IllegalArgumentException("Debian 安装包为空或超过 64 MiB");
+            throw new IllegalArgumentException("Debian package is empty or exceeds 64 MiB");
         }
         String signature = signatureBase64 == null ? "" : signatureBase64.trim();
         if (signature.isEmpty()) {
-            throw new IllegalArgumentException("缺少安装包签名");
+            throw new IllegalArgumentException("Package signature missing");
         }
 		return request("POST", "/v1/packages/install", debianPackage, signature, mode, 120_000);
     }
@@ -56,7 +56,7 @@ public final class InstallerClient {
 
 	private String request(String method, String path, byte[] body, String signature, String mode, int timeout) throws Exception {
         if (endpoint == null || endpoint.isEmpty() || token == null || token.length() < 24) {
-            throw new IllegalStateException("AirSIM installer 尚未配对");
+            throw new IllegalStateException("AirSIM installer is not paired");
         }
         HttpURLConnection connection = null;
         try {

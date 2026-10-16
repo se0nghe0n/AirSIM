@@ -23,6 +23,6 @@ public final class RuntimeMode {
     }
 
     public static String agentLabel(Context context) {
-        return isStandalone(context) ? "内置 Agent" : "Linux Agent";
+        return isStandalone(context) ? "Built-in Agent" : "Linux Agent";
     }
 }

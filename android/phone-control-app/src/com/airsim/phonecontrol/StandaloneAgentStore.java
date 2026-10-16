@@ -64,9 +64,9 @@ final class StandaloneAgentStore {
 
     synchronized JSONObject setCloudEnabled(boolean enabled) throws Exception {
         JSONObject value = registration();
-        if (value == null) throw new IllegalStateException("尚未完成配对");
+        if (value == null) throw new IllegalStateException("Pairing has not completed");
         if (enabled && value.optBoolean("local_mode", false)) {
-            throw new IllegalArgumentException("本地模式不能启用云端模式");
+            throw new IllegalArgumentException("Cloud mode cannot be enabled in local mode");
         }
         value.put("cloud_enabled", enabled);
         return saveRegistration(value.toString());
@@ -114,7 +114,7 @@ final class StandaloneAgentStore {
     static void validateRegistration(JSONObject value) throws Exception {
         if (value.optBoolean("local_mode", false)) {
             if (value.optBoolean("cloud_enabled", false)) {
-                throw new IllegalArgumentException("本地模式不能启用云端模式");
+                throw new IllegalArgumentException("Cloud mode cannot be enabled in local mode");
             }
             return;
         }
@@ -123,16 +123,16 @@ final class StandaloneAgentStore {
         String bundleID = value.optString("bundle_id", "").trim();
         String environment = value.optString("environment", "");
         String relayURL = value.optString("relay_url", "").trim();
-        if (deviceID.isEmpty() || deviceID.length() > 128) throw new IllegalArgumentException("device_id 无效");
-        if (secret.length() < 16 || secret.length() > 512) throw new IllegalArgumentException("device_secret 无效");
-        if (bundleID.isEmpty() || bundleID.length() > 255) throw new IllegalArgumentException("bundle_id 无效");
+        if (deviceID.isEmpty() || deviceID.length() > 128) throw new IllegalArgumentException("Invalid device_id");
+        if (secret.length() < 16 || secret.length() > 512) throw new IllegalArgumentException("Invalid device_secret");
+        if (bundleID.isEmpty() || bundleID.length() > 255) throw new IllegalArgumentException("Invalid bundle_id");
         if (!"sandbox".equals(environment) && !"production".equals(environment)) {
-            throw new IllegalArgumentException("environment 必须是 sandbox 或 production");
+            throw new IllegalArgumentException("environment must be sandbox or production");
         }
         URI relay = URI.create(relayURL);
         if (!"https".equalsIgnoreCase(relay.getScheme()) || relay.getHost() == null
                 || relay.getRawUserInfo() != null) {
-            throw new IllegalArgumentException("relay_url 必须是无凭据的 HTTPS 地址");
+            throw new IllegalArgumentException("relay_url must be an HTTPS address without embedded credentials");
         }
         boolean hasToken = false;
         for (String key : new String[]{"voip_token", "alert_token", "watch_voip_token",
@@ -141,14 +141,14 @@ final class StandaloneAgentStore {
             if (!token.isEmpty()) {
                 hasToken = true;
                 if ((token.length() & 1) != 0 || !token.matches("[0-9a-fA-F]{16,512}")) {
-                    throw new IllegalArgumentException(key + " 无效");
+                    throw new IllegalArgumentException(key + " is invalid");
                 }
             }
         }
-        if (!hasToken) throw new IllegalArgumentException("至少需要一个 APNs token");
+        if (!hasToken) throw new IllegalArgumentException("At least one APNs token is required");
         String watchToken = value.optString("watch_voip_token", "");
         if (!watchToken.isEmpty() && !(bundleID + ".watchkitapp").equals(value.optString("watch_bundle_id", ""))) {
-            throw new IllegalArgumentException("watch_bundle_id 与主应用不匹配");
+            throw new IllegalArgumentException("watch_bundle_id does not match the main app");
         }
         JSONArray capabilities = value.optJSONArray("agent_media_capabilities");
         if (capabilities == null) {

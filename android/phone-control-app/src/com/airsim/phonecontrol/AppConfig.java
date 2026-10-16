@@ -66,11 +66,11 @@ public final class AppConfig {
         }
         String normalizedEndpoint = endpoint == null ? "" : endpoint.trim();
         if (!AVFNetworkPolicy.isAgentEndpoint(normalizedEndpoint)) {
-            throw new IllegalArgumentException("Agent 必须使用 AVF 私网 HTTP 地址");
+            throw new IllegalArgumentException("Agent must use an AVF private-network HTTP address");
         }
 		while (normalizedEndpoint.endsWith("/")) normalizedEndpoint = normalizedEndpoint.substring(0, normalizedEndpoint.length() - 1);
         if (token == null || token.trim().length() < 24) {
-            throw new IllegalArgumentException("控制令牌至少 24 个字符");
+            throw new IllegalArgumentException("Control token must contain at least 24 characters");
         }
         String normalizedMode = MODE_LOCAL_AND_PUSH.equals(mode) ? MODE_LOCAL_AND_PUSH : MODE_REMOTE_SILENT;
         preferences(context).edit()
