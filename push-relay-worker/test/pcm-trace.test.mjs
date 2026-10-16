@@ -162,3 +162,49 @@ test("intervals compare source monotonic deltas to ingress independently of Unix
   assert.equal(logs.length, 1);
   assert.notEqual(new PCMRelayTrace().instanceID, telemetry.instanceID);
 });
+
+test("stable connection attachment keeps interval history across host socket wrappers", (t) => {
+  const logs = [];
+  t.mock.method(console, "log", (message) => logs.push(JSON.parse(message)));
+  let now = 100;
+  t.mock.method(performance, "now", () => now);
+  const firstWrapper = new Socket("agent");
+  firstWrapper.attachment.pcmTraceKey = "connection-one";
+  const iphone = new Socket("iphone", true);
+  const relay = session([firstWrapper, iphone]);
+  relay.webSocketMessage(firstWrapper, frame({ seq: 1 }));
+  const secondWrapper = new Socket("agent");
+  secondWrapper.attachment.pcmTraceKey = "connection-one";
+  now = 1100;
+  relay.webSocketMessage(secondWrapper, frame({ seq: 2, mono: 5020n }));
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].received, 2);
+  assert.equal(logs[0].forwarded, 2);
+  assert.equal(logs[0].source_seq_first, 1);
+  assert.equal(logs[0].source_seq_last, 2);
+  assert.equal(logs[0].ingress_gap_max_ms, 1000);
+  assert.equal(logs[0].ingress_minus_source_delta_max_ms, 980);
+
+  const replacement = new Socket("agent");
+  replacement.attachment.pcmTraceKey = "connection-two";
+  now = 1200;
+  relay.webSocketMessage(replacement, frame({ seq: 3 }));
+  assert.equal(logs.length, 1);
+  now = 2200;
+  relay.webSocketMessage(replacement, frame({ seq: 4, mono: 5020n }));
+  assert.equal(logs.length, 2);
+  assert.notEqual(logs[1].stream_id, logs[0].stream_id);
+  assert.equal(logs[1].received, 2);
+  assert.equal(logs[1].source_seq_first, 3);
+  assert.equal(relay.pcmTrace.streams.size, 1);
+});
+
+test("trace stream map retains at most one connection per supported role", () => {
+  const telemetry = new PCMRelayTrace();
+  for (let generation = 0; generation < 20; generation += 1) {
+    for (const role of ["agent", "iphone", "watch"]) {
+      telemetry.receive({}, role, inspectPCMTrace(frame()), generation, `${role}-${generation}`);
+    }
+  }
+  assert.equal(telemetry.streams.size, 3);
+});

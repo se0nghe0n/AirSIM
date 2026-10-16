@@ -784,6 +784,7 @@ export class CallMediaSession {
     const [client, server] = Object.values(pair);
     server.serializeAttachment({
       role,
+      pcmTraceKey: crypto.randomUUID(),
       owner: inheritsOwnership,
       pendingControl: inheritedPendingControl,
       callID: request.headers.get("x-airsim-call-id") || "",
@@ -814,7 +815,7 @@ export class CallMediaSession {
     }
     if (role !== "agent" && !this.acceptClientMessage(socket, role, message)) return;
     const trace = typeof message === "string" ? null : inspectPCMTrace(message);
-    const stream = trace ? this.pcmTrace.receive(socket, role, trace, ingressMono) : null;
+    const stream = trace ? this.pcmTrace.receive(socket, role, trace, ingressMono, attachment.pcmTraceKey) : null;
     if (trace?.kind === "invalid_v2") {
       this.pcmTrace.flush(stream, performance.now());
       return;

@@ -39,19 +39,27 @@ function interval() {
 export class PCMRelayTrace {
   constructor() {
     this.instanceID = crypto.randomUUID();
-    this.streams = new WeakMap();
+    this.streams = new Map();
     this.nextStreamID = 0;
   }
 
-  receive(socket, role, trace, now) {
-    let stream = this.streams.get(socket);
+  receive(socket, role, trace, now, connectionKey) {
+    // Host WebSocket wrappers can differ across events for the same connection.
+    // The attachment key survives that change; older connections fall back to
+    // object identity. fetch() allows one connection per role, so retain at most
+    // three streams, replacing old role history when a new connection arrives.
+    const key = typeof connectionKey === "string" && connectionKey ? connectionKey : socket;
+    let stream = this.streams.get(key);
     if (!stream) {
+      for (const [oldKey, previous] of this.streams) {
+        if (previous.role === role) this.streams.delete(oldKey);
+      }
       stream = {
         id: ++this.nextStreamID, role, since: now, lastLog: now,
         lastErrorLog: -Infinity, previousIngress: null, previousSource: null,
         previousForward: null, counts: interval(),
       };
-      this.streams.set(socket, stream);
+      this.streams.set(key, stream);
     }
     const counts = stream.counts;
     counts.received += 1;
