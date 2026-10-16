@@ -15,7 +15,7 @@ final class CloudPCMAudioQueue {
     private byte[] lastGood;
     private long dropped, underruns, concealed;
 
-    private static final class Frame {
+    static final class Frame {
         final byte[] pcm;
         final long capturedAt;
         Frame(byte[] pcm, long now) { this.pcm = pcm.clone(); capturedAt = now; }
@@ -42,10 +42,8 @@ final class CloudPCMAudioQueue {
     }
     synchronized byte[] poll(long nowMillis) {
         if (!playout) {
-            while (!frames.isEmpty() && nowMillis - frames.peekFirst().capturedAt > 250) {
-                frames.removeFirst(); dropped++;
-            }
-            return frames.isEmpty() ? null : frames.removeFirst().pcm;
+            Frame frame = pollCapturedFrame(nowMillis);
+            return frame == null ? null : frame.pcm;
         }
         if (!primed) return null;
         if (!frames.isEmpty()) {
@@ -69,6 +67,14 @@ final class CloudPCMAudioQueue {
         target = Math.min(10, target + 1);
         primed = false;
         return null;
+    }
+    /** Outgoing-only dequeue; retain the capture-complete clock across the queue. */
+    synchronized Frame pollCapturedFrame(long nowMillis) {
+        if (playout) throw new IllegalStateException("capture dequeue requires outgoing queue");
+        while (!frames.isEmpty() && nowMillis - frames.peekFirst().capturedAt > 250) {
+            frames.removeFirst(); dropped++;
+        }
+        return frames.pollFirst();
     }
     private void trim(int maximum) {
         while (frames.size() > maximum) { frames.removeFirst(); dropped++; }

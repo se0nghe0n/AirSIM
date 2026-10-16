@@ -217,6 +217,11 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/test/com/airsim/phonecontrol/CloudPCMAudioQueueTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.CloudPCMAudioQueueTests
 
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudPCMTraceFrame.java \
+  "$ROOT"/test/com/airsim/phonecontrol/CloudPCMTraceFrameTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.CloudPCMTraceFrameTests
+
 "$JAVAC" --release 17 -cp "$DIAGNOSTICS_OUT:$OUT" -d "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/CloudPCMMediaPump.java \
   "$ROOT"/test/com/airsim/phonecontrol/CloudPCMMediaPumpTests.java

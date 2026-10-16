@@ -7,10 +7,12 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 final class CloudPCMMediaPump implements Closeable {
-    interface Sender { void send(byte[] frame) throws Exception; }
+    /** Returns local WebSocket write completion duration, including its lock, in milliseconds. */
+    interface Sender { long send(byte[] frame, long capturedAtMillis) throws Exception; }
     interface Failure { void failed(Exception error); }
     private final InputStream capture;
     private final OutputStream playback;
@@ -22,6 +24,10 @@ final class CloudPCMMediaPump implements Closeable {
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean started = new AtomicBoolean();
     private volatile long sendingSince, playingSince;
+    private final AtomicLong maxCaptureGap = new AtomicLong();
+    private final AtomicLong maxQueueAge = new AtomicLong();
+    private final AtomicLong maxSendGap = new AtomicLong();
+    private final AtomicLong maxLocalWrite = new AtomicLong();
 
     CloudPCMMediaPump(InputStream capture, OutputStream playback, Sender sender,
                       Failure failure, Executor executor) {
@@ -45,13 +51,17 @@ final class CloudPCMMediaPump implements Closeable {
     private void capture() {
         byte[] frame = new byte[320];
         int offset = 0;
+        long previousCapture = -1;
         try {
             while (running.get()) {
                 int count = capture.read(frame, offset, frame.length - offset);
                 if (count < 0) throw new EOFException("Cloud PCM capture closed");
                 offset += count;
                 if (offset == frame.length) {
-                    outgoing.offer(frame, nowMillis());
+                    long capturedAt = nowMillis();
+                    if (previousCapture >= 0) maxCaptureGap.accumulateAndGet(capturedAt - previousCapture, Math::max);
+                    previousCapture = capturedAt;
+                    outgoing.offer(frame, capturedAt);
                     offset = 0;
                 }
             }
@@ -59,13 +69,21 @@ final class CloudPCMMediaPump implements Closeable {
     }
     private void paced(boolean network) {
         long tick = System.nanoTime();
+        long previousSend = -1;
         try {
             while (running.get() && !Thread.currentThread().isInterrupted()) {
-                byte[] frame = (network ? outgoing : incoming).poll(nowMillis());
+                CloudPCMAudioQueue.Frame captured = network ? outgoing.pollCapturedFrame(nowMillis()) : null;
+                byte[] frame = network ? (captured == null ? null : captured.pcm) : incoming.poll(nowMillis());
                 if (frame != null && running.get()) {
                     if (network) {
                         sendingSince = System.nanoTime();
-                        try { sender.send(frame); } finally { sendingSince = 0; }
+                        long sendAt = nowMillis();
+                        maxQueueAge.accumulateAndGet(Math.max(0, sendAt - captured.capturedAt), Math::max);
+                        if (previousSend >= 0) maxSendGap.accumulateAndGet(sendAt - previousSend, Math::max);
+                        previousSend = sendAt;
+                        try {
+                            maxLocalWrite.accumulateAndGet(sender.send(frame, captured.capturedAt), Math::max);
+                        } finally { sendingSince = 0; }
                     } else {
                         playingSince = System.nanoTime();
                         try { playback.write(frame); } finally { playingSince = 0; }
@@ -91,7 +109,11 @@ final class CloudPCMMediaPump implements Closeable {
                         + " tx_drop=" + outgoing.droppedFrames() + " rx_queue=" + incoming.size()
                         + " rx_target_ms=" + incoming.targetFrames() * 20
                         + " rx_drop=" + incoming.droppedFrames() + " underruns=" + incoming.underruns()
-                        + " concealed=" + incoming.concealedFrames());
+                        + " concealed=" + incoming.concealedFrames()
+                        + " max_capture_gap_ms=" + maxCaptureGap.getAndSet(0)
+                        + " max_queue_age_ms=" + maxQueueAge.getAndSet(0)
+                        + " max_send_gap_ms=" + maxSendGap.getAndSet(0)
+                        + " max_local_write_ms=" + maxLocalWrite.getAndSet(0));
                 lastStats = now;
             }
             LockSupport.parkNanos(100_000_000L);

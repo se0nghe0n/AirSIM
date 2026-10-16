@@ -20,8 +20,11 @@ public final class CloudPCMMediaPumpTests {
                 super.write(data, offset, length); played.countDown();
             }
         };
-        CloudPCMMediaPump pump = new CloudPCMMediaPump(capture, playback, frame -> {
+        CloudPCMMediaPump pump = new CloudPCMMediaPump(capture, playback, (frame, capturedAtMillis) -> {
+            check(capturedAtMillis > 0 && capturedAtMillis <= System.nanoTime() / 1_000_000L,
+                    "sender receives capture-complete monotonic time");
             sending.countDown(); release.await();
+            return 0;
         }, error -> { failure.set(error); disconnected.countDown(); }, workers);
         try {
             pump.start();

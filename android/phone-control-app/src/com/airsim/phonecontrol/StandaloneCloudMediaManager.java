@@ -9,8 +9,6 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -124,6 +122,8 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile String mediaProtocol = "";
         volatile boolean mediaStarted;
         int sequence;
+        long previousSendMillis = -1;
+        long lastTraceLogMillis = -1;
 
         CloudSession(Descriptor descriptor) { this.descriptor = descriptor; }
 
@@ -226,9 +226,29 @@ final class StandaloneCloudMediaManager implements Closeable {
                         }
                         pcm = connection;
                         boolean[] first = {true};
-                        mediaPump = new CloudPCMMediaPump(connection.getInputStream(), output, frame -> {
-                            owner.writeBinary(encodePCM(frame));
+                        mediaPump = new CloudPCMMediaPump(connection.getInputStream(), output, (frame, capturedAtMillis) -> {
+                            long sendMillis = System.nanoTime() / 1_000_000L;
+                            int frameSequence = sequence++;
+                            byte[] wire = CloudPCMTraceFrame.encode(mediaProtocol, frame, frameSequence,
+                                    capturedAtMillis, sendMillis, System.currentTimeMillis());
+                            long writeStarted = System.nanoTime();
+                            owner.writeBinary(wire);
+                            long writeDurationMillis = (System.nanoTime() - writeStarted) / 1_000_000L;
+                            long gapMillis = previousSendMillis < 0 ? 0 : sendMillis - previousSendMillis;
+                            previousSendMillis = sendMillis;
+                            long completedMillis = System.nanoTime() / 1_000_000L;
+                            if (lastTraceLogMillis < 0 || completedMillis - lastTraceLogMillis >= 1_000) {
+                                lastTraceLogMillis = completedMillis;
+                                // Local completion includes acquiring the WebSocket write lock; it is not delivery.
+                                BridgeLog.info("cloud_pcm_send_trace seq=" + Integer.toUnsignedString(frameSequence)
+                                        + " send_mono_ms=" + sendMillis
+                                        + " capture_to_send_ms=" + Math.max(0, sendMillis - capturedAtMillis)
+                                        + " gap_ms=" + gapMillis
+                                        + " write_duration_ms=" + writeDurationMillis
+                                        + " completion=local_websocket_write");
+                            }
                             if (first[0]) { first[0] = false; owner.writeText(status("pcm_first_frame", "")); }
+                            return writeDurationMillis;
                         }, error -> {
                             if (running && webSocket == owner) BridgeLog.error("standalone_pcm_bridge_failed", error);
                             // Only the owning connection is closed; old workers cannot touch a new call/socket.
@@ -256,20 +276,8 @@ final class StandaloneCloudMediaManager implements Closeable {
             }
         }
 
-        private byte[] encodePCM(byte[] payload) {
-            if (!"airsim-pcm-v1".equalsIgnoreCase(mediaProtocol)) return payload;
-            ByteBuffer wire = ByteBuffer.allocate(20 + payload.length).order(ByteOrder.BIG_ENDIAN);
-            wire.put(new byte[]{'A', 'S', 'P', 'M'}).put((byte) 1).put((byte) 0).putShort((short) 20)
-                    .putInt(sequence++).putLong(System.currentTimeMillis()).put(payload);
-            return wire.array();
-        }
-
         private byte[] decodePCM(byte[] wire) throws Exception {
-            if (wire.length < 4 || wire[0] != 'A' || wire[1] != 'S' || wire[2] != 'P' || wire[3] != 'M') return wire;
-            if (wire.length != 340 || wire[4] != 1 || ByteBuffer.wrap(wire, 6, 2).order(ByteOrder.BIG_ENDIAN).getShort() != 20) {
-                throw new java.io.IOException("AirSIM PCM frame invalid");
-            }
-            return java.util.Arrays.copyOfRange(wire, 20, wire.length);
+            return CloudPCMTraceFrame.decode(wire);
         }
 
         private String status(String value, String message) throws Exception {

@@ -32,6 +32,9 @@ public final class CloudPCMAudioQueueTests {
         check(send.poll(500) == null && send.size() == 0, "never send half-second-old speech");
         send.offer(pcm, 600); pcm[0] = 0;
         check(sample(send.poll(600)) == 1000, "queue owns its captured PCM");
+        send.offer(new byte[320], 617);
+        CloudPCMAudioQueue.Frame captured = send.pollCapturedFrame(699);
+        check(captured != null && captured.capturedAt == 617, "capture timestamp survives delayed dequeue");
         send.offer(new byte[319], 700);
         check(send.size() == 0, "reject partial PCM frames");
         check(CloudPCMAudioQueue.nextTickNanos(0, 1_000_000) == 20_000_000, "regular 20 ms cadence");
