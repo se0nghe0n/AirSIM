@@ -1,42 +1,42 @@
-# AirSIM 三星通话音频桥
+# AirSIM Samsung Call Audio Bridge
 
-推荐的 [Android Standalone APK](../../android-standalone/README.md) 不依赖 AVF。只有使用旧 AVF 兼容模式时，才按[AVF 安装与无损排障指南](../../docs/AVF_INSTALL_GUIDE.md)分别验证 `8575`、`8576` 和控制令牌；PCM 桥待启动不等于 Debian 包损坏，也不应通过清除 AVF 数据处理。
+The recommended [Android Standalone APK](../../android-standalone/README.md) does not depend on AVF. Only legacy AVF compatibility mode requires separate verification of `8575`, `8576`, and the control token using the [AVF installation and non-destructive troubleshooting guide](../../docs/AVF_INSTALL_GUIDE.md). A PCM bridge waiting to start does not mean the Debian package is damaged and should not be addressed by clearing AVF data.
 
-该组件运行在 Android 的 Shizuku `UserService` 中，以 shell UID 访问系统通话音频，并向 AirSIM 控制 App 的内置 Agent 或旧 AVF Agent 提供双向 PCM。
+This component runs in an Android Shizuku `UserService`, accesses system call audio as the shell UID, and provides bidirectional PCM to the control app's built-in Agent or the legacy AVF Agent.
 
-当前应用发布基线为 [`v0.9.2`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.2)，AVF Agent 为 [`v0.4.5`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.5)。云端媒体只连接与当前 AirSIM 签名身份匹配的 Relay；维护者地址是 `https://airsim-push.remotepilot.site`，不是 DJOneHub 的 `https://push.remotepilot.site`。
+The application release baseline documented here is [`v0.9.2`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.2), with AVF Agent [`v0.4.5`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.5). Cloud media connects only to a Relay matching the current AirSIM signing identity. The upstream maintainer's address is `https://airsim-push.remotepilot.site`, not DJOneHub's `https://push.remotepilot.site`.
 
-## 音频方向
+## Audio directions
 
-- 下行：`AudioRecord.VOICE_DOWNLINK` → Agent / Relay → iPhone 或 Apple Watch
-- 上行：iPhone 或 Apple Watch 麦克风 → Agent / Relay → `USAGE_VOICE_COMMUNICATION` 与三星 `VOICE_TX`
-- 格式：8 kHz、单声道、PCM16LE、每帧 320 字节
-- 握手：`AIRSIMPCM1\n` / `AIRSIMREADY`
+- Downlink: `AudioRecord.VOICE_DOWNLINK` → Agent / Relay → iPhone or Apple Watch
+- Uplink: iPhone or Apple Watch microphone → Agent / Relay → `USAGE_VOICE_COMMUNICATION` and Samsung `VOICE_TX`
+- Format: 8 kHz, mono, PCM16LE, 320 bytes per frame
+- Handshake: `AIRSIMPCM1\n` / `AIRSIMREADY`
 
-音频桥不保存 PCM。JSONL 日志仅包含生命周期、路由、帧数、字节数、峰值与错误信息。
+The bridge does not save PCM. JSONL logs contain only lifecycle events, routes, frame counts, byte counts, peaks, and errors.
 
-## 构建与测试
+## Build and test
 
 ```sh
 ./android/phone-audio-bridge/build.sh
 ```
 
-构建会同时运行 JVM 单元测试，并输出：
+The build also runs JVM unit tests and outputs:
 
 ```text
 android/phone-audio-bridge/build/airsim-phone-audio-bridge.jar
 ```
 
-## 三星设备运行
+## Run on a Samsung device
 
-音频桥必须绑定 Android AVF 私网接口。每次 AVF 启动后先解析当前地址：
+The bridge must bind to the Android AVF private interface. Resolve the current address after every AVF startup:
 
 ```sh
 adb -s DEVICE shell 'ip -o -4 addr show avf_tap_fixed'
 ssh -p 2222 droid@127.0.0.1 'ip route'
 ```
 
-启动和检查：
+Start and inspect:
 
 ```sh
 ADB=/path/to/adb ADB_SERIAL=DEVICE LISTEN_HOST=AVF_ANDROID_IP \
@@ -47,11 +47,11 @@ ADB=/path/to/adb ADB_SERIAL=DEVICE \
   ./android/phone-audio-bridge/run-device-bridge.sh logs
 ```
 
-Runner 会拒绝通配地址、外部 Wi-Fi、热点、蜂窝和其他非 AVF 私网接口。
+The runner rejects wildcard addresses, external Wi-Fi, hotspot, cellular, and other interfaces outside the AVF private network.
 
-## Agent 配置
+## Agent configuration
 
-systemd 环境示例：
+Example systemd environment:
 
 ```ini
 [Service]
@@ -59,7 +59,7 @@ Environment=AIRSIM_VOICE_BACKEND=samsung_android
 Environment=AIRSIM_SAMSUNG_PCM_ADDRESS=AVF_ANDROID_IP:7580
 ```
 
-启动前可执行握手探针：
+Run the handshake probe before startup:
 
 ```sh
 AIRSIM_RUNTIME_PROFILE=android-avf \
@@ -68,9 +68,9 @@ AIRSIM_SAMSUNG_PCM_ADDRESS=AVF_ANDROID_IP:7580 \
 /usr/local/bin/airsim-agent --startup-probe voice-backend
 ```
 
-## 运行边界
+## Runtime boundaries
 
-- 仅允许一个已认证客户端占用当前通话的 PCM 会话。
-- 通话结束、热点变化或任一方向断开时立即关闭双向流。
-- Android 可能回收 shell 进程；控制 App 的 Shizuku 管理器负责检测并重启服务。
-- 真实双向语音必须与 Android Telecom 控制面、AVF Agent 和 iOS/watchOS 客户端联合验证。
+- Only one authenticated client may hold the current call's PCM session.
+- Close both streams immediately when the call ends, the hotspot changes, or either direction disconnects.
+- Android may terminate the shell process; the control app's Shizuku manager detects this and restarts the service.
+- Real bidirectional voice must be validated together with Android Telecom control, the AVF Agent, and the iOS/watchOS client.

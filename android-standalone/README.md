@@ -1,149 +1,149 @@
 # AirSIM Android Standalone
 
-AirSIM Android Standalone 是推荐的 Android 端部署方式：它把原本运行在 Android AVF Linux 中的 Agent 合并进 Android 前台服务，形成单一 APK。安装后不再需要 Linux Terminal、Debian、AVF 私网、`airsim-installerd`，也不再监听 Agent / installer 的 `8575`、`8576` 端口。
+AirSIM Android Standalone is the recommended Android deployment. It moves the Agent previously hosted in Android AVF Linux into an Android foreground service, providing a single APK. After installation, Linux Terminal, Debian, the AVF private network, and `airsim-installerd` are no longer required, and Agent/installer ports `8575` and `8576` are not used.
 
-**[Android 10–13 修复版 0.9.7.1（81），推荐安装](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1)**。正式签名构建沿用原证书与包名，可保留数据覆盖升级；不要先卸载。其他证书的调试版/重签版不能直接覆盖。本版不更新 Linux AVF Agent 或 Relay；iOS build 81 另行通过 Xcode 上传 TestFlight。
+**[Android 10–13 hotfix 0.9.7.1 (81), recommended](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1)**. Official builds retain the original certificate and package name, allowing an in-place upgrade without data loss; do not uninstall first. Debug/re-signed builds with other certificates cannot replace them directly. This version does not update the Linux AVF Agent or Relay; iOS build 81 is uploaded separately through Xcode to TestFlight.
 
-本次修复针对旧系统缺失的 Java I/O 和数组转换方法，不代表所有 Android 10–13/OEM 音频适配均已通过。Redmi Android 12 已保留数据覆盖安装，用户确认 VoBLE 配对正常，并在本轮云端通话中反馈挂断 UI 不再重现、声音更稳；vivo Android 11 已定位报告但未复测，Android 10、13 和 realme（真我）尚未实测。完整范围、签名和验证边界见[发布说明](../docs/releases/0.9.7.1-android10-13.md)。
+This hotfix addresses missing Java I/O and array-conversion methods on older systems; it does not establish full Android 10–13/OEM audio compatibility. Redmi Android 12 received an in-place update preserving data, and the user confirmed VoBLE pairing and reported no call-UI recurrence with steadier cloud-call audio in that test round. The vivo Android 11 report was diagnosed but not retested; Android 10, 13, and realme have not been device-tested. See the [release notes](../docs/releases/0.9.7.1-android10-13.md) for scope, signing, and validation boundaries.
 
-Standalone 复用 [`android/phone-control-app`](../android/phone-control-app/README.md) 的 Telecom、短信、VoWLAN、配对与 Shizuku 管理代码，以及 [`android/phone-audio-bridge`](../android/phone-audio-bridge/README.md) 的通话 PCM 桥。独立 Manifest 使用包名 `com.airsim.phonecontrol.standalone`，因此可与旧 AVF 版并存安装；但同一时间只能有一个 App 持有默认电话角色和 Shizuku PCM 会话。
+Standalone reuses Telecom, SMS, VoWLAN, pairing, and Shizuku management from [`android/phone-control-app`](../android/phone-control-app/README.md), and the call PCM bridge from [`android/phone-audio-bridge`](../android/phone-audio-bridge/README.md). Its Manifest uses package `com.airsim.phonecontrol.standalone`, so it can coexist with the legacy AVF app. Only one app can hold the default phone role and Shizuku PCM session at a time.
 
-## 内置能力
+## Built-in capabilities
 
-- Relay 设备注册、30 秒心跳、WebSocket 云端命令与 HTTP 补漏；
-- Android Telecom 拨号、接听、拒接、挂断、DTMF 和系统短信发送；
-- 来电 Push、通话生命周期以及单路云端 PCM 媒体编排；
-- 云端 PCM 抖动优化将采集/收发解耦，限制旧语音积压，并在 WebSocket 重连后重新启动媒体；策略与真机验收边界见[云端 PCM 抖动处理](../docs/cloud-pcm-resilience.md)；
-- VoWLAN 本地控制和 PCM 链路；
-- VoBLE 蓝牙本地控制和加密 G.711 μ-law 双向音频链路；
-- 原 Agent `/api/health`、`/api/android/status`、通话和音频配置接口的进程内兼容层；
-- 小米 HyperOS 默认电话角色引导，以及在系统角色界面不可用时通过已授权 Shizuku 设置默认电话 App；
-- 非三星设备通过 Android `TYPE_TELEPHONY` 音频设备选择通话上下行，三星设备继续使用其语音 TX 路由。
-- 默认电话角色的来电提供独立锁屏通话界面及接听/拒接通知动作；通话中可从通知返回界面挂断。Android 端保持静音转送策略，不因显示界面而自动切回本机听筒。
+- Relay device registration, 30-second heartbeats, WebSocket cloud commands, and HTTP fallback fetching;
+- Android Telecom dialing, answer, reject, hang-up, DTMF, and system SMS sending;
+- Incoming-call push, call lifecycle, and single-stream cloud PCM media orchestration;
+- Cloud PCM jitter mitigation separates capture from network send/receive, limits stale audio backlog, and restarts media after WebSocket reconnection. See [cloud PCM jitter mitigation](../docs/cloud-pcm-resilience.md) for the strategy and device-acceptance boundaries;
+- Local VoWLAN control and PCM links;
+- Local VoBLE control and encrypted G.711 μ-law bidirectional audio;
+- An in-process compatibility layer for the original Agent `/api/health`, `/api/android/status`, call, and audio-configuration APIs;
+- Xiaomi HyperOS default phone-role guidance, with authorized Shizuku configuration when the system role-selection UI is unavailable;
+- Non-Samsung devices select call uplink/downlink through Android `TYPE_TELEPHONY` audio devices; Samsung devices retain their voice TX route.
+- A separate lock-screen call UI and answer/reject notification actions when acting as default phone app. During calls, the notification reopens the UI for hang-up. Android retains silent-forwarding behavior; showing the UI does not automatically switch audio back to the local earpiece.
 
-VoWLAN 的 `/api/calls/answer`、`/api/calls/reject`、`/api/calls/hangup` 接受可选 JSON `call_id`，值应为 `/api/calls/status` 中当前通话的 `id`。携带 ID 时只操作该通话；ID 过期或不匹配时拒绝执行，不会改选另一通。未携带 ID 的旧客户端保留当前通话兼容路径。
+VoWLAN `/api/calls/answer`, `/api/calls/reject`, and `/api/calls/hangup` accept optional JSON `call_id`, taken from the current call's `id` in `/api/calls/status`. With an ID, only that call may be affected. Expired or mismatched IDs are rejected without selecting another call. Older clients without an ID retain the current-call compatibility path.
 
-## 运行架构
+## Runtime architecture
 
 ```text
 iPhone / Apple Watch
-        │  VoWLAN、VoBLE 或 Cloudflare Relay
+        │  VoWLAN, VoBLE, or Cloudflare Relay
         ▼
 AirSIM Android Standalone APK
-        ├─ 内置 Agent：身份、心跳、命令和媒体编排
-        ├─ Telecom / SMS：运营商通话与短信
-        └─ Shizuku UserService：通话 PCM 桥
+        ├─ Built-in Agent: identity, heartbeats, commands, and media orchestration
+        ├─ Telecom / SMS: cellular calls and text messages
+        └─ Shizuku UserService: call PCM bridge
 ```
 
-Shizuku 仍是采集和注入系统通话音频所需的权限桥。Standalone 不能绕过 Android/OEM 的安全边界，也不能替代系统紧急呼叫能力。
+Shizuku remains the permission bridge for capturing and injecting system call audio. Standalone cannot bypass Android/OEM security boundaries or replace system emergency calling.
 
-启动时，在系统权限请求结束后检查 Shizuku：未安装显示官方下载安装地址（`https://shizuku.rikka.app/zh-hans/download/`）和「下载 Shizuku」按钮；已安装但未运行提供「打开 Shizuku」；已运行但未授权提供「授权」。已就绪不提示，每次启动最多提示一次，从下载页或 Shizuku 返回不重复弹窗；可选「稍后」继续进入 App，但未就绪的通话音频桥仍无法工作。不会静默下载安装或绕过系统授权。
+After startup system-permission requests finish, the app checks Shizuku. If absent, it shows the official download URL (`https://shizuku.rikka.app/zh-hans/download/`) and “Download Shizuku”; if installed but stopped, “Open Shizuku”; if running but unauthorized, “Authorize.” No prompt appears when ready. It prompts at most once per launch and does not repeat when returning from the download page or Shizuku. “Later” continues into the app, but an unready call audio bridge cannot work. The app never silently installs Shizuku or bypasses system authorization.
 
-## 构建与测试
+## Build and test
 
-兼容修复还包括：移除 `StringBuilder.isEmpty()`、URL 编解码的 `Charset` 重载与 `InputStream.nullInputStream()`；Android 10/11 通过旧版短信工厂保留所选短信 SIM，服务为空时有回退。Shizuku 静音改为 shell 身份的 `AudioManager` 能力检测、回读验证与原状态恢复，不依赖 OEM 可能未实现的 `cmd audio`；系统拒绝静音时明确失败，不能将静音能力或 JVM 测试当作真实双向通话验收。
+Compatibility fixes also remove `StringBuilder.isEmpty()`, URL encoding/decoding `Charset` overloads, and `InputStream.nullInputStream()`. Android 10/11 uses the older SMS factory while preserving the selected SMS SIM, with fallback for a null service. Shizuku mute uses shell-identity `AudioManager` capability detection, readback, and original-state restoration instead of possibly absent OEM `cmd audio`. A system refusal to mute is an explicit failure. Mute support and JVM tests do not establish real bidirectional-call acceptance.
 
-共享测试与 APK 构建包含 Android 11/12 Java API 兼容性回归检查，防止日志读取、权限列表、VoWLAN 和 Relay 路径引用旧系统不存在的流读取及数组转换重载。该检查针对已知问题，不替代不同 Android 版本的真机启动和通话验收。
+Shared tests and APK builds check Android 11/12 Java API compatibility, preventing log reading, permission lists, VoWLAN, and Relay paths from referencing unavailable stream-reading and array-conversion overloads. These targeted checks do not replace real-device startup and call acceptance on different Android versions.
 
-需要 JDK 17、Android SDK Platform 35、Build Tools 35 和 Python 3。构建脚本默认读取 `ANDROID_SDK_ROOT`；未设置时使用 Homebrew Android command-line tools 路径。
+Requires JDK 17, Android SDK Platform 35, Build Tools 35, and Python 3. The build reads `ANDROID_SDK_ROOT`, falling back to the Homebrew Android command-line tools path if unset.
 
 ```sh
 ./android-standalone/test.sh
 ./android-standalone/build.sh
 ```
 
-调试 APK 输出到：
+Debug APK output:
 
 ```text
 android-standalone/build/android/AirSIM-Android-Standalone-debug.apk
 ```
 
-构建不可调试的正式签名 APK：
+Build a non-debuggable, release-signed APK:
 
 ```sh
 AIRSIM_ANDROID_BUILD_VARIANT=release \
 AIRSIM_ANDROID_KEYSTORE=/absolute/path/to/airsim-android-release.jks \
 AIRSIM_ANDROID_KEY_ALIAS=airsim \
-AIRSIM_ANDROID_KEYSTORE_PASSWORD='从 Secret Store 注入' \
-AIRSIM_ANDROID_KEY_PASSWORD='从 Secret Store 注入' \
+AIRSIM_ANDROID_KEYSTORE_PASSWORD='injected from Secret Store' \
+AIRSIM_ANDROID_KEY_PASSWORD='injected from Secret Store' \
 ./android-standalone/build.sh
 ```
 
-正式 APK 输出为 `android-standalone/build/android/AirSIM-Android-Standalone-release.apk`。发布签名私钥和密码不得写入仓库、脚本、Release 或日志；覆盖升级时必须沿用上一版的签名证书。
+Release output is `android-standalone/build/android/AirSIM-Android-Standalone-release.apk`. Do not put signing private keys or passwords in the repository, scripts, Releases, or logs. In-place upgrades must retain the prior signing certificate.
 
-## 安装与首次配置
+## Installation and initial setup
 
-1. 安装 APK，并启动 Shizuku；无线调试重启后通常需要重新启动 Shizuku。
-2. 打开 AirSIM Standalone，授予电话、短信和通知权限，并按页面提示设为默认电话 App。可选择授权「读取短信」作为收件箱兜底：首次授权只记录当前收件箱位置，之后仅扫描新短信；拒绝时仍通过短信广播接收。部分安装来源可能因 Android 受限权限策略无法授予此权限。
-   `读取手机状态/号码` 权限用于把 SIM 号码显示在 iPhone 的已配对 Agent 列表；运营商未写入本机号码或拒绝号码权限时，iPhone 会显示“号码未提供”。指定默认通话卡需要电话状态权限。
-3. 小米 HyperOS 无法弹出默认电话选择页时，先在 Shizuku 中授权 AirSIM，再让 App 自动执行系统角色设置；无需手动运行 ADB 命令。
-4. 在 Android 页面填写自己的 Relay 地址、设备标识与配对资料；使用自己的 Apple Bundle ID 时，Relay 的 `ALLOWED_BUNDLE_ID` 和 APNs topic 必须一致。
-5. iPhone 与 Android 在同一热点或局域网时优先验证 VoWLAN；随后再验证 Relay 远程模式。
+1. Install the APK and start Shizuku. Wireless debugging usually requires restarting Shizuku after a reboot.
+2. Open AirSIM Standalone, grant phone, SMS, and notification permissions, and follow the default-phone-app prompt. Optional “Read SMS” permission provides inbox fallback: initial authorization records the current inbox position and scans only new messages afterward. If denied, SMS broadcasts remain available. Android restricted-permission policy may prevent some installation sources from granting it.
+   “Read phone state/number” permission lets the iPhone paired-Agent list display the SIM number. If the carrier has not stored a number or permission is denied, iPhone shows “Number not provided.” Selecting a default calling SIM requires phone-state permission.
+3. If Xiaomi HyperOS does not open default-phone selection, authorize AirSIM in Shizuku first and let the app configure the system role automatically. No manual ADB command is needed.
+4. Enter your Relay URL, device identifier, and pairing details on Android. If using your own Apple Bundle ID, Relay `ALLOWED_BUNDLE_ID` and APNs topics must match.
+5. First validate VoWLAN with iPhone and Android on the same hotspot/LAN, then validate remote Relay mode.
 
-### 默认通话卡（双卡 / 多卡）
+### Default calling SIM (dual/multi-SIM)
 
-在 Android AirSIM「设置 → 默认通话卡」中选择「跟随系统默认」或一张已启用的 SIM/eSIM。卡槽与运营商由系统提供；号码仅在已授权且运营商提供时显示。选项本地保存，重启或覆盖安装后保留。BLE、VoWLAN、Relay 和 Android 本机拨号均使用此设置，无需联网选卡。
+Under Android AirSIM “Settings → Default Calling SIM,” select “Follow System Default” or an enabled SIM/eSIM. Slots and carriers come from the system; a number is shown only when permission and carrier data are available. The local preference survives restart and in-place upgrades. BLE, VoWLAN, Relay, and Android local dialing all use it, without network access for SIM selection.
 
-AirSIM 使用系统 Telecom 的 `EXTRA_PHONE_ACCOUNT_HANDLE` 指定卡，不修改系统默认通话卡，也不修改默认短信卡。每次拨号重新检查账户；指定卡被停用、移除或电话状态权限被撤销时，明确报错，不自动改用其他卡。紧急呼叫仍由系统的安全路由决定，不保证使用此选项。
+AirSIM selects the SIM through Telecom `EXTRA_PHONE_ACCOUNT_HANDLE`, without changing system call or SMS defaults. It rechecks the account on each dial. If the selected SIM is disabled/removed or phone-state permission is revoked, it returns an explicit error without choosing another SIM. System safety routing still determines emergency calls and may override this choice.
 
-### 配置 VoBLE 蓝牙模式
+### Configure VoBLE Bluetooth mode
 
-设备名与号码在认证后的 `device_info` 命令、VoWLAN 健康检查和 Standalone Relay 心跳中实时读取。号码对应当前默认通话卡；换卡、停用卡或号码不可读时不回填首次配对保存的旧号。iPhone 新版设置页可删除某一配对设备的本机记录；在线蓝牙删除会尝试撤销双方凭据，离线删除后若 Android 仍保存旧认证，可在本 APK 的「VoBLE 认证配置」中清除后重新配对。
+Authenticated `device_info`, VoWLAN health checks, and Standalone Relay heartbeats read the device name and number live. The number follows the current calling SIM; changing/disabling a SIM or losing number access never substitutes the initial pairing's old number. Newer iPhone settings can delete one device's local pairing record. Online Bluetooth deletion attempts to revoke both ends' credentials; after offline deletion, clear remaining Android credentials under “VoBLE Authentication” before re-pairing if needed.
 
-VoBLE 是设置中的独立模式，不要求先建立 VoWLAN，也不会改变已有 VoWLAN/Relay 配置：
+VoBLE is an independent settings mode. It does not require prior VoWLAN pairing or change existing VoWLAN/Relay configuration:
 
-1. Android 保持 AirSIM Standalone 为默认电话 App，授予附近设备/蓝牙与通知权限，并确认 Shizuku PCM 音频桥显示运行中。
-2. 在 Android 状态页启用 VoBLE；在 iPhone AirSIM 设置中选择“蓝牙直连”，扫描并选择目标 Android。
-3. 两端核对同一个短码后确认配对。长期密钥仅保存在 Android Keystore 和 iOS Keychain，不应截图、记录或写入日志。
-4. 配对完成后先做一通拨出和一通呼入，分别检查接听、拒接、挂断、静音、扬声器和 DTMF，再检查双向音频。
+1. Keep AirSIM Standalone as Android's default phone app, grant nearby-device/Bluetooth and notification permissions, and confirm the Shizuku PCM bridge is running.
+2. Enable VoBLE on Android's status screen. Select “Direct Bluetooth” in iPhone AirSIM settings, scan, and choose the Android device.
+3. Compare the short code on both devices and confirm pairing. Long-term keys remain only in Android Keystore and iOS Keychain; do not screenshot, record, or log them.
+4. Make one outgoing and one incoming call. Check answer, reject, hang-up, mute, speaker, and DTMF, then verify bidirectional audio.
 
-蓝牙模式通过 BLE GATT 传送控制与 G.711 μ-law 8 kHz 单声道音频，帧使用 AES-256-GCM 认证加密。它不使用 Relay、PushKit 或云端注册参数，也不提供 Bluetooth PAN 网络共享；iPhone 的互联网连接需要单独配置。Android PCM 桥、默认电话角色和系统 Telecom 仍是必需条件。三秒内的短暂断链只恢复同一 `call_id`/generation，超过三秒会结束本次媒体会话，防止旧包进入下一通电话。
+Bluetooth mode transports control and G.711 μ-law 8 kHz mono audio over BLE GATT, with AES-256-GCM authenticated frames. It uses no Relay, PushKit, or cloud-registration parameters and provides no Bluetooth PAN internet sharing; configure iPhone internet separately. The Android PCM bridge, default phone role, and system Telecom remain required. A brief disconnection may resume only the same `call_id`/generation within three seconds; a longer gap ends the media session to prevent old packets entering a later call.
 
-VoBLE 拨号时，iPhone 创建的临时 `call_id` 与 Android Telecom 随后发布的权威 `call_id` 属于同一个 generation；Android 只替换 ID，不推进 generation。这样媒体启动、DTMF 与挂断不会被误判为上一通电话的 `call_mismatch`。
+When dialing over VoBLE, the provisional iPhone `call_id` and the later authoritative Android Telecom `call_id` share one generation. Android replaces the ID without advancing generation, preventing media start, DTMF, and hang-up from being mistaken for a previous call's `call_mismatch`.
 
-设置页的“VoBLE 认证配置”会显示蓝牙权限、凭据与当前会话状态。正常取消配对由 iPhone 通过已认证控制通道发起，并同时删除两端凭据；若一端重装后出现 `already paired`、`peer is not paired` 或重连认证失败，可在 Android 该页面本地清除旧凭据，再在 iPhone 清除本机旧凭据并重新核对六位安全码。清除操作不会修改 VoWLAN 或 Relay 配置。
+“VoBLE Authentication” in settings shows Bluetooth permission, credential, and session state. Normal unpairing begins on iPhone through the authenticated control channel and deletes both ends' credentials. If reinstalling one end causes `already paired`, `peer is not paired`, or reconnection authentication failures, clear Android's old credentials here, clear iPhone's local credentials, and compare the new six-digit security code. This does not change VoWLAN or Relay configuration.
 
-iOS 被用户强制退出后不保证后台 BLE 来电唤醒；重新打开 AirSIM 后会恢复扫描。Apple Watch 由 iPhone 的 CallKit/WatchConnectivity 镜像来电与控制状态，不直接连接 Android BLE，音频能否切到手表取决于 iPhone/watchOS 的系统路由。
+iOS does not guarantee background BLE incoming-call wake-up after the user force-quits the app; reopening AirSIM resumes scanning. Apple Watch mirrors incoming calls/control through iPhone CallKit/WatchConnectivity rather than connecting to Android BLE directly. Whether audio can route to Watch depends on iPhone/watchOS system routing.
 
-锁屏来电使用独立的高优先级「AirSIM 来电」通知渠道；Android 14 及以上若系统关闭了该 App 的全屏来电权限，可能只显示可操作的横幅通知。此权限由系统/用户控制，App 不能绕过。请在目标设备上分别实测锁屏接听、拒接、挂断以及 iPhone 端音频路径。
+Lock-screen incoming calls use a dedicated high-priority “AirSIM Incoming Calls” notification channel. On Android 14+, if system settings deny full-screen call permission, only an actionable banner may appear. The system/user controls that permission; the app cannot bypass it. Test locked-screen answer, reject, hang-up, and iPhone audio routing on each target device.
 
-### 闪退报告
+### Crash reports
 
-Standalone 和 AVF Bridge 都会在 App 进程发生未处理异常时，将最近一次 Java 堆栈保存到应用私有目录。报告包含 App 版本、Android SDK、设备型号、线程和异常堆栈，并在写入和分享前脱敏电话号码、令牌、密码与配对码；最多保留一份，报告上限为 48 KiB。
+Standalone and AVF Bridge save the most recent unhandled Java exception stack to app-private storage. Reports include app version, Android SDK, model, thread, and stack, with phone numbers, tokens, passwords, and pairing codes redacted before saving/sharing. Only one report is retained, limited to 48 KiB.
 
-下次打开 App 时会提示“检测到上次闪退”。用户可选择发送、进入“调试”页查看发送入口，或稍后处理。“发送闪退报告”使用 Android 系统分享面板，并附带最多 12 KiB 的最近脱敏 Debug 日志；App 不会自动上传。调试页可单独删除闪退报告，清除后无法恢复。
+On the next launch, “Previous crash detected” allows sending, opening the Debug sharing entry point, or deferring. “Send Crash Report” opens Android's share sheet with up to 12 KiB of recent redacted Debug logs. Nothing uploads automatically. The Debug screen can delete the report permanently.
 
-无线调试安装示例：
+Wireless-debugging installation example:
 
 ```sh
 adb connect DEVICE_IP:WIRELESS_ADB_PORT
 adb install -r android-standalone/build/android/AirSIM-Android-Standalone-debug.apk
 ```
 
-无线调试地址与端口每次配对都可能变化，示例值不能当作固定设备配置。
+Wireless debugging addresses and ports can change at each pairing; example values are not fixed device configuration.
 
-## 从 AVF 版迁移
+## Migrate from the AVF version
 
-- Standalone 使用独立包名，不会自动读取旧 AVF 版 App 的本地数据；迁移前记录 Relay、设备 ID 和配对资料。
-- 安装并验证 Standalone 后，将它设为默认电话 App；不要让两个 AirSIM 包同时控制同一通话。
-- Standalone 正常工作后即可停止 AVF Agent。删除 Debian/AVF 数据属于独立的破坏性操作，不是 APK 安装流程的一部分。
-- 需要回退时，重新把旧 App 设为默认电话 App，并恢复对应的 AVF Agent；两个版本可保留在设备上用于回退。
+- Standalone has a separate package name and does not automatically read the legacy app's local data. Record your Relay, device ID, and pairing details before migration.
+- After installing and validating Standalone, make it the default phone app. Do not allow two AirSIM packages to control the same call.
+- Once Standalone works, the AVF Agent can be stopped. Deleting Debian/AVF data is a separate destructive operation, not part of APK installation.
+- To revert, make the old app the default phone app again and restore its AVF Agent. Both versions may remain installed for fallback.
 
-## 真机验收
+## Device acceptance
 
-- 页面显示内置 Agent、Relay 和 VoWLAN 状态正常，且不依赖 `8575/8576`；
-- Android 重启后前台服务能恢复，Shizuku 失效时页面给出明确提示；
-- iPhone 可拨号、接听、拒接、挂断和发送 DTMF；
-- Android 与 iPhone 双向通话音频都从预期设备输出，没有回到小米本机听筒；
-- 短信发送结果以 Android 系统回执为准，并由收件方确认实际收到；
-- 分别测试同网 VoWLAN 与异网 Relay，通话中不切换传输路径。
-- 单独选择 VoBLE 后关闭 Wi-Fi，确认拨出、呼入和双向音频不访问 Relay；再验证三秒内同通话恢复和超时终止。
+- The screen shows healthy built-in Agent, Relay, and VoWLAN status without depending on `8575/8576`;
+- The foreground service recovers after Android restart, with clear feedback if Shizuku becomes unavailable;
+- iPhone can dial, answer, reject, hang up, and send DTMF;
+- Android/iPhone bidirectional audio uses the expected device and does not revert to the Xiaomi earpiece;
+- SMS send results follow Android system receipts, and the recipient confirms actual delivery;
+- Same-network VoWLAN and separate-network Relay are tested independently, with no transport change mid-call.
+- Select VoBLE, turn off Wi-Fi, and confirm outgoing/incoming calls and bidirectional audio do not access Relay. Then verify same-call recovery within three seconds and termination after timeout.
 
-完整项目级结果、未连接设备和失败场景记录在 [VoBLE 真机测试矩阵](../docs/voble-real-device-test-matrix.md)。
+Project-wide results, disconnected devices, and failures are recorded in the [VoBLE device test matrix](../docs/voble-real-device-test-matrix.md).
 
-## 安全边界
+## Security boundaries
 
-- 通话 PCM 只在内存与网络中处理，不落盘；
-- 日志不得包含完整短信、电话号码、Push token、配对密钥或 Relay 密钥；
-- APK 不包含 APNs 私钥、Cloudflare token、Android 发布私钥或 Apple 签名身份；
-- 本项目仅限 [PolyForm Noncommercial License 1.0.0](../LICENSE) 允许的非商业用途。
+- Call PCM is processed only in memory and on the network, never saved to disk;
+- Logs must not contain complete SMS messages, phone numbers, push tokens, pairing keys, or Relay secrets;
+- The APK contains no APNs private keys, Cloudflare tokens, Android release private keys, or Apple signing identities;
+- Use is limited to noncommercial purposes allowed by the [PolyForm Noncommercial License 1.0.0](../LICENSE).

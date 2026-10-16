@@ -1,41 +1,41 @@
-# AirSIM 三星 Android 控制 App
+# AirSIM Samsung Android Control App
 
-该目录包含 AirSIM Android 端的共享实现以及旧 AVF 兼容 Manifest。新安装推荐使用根目录的 [Android Standalone APK](../../android-standalone/README.md)，由同一 APK 内置 Agent；只有兼容旧部署时才使用这里的 AVF 版构建入口。
+This directory contains the shared Android implementation and legacy AVF compatibility Manifest. New installations should use the root [Android Standalone APK](../../android-standalone/README.md), which includes the Agent in the same APK. Use this AVF build entry point only for legacy deployments.
 
-当前正式应用版本为 [`v0.9.7.1`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1)（Android `versionCode 81`），包含 Android 10–13 兼容性修复，推荐升级；新安装优先 Standalone。配套 Linux AVF Agent 保持 [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6)。维护者云端模式使用 `https://airsim-push.remotepilot.site`，不得改用 DJOneHub 的 `https://push.remotepilot.site`。自行签名的 Apple 客户端需要部署与其 Bundle ID、APNs 凭据匹配的独立 Relay。
+The documented release is [`v0.9.7.1`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1) (Android `versionCode 81`), with Android 10–13 compatibility fixes; upgrading is recommended. Prefer Standalone for new installs. The companion Linux AVF Agent remains [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6). The upstream maintainer's cloud mode uses `https://airsim-push.remotepilot.site`, not DJOneHub's `https://push.remotepilot.site`. Self-signed Apple clients need a separate Relay matching their Bundle ID and APNs credentials.
 
-## 主要职责
+## Responsibilities
 
-- 申请并维护默认电话 App 角色。
-- 监听来电、拨出、接通、挂断和 DTMF 状态。
-- 将通话与短信事件发送给 AVF Agent。
-- 执行 Agent 下发的拨号、接听、拒接、挂断和短信命令。
-- 提供限时配对窗口与六位确认码。
-- 在三星热点接口上发布经过认证的 VoWLAN 控制与 PCM 服务。
-- VoWLAN 优先使用 `7592/7593`，端口占用时自动选择可用端口并通过服务发现公布实际端口，避免与 DJOneHub 的 `7590/7591` 冲突。
-- 维护前台守护服务、Shizuku 状态和故障诊断。
-- 通过独立 AVF installerd 检查、安装和回滚签名 Debian 包。
-- 启动时检测 AVF、AOSP Linux Terminal 和 AVF 私网状态，并提供可复制的一键安装命令。
-- 状态首页明确显示当前使用 VoWLAN、云端模式、云端异常或离线；仅配置 Relay 不会被误报为已经在线。
+- Request and maintain the default phone app role.
+- Monitor incoming, outgoing, connected, ended, and DTMF states.
+- Send call and SMS events to the AVF Agent.
+- Execute Agent commands for dialing, answering, rejecting, hanging up, and SMS.
+- Provide a limited-time pairing window and six-digit confirmation code.
+- Publish authenticated VoWLAN control and PCM services on the Samsung hotspot interface.
+- Prefer VoWLAN ports `7592/7593`; if occupied, choose available ports and advertise them through service discovery, avoiding DJOneHub's `7590/7591`.
+- Maintain the foreground service, Shizuku state, and diagnostics.
+- Check, install, and roll back signed Debian packages through the separate AVF installerd.
+- Detect AVF, AOSP Linux Terminal, and AVF private-network readiness on startup, and provide a copyable one-command installer.
+- Clearly show VoWLAN, cloud mode, cloud error, or offline status on the home screen; configuring Relay alone does not mean it is online.
 
-## 默认通话卡
+## Default calling SIM
 
-Android AirSIM「设置 → 默认通话卡」支持选择已启用的 SIM/eSIM，或保持「跟随系统默认」。本地保存的选项用于 BLE、VoWLAN、Relay 和 Android 本机拨号，不改变系统默认通话卡及短信卡，无需 Relay 注册或网络连接。
+“Settings → Default Calling SIM” supports an enabled SIM/eSIM or “Follow System Default.” The local preference applies to BLE, VoWLAN, Relay, and Android local dialing without changing system call/SMS defaults. Relay registration and network connectivity are not required.
 
-读取可选卡需要现有的电话状态权限，号码展示权限为可选。每次拨号使用系统提供的 `PhoneAccountHandle` 并重新检查其是否仍启用；指定卡不可用时返回明确错误，不静默切换其他卡。系统紧急呼叫路由不受此选项保证。
+Reading available SIMs needs the existing phone-state permission; number-display permission is optional. Every dial uses a system `PhoneAccountHandle` and rechecks that the account is enabled. An unavailable selected SIM returns an explicit error without silently switching. This preference does not guarantee emergency-call routing.
 
-## 运行要求
+## Requirements
 
-- 三星 Android 测试手机，目标 SDK 35。
-- 用户将 AirSIM 设置为默认电话 App。
-- 用户确认 AirSIM 已获得「发送短信」权限，并在双 SIM 设备上指定默认短信 SIM；不同 Android 系统可能随电话角色授予该权限，也可能要求单独授权。
-- 官方 Shizuku 管理器已启动，并向 AirSIM 授权。
-- Android AVF Agent 可通过设备内部私网访问。
-- Agent 控制 token 已写入 App 私有存储。
+- A Samsung Android test phone; target SDK 35.
+- AirSIM selected as the default phone app.
+- “Send SMS” permission granted and a default SMS SIM set on dual-SIM devices. Some Android versions grant this with the phone role; others require separate authorization.
+- Official Shizuku manager running, with AirSIM authorized.
+- Android AVF Agent reachable over the device's internal private network.
+- Agent control token saved in app-private storage.
 
-## 构建与测试
+## Build and test
 
-在仓库根目录运行：
+Run from the repository root:
 
 ```sh
 ./android/phone-control-app/test.sh
@@ -43,74 +43,74 @@ Android AirSIM「设置 → 默认通话卡」支持选择已启用的 SIM/eSIM�
 sh ./android/phone-control-app/verify-apk.sh
 ```
 
-调试 APK 输出到：
+Debug APK output:
 
 ```text
 android/phone-control-app/build/android/AirSIM-Phone-Bridge-debug.apk
 ```
 
-正式发布使用仓库外的长期签名库；不要用 debug keystore 发布，否则后续版本无法安全升级：
+For releases, use a long-lived signing keystore outside the repository. Do not release with a debug keystore, which prevents safe upgrades later:
 
 ```sh
 AIRSIM_ANDROID_BUILD_VARIANT=release \
 AIRSIM_ANDROID_KEYSTORE=/absolute/path/to/airsim-android-release.jks \
 AIRSIM_ANDROID_KEY_ALIAS=airsim-release \
-AIRSIM_ANDROID_KEYSTORE_PASSWORD='从 Secret Store 注入' \
-AIRSIM_ANDROID_KEY_PASSWORD='从 Secret Store 注入' \
+AIRSIM_ANDROID_KEYSTORE_PASSWORD='injected from Secret Store' \
+AIRSIM_ANDROID_KEY_PASSWORD='injected from Secret Store' \
 ./android/phone-control-app/build.sh
 ```
 
-Release APK 输出到 `android/phone-control-app/build/android/AirSIM-Phone-Bridge-release.apk`。签名库和密码不得提交到 Git；公开 Release 必须复用同一签名证书，才能覆盖升级已安装版本。
+The release APK is `android/phone-control-app/build/android/AirSIM-Phone-Bridge-release.apk`. Never commit the keystore or passwords. Public releases must reuse the signing certificate to upgrade installed versions in place.
 
-## 三星手机配置
+## Samsung phone setup
 
-首次权限请求结束后，App 自动检查 Shizuku：未安装的弹窗包含官方地址 `https://shizuku.rikka.app/zh-hans/download/` 和下载入口；已安装未启动提示打开管理器，未授权提示授权。就绪时不弹窗；本次启动最多一次，可点「稍后」继续。启动引导与权限、AVF 环境及闪退报告提示按顺序呈现，不会自动安装 Shizuku 或绕过用户授权。
+After initial permissions, the app checks Shizuku automatically. If absent, it shows official URL `https://shizuku.rikka.app/zh-hans/download/` and a download action; if installed but stopped, it offers to open the manager; if unauthorized, it offers authorization. No prompt appears when ready. It prompts at most once per launch and supports “Later.” Startup guidance, permissions, AVF readiness, and crash-report prompts are sequenced; the app does not install Shizuku automatically or bypass authorization.
 
-1. 安装 APK 并启动 AirSIM。
-2. 如果启动提示显示 AVF Linux 尚未运行，点“启动 Linux Terminal”；若 Terminal 未启用，点“打开开发者选项”并启用 Linux 开发环境。
-3. Linux 首次启动后，复制并在 Terminal 中执行 v0.4.6 首次安装命令；已有 `0.4.4-1` 的设备请先按[一次性密钥迁移](../../docs/AVF_INSTALL_GUIDE.md)升级到 v0.4.5，再通过安装器升级，不能通过旧 installer 直接跳过密钥迁移：
+1. Install the APK and open AirSIM.
+2. If startup reports that AVF Linux is not running, select “Start Linux Terminal.” If Terminal is disabled, select “Open Developer Options” and enable the Linux development environment.
+3. After Linux first starts, copy and execute the v0.4.6 first-install command in Terminal. Devices on `0.4.4-1` must first perform the [one-time key migration](../../docs/AVF_INSTALL_GUIDE.md) to v0.4.5, then upgrade through the installer. The old installer cannot skip key migration:
 
    ```sh
    bash -o pipefail -c 'curl -fsSL --connect-timeout 10 --max-time 90 --retry 2 --proto =https --proto-redir =https --tlsv1.2 https://github.com/kai-wu-cortex/AirSIM/releases/download/v0.4.6/install-avf.sh | sudo sh'
    ```
 
-4. 在系统设置中选择 AirSIM 作为默认电话 App。
-   首次启动还应允许「发送短信」权限；「读取短信」是可选的收件箱兜底权限，仅用于扫描授权后新收到的短信，拒绝后仍使用短信广播。若有两张 SIM，请在系统 SIM 卡设置中指定默认短信 SIM。缺少发送权限或默认短信 SIM 时，Agent 会返回明确错误，不会把短信命令当作通话命令执行。
-5. 启动 Shizuku，并在 AirSIM 的 Shizuku 区域完成授权。
-6. 在 Terminal 运行 `sudo airsim-avf-pair`，从当前 AVF 私网确定 Agent 地址，把输出的控制 token 保存到 App。不要把 token 粘贴到日志、截图或仓库。
-7. 确认 Agent、音频桥和 VoWLAN 状态均为就绪。
-8. 打开两分钟配对窗口，让 iPhone 输入三星端显示的六位配对码。
+4. Select AirSIM as the default phone app in system settings.
+   Also allow “Send SMS” on first launch. “Read SMS” is an optional inbox fallback that scans only new messages after authorization; SMS broadcasts remain available if denied. For dual SIMs, set a default SMS SIM in system SIM settings. Missing send permission or default SMS SIM returns an explicit Agent error; SMS commands are never treated as call commands.
+5. Start Shizuku and authorize AirSIM in its Shizuku section.
+6. Run `sudo airsim-avf-pair` in Terminal, determine the Agent address on the current AVF private network, and save the printed control token in the app. Do not paste it into logs, screenshots, or the repository.
+7. Confirm that the Agent, audio bridge, and VoWLAN are Ready.
+8. Open the two-minute pairing window and enter the Samsung six-digit code on iPhone.
 
-安装命令也固定显示在 App 的“设置 → AVF Linux 首次安装”中，可随时复制；**复制不会自动运行**，须在 Debian Terminal 粘贴并按回车。App 只会在 AVF 未启动，或 AVF 已启动但 Agent 尚未配置时显示启动提示。`Agent 可达 · 尚未配对` 只表示 `8575` 的无凭据健康检查通过，不代表安装管理或通话控制已就绪；`installerd` 还需要 `8576` 服务和控制 token。修复版线上引导脚本遇到已有 `current.deb` 会优先恢复服务而非拒绝运行；发布前仍需按[AVF 安装与无损排障指南](../../docs/AVF_INSTALL_GUIDE.md)手动检查 systemd 服务，不要清除 Linux Terminal 数据。
+The installer command is always available under “Settings → AVF Linux Initial Installation.” **Copying does not execute it**; paste it at the Debian Terminal prompt and press Enter. Startup guidance appears only if AVF is stopped or if AVF is running but the Agent is unconfigured. “Agent reachable · Not paired” means only that the unauthenticated health check on `8575` passed; installation management and call control may not be ready. `installerd` also needs port `8576` and the control token. The repaired online bootstrap restores existing services when `current.deb` exists rather than refusing to run. Before release, manually inspect systemd services using the [AVF installation and non-destructive troubleshooting guide](../../docs/AVF_INSTALL_GUIDE.md); do not clear Linux Terminal data.
 
-Terminal 若报 `udev` 需要较新 `libudev1`、`unmet dependencies`，属于 AVF Debian 包状态问题。先在 Terminal 运行 `apt-cache policy udev libudev1` 和 `sudo apt-get -s -f install`，检查模拟计划；不要直接让 App 或脚本自动执行 `apt --fix-broken install`。
+If Terminal reports `udev` requiring a newer `libudev1` or `unmet dependencies`, the problem is AVF Debian package state. Run `apt-cache policy udev libudev1` and `sudo apt-get -s -f install` in Terminal and inspect the simulated plan. Do not let the app or a script automatically run `apt --fix-broken install`.
 
-## 厂商系统兼容性边界
+## OEM compatibility boundaries
 
-本版修复增加 URL UTF-8 编解码、Shizuku 命令输出与 PCM 失败清理的旧 API 替代；短信工厂按 API 31 分支，保留默认短信 SIM。旧 AVF 模式在 Android 10–13 改为可点击通知提示用户恢复 Terminal，只有 API 34+ 才调用新的后台启动选项。Shizuku daemon 版本提升至 8，覆盖升级后不复用旧静音实现；使用 shell 包身份的 `AudioManager` 操作并回读静音结果，挂断恢复之前的静音/音量，失败保留恢复快照供重试，不虚报静音成功。OEM 不支持时仍须用户处理。
+This hotfix adds older-API alternatives for URL UTF-8 encoding/decoding, Shizuku output, and PCM failure cleanup. The SMS factory branches at API 31 and retains the default SMS SIM. Legacy AVF mode on Android 10–13 uses a tappable notification to reopen Terminal; only API 34+ uses newer background-start options. Shizuku daemon version 8 avoids reusing the old mute implementation after upgrade. It calls `AudioManager` under the shell package identity, reads back mute state, restores prior mute/volume on hang-up, and retains a restoration snapshot on failure for retry. It does not falsely report successful muting; unsupported OEM behavior still requires user action.
 
-Android 11/12 真机曾在启动时因 `ByteArrayOutputStream.toString(Charset)` 和 `Collection.toArray(IntFunction)` 缺失而闪退。共享实现改用兼容的 UTF-8/ASCII 解码与数组转换；VoWLAN、Relay、PCM 和闪退报告路径同步替换 `InputStream.readNBytes`。`test.sh` 与 APK 构建都会检查编译后的方法引用，阻止这些已知不兼容调用回归；这是定向回归检查，不是完整 Android API lint，仍需目标系统真机验收。
+Android 11/12 devices previously crashed on startup because `ByteArrayOutputStream.toString(Charset)` and `Collection.toArray(IntFunction)` were unavailable. Shared code now uses compatible UTF-8/ASCII decoding and array conversion; VoWLAN, Relay, PCM, and crash-report paths also replace `InputStream.readNBytes`. Both `test.sh` and APK builds inspect compiled method references to block these known incompatible calls. This is a targeted regression check, not full Android API lint; target-device acceptance is still required.
 
-AirSIM 会识别小米、Redmi、OPPO、OnePlus、realme、vivo、iQOO 和荣耀等厂商，并区分“Terminal 已安装但停用”“Terminal 未安装”和“系统未公开 AVF”三种情况。App 可以启动已安装的 AOSP Linux Terminal，或跳转到开发者选项，但普通第三方 App 无法强制补装厂商固件删除的 Terminal、打开未公开的 AVF 系统功能，或绕过系统签名权限。遇到后两种情况需要厂商系统更新、包含 Terminal 的系统镜像，或由 OEM 将 AirSIM 作为特权系统组件集成。
+AirSIM recognizes Xiaomi, Redmi, OPPO, OnePlus, realme, vivo, iQOO, and Honor, distinguishing “Terminal installed but disabled,” “Terminal not installed,” and “AVF not exposed by the system.” It can open installed AOSP Linux Terminal or Developer Options, but a normal third-party app cannot restore a Terminal removed from OEM firmware, enable hidden AVF features, or bypass system-signature permissions. Those cases require an OEM update, a system image containing Terminal, or privileged-system integration by the OEM.
 
-## 通话与音频策略
+## Call and audio policy
 
-普通来电默认使用 `remote_silent`：三星端保持受控静音，由 iPhone 或 Apple Watch 呈现来电并承载音频。紧急通话始终交回系统预装电话 App。Shizuku 服务以 shell UID 运行音频桥，并在通话结束时恢复先前的系统音量状态。
+Normal incoming calls default to `remote_silent`: Samsung remains under controlled mute while iPhone or Apple Watch presents the call and handles audio. Emergency calls always return to the preinstalled system phone app. The Shizuku service runs the audio bridge as the shell UID and restores previous system volume when the call ends.
 
-作为默认电话 App，AirSIM 还提供独立锁屏来电界面和通知接听/拒接/挂断入口；它不展示短信或设置内容。来电通知使用新的高优先级渠道，避免既有低优先级前台服务渠道无法升级的问题。系统若未授予全屏来电权限，会退化为可操作的横幅通知；是否亮屏以及锁屏操作仍需在每种目标机型上实测。
+As the default phone app, AirSIM also provides a separate Lock Screen incoming-call UI and notification actions for answering, rejecting, and hanging up; it shows no SMS or settings content. Incoming calls use a new high-priority notification channel because an existing low-priority foreground-service channel cannot be upgraded. Without full-screen call permission, it falls back to an actionable banner. Screen wake-up and lock-screen behavior require per-model device testing.
 
-## 短信发送
+## Sending SMS
 
-iPhone 经 VoWLAN 或云端 Relay 提交发信请求后，AVF Agent 把 `send_sms` 命令交给 Android Bridge。Android Bridge 使用系统短信服务和默认短信 SIM 分段发送；每一段都收到系统「已发送」回执后，才向 Agent 回报成功。这个回执表示手机已把短信交给运营商网络，不代表收件人已收到。超时或失败时，请先在手机短信记录中核对，避免重复发送。短信命令与 Telecom 通话 ID 控制相互独立。
+After iPhone submits SMS through VoWLAN or Relay, the AVF Agent sends `send_sms` to the Android Bridge. The Bridge uses the system SMS service and default SMS SIM to send segments, reporting success only after every segment receives a system “sent” receipt. This means the phone handed the message to the carrier, not that the recipient received it. On timeout or failure, inspect phone SMS history before retrying to avoid duplicates. SMS commands are independent of Telecom call-ID control.
 
-## 网络与安全
+## Network and security
 
-- Agent 配置仅接受 AVF 私网地址；AVF 网段由系统动态分配，不能固定为 `10.185.5.0/24`。App 优先根据 `avf_tap_fixed` 所在网段推断来宾地址，仍需在当前设备上验证。
-- bearer token 只保存在 Android 私有偏好设置中，不写入日志。
-- VoWLAN 仅绑定有效的三星热点地址，不监听通用网络接口。
-- 所有控制请求均执行路由白名单、消息大小、时间戳、随机数与 HMAC 校验。
-- 原始 PCM、配对明文和认证材料不得进入诊断日志。
-- Agent API 使用 AVF 端口 `8575`，救援安装服务使用 `8576`；两者复用首次引导生成的控制 token。
-- 旧版 AirSIM 保存的 `:7575` 地址会迁移到 `:8575`；`7575` 可能属于同机 DJOneHub，不再视为 AirSIM 在线证据。未发布端口迁移版 Agent 前，不能用旧版在线包做共存安装。
-- Android 管理端只提交签名的 `airsim-avf-agent_*_arm64.deb`，芯片厂商差异由 App 的能力探测处理，不选择不同 Debian 包。
-- “检查并安装最新 Agent”从 `kai-wu-cortex/AirSIM` 的最新 GitHub Release 选择唯一的 `airsim-avf-agent_*_arm64.deb` 及同名 `.sig`；Release 缺包、缺签名、多包或非 HTTPS 下载都会被拒绝。
+- Agent configuration accepts only AVF private addresses. The subnet is dynamically assigned and must not be fixed to `10.185.5.0/24`. The app first infers the guest address from the `avf_tap_fixed` subnet; verify it on the current device.
+- The bearer token is stored only in Android private preferences and never logged.
+- VoWLAN binds only to a valid Samsung hotspot address, not general network interfaces.
+- Every control request checks the route allowlist, message size, timestamp, nonce, and HMAC.
+- Raw PCM, plaintext pairing data, and authentication material must not enter diagnostic logs.
+- Agent API uses AVF port `8575`; the recovery installer uses `8576`. Both share the control token generated at bootstrap.
+- Saved legacy AirSIM `:7575` addresses migrate to `:8575`. Port `7575` may belong to DJOneHub on the same device and is no longer evidence that AirSIM is online. Do not use old online packages for coexistence before the Agent port-migration release is published.
+- Android management uploads only signed `airsim-avf-agent_*_arm64.deb` packages. Runtime capability detection handles chip-vendor differences without selecting different Debian packages.
+- “Check and Install Latest Agent” selects exactly one `airsim-avf-agent_*_arm64.deb` and matching `.sig` from the latest GitHub Release of `kai-wu-cortex/AirSIM`. Missing packages/signatures, multiple packages, and non-HTTPS downloads are rejected.
