@@ -57,13 +57,13 @@ enum CallAudioStatusPresentation {
                      bluetoothError: String?, localAudioActive: Bool,
                      cloudState: CloudCallAudioState) -> String {
         if transport == .bluetooth {
-            if bluetoothRunning { return "蓝牙语音已连接" }
-            return bluetoothError ?? "正在建立蓝牙语音链路"
+            if bluetoothRunning { return "Bluetooth Audio Connected" }
+            return bluetoothError ?? "Connecting Bluetooth Audio"
         }
         switch cloudState {
-        case .idle: return localAudioActive ? "语音链路已连接" : "正在建立语音链路"
-        case let .connecting(attempt, maximum): return "正在重试云端语音 \(attempt)/\(maximum)"
-        case .connected: return "云端语音已连接"
+        case .idle: return localAudioActive ? "Audio Connected" : "Connecting Audio"
+        case let .connecting(attempt, maximum): return "Retrying Cloud Audio \(attempt)/\(maximum)"
+        case .connected: return "Cloud Audio Connected"
         case let .failed(message): return message
         }
     }
@@ -379,7 +379,7 @@ final class AppModel: ObservableObject {
                 : [agent.manufacturer, agent.model].compactMap { $0 }.joined(separator: " ")
             values[agent.id] = AndroidAgentPresentation(
                 id: agent.id,
-                deviceName: name.isEmpty ? "Android 手机" : name,
+                deviceName: name.isEmpty ? "Android Phone" : name,
                 phoneNumber: cloudStatusIsFresh && agent.cloudOnline && agent.phoneNumber?.isEmpty == false
                     ? agent.phoneNumber : nil,
                 agentKind: agent.agentKind,
@@ -412,7 +412,7 @@ final class AppModel: ObservableObject {
             let information = voble.deviceInformation
             values[bluetoothID] = AndroidAgentPresentation(
                 id: bluetoothID,
-                deviceName: information?.deviceName ?? voble.currentDeviceName ?? "Android 蓝牙 Agent",
+                deviceName: information?.deviceName ?? voble.currentDeviceName ?? "Android Bluetooth Agent",
                 phoneNumber: information?.phoneNumber,
                 agentKind: information?.agentKind ?? previous?.agentKind,
                 cloudOnline: previous?.cloudOnline ?? false,
@@ -427,7 +427,7 @@ final class AppModel: ObservableObject {
             let fallbackID = cloudStatus.activeAgentID ?? "cloud-agent"
             values[fallbackID] = AndroidAgentPresentation(
                 id: fallbackID,
-                deviceName: "Android 手机",
+                deviceName: "Android Phone",
                 phoneNumber: nil,
                 agentKind: nil,
                 cloudOnline: true,
@@ -513,7 +513,7 @@ final class AppModel: ObservableObject {
     func forgetAndroidDevice(_ agentID: String) async throws {
         guard !callLifecycleSnapshot.state.representsCall else {
             throw NSError(domain: "AirSIM.Pairing", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "请先结束当前通话，再删除配对设备"])
+                          userInfo: [NSLocalizedDescriptionKey: "End the current call before deleting a paired device"])
         }
         // Block before awaiting unpair, so delayed discovery/status callbacks cannot restore it.
         PairedAndroidDeviceStore.forget(agentID)
@@ -770,7 +770,7 @@ final class AppModel: ObservableObject {
             self.lockedCallTransport = LockedCallTransport(
                 transport: .bluetooth, generation: call.generation)
             self.callKit.reportIncomingPush(call) { [weak self] error in
-                if let error { self?.errorMessage = "蓝牙来电启动失败：\(error.localizedDescription)" }
+                if let error { self?.errorMessage = "Unable to start Bluetooth incoming call: \(error.localizedDescription)" }
             }
             WatchCallCoordinator.shared.publishIncoming(call, transport: "bluetooth")
         }
@@ -1105,7 +1105,7 @@ final class AppModel: ObservableObject {
             // VoWLAN 缓存并把下一次自动拨号错误地送回旧 IP。
             if isOnline { isOnline = false }
             isReconnecting = !ready
-            connectionMessage = ready ? "蓝牙 Agent 已连接" : "正在连接蓝牙 Agent"
+            connectionMessage = ready ? "Bluetooth Agent Connected" : "Connecting to Bluetooth Agent"
             consecutivePollFailures = 0
             refreshVoBLELiveActivity(remoteCall)
             return
@@ -1281,11 +1281,11 @@ final class AppModel: ObservableObject {
             consecutivePollFailures += 1
             isReconnecting = true
             let failedRouteName: String = {
-                guard let route = lastSuccessfulLocalAPI?.route else { return "本地控制链路" }
+                guard let route = lastSuccessfulLocalAPI?.route else { return "Local Control Connection" }
                 if case .vowlan = route { return "VoWLAN" }
-                return "模块本地链路"
+                return "Local Module Connection"
             }()
-            connectionMessage = "正在重新连接\(failedRouteName)：\(error.localizedDescription)"
+            connectionMessage = "Reconnecting\(failedRouteName): \(error.localizedDescription)"
 
             // 一次长轮询中断不能代表 USB ECM 已离线。通话动作后的 8 秒保护期内
             // 保留最后一次在线状态；其后也必须连续失败三次并让独立 health 请求失败。
@@ -1313,8 +1313,8 @@ final class AppModel: ObservableObject {
                 updateLocalConnectionSummary(cellularState: health?.cellularState)
                 if health?.ok == false {
                     connectionMessage = health?.cellularRecovery?.isEmpty == false
-                        ? "模块已连接，AT 通道恢复中 · \(health!.cellularRecovery!)"
-                        : "模块已连接，AT 通道正在自动恢复"
+                        ? "Module connected, recovering AT channel · \(health!.cellularRecovery!)"
+                        : "Module connected, recovering AT channel automatically"
                 }
                 return
             }
@@ -1332,8 +1332,8 @@ final class AppModel: ObservableObject {
                     cellularState: cloudAgentStatus?.cellularState ?? modemStatus?.cellularState
                 )
                 connectionMessage = IPhoneCloudCallSession.shared.isRecovering
-                    ? "云端通话在线，公网 PCM 正在重新连接"
-                    : "云端通话在线，USB ECM 正在重新连接"
+                    ? "Cloud call active, reconnecting internet PCM"
+                    : "Cloud call active, reconnecting USB ECM"
                 var lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
                 await awaitCloudStatusForLiveActivity(call: lifecycleCall)
                 lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
@@ -1382,7 +1382,7 @@ final class AppModel: ObservableObject {
                 )
             } else {
                 isReconnecting = false
-                connectionMessage = "模块本地与云端均不可达：\(error.localizedDescription)"
+                connectionMessage = "Module is unreachable locally and through cloud: \(error.localizedDescription)"
                 await liveActivity.markOffline(
                     agent: liveActivityAgentSnapshot,
                     appIsActive: appIsActive
@@ -1552,21 +1552,21 @@ final class AppModel: ObservableObject {
         case .localOnlineNoService:
             let detail = modemStatus?.cellularRecovery ?? modemStatus?.registrationText
             connectionMessage = detail?.isEmpty == false
-                ? "USB ECM 已连接 · \(detail!)"
-                : "USB ECM 已连接，蜂窝网络正在恢复"
+                ? "USB ECM Connected · \(detail!)"
+                : "USB ECM connected, cellular network recovering"
         case .cloudOnly, .offline:
             break
         }
     }
 
     private func cloudConnectionMessage(for status: CloudAgentStatus) -> String {
-        let local = "USB ECM 本地连接中断，模块云端在线"
+        let local = "USB ECM disconnected, module online through cloud"
         if status.cellularState == "registered" {
-            return local + "，来电将通过云端接听"
+            return local + "; incoming calls will use cloud"
         }
         let detail = status.cellularRecovery?.isEmpty == false
             ? status.cellularRecovery!
-            : (status.cellularRegistration?.isEmpty == false ? status.cellularRegistration! : "蜂窝网络恢复中")
+            : (status.cellularRegistration?.isEmpty == false ? status.cellularRegistration! : "Cellular network recovering")
         return local + " · " + detail
     }
 
@@ -1694,7 +1694,7 @@ final class AppModel: ObservableObject {
     ) async {
         guard let identity = vobleCalls.currentIdentity,
               identity.callID == callID else {
-            errorMessage = "该蓝牙通话已经结束或被另一通电话替换"
+            errorMessage = "This Bluetooth call ended or was replaced by another call"
             return
         }
         switch action {
@@ -1779,7 +1779,7 @@ final class AppModel: ObservableObject {
                     audio.setMuted(target)
                     errorMessage = nil
                 } else {
-                    errorMessage = "系统静音切换失败：\(error.localizedDescription)"
+                    errorMessage = "System mute change failed: \(error.localizedDescription)"
                 }
             }
             return
@@ -1911,7 +1911,7 @@ final class AppModel: ObservableObject {
 
     func clearLocalMessages() {
         guard historyStore.saveMessages([]) else {
-            errorMessage = "无法清空本机短信，请稍后重试"
+            errorMessage = "Unable to clear local messages. Try again later."
             return
         }
         messages = []
@@ -1922,7 +1922,7 @@ final class AppModel: ObservableObject {
         guard !ids.isEmpty else { return }
         let remaining = callHistory.filter { !ids.contains($0.id) }
         guard historyStore.saveCallHistory(remaining) else {
-            errorMessage = "无法删除本机通话记录，请稍后重试"
+            errorMessage = "Unable to delete local call history. Try again later."
             return
         }
         callHistory = remaining
@@ -2014,7 +2014,7 @@ final class AppModel: ObservableObject {
         )
         messages = updatedMessages
         if !historyStore.saveMessages(updatedMessages) {
-            errorMessage = "短信已发送，但保存到本机失败，请稍后刷新确认"
+            errorMessage = "Message sent, but could not be saved locally. Refresh later to confirm."
         }
     }
 
@@ -2081,7 +2081,7 @@ final class AppModel: ObservableObject {
         do {
             guard let localAPI = reachableLocalAPI else {
                 backgroundStandby.resumeAfterCall()
-                errorMessage = "本地语音路由尚未锁定"
+                errorMessage = "Local audio route is not locked yet"
                 return
             }
             let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
@@ -2117,7 +2117,7 @@ final class AppModel: ObservableObject {
                 try? await localAPI.setAudioHostEnabled(false)
             }
             backgroundStandby.resumeAfterCall()
-            errorMessage = "无法登记通话音频：\(error.localizedDescription)"
+            errorMessage = "Unable to register call audio: \(error.localizedDescription)"
             return
         }
     }
@@ -2159,7 +2159,7 @@ final class AppModel: ObservableObject {
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "ios", category: "call_transport", phase: "locked",
-                title: transport == .vowlan ? "本通已锁定 VoWLAN" : "本通已锁定模块本地链路",
+                title: transport == .vowlan ? "This Call Uses VoWLAN" : "This Call Uses Local Module Connection",
                 fields: ["generation": String(callLifecycleSnapshot.generation)]
             )
         }
@@ -2177,11 +2177,11 @@ final class AppModel: ObservableObject {
         let localAPI = currentLocalAPI
         audio.deactivate()
         try? await localAPI?.hangupCall(callID: activeCall?.id)
-        errorMessage = "VoWLAN 局域网已断开；当前通话已结束，下一通将自动选择云端"
+        errorMessage = "VoWLAN disconnected. This call has ended; the next call will automatically use cloud."
         await AgentVerboseTraceRecorder.shared.recordEvent(
             source: "ios", category: "call_transport", phase: "ended",
             title: "hotspot_lost_no_midcall_handover",
-            detail: "VoWLAN 局域网路径丢失，结束当前通话；未迁移到云端",
+            detail: "VoWLAN network lost. Ended this call without transferring it to cloud.",
             fields: ["generation": String(lockedCallTransport?.generation ?? 0)],
             isFailure: true
         )
@@ -2292,7 +2292,7 @@ final class AppModel: ObservableObject {
             source: .agent,
             timestamp: call.updatedAt,
             traceID: "agent-poll-\(call.id)-\(generation)",
-            failure: state == .failed ? "Agent 报告通话失败" : nil
+            failure: state == .failed ? "Agent reported call failure" : nil
         ))
     }
 
@@ -2909,7 +2909,7 @@ private enum ModuleSetupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .notReady(message): return message
-        case .timeout: return "模块重启后未重新上线，请重新插拔 USB 线"
+        case .timeout: return "Module did not reconnect after restarting. Reconnect the USB cable."
         }
     }
 }

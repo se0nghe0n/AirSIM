@@ -17,7 +17,7 @@ struct SamsungPairingService: Identifiable {
 @MainActor
 final class SamsungPairingBrowser: ObservableObject {
     @Published private(set) var services: [SamsungPairingService] = []
-    @Published private(set) var stateText = "正在扫描 VoWLAN 局域网…"
+    @Published private(set) var stateText = "Scanning the local network for VoWLAN…"
 
     private let queue = DispatchQueue(label: "com.airsim.samsung-pair.browser")
     private var browser: NWBrowser?
@@ -34,10 +34,10 @@ final class SamsungPairingBrowser: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 switch state {
-                case .ready: self.stateText = "正在等待安卓配对广播…"
-                case .waiting: self.stateText = "请确认 iPhone 与安卓处于同一 Wi-Fi 或安卓热点"
-                case .failed(let error): self.stateText = "局域网扫描失败：\(error.localizedDescription)"
-                case .cancelled: self.stateText = "扫描已停止"
+                case .ready: self.stateText = "Waiting for the Android pairing broadcast…"
+                case .waiting: self.stateText = "Connect iPhone and Android to the same Wi-Fi or Android hotspot"
+                case .failed(let error): self.stateText = "Local network scan failed: \(error.localizedDescription)"
+                case .cancelled: self.stateText = "Scan stopped"
                 default: break
                 }
             }
@@ -48,7 +48,7 @@ final class SamsungPairingBrowser: ObservableObject {
                 .sorted { $0.expiresAt < $1.expiresAt }
             Task { @MainActor in
                 self?.services = parsed
-                if !parsed.isEmpty { self?.stateText = "已发现 \(parsed.count) 台待配对设备" }
+                if !parsed.isEmpty { self?.stateText = "Found \(parsed.count) devices available to pair" }
             }
         }
         browser = active
@@ -165,7 +165,7 @@ enum SamsungPairingClient {
         let response = try JSONDecoder().decode(Response.self, from: responseData)
         guard response.configured else { throw SamsungPairingClientError.rejected }
         if let agentID = response.agentID { PairedAndroidDeviceStore.allowPairing(agentID) }
-        return response.deviceIDHint.map { "配对成功（设备 …\($0)）" } ?? "配对成功"
+        return response.deviceIDHint.map { "Paired successfully (device …\($0))" } ?? "Paired successfully"
     }
 
     private static func exchange(endpoint: NWEndpoint, body: Data) async throws -> Data {
@@ -251,13 +251,13 @@ enum SamsungPairingClientError: LocalizedError {
     case invalidCode, expired, rejected, responseTooLarge, connectionClosed, registrationUnavailable, pairingBusy
     var errorDescription: String? {
         switch self {
-        case .invalidCode: return "请输入三星屏幕上的 6 位验证码"
-        case .expired: return "三星配对窗口已过期，请重新开始"
-        case .rejected: return "三星拒绝了配对，请核对验证码后重试"
-        case .responseTooLarge: return "三星返回的数据异常"
-        case .connectionClosed: return "与三星的局域网连接已断开"
-        case .registrationUnavailable: return "Relay／推送配置未就绪。请先在设置完成云端配置；若只需本地连接，请打开‘本地模式配对’。"
-        case .pairingBusy: return "另一个配对正在进行，请稍后重试"
+        case .invalidCode: return "Enter the six-digit code shown on Android"
+        case .expired: return "The Android pairing window expired. Start again."
+        case .rejected: return "Android rejected pairing. Check the code and try again."
+        case .responseTooLarge: return "Android returned an invalid response"
+        case .connectionClosed: return "The local network connection to Android was lost"
+        case .registrationUnavailable: return "Relay/push configuration is not ready. Configure cloud settings first, or enable Local-Only Pairing for a local connection."
+        case .pairingBusy: return "Another pairing is in progress. Try again shortly."
         }
     }
 }

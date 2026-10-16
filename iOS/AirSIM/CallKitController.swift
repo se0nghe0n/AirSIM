@@ -222,7 +222,7 @@ final class CallKitController: NSObject {
                 return
             }
             incomingReportCompletions.append(completion)
-            reportIncomingIfNeeded(number: currentNumber, callerName: call.callerName, source: "PushKit 重投")
+            reportIncomingIfNeeded(number: currentNumber, callerName: call.callerName, source: "PushKit Redelivery")
             handler?.callKitDidReceiveIncoming(call)
             return
         }
@@ -369,7 +369,7 @@ final class CallKitController: NSObject {
         currentNumber = call.number
 
         if ["incoming", "waiting"].contains(call.state) {
-            reportIncomingIfNeeded(number: call.number, callerName: callerName, source: "模块状态")
+            reportIncomingIfNeeded(number: call.number, callerName: callerName, source: "Module Status")
         }
         currentState = call.state
     }
@@ -397,7 +397,7 @@ final class CallKitController: NSObject {
                     }
                     self.systemCallReported = false
                     self.incomingReportFailed = true
-                    self.handler?.callKitDidFail("系统来电界面启动失败：\(error.localizedDescription)")
+                    self.handler?.callKitDidFail("Unable to show system incoming call screen: \(error.localizedDescription)")
                     self.finishIncomingReport(error)
                 } else {
                     self.debugLog("系统来电上报成功")
@@ -439,7 +439,7 @@ final class CallKitController: NSObject {
 
     private func update(number: String?, callerName: String?) -> CXCallUpdate {
         let update = CXCallUpdate()
-        let value = number?.isEmpty == false ? number! : "未知号码"
+        let value = number?.isEmpty == false ? number! : "Unknown Number"
         update.remoteHandle = CXHandle(type: .phoneNumber, value: value)
         if let callerName, !callerName.isEmpty, callerName != number {
             update.localizedCallerName = callerName
@@ -703,7 +703,7 @@ extension CallKitController: CXProviderDelegate {
                 source: "APP",
                 category: "callkit-audio",
                 phase: "activated",
-                title: "CallKit 音频会话已激活",
+                title: "CallKit Audio Session Activated",
                 fields: self.audioTraceFields(audioSession)
             )
             await self.handler?.callKitAudioSessionDidActivate()
@@ -721,7 +721,7 @@ extension CallKitController: CXProviderDelegate {
                 source: "APP",
                 category: "callkit-audio",
                 phase: "deactivated",
-                title: "CallKit 音频会话已停用",
+                title: "CallKit Audio Session Deactivated",
                 fields: self.audioTraceFields(audioSession)
             )
             self.handler?.callKitAudioSessionDidDeactivate()
@@ -753,13 +753,13 @@ enum CallKitBridgeError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noSystemCall: return "系统通话尚未建立"
-        case .staleSystemCall: return "系统通话状态已刷新"
-        case .handlerUnavailable: return "通话控制器尚未就绪"
-        case .unavailable: return "系统 CallKit 当前不可用"
-        case .callInProgress: return "当前已有进行中的系统通话"
-        case .noReachableTransport: return "三星本地链路和云端语音当前都不可达"
-        case .cloudMediaDisabled: return "三星本地链路不可达，云端语音中继已关闭"
+        case .noSystemCall: return "System call has not started"
+        case .staleSystemCall: return "System call state refreshed"
+        case .handlerUnavailable: return "Call controller is not ready"
+        case .unavailable: return "System CallKit is unavailable"
+        case .callInProgress: return "A system call is already in progress"
+        case .noReachableTransport: return "Android is unreachable locally and through cloud audio"
+        case .cloudMediaDisabled: return "Android local connection is unavailable and cloud audio relay is disabled"
         }
     }
 }

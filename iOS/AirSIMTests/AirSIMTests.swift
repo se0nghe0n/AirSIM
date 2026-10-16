@@ -1044,7 +1044,7 @@ final class AirSIMTests: XCTestCase {
         for cloud in [CloudCallAudioState.idle, .failed("old relay failure")] {
             XCTAssertEqual(CallAudioStatusPresentation.text(
                 transport: .bluetooth, bluetoothRunning: true, bluetoothError: nil,
-                localAudioActive: false, cloudState: cloud), "蓝牙语音已连接")
+                localAudioActive: false, cloudState: cloud), "Bluetooth Audio Connected")
         }
         XCTAssertEqual(CallAudioStatusPresentation.text(
             transport: .bluetooth, bluetoothRunning: false, bluetoothError: "音频启动失败",
@@ -1244,7 +1244,7 @@ final class AirSIMTests: XCTestCase {
             vowlanOnline: false, moduleLocalReachable: false,
             cloudOnline: false, bluetoothReady: true)
         XCTAssertEqual(route?.transport, .bluetooth)
-        XCTAssertEqual(route?.title, "蓝牙")
+        XCTAssertEqual(route?.title, "Bluetooth")
     }
 
     func testVoBLEControlEnvelopeRoundTripsAndRejectsBadMagic() throws {
@@ -1553,7 +1553,7 @@ final class AirSIMTests: XCTestCase {
         guard case .requestLimitExceeded = error else {
             return XCTFail("Cloudflare 1027 must not be reported as an invalid Relay response")
         }
-        XCTAssertTrue(error.localizedDescription.contains("额度"))
+        XCTAssertTrue(error.localizedDescription.contains("quota"))
     }
 
     func testCurrentModePrefersVoWLANAndReportsCloudFailure() {
@@ -1575,7 +1575,7 @@ final class AirSIMTests: XCTestCase {
             cloudOnline: true
         )
         XCTAssertEqual(bluetooth.mode, .bluetooth)
-        XCTAssertEqual(bluetooth.status, "已连接")
+        XCTAssertEqual(bluetooth.status, "Connected")
         let cloud = ConnectionModePresentation.make(
             selectedMode: .automatic,
             vowlanOnline: false,
@@ -1584,7 +1584,7 @@ final class AirSIMTests: XCTestCase {
             cloudOnline: true
         )
         XCTAssertEqual(cloud.mode, .cloud)
-        XCTAssertEqual(cloud.status, "已连接")
+        XCTAssertEqual(cloud.status, "Connected")
 
         let unreachable = ConnectionModePresentation.make(
             selectedMode: .cloud,
@@ -1594,7 +1594,7 @@ final class AirSIMTests: XCTestCase {
             cloudOnline: false
         )
         XCTAssertEqual(unreachable.mode, .cloud)
-        XCTAssertEqual(unreachable.status, "不可达")
+        XCTAssertEqual(unreachable.status, "Unreachable")
     }
 
     func testCloudSelfTestReportOnlyPassesWhenEveryStagePasses() {

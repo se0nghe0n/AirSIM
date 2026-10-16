@@ -60,7 +60,7 @@ enum SamsungPairingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidEncryptedPayload:
-            return "无法生成配对加密数据"
+            return "Unable to generate encrypted pairing data"
         }
     }
 }

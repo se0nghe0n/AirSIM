@@ -17,23 +17,23 @@ struct AirSIMFirstConnectionView: View {
                     .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 22))
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("连接三星手机")
+                    Text("Connect Android Phone")
                         .font(.largeTitle.bold())
-                    Text("AirSIM 可通过 VoWLAN、蓝牙或云端 Relay 独立连接 Android 手机。")
+                    Text("AirSIM connects to your Android phone over VoWLAN, Bluetooth, or a cloud Relay.")
                         .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 18) {
-                    Label("在 Android 手机启动 AirSIM 和音频桥", systemImage: "1.circle.fill")
-                    Label(selectedMode == .bluetooth ? "打开两台设备的蓝牙" : "按所选模式准备网络或蓝牙", systemImage: "2.circle.fill")
-                    Label("核对配对安全码并完成认证", systemImage: "3.circle.fill")
+                    Label("Start AirSIM and the audio bridge on Android", systemImage: "1.circle.fill")
+                    Label(selectedMode == .bluetooth ? "Turn on Bluetooth on both devices" : "Set up the network or Bluetooth for your selected mode", systemImage: "2.circle.fill")
+                    Label("Verify the security code and finish pairing", systemImage: "3.circle.fill")
                 }
                 .font(.body.weight(.medium))
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
 
-                Picker("连接模式", selection: $connectionModeRaw) {
+                Picker("Connection Mode", selection: $connectionModeRaw) {
                     ForEach(AirSIMConnectionMode.allCases) { mode in
                         Text(mode.title).tag(mode.rawValue)
                     }
@@ -49,14 +49,14 @@ struct AirSIMFirstConnectionView: View {
 
                 Spacer()
 
-                Button("开始配对", systemImage: "lock.shield") {
+                Button("Start Pairing", systemImage: "lock.shield") {
                     showingPairing = true
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .frame(maxWidth: .infinity)
 
-                Button("稍后在设置中配对") { completed = true }
+                Button("Pair Later in Settings") { completed = true }
                     .frame(maxWidth: .infinity)
             }
             .padding(24)
@@ -76,7 +76,7 @@ struct AirSIMFirstConnectionView: View {
                         .environmentObject(model)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
-                                Button("完成") { showingPairing = false }
+                                Button("Done") { showingPairing = false }
                             }
                         }
                 }
@@ -89,13 +89,13 @@ struct AirSIMFirstConnectionView: View {
     }
 }
 
-#Preview("已配对设备 · 空列表") {
-    Form { Section("三星连接") { PairedAndroidDeviceRows(devices: [], onDelete: { _ in }) } }
+#Preview("Paired Devices · Empty") {
+    Form { Section("Android Connection") { PairedAndroidDeviceRows(devices: [], onDelete: { _ in }) } }
 }
 
-#Preview("已配对设备 · 在线与离线") {
+#Preview("Paired Devices · Online and Offline") {
     Form {
-        Section("三星连接") {
+        Section("Android Connection") {
             PairedAndroidDeviceRows(devices: [
                 .init(id: "preview-flip", deviceName: "Samsung Flip7", phoneNumber: "+10000000001",
                       agentKind: "standalone", cloudOnline: false, vowlanOnline: false,
@@ -113,15 +113,15 @@ private struct PairedAndroidDeviceRows: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("已配对设备").font(.subheadline.weight(.semibold))
+            Text("Paired Devices").font(.subheadline.weight(.semibold))
             if devices.isEmpty {
-                Text("暂无配对记录").font(.caption).foregroundStyle(.secondary)
+                Text("No paired devices").font(.caption).foregroundStyle(.secondary)
             }
             ForEach(devices) { device in
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(device.deviceName).font(.subheadline.weight(.medium))
-                        Text(device.phoneNumber ?? "号码未提供").font(.caption).foregroundStyle(.secondary)
+                        Text(device.phoneNumber ?? "Number unavailable").font(.caption).foregroundStyle(.secondary)
                         Text(connectionText(device)).font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -129,20 +129,20 @@ private struct PairedAndroidDeviceRows: View {
                         Image(systemName: "trash").padding(10)
                     }
                     .buttonStyle(.borderless)
-                    .accessibilityLabel("删除 \(device.deviceName) 配对记录")
+                    .accessibilityLabel("Delete \(device.deviceName) pairing record")
                 }
             }
-            Text("重连时重新读取当前信息，离线记录不保存号码。")
+            Text("Current information is refreshed on reconnection. Offline records do not store phone numbers.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(.vertical, 4)
     }
 
     private func connectionText(_ device: AndroidAgentPresentation) -> String {
-        let routes = [device.vowlanOnline ? "VoWLAN 在线" : nil,
-                      device.bluetoothOnline ? "VoBLE 在线" : nil,
-                      device.cloudOnline ? "云端在线" : nil].compactMap { $0 }
-        return routes.isEmpty ? "离线 · 下次连接重新读取" : routes.joined(separator: " · ")
+        let routes = [device.vowlanOnline ? "VoWLAN Online" : nil,
+                      device.bluetoothOnline ? "VoBLE Online" : nil,
+                      device.cloudOnline ? "Cloud Online" : nil].compactMap { $0 }
+        return routes.isEmpty ? "Offline · Refreshes on reconnection" : routes.joined(separator: " · ")
     }
 }
 
@@ -173,7 +173,7 @@ struct AirSIMSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("连接模式", selection: $connectionModeRaw) {
+                    Picker("Connection Mode", selection: $connectionModeRaw) {
                         ForEach(AirSIMConnectionMode.allCases) { mode in
                             Label(mode.title, systemImage: modeIcon(mode)).tag(mode.rawValue)
                         }
@@ -186,20 +186,20 @@ struct AirSIMSettingsView: View {
                         model.setConnectionMode(mode)
                     }
                 } header: {
-                    Text("运行模式")
+                    Text("Connection Mode")
                 } footer: {
                     Text(selectedMode.detail)
                 }
 
-                Section("当前连接") {
-                    LabeledContent("当前模式", value: model.connectionModePresentation.title)
-                    LabeledContent("连接状态", value: model.connectionModePresentation.status)
+                Section("Current Connection") {
+                    LabeledContent("Current Mode", value: model.connectionModePresentation.title)
+                    LabeledContent("Connection Status", value: model.connectionModePresentation.status)
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
                     LabeledContent(
-                        "云端 Relay",
+                        "Cloud Relay",
                         value: runtimePolicy.startsCloud
-                            ? (model.cloudAgentStatus?.cloudOnline == true ? "Agent 在线" : "不可达")
-                            : "当前模式已关闭"
+                            ? (model.cloudAgentStatus?.cloudOnline == true ? "Agent Online" : "Unreachable")
+                            : "Disabled in current mode"
                     )
                     Text(model.connectionModePresentation.detail)
                         .font(.footnote)
@@ -211,29 +211,29 @@ struct AirSIMSettingsView: View {
                     }
                 }
 
-                Section("三星连接") {
+                Section("Android Connection") {
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
                     NavigationLink {
                         SamsungPairingView()
                     } label: {
-                        Label("配对安卓手机", systemImage: "personalhotspot")
+                        Label("Pair Android Phone", systemImage: "personalhotspot")
                     }
                     PairedAndroidDeviceRows(devices: model.pairedDeviceHistory, onDelete: { deletingDevice = $0 })
                         .disabled(deviceDeletionInProgress)
-                    Button("重新发现", systemImage: "arrow.clockwise") {
+                    Button("Discover Again", systemImage: "arrow.clockwise") {
                         model.vowlan.restartBrowsing()
                         Task { await model.vowlan.probeNow() }
                     }
                 }
 
-                Section("蓝牙连接") {
+                Section("Bluetooth Connection") {
                     LabeledContent("VoBLE", value: voBLEStatus)
                     NavigationLink {
                         VoBLEPairingView()
                     } label: {
-                        Label("配对蓝牙 Agent", systemImage: "wave.3.right")
+                        Label("Pair Bluetooth Agent", systemImage: "wave.3.right")
                     }
-                    Button("重新扫描蓝牙 Agent", systemImage: "arrow.clockwise") {
+                    Button("Scan for Bluetooth Agents Again", systemImage: "arrow.clockwise") {
                         model.voble.stop()
                         model.voble.start()
                     }
@@ -241,16 +241,16 @@ struct AirSIMSettingsView: View {
                 }
 
                 if runtimePolicy.startsBluetooth {
-                    Section("蓝牙诊断（已脱敏）") {
+                    Section("Bluetooth Diagnostics (Redacted)") {
                         let diagnostics = model.vobleDiagnostics
-                        LabeledContent("认证", value: diagnostics.peerAuthenticated ? "通过" : "未完成")
-                        LabeledContent("PCM", value: diagnostics.pcmReady ? "运行中" : "待启动")
-                        LabeledContent("编码", value: diagnostics.codec)
-                        LabeledContent("发送队列", value: "\(diagnostics.queuedFrames) / 8 帧")
-                        LabeledContent("丢帧", value: "\(diagnostics.droppedFrames)")
-                        LabeledContent("抖动缓冲", value: "\(diagnostics.jitterFrames) 帧")
-                        LabeledContent("最近错误", value: diagnostics.lastError.rawValue)
-                        Text("诊断不会显示号码、密钥、nonce、认证标签或音频内容。")
+                        LabeledContent("Authentication", value: diagnostics.peerAuthenticated ? "Passed" : "Incomplete")
+                        LabeledContent("PCM", value: diagnostics.pcmReady ? "Running" : "Not Started")
+                        LabeledContent("Codec", value: diagnostics.codec)
+                        LabeledContent("Send Queue", value: "\(diagnostics.queuedFrames) / 8 frames")
+                        LabeledContent("Dropped Frames", value: "\(diagnostics.droppedFrames)")
+                        LabeledContent("Jitter Buffer", value: "\(diagnostics.jitterFrames) frames")
+                        LabeledContent("Last Error", value: diagnostics.lastError.rawValue)
+                        Text("Diagnostics exclude phone numbers, keys, nonces, authentication tags, and audio content.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -258,26 +258,26 @@ struct AirSIMSettingsView: View {
 
                 Section {
                     Toggle(isOn: $liveActivityEnabled) {
-                        Label("显示灵动岛", systemImage: "platter.filled.top.iphone")
+                        Label("Show Dynamic Island", systemImage: "platter.filled.top.iphone")
                     }
                     .onChange(of: liveActivityEnabled) { enabled in
                         model.setLiveActivityEnabled(enabled)
                     }
                 } header: {
-                    Text("灵动岛与实时活动")
+                    Text("Dynamic Island and Live Activities")
                 } footer: {
-                    Text("关闭后结束 AirSIM 的灵动岛与锁屏实时活动；通话和短信仍可正常使用。")
+                    Text("Turning this off ends AirSIM Dynamic Island and Lock Screen Live Activities. Calls and messages remain available.")
                 }
 
                 Section {
-                    LabeledContent("远程通话与短信", value: runtimePolicy.startsCloud ? "已启用" : "已关闭")
+                    LabeledContent("Remote Calls and Messages", value: runtimePolicy.startsCloud ? "Enabled" : "Disabled")
 
                     TextField("https://relay.example.com", text: $relayURL)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .disabled(!runtimePolicy.startsCloud)
-                    Button("保存 Relay 地址") {
+                    Button("Save Relay URL") {
                         VoIPPushController.shared.updateRelayURL(relayURL)
                         selfTestTask?.cancel()
                         selfTestPhase = .idle
@@ -288,14 +288,14 @@ struct AirSIMSettingsView: View {
                             }
                             await model.refreshCloudStatusForDiagnostics()
                         }
-                        message = "地址已保存；配对后自动注册。"
+                        message = "URL saved. Registration will complete automatically after pairing."
                     }
                     .disabled(!runtimePolicy.startsCloud)
                     if let message { Text(message).foregroundStyle(.secondary) }
                 } header: {
-                    Text("云端 Relay")
+                    Text("Cloud Relay")
                 } footer: {
-                    Text("云端关闭后，局域网内的三星 VoWLAN 仍可使用；公网拨打、接听和短信需要云端 Relay 与有效设备注册。")
+                    Text("Local VoWLAN remains available when cloud mode is off. Remote calls and messages require a cloud Relay and valid device registration.")
                 }
 
                 Section {
@@ -303,7 +303,7 @@ struct AirSIMSettingsView: View {
                         startCloudSelfTest()
                     } label: {
                         HStack {
-                            Label("运行云端模式自检", systemImage: "stethoscope")
+                            Label("Run Cloud Self-Test", systemImage: "stethoscope")
                             Spacer()
                             if selfTestPhase == .running {
                                 ProgressView()
@@ -327,22 +327,22 @@ struct AirSIMSettingsView: View {
                             }
                         }
                         if selfTestPhase == .completed {
-                            Text(report.allPassed ? "云端模式自检通过" : "自检未通过，请按失败步骤修复后重试")
+                            Text(report.allPassed ? "Cloud self-test passed" : "Self-test failed. Resolve the failed steps and try again.")
                                 .font(.footnote.weight(.medium))
                                 .foregroundStyle(report.allPassed ? .green : .orange)
                         }
                     }
                 } header: {
-                    Text("云端模式自检")
+                    Text("Cloud Self-Test")
                 } footer: {
                     Text(!runtimePolicy.startsCloud
-                        ? "当前连接模式不运行云端自检。"
-                        : "依次验证本机 Push 凭据、AirSIM Relay 身份、设备注册和 Agent 最近 90 秒心跳；不会拨号或发送短信。")
+                        ? "Cloud self-test is unavailable in the current connection mode."
+                        : "Checks local push credentials, AirSIM Relay identity, device registration, and an Agent heartbeat within the last 90 seconds. No calls or messages are sent.")
                 }
 
-                Section("关于") {
-                    LabeledContent("项目", value: "AirSIM · Samsung")
-                    Picker("外观", selection: $settings.appearance) {
+                Section("About") {
+                    LabeledContent("Project", value: "AirSIM · Samsung")
+                    Picker("Appearance", selection: $settings.appearance) {
                         ForEach(AppAppearance.allCases) { appearance in
                             Text(appearance.title).tag(appearance)
                         }
@@ -350,10 +350,10 @@ struct AirSIMSettingsView: View {
                 }
             }
             .task { await model.refreshPairedDeviceInformation() }
-            .confirmationDialog("删除这个设备的本机配对记录？",
+            .confirmationDialog("Delete this device's local pairing record?",
                 isPresented: Binding(get: { deletingDevice != nil }, set: { if !$0 { deletingDevice = nil } }),
                 titleVisibility: .visible, presenting: deletingDevice) { device in
-                Button("删除 \(device.deviceName)", role: .destructive) {
+                Button("Delete \(device.deviceName)", role: .destructive) {
                     deviceDeletionInProgress = true
                     Task {
                         defer { deviceDeletionInProgress = false }
@@ -361,11 +361,11 @@ struct AirSIMSettingsView: View {
                         catch { message = error.localizedDescription }
                     }
                 }
-                Button("取消", role: .cancel) {}
+                Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("清除本机记录、绑定和缓存；不会删除通话或短信。此设备需要重新配对才能自动连接，其他设备不受影响。离线设备的远端凭据不会因此自动撤销。")
+                Text("Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.")
             }
-            .navigationTitle("设置")
+            .navigationTitle("Settings")
             .onDisappear {
                 selfTestTask?.cancel()
                 selfTestTask = nil
@@ -400,13 +400,13 @@ struct AirSIMSettingsView: View {
 
     private var voBLEStatus: String {
         switch model.voble.state {
-        case .stopped: return runtimePolicy.startsBluetooth ? "待启动" : "当前模式已关闭"
-        case .bluetoothUnavailable: return "蓝牙不可用"
-        case .scanning: return "正在发现"
-        case .connecting, .connected: return "正在连接"
-        case .authenticating: return "正在认证"
-        case .ready: return "已认证"
-        case .failed(let message): return "失败：\(message)"
+        case .stopped: return runtimePolicy.startsBluetooth ? "Not Started" : "Disabled in current mode"
+        case .bluetoothUnavailable: return "Bluetooth Unavailable"
+        case .scanning: return "Discovering"
+        case .connecting, .connected: return "Connecting"
+        case .authenticating: return "Authenticating"
+        case .ready: return "Authenticated"
+        case .failed(let message): return "Failed: \(message)"
         }
     }
 

@@ -586,17 +586,17 @@ private enum WiredHTTPError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidRequest: return "模块请求格式无效"
-        case .wiredPathUnavailable: return "未找到模块 USB 以太网路径"
-        case let .connectionFailed(message): return "模块有线连接失败：\(message)"
-        case .connectionClosed: return "模块有线连接已关闭"
-        case let .sendFailed(message): return "模块请求发送失败：\(message)"
-        case let .receiveFailed(message): return "模块响应接收失败：\(message)"
-        case .timedOut: return "模块有线请求超时"
-        case .responseTooLarge: return "模块响应超过安全大小限制"
-        case .invalidResponse: return "模块代理返回了无效 HTTP 响应"
-        case .incompleteResponse: return "模块代理返回的 HTTP 响应不完整"
-        case .unreadableUpload: return "无法读取模块更新包"
+        case .invalidRequest: return "Invalid module request format"
+        case .wiredPathUnavailable: return "Module USB Ethernet connection not found"
+        case let .connectionFailed(message): return "Module wired connection failed: \(message)"
+        case .connectionClosed: return "Module wired connection closed"
+        case let .sendFailed(message): return "Module request send failed: \(message)"
+        case let .receiveFailed(message): return "Module response receive failed: \(message)"
+        case .timedOut: return "Module wired request timed out"
+        case .responseTooLarge: return "Module response exceeds the safe size limit"
+        case .invalidResponse: return "Module Agent returned an invalid HTTP response"
+        case .incompleteResponse: return "Module Agent returned an incomplete HTTP response"
+        case .unreadableUpload: return "Unable to read module update package"
         }
     }
 }

@@ -693,7 +693,7 @@ struct ESIMProfile: Codable, Sendable, Identifiable {
 
     var id: String { iccid ?? name ?? UUID().uuidString }
     var enabled: Bool { state == 1 }
-    var displayName: String { name ?? serviceProviderName ?? iccid ?? "未命名 Profile" }
+    var displayName: String { name ?? serviceProviderName ?? iccid ?? "Unnamed Profile" }
 
     enum CodingKeys: String, CodingKey {
         case iccid, name, state

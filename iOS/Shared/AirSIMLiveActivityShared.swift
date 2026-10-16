@@ -14,9 +14,9 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
             var title: String {
                 switch self {
                 case .vowlan: return "VoWLAN"
-                case .bluetooth: return "蓝牙"
-                case .cloud: return "云端"
-                case .moduleLocal: return "模块本地"
+                case .bluetooth: return "Bluetooth"
+                case .cloud: return "Cloud"
+                case .moduleLocal: return "Local Module"
                 }
             }
 
@@ -105,12 +105,12 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
 
             var title: String {
                 switch self {
-                case .standby: return "模块待机"
-                case .cloudStandby: return "云端在线"
-                case .incoming: return "模块来电"
-                case .active: return "通话中"
-                case .held: return "通话保持"
-                case .offline: return "模块离线"
+                case .standby: return "Module Standby"
+                case .cloudStandby: return "Cloud Online"
+                case .incoming: return "Incoming Call"
+                case .active: return "On Call"
+                case .held: return "Call on Hold"
+                case .offline: return "Module Offline"
                 }
             }
         }
@@ -291,10 +291,10 @@ private enum LiveActivityCallClient {
 
 @available(iOS 17.0, *)
 struct AnswerAirSIMCallIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "接听模块来电"
+    static var title: LocalizedStringResource = "Answer Module Call"
     static var openAppWhenRun = false
 
-    @Parameter(title: "通话 ID") var callID: String
+    @Parameter(title: "Call ID") var callID: String
 
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
@@ -307,10 +307,10 @@ struct AnswerAirSIMCallIntent: LiveActivityIntent {
 
 @available(iOS 17.0, *)
 struct RejectAirSIMCallIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "拒绝模块来电"
+    static var title: LocalizedStringResource = "Decline Module Call"
     static var openAppWhenRun = false
 
-    @Parameter(title: "通话 ID") var callID: String
+    @Parameter(title: "Call ID") var callID: String
 
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
@@ -323,10 +323,10 @@ struct RejectAirSIMCallIntent: LiveActivityIntent {
 
 @available(iOS 17.0, *)
 struct HangUpAirSIMCallIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "挂断模块通话"
+    static var title: LocalizedStringResource = "End Module Call"
     static var openAppWhenRun = false
 
-    @Parameter(title: "通话 ID") var callID: String
+    @Parameter(title: "Call ID") var callID: String
 
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
@@ -344,9 +344,9 @@ private enum LiveActivityCallError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .staleCall: return "该来电已经结束或被另一通电话替换"
-        case .invalidState: return "当前通话状态不允许执行此操作"
-        case let .httpStatus(code): return "模块通话接口返回 HTTP \(code)"
+        case .staleCall: return "This call has ended or was replaced by another call"
+        case .invalidState: return "This action is unavailable in the current call state"
+        case let .httpStatus(code): return "Module call endpoint returned HTTP \(code)"
         }
     }
 }

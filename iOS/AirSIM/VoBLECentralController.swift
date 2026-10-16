@@ -110,11 +110,11 @@ enum VoBLECentralError: LocalizedError, Equatable {
     case bluetooth(String)
     var errorDescription: String? {
         switch self {
-        case .notReady: "蓝牙 Agent 尚未完成认证"
-        case .invalidResponse: "蓝牙 Agent 响应无效"
-        case .authenticationFailed: "蓝牙消息认证失败"
-        case .commandTimedOut: "蓝牙命令响应超时"
-        case .disconnected: "蓝牙连接已断开"
+        case .notReady: "Bluetooth Agent is not authenticated"
+        case .invalidResponse: "Invalid Bluetooth Agent response"
+        case .authenticationFailed: "Bluetooth message authentication failed"
+        case .commandTimedOut: "Bluetooth command timeout"
+        case .disconnected: "Bluetooth connection lost"
         case let .bluetooth(message): message
         }
     }
@@ -124,13 +124,13 @@ enum VoBLEPairingRecovery {
     static func userMessage(for message: String) -> String {
         let normalized = message.lowercased()
         if normalized.contains("already paired") {
-            return "Android 仍保存旧的 VoBLE 凭据。请在 Android AirSIM → 设置 → VoBLE 认证中清除旧配对，再重新配对。"
+            return "Android still has old VoBLE credentials. Clear the old pairing in Android AirSIM → Settings → VoBLE Authentication, then pair again."
         }
         if normalized.contains("reconnect authentication failed") {
-            return "两端 VoBLE 密钥不一致。请在 Android AirSIM → 设置 → VoBLE 认证中清除旧配对，再重新配对。"
+            return "VoBLE keys do not match. Clear the old pairing in Android AirSIM → Settings → VoBLE Authentication, then pair again."
         }
         if normalized.contains("peer is not paired") {
-            return "Android 已没有对应的 VoBLE 凭据。请清除本机旧凭据，然后重新核对安全码。"
+            return "Android no longer has matching VoBLE credentials. Clear local credentials, then verify the security code again."
         }
         return message
     }
@@ -485,7 +485,7 @@ final class VoBLECentralController: NSObject, ObservableObject, VoBLECentralCont
             }
             guard let self, self.enabled,
                   self.reconnectBarrier.disconnectingID == value.identifier else { return }
-            self.apply(.authenticationFailed("旧蓝牙连接尚未释放，请稍后重试"))
+            self.apply(.authenticationFailed("The previous Bluetooth connection is still closing. Try again shortly."))
         }
     }
 
@@ -551,7 +551,7 @@ final class VoBLECentralController: NSObject, ObservableObject, VoBLECentralCont
                 return
             }
             if object["ok"] as? Bool == false {
-                let raw = object["error"] as? String ?? "蓝牙配对失败"
+                let raw = object["error"] as? String ?? "Bluetooth pairing failed"
                 throw VoBLECentralError.bluetooth(VoBLEPairingRecovery.userMessage(for: raw))
             }
             if object["op"] as? String == "prepare" {
@@ -759,7 +759,7 @@ extension VoBLECentralController: @preconcurrency CBCentralManagerDelegate {
         if reconnectBarrier.finish(peripheral.identifier) { continueAfterCancellation(); return }
         guard self.peripheral === peripheral else { return }
         resetConnection()
-        apply(.disconnected(error?.localizedDescription ?? "蓝牙连接失败")); if enabled { restoreOrScan() }
+        apply(.disconnected(error?.localizedDescription ?? "Bluetooth connection failed")); if enabled { restoreOrScan() }
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
@@ -793,7 +793,7 @@ extension VoBLECentralController: @preconcurrency CBPeripheralDelegate {
         guard acceptsCallback(from: peripheral) else { return }
         if let error { apply(.authenticationFailed(error.localizedDescription)); return }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
-            apply(.authenticationFailed("未发现 AirSIM 蓝牙服务")); return
+            apply(.authenticationFailed("AirSIM Bluetooth service not found")); return
         }
         peripheral.discoverCharacteristics([Self.capabilityUUID, Self.pairingUUID, Self.controlRXUUID,
             Self.controlTXUUID, Self.audioUplinkUUID, Self.audioDownlinkUUID, Self.diagnosticsUUID], for: service)
@@ -814,7 +814,7 @@ extension VoBLECentralController: @preconcurrency CBPeripheralDelegate {
             }
         }
         guard pairing != nil, controlRX != nil, controlTX != nil, audioUplink != nil, audioDownlink != nil else {
-            apply(.authenticationFailed("AirSIM 蓝牙特征不完整")); return
+            apply(.authenticationFailed("AirSIM Bluetooth characteristics are incomplete")); return
         }
         apply(.characteristicsReady)
     }

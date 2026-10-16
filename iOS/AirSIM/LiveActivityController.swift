@@ -54,7 +54,7 @@ enum LiveActivityStateBuilder {
             return .init(
                 callID: "",
                 number: "",
-                displayName: "模块离线",
+                displayName: "Module Offline",
                 phase: .offline,
                 startedAt: idleStartedAt,
                 agentDeviceName: agent?.deviceName,
@@ -71,7 +71,7 @@ enum LiveActivityStateBuilder {
             return .init(
                 callID: "",
                 number: "",
-                displayName: cloudOnly ? "公网中继已连接" : "等待模块来电",
+                displayName: cloudOnly ? "Internet Relay Connected" : "Waiting for Incoming Calls",
                 phase: cloudOnly ? .cloudStandby : .standby,
                 startedAt: idleStartedAt,
                 transport: cloudOnly ? .cloud : transport,
@@ -99,7 +99,7 @@ enum LiveActivityStateBuilder {
         } else {
             phase = .active
         }
-        let number = call.number?.isEmpty == false ? call.number! : "未知号码"
+        let number = call.number?.isEmpty == false ? call.number! : "Unknown Number"
         return .init(
             callID: call.id,
             number: number,

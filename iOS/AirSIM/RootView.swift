@@ -47,8 +47,8 @@ enum PhoneTab: String, CaseIterable, Identifiable {
 
     var tabTitle: String {
         switch self {
-        case .recents: return "最近"
-        case .contacts: return "联系人"
+        case .recents: return "Recents"
+        case .contacts: return "Contacts"
         default: return rawValue
         }
     }

@@ -14,11 +14,11 @@ enum VoIPPushPayloadError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedEvent: return "不是有效的来电推送"
-        case .missingCallID: return "来电推送缺少 call_id"
-        case .invalidCallUUID: return "来电推送缺少有效 call_uuid"
-        case .invalidVirtualCall: return "虚拟来电缺少有效的本地播报内容"
-        case .expired: return "来电推送已经过期"
+        case .unsupportedEvent: return "Invalid incoming call push"
+        case .missingCallID: return "Incoming call push is missing call_id"
+        case .invalidCallUUID: return "Incoming call push is missing a valid call_uuid"
+        case .invalidVirtualCall: return "Virtual call has no valid local speech content"
+        case .expired: return "Incoming call push expired"
         }
     }
 }
@@ -295,41 +295,41 @@ struct ConnectionModePresentation: Equatable, Sendable {
             return ConnectionModePresentation(
                 mode: .vowlan,
                 title: "VoWLAN",
-                status: "已连接",
+                status: "Connected",
                 detail: bluetoothReady || cloudOnline
-                    ? "自动模式优先使用同一 Wi-Fi / 三星热点"
-                    : "同一 Wi-Fi / 三星热点"
+                    ? "Automatic mode prefers the same Wi-Fi / Android hotspot"
+                    : "Same Wi-Fi / Android hotspot"
             )
         }
         if selected == .bluetooth {
             return ConnectionModePresentation(
                 mode: .bluetooth,
                 title: "VoBLE",
-                status: "已连接",
-                detail: "蓝牙控制与通话音频已认证，不经过 Relay"
+                status: "Connected",
+                detail: "Bluetooth call control and audio are authenticated, without Relay"
             )
         }
         if selected == .cloud {
             return ConnectionModePresentation(
                 mode: .cloud,
-                title: "云端",
-                status: cloudOnline ? "已连接" : "不可达",
-                detail: cloudOnline ? "独立 Relay 与 Agent 心跳正常" : "运行云端模式自检定位故障"
+                title: "Cloud",
+                status: cloudOnline ? "Connected" : "Unreachable",
+                detail: cloudOnline ? "Relay and Agent heartbeat are healthy" : "Run the cloud self-test to diagnose the issue"
             )
         }
         switch selectedMode {
         case .vowlan:
-            return .init(mode: .vowlan, title: "VoWLAN", status: "不可达",
-                         detail: "尚未发现已配对且通过鉴权的 VoWLAN Agent")
+            return .init(mode: .vowlan, title: "VoWLAN", status: "Unreachable",
+                         detail: "No paired and authenticated VoWLAN Agent found")
         case .bluetooth:
-            return .init(mode: .bluetooth, title: "VoBLE", status: "不可达",
-                         detail: "蓝牙 Agent 尚未完成连接与应用层认证")
+            return .init(mode: .bluetooth, title: "VoBLE", status: "Unreachable",
+                         detail: "Bluetooth Agent has not connected and authenticated")
         case .cloud:
-            return .init(mode: .cloud, title: "云端", status: "不可达",
-                         detail: "运行云端模式自检定位故障")
+            return .init(mode: .cloud, title: "Cloud", status: "Unreachable",
+                         detail: "Run the cloud self-test to diagnose the issue")
         case .automatic:
-            return .init(mode: .offline, title: "自动", status: "无可用路由",
-                         detail: "正在按 VoWLAN、VoBLE、云端顺序查找拨号路由")
+            return .init(mode: .offline, title: "Automatic", status: "No Available Route",
+                         detail: "Checking VoWLAN, VoBLE, then cloud for a call route")
         }
     }
 }
@@ -361,10 +361,10 @@ struct CloudSelfTestReport: Equatable, Sendable {
 
     static let initial = CloudSelfTestReport(
         steps: [
-            CloudSelfTestStep(id: .configuration, title: "本机配置", state: .pending, detail: "等待检查"),
-            CloudSelfTestStep(id: .relayIdentity, title: "Relay 身份", state: .pending, detail: "等待检查"),
-            CloudSelfTestStep(id: .deviceRegistration, title: "设备注册", state: .pending, detail: "等待检查"),
-            CloudSelfTestStep(id: .agentHeartbeat, title: "Agent 心跳", state: .pending, detail: "等待检查"),
+            CloudSelfTestStep(id: .configuration, title: "Local Configuration", state: .pending, detail: "Waiting"),
+            CloudSelfTestStep(id: .relayIdentity, title: "Relay Identity", state: .pending, detail: "Waiting"),
+            CloudSelfTestStep(id: .deviceRegistration, title: "Device Registration", state: .pending, detail: "Waiting"),
+            CloudSelfTestStep(id: .agentHeartbeat, title: "Agent Heartbeat", state: .pending, detail: "Waiting"),
         ],
         completedAt: nil
     )
@@ -382,7 +382,7 @@ struct CloudSelfTestReport: Equatable, Sendable {
     mutating func fail(_ id: CloudSelfTestStepID, detail: String) {
         update(id, state: .failed, detail: detail)
         for index in steps.indices where steps[index].state == .pending {
-            steps[index].detail = "未执行：前序检查未通过"
+            steps[index].detail = "Skipped: a previous check failed"
         }
         completedAt = Date()
     }
@@ -484,11 +484,11 @@ enum CloudAgentStatusError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unavailable: return "云端状态尚未配置"
-        case .invalidRelayURL: return "Relay 必须使用 HTTPS"
-        case .invalidResponse: return "Relay 状态响应无效"
-        case .requestLimitExceeded: return "Relay 每日请求额度已用尽（Cloudflare 1027），请等待额度重置或升级 Workers 套餐"
-        case let .relayHTTP(statusCode): return "Relay 请求失败（HTTP \(statusCode)）"
+        case .unavailable: return "Cloud status is not configured"
+        case .invalidRelayURL: return "Relay requires HTTPS"
+        case .invalidResponse: return "Invalid Relay status response"
+        case .requestLimitExceeded: return "Relay daily request quota exhausted (Cloudflare 1027). Wait for the quota to reset or upgrade the Workers plan."
+        case let .relayHTTP(statusCode): return "Relay request failed (HTTP \(statusCode))"
         }
     }
 }
@@ -502,11 +502,11 @@ enum CloudCommandError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .cloudModeDisabled: return "云端模式已关闭"
-        case .unavailable: return "模块云端控制通道尚未连接"
-        case .invalidResponse: return "Relay 返回了无效的云端控制响应"
+        case .cloudModeDisabled: return "Cloud mode is disabled"
+        case .unavailable: return "Module cloud control channel is not connected"
+        case .invalidResponse: return "Relay returned an invalid cloud control response"
         case let .failed(message): return message
-        case .timeout: return "等待模块执行云端命令超时"
+        case .timeout: return "Timed out waiting for the module to execute a cloud command"
         }
     }
 }
@@ -716,9 +716,9 @@ enum RemoteSMSPushError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedEvent: return "不是有效的新短信推送"
-        case .incomplete: return "短信推送缺少必要字段"
-        case .invalidTimestamp: return "短信推送时间无效"
+        case .unsupportedEvent: return "Invalid new message push"
+        case .incomplete: return "Message push is missing required fields"
+        case .invalidTimestamp: return "Invalid message push timestamp"
         }
     }
 }
@@ -1155,68 +1155,68 @@ final class VoIPPushController: NSObject {
     ) async -> CloudSelfTestReport {
         var report = CloudSelfTestReport.initial
 
-        report.update(.configuration, state: .running, detail: "检查 Relay、PushKit 与通知凭据")
+        report.update(.configuration, state: .running, detail: "Checking Relay, PushKit, and notification credentials")
         onUpdate(report)
         let readiness = registrationReadiness()
         var missing: [String] = []
-        if !CloudModePreference.isEnabled() { missing.append("云端模式未开启") }
-        if !readiness.relayURLReady { missing.append("Relay HTTPS 地址无效") }
-        if !readiness.deviceIdentityReady { missing.append("设备身份未生成") }
-        if !readiness.voIPTokenReady { missing.append("PushKit token 未就绪") }
-        if !readiness.alertTokenReady { missing.append("通知 token 未就绪") }
+        if !CloudModePreference.isEnabled() { missing.append("Cloud mode is not enabled") }
+        if !readiness.relayURLReady { missing.append("Invalid Relay HTTPS URL") }
+        if !readiness.deviceIdentityReady { missing.append("Device identity has not been generated") }
+        if !readiness.voIPTokenReady { missing.append("PushKit token is not ready") }
+        if !readiness.alertTokenReady { missing.append("Notification token is not ready") }
         guard missing.isEmpty, let registration = currentRegistration() else {
-            report.fail(.configuration, detail: missing.isEmpty ? "设备注册信息不完整" : missing.joined(separator: "；"))
+            report.fail(.configuration, detail: missing.isEmpty ? "Device registration information is incomplete" : missing.joined(separator: "; "))
             onUpdate(report)
             return report
         }
         report.update(
             .configuration,
             state: .passed,
-            detail: "设备 \(readiness.deviceIDHint ?? "已生成") · APNs \(readiness.environment)"
+            detail: "Device \(readiness.deviceIDHint ?? "Generated") · APNs \(readiness.environment)"
         )
         onUpdate(report)
 
-        report.update(.relayIdentity, state: .running, detail: "验证 AirSIM Relay 服务身份")
+        report.update(.relayIdentity, state: .running, detail: "Verifying AirSIM Relay identity")
         onUpdate(report)
         do {
             let version = try await fetchRelayHealthVersion(registration: registration)
             report.update(.relayIdentity, state: .passed, detail: "airsim-push-relay · v\(version)")
             onUpdate(report)
         } catch {
-            report.fail(.relayIdentity, detail: "Relay 不可达或服务身份不匹配：\(error.localizedDescription)")
+            report.fail(.relayIdentity, detail: "Relay is unreachable or its identity does not match: \(error.localizedDescription)")
             onUpdate(report)
             return report
         }
 
-        report.update(.deviceRegistration, state: .running, detail: "验证设备密钥与注册接口")
+        report.update(.deviceRegistration, state: .running, detail: "Verifying device key and registration endpoint")
         onUpdate(report)
         do {
             try await registerDirectlyWithRelay(registration)
-            report.update(.deviceRegistration, state: .passed, detail: "Relay 已接受设备注册")
+            report.update(.deviceRegistration, state: .passed, detail: "Relay accepted device registration")
             onUpdate(report)
         } catch {
-            report.fail(.deviceRegistration, detail: "注册被拒绝：\(error.localizedDescription)")
+            report.fail(.deviceRegistration, detail: "Registration rejected: \(error.localizedDescription)")
             onUpdate(report)
             return report
         }
 
-        report.update(.agentHeartbeat, state: .running, detail: "查询 AVF Agent 最近 90 秒心跳")
+        report.update(.agentHeartbeat, state: .running, detail: "Checking for an AVF Agent heartbeat in the last 90 seconds")
         onUpdate(report)
         do {
             let status = try await fetchCloudAgentStatusForDiagnostics()
             guard status.cloudOnline else {
-                report.fail(.agentHeartbeat, detail: "Relay 已连接，但 AVF Agent 90 秒内无心跳")
+                report.fail(.agentHeartbeat, detail: "Relay connected, but no AVF Agent heartbeat in the last 90 seconds")
                 onUpdate(report)
                 return report
             }
-            let version = status.agentVersion?.isEmpty == false ? status.agentVersion! : "未知版本"
-            let cellular = status.cellularState?.isEmpty == false ? " · 蜂窝 \(status.cellularState!)" : ""
-            report.update(.agentHeartbeat, state: .passed, detail: "Agent \(version) 在线\(cellular)")
+            let version = status.agentVersion?.isEmpty == false ? status.agentVersion! : "Unknown Version"
+            let cellular = status.cellularState?.isEmpty == false ? " · Cellular \(status.cellularState!)" : ""
+            report.update(.agentHeartbeat, state: .passed, detail: "Agent \(version) Online\(cellular)")
             report.completedAt = Date()
             onUpdate(report)
             return report
         } catch {
-            report.fail(.agentHeartbeat, detail: "心跳查询失败：\(error.localizedDescription)")
+            report.fail(.agentHeartbeat, detail: "Heartbeat check failed: \(error.localizedDescription)")
             onUpdate(report)
             return report
         }
@@ -1316,7 +1316,7 @@ final class VoIPPushController: NSObject {
         }
         let outcome = try await waitForCloudCommand(commandID: commandID, timeout: timeout)
         guard outcome.status == "completed", outcome.result?.dialing == true else {
-            throw CloudCommandError.failed(outcome.error ?? "模块未能开始拨号")
+            throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
         }
         return try IncomingVoIPCall(
             outgoingCallID: call.callID,
@@ -1340,7 +1340,7 @@ final class VoIPPushController: NSObject {
         guard enqueue.accepted else { throw CloudCommandError.invalidResponse }
         let outcome = try await waitForCloudCommand(commandID: commandID, timeout: 5 * 60)
         guard outcome.status == "completed", outcome.result?.sent == true else {
-            throw CloudCommandError.failed(outcome.error ?? "模块发送短信失败")
+            throw CloudCommandError.failed(outcome.error ?? "Module failed to send the message")
         }
         return SMSSendResult(sent: true, segments: outcome.result?.segments)
     }
@@ -1356,7 +1356,7 @@ final class VoIPPushController: NSObject {
         guard enqueue.accepted else { throw CloudCommandError.invalidResponse }
         let outcome = try await waitForCloudCommand(commandID: commandID, timeout: 15)
         guard outcome.status == "completed", outcome.result?.sent == true else {
-            throw CloudCommandError.failed(outcome.error ?? "模块发送 DTMF 失败")
+            throw CloudCommandError.failed(outcome.error ?? "Module failed to send DTMF")
         }
     }
 

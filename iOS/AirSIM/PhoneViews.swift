@@ -15,7 +15,7 @@ enum RecentCallTimeFormatter {
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            day == calendar.dateComponents([.year, .month, .day], from: yesterday) {
-            return "昨天"
+            return "Yesterday"
         }
         if day.year == currentDay.year {
             return String(format: "%02d/%02d", day.month ?? 0, day.day ?? 0)
@@ -59,23 +59,23 @@ struct DialPadTransportPresentation: Equatable {
         if selected == .vowlan {
             return DialPadTransportPresentation(
                 title: "VoWLAN",
-                detail: "拨号及通话音频将通过同一 Wi-Fi 或三星热点",
+                detail: "Calls and audio use the same Wi-Fi or Android hotspot",
                 systemImage: "wifi",
                 transport: .vowlan
             )
         }
         if selected == .bluetooth {
             return DialPadTransportPresentation(
-                title: "蓝牙",
-                detail: "拨号及通话音频将通过 VoBLE，不使用 Relay",
+                title: "Bluetooth",
+                detail: "Calls and audio use VoBLE, without Relay",
                 systemImage: "wave.3.right",
                 transport: .bluetooth
             )
         }
         if selected == .cloud {
             return DialPadTransportPresentation(
-                title: "云端",
-                detail: "拨号及通话音频将通过云端 Relay",
+                title: "Cloud",
+                detail: "Calls and audio use the cloud Relay",
                 systemImage: "cloud.fill",
                 transport: .cloud
             )
@@ -200,16 +200,16 @@ struct DialPadView: View {
                             Image(systemName: "wave.3.right")
                                 .foregroundStyle(model.voble.state == .ready ? .green : .orange)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("VoBLE 蓝牙模式")
+                                Text("VoBLE Bluetooth Mode")
                                     .font(.subheadline.weight(.semibold))
                                 Text(model.voble.state == .ready
-                                     ? "已认证 · 通话不经过 Relay"
-                                     : "等待 Android 蓝牙 Agent")
+                                     ? "Authenticated · Calls do not use Relay"
+                                     : "Waiting for Android Bluetooth Agent")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Text(model.voble.state == .ready ? "在线" : "连接中")
+                            Text(model.voble.state == .ready ? "Online" : "Connecting")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(model.voble.state == .ready ? .green : .orange)
                         }
@@ -224,9 +224,9 @@ struct DialPadView: View {
                                 Image(systemName: "smartphone.slash")
                                     .foregroundStyle(.secondary)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("已配对 Android Agent · \(model.pairedAndroidAgents.count)")
+                                    Text("Paired Android Agents · \(model.pairedAndroidAgents.count)")
                                         .font(.subheadline.weight(.semibold))
-                                    Text("当前没有可用的拨号路由")
+                                    Text("No call route is currently available")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -431,14 +431,14 @@ private struct DialPadCurrentAgentCard: View {
                         Text(agent.deviceName)
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
-                        Text("当前")
+                        Text("Current")
                             .font(.caption2.weight(.bold))
                             .foregroundStyle(.green)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.green.opacity(0.12), in: Capsule())
                     }
-                    Text(agent.phoneNumber ?? "号码未提供")
+                    Text(agent.phoneNumber ?? "Number unavailable")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -447,7 +447,7 @@ private struct DialPadCurrentAgentCard: View {
                 Spacer(minLength: 4)
 
                 if agentCount > 1 {
-                    Button("全部 \(agentCount)", action: showAll)
+                    Button("All \(agentCount)", action: showAll)
                         .font(.caption.weight(.semibold))
                         .buttonStyle(.plain)
                         .foregroundStyle(.blue)
@@ -457,7 +457,7 @@ private struct DialPadCurrentAgentCard: View {
             HStack(spacing: 8) {
                 AgentTransportPill(title: "VoWLAN", online: agent.vowlanOnline, enabled: true)
                 AgentTransportPill(title: "VoBLE", online: agent.bluetoothOnline, enabled: true)
-                AgentTransportPill(title: "云端", online: agent.cloudOnline, enabled: cloudModeEnabled)
+                AgentTransportPill(title: "Cloud", online: agent.cloudOnline, enabled: cloudModeEnabled)
                 Spacer(minLength: 0)
                 Text(agent.agentKindTitle)
                     .font(.caption2)
@@ -484,7 +484,7 @@ private struct AgentTransportPill: View {
     var body: some View {
         HStack(spacing: 4) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(title) \(!enabled ? "关闭" : (online ? "在线" : "离线"))")
+            Text("\(title) \(!enabled ? "Off" : (online ? "Online" : "Offline"))")
                 .font(.caption2.weight(.medium))
         }
         .foregroundStyle(color)
@@ -511,7 +511,7 @@ private struct PairedAndroidAgentsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(agent.deviceName)
                                 .font(.headline)
-                            Text(agent.phoneNumber ?? "号码未提供")
+                            Text(agent.phoneNumber ?? "Number unavailable")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -523,7 +523,7 @@ private struct PairedAndroidAgentsView: View {
                     HStack(spacing: 8) {
                         AgentTransportPill(title: "VoWLAN", online: agent.vowlanOnline, enabled: true)
                         AgentTransportPill(title: "VoBLE", online: agent.bluetoothOnline, enabled: true)
-                        AgentTransportPill(title: "云端", online: agent.cloudOnline, enabled: cloudModeEnabled)
+                        AgentTransportPill(title: "Cloud", online: agent.cloudOnline, enabled: cloudModeEnabled)
                         Spacer()
                         Text(agent.agentKindTitle)
                             .font(.caption)
@@ -540,12 +540,12 @@ private struct PairedAndroidAgentsView: View {
                         Image(systemName: "smartphone.slash")
                             .font(.system(size: 34))
                             .foregroundStyle(.secondary)
-                        Text("暂无已配对 Android Agent")
+                        Text("No paired Android Agents")
                             .font(.headline)
                     }
                 }
             }
-            .navigationTitle("已配对 Android Agent")
+            .navigationTitle("Paired Android Agents")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -614,7 +614,7 @@ struct RecentsView: View {
                                     }
                                 }
                             )
-                            .accessibilityHint("轻点回拨，按住查看详情")
+                            .accessibilityHint("Tap to call back; touch and hold for details")
                             .listRowBackground(Color.clear)
                             .listRowInsets(.init(
                                 top: 0,
@@ -760,7 +760,7 @@ struct RecentsView: View {
                     HStack(spacing: 4) {
                         Image(systemName: call.direction == "incoming" ? "arrow.down.left" : "arrow.up.right")
                             .font(.caption2.weight(.semibold))
-                        Text(call.missed ? L10n.t("未接") : "AirSIM 音频")
+                        Text(call.missed ? L10n.t("未接") : "AirSIM Audio")
                     }
                     .font(.subheadline)
                     .foregroundStyle(call.missed ? .red : .secondary)
@@ -849,7 +849,7 @@ struct MessagesView: View {
                         Image(systemName: "ellipsis")
                             .font(.body.weight(.semibold))
                     }
-                    .accessibilityLabel("短信操作")
+                    .accessibilityLabel("Message Actions")
                 }
                 phoneMorphingToolbarItem(placement: .topBarTrailing, id: "top-action-trailing-primary") {
                     Button { showingComposer = true } label: {
@@ -880,7 +880,7 @@ struct MessagesView: View {
                 }
                 Button(L10n.t("取消"), role: .cancel) {}
             } message: {
-                Text("这会删除本机短信以及尚未交付的模块短信，无法恢复。")
+                Text("This permanently deletes local messages and undelivered module messages.")
             }
         }
     }
@@ -1102,7 +1102,7 @@ private struct MessageComposer: View {
                 }
                 .frame(maxWidth: 130, alignment: .trailing)
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("已识别联系人：\(contact.name)")
+                .accessibilityLabel("Recognized contact: \(contact.name)")
             }
         }
         .padding(.horizontal, 16)
@@ -1285,11 +1285,11 @@ struct ContactsView: View {
                 if !model.contacts.isAuthorized {
                     EmptyStateView(
                         title: model.contacts.authorizationState == .denied
-                            ? "通讯录权限已关闭"
+                            ? "Contacts access is disabled"
                             : L10n.t("授权访问通讯录"),
                         systemImage: "person.crop.circle.badge.questionmark",
                         actionTitle: model.contacts.authorizationState == .denied
-                            ? "前往系统设置"
+                            ? "Open Settings"
                             : L10n.t("授权访问通讯录")
                     ) {
                         if model.contacts.authorizationState == .denied {
@@ -1553,10 +1553,10 @@ private struct EmptyStateView: View {
 
     private var emptyStateDescription: String {
         switch systemImage {
-        case "message": return "收到的短信会显示在这里。"
-        case "phone.arrow.up.right": return "完成通话后，记录会显示在这里。"
-        case "person.2": return "联系人会从系统通讯录同步。"
-        default: return "完成连接或授权后即可使用。"
+        case "message": return "Received messages appear here."
+        case "phone.arrow.up.right": return "Your call history appears here after a call."
+        case "person.2": return "Contacts sync from your device address book."
+        default: return "Connect or grant access to get started."
         }
     }
 }
@@ -1652,7 +1652,7 @@ struct ActiveCallView: View {
 
     private var incomingSurface: some View {
         VStack(spacing: 0) {
-            callHeader(title: "AirSIM 来电", showsRecording: false)
+            callHeader(title: "AirSIM Incoming Call", showsRecording: false)
 
             Spacer(minLength: isCompact ? 36 : 54)
 
@@ -1719,7 +1719,7 @@ struct ActiveCallView: View {
 
     private var connectedSurface: some View {
         VStack(spacing: 0) {
-            callHeader(title: "AirSIM 通话", showsRecording: true)
+            callHeader(title: "AirSIM Call", showsRecording: true)
 
             Spacer(minLength: isCompact ? 24 : 42)
 
@@ -1777,7 +1777,7 @@ struct ActiveCallView: View {
                     Task { await model.toggleMute() }
                 }
                 CallCircleButton(
-                    title: "键盘",
+                    title: "Keypad",
                     icon: "circle.grid.3x3.fill",
                     color: nil,
                     foregroundColor: .white,
@@ -1870,10 +1870,10 @@ struct ActiveCallView: View {
     }
 
     private var connectivityText: String {
-        let status = moduleIsReachable ? "模块在线" : "模块连接中"
+        let status = moduleIsReachable ? "Module Online" : "Connecting to Module"
         let signal = model.modemStatus?.signalDBM ?? model.cloudAgentStatus?.signalDBM
         guard let signal else { return status }
-        return "\(status) · 信号 \(signal) dBm"
+        return "\(status) · Signal \(signal) dBm"
     }
 
     private var audioStatusColor: Color {
@@ -2040,12 +2040,12 @@ private struct DTMFKeypadView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                Text(enteredDigits.isEmpty ? "按键发送双音多频" : enteredDigits)
+                Text(enteredDigits.isEmpty ? "Tap keys to send DTMF tones" : enteredDigits)
                     .font(.system(.title3, design: .rounded).monospacedDigit())
                     .foregroundStyle(enteredDigits.isEmpty ? .secondary : .primary)
                     .lineLimit(1)
                     .contentTransition(.numericText())
-                    .accessibilityLabel(enteredDigits.isEmpty ? "尚未输入按键" : enteredDigits)
+                    .accessibilityLabel(enteredDigits.isEmpty ? "No digits entered" : enteredDigits)
                 if #available(iOS 26.0, *) {
                     GlassEffectContainer(spacing: 16) { keypad }
                 } else {
@@ -2054,7 +2054,7 @@ private struct DTMFKeypadView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(24)
-            .navigationTitle("通话键盘")
+            .navigationTitle("Call Keypad")
             .toolbar { Button(L10n.t("取消")) { dismiss() } }
         }
         .presentationDetents([.medium])
@@ -2077,7 +2077,7 @@ private struct DTMFKeypadView: View {
                                 .contentShape(Circle())
                         }
                         .buttonStyle(DTMFGlassButtonStyle())
-                        .accessibilityLabel("发送 DTMF \(digit)")
+                        .accessibilityLabel("Send DTMF \(digit)")
                     }
                 }
             }

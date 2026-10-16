@@ -98,11 +98,11 @@ struct AirSIMLiveActivityWidget: Widget {
             Image(systemName: "phone.badge.waveform.fill")
                 .foregroundStyle(.green)
         case .held:
-            Text("保持")
+            Text("On Hold")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.orange)
         case .offline:
-            Text("离线")
+            Text("Offline")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
         }
@@ -127,7 +127,7 @@ struct AirSIMLiveActivityWidget: Widget {
                     if state.phase == .standby {
                         HStack(spacing: 5) {
                             Circle().fill(Color.green).frame(width: 7, height: 7)
-                            Text(connectionStatusLine(state) ?? "模块在线")
+                            Text(connectionStatusLine(state) ?? "Module Online")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.green)
                         }
@@ -138,11 +138,11 @@ struct AirSIMLiveActivityWidget: Widget {
                     } else if state.phase == .cloudStandby {
                         HStack(spacing: 5) {
                             Circle().fill(Color.cyan).frame(width: 7, height: 7)
-                            Text("云端在线")
+                            Text("Cloud Online")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.cyan)
                         }
-                        Text("公网中继保持连接 · 可接收来电与短信")
+                        Text("Internet Relay Connected · Ready for Calls and Messages")
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.62))
                             .lineLimit(1)
@@ -196,7 +196,7 @@ struct AirSIMLiveActivityWidget: Widget {
                 .font(.title2.weight(.semibold))
                 .foregroundStyle(.green)
         } else if state.phase == .offline {
-            Text("离线")
+            Text("Offline")
                 .font(.headline)
                 .foregroundStyle(.white.opacity(0.55))
         }
@@ -229,7 +229,7 @@ struct AirSIMLiveActivityWidget: Widget {
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
             } else if state.phase == .offline {
-                Label("等待 Android Agent 恢复", systemImage: "wifi.exclamationmark")
+                Label("Waiting for Android Agent to Reconnect", systemImage: "wifi.exclamationmark")
                     .lineLimit(1)
             } else {
                 Text(standbyNetworkLine(state))
@@ -254,7 +254,7 @@ struct AirSIMLiveActivityWidget: Widget {
     ) -> some View {
         Group {
             if let count = state.pairedAgentCount, count > 1 {
-                Text("\(count) 台")
+                Text("\(count) devices")
             } else {
                 Image(systemName: state.phase == .cloudStandby ? "icloud.fill" : "smartphone")
             }
@@ -279,7 +279,7 @@ struct AirSIMLiveActivityWidget: Widget {
                         .font(.caption.weight(.semibold))
                         .lineLimit(1)
                     if let count = state.pairedAgentCount, count > 1 {
-                        Text("共 \(count) 台")
+                        Text("Total: \(count) devices")
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.white.opacity(0.52))
                     }
@@ -314,7 +314,7 @@ struct AirSIMLiveActivityWidget: Widget {
                 connectionBadge("VoBLE", systemImage: "wave.3.right", color: .blue)
             }
             if cloudIsOnline(state) {
-                connectionBadge("云端", systemImage: "icloud.fill", color: .cyan)
+                connectionBadge("Cloud", systemImage: "icloud.fill", color: .cyan)
             }
         }
     }
@@ -341,7 +341,7 @@ struct AirSIMLiveActivityWidget: Widget {
             switch state.phase {
             case .incoming:
                 HStack(spacing: 8) {
-                    Text("来电")
+                    Text("Incoming Call")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -355,7 +355,7 @@ struct AirSIMLiveActivityWidget: Widget {
                                     .frame(width: IslandActionLayout.buttonSide,
                                            height: IslandActionLayout.buttonSide)
                             }
-                            .accessibilityLabel("拒绝来电")
+                            .accessibilityLabel("Decline Call")
                             .modifier(LiveActivityGlassButtonStyle(
                                 prominent: false,
                                 tint: Color.white.opacity(0.17)
@@ -367,7 +367,7 @@ struct AirSIMLiveActivityWidget: Widget {
                                     .frame(width: IslandActionLayout.buttonSide,
                                            height: IslandActionLayout.buttonSide)
                             }
-                            .accessibilityLabel("拒绝来电")
+                            .accessibilityLabel("Decline Call")
                             .modifier(LiveActivityGlassButtonStyle(
                                 prominent: false,
                                 tint: Color.white.opacity(0.17)
@@ -383,7 +383,7 @@ struct AirSIMLiveActivityWidget: Widget {
                                     .frame(width: IslandActionLayout.buttonSide,
                                            height: IslandActionLayout.buttonSide)
                             }
-                            .accessibilityLabel("接听来电")
+                            .accessibilityLabel("Answer Call")
                             .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .green))
                         } else {
                             Button(intent: AnswerAirSIMCallIntent(callID: state.callID)) {
@@ -392,7 +392,7 @@ struct AirSIMLiveActivityWidget: Widget {
                                     .frame(width: IslandActionLayout.buttonSide,
                                            height: IslandActionLayout.buttonSide)
                             }
-                            .accessibilityLabel("接听来电")
+                            .accessibilityLabel("Answer Call")
                             .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .green))
                         }
                     }
@@ -403,7 +403,7 @@ struct AirSIMLiveActivityWidget: Widget {
                 HStack(spacing: 8) {
                     Image(systemName: state.phase == .held ? "pause.fill" : "waveform")
                         .foregroundStyle(tint(for: state.phase))
-                    Text(state.phase == .held ? "通话保持" : "通话中")
+                    Text(state.phase == .held ? "Call on Hold" : "On Call")
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -416,7 +416,7 @@ struct AirSIMLiveActivityWidget: Widget {
                                 .frame(width: IslandActionLayout.buttonSide,
                                        height: IslandActionLayout.buttonSide)
                         }
-                        .accessibilityLabel("挂断通话")
+                        .accessibilityLabel("End Call")
                         .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .red))
                         .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
                                alignment: .trailing)
@@ -427,7 +427,7 @@ struct AirSIMLiveActivityWidget: Widget {
                                 .frame(width: IslandActionLayout.buttonSide,
                                        height: IslandActionLayout.buttonSide)
                         }
-                        .accessibilityLabel("挂断通话")
+                        .accessibilityLabel("End Call")
                         .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .red))
                         .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
                                alignment: .trailing)
@@ -437,7 +437,7 @@ struct AirSIMLiveActivityWidget: Widget {
                 EmptyView()
             }
         } else if state.phase == .incoming {
-            Text("打开 AirSIM 接听")
+            Text("Open AirSIM to Answer")
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.62))
         }
@@ -453,7 +453,7 @@ struct AirSIMLiveActivityWidget: Widget {
                 .font(.caption2.monospacedDigit())
                 .frame(width: 42)
         case .incoming:
-            Text("来电")
+            Text("Incoming Call")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.green)
         case .standby:
@@ -497,7 +497,7 @@ struct AirSIMLiveActivityWidget: Widget {
             }
         }
         .frame(height: 14)
-        .accessibilityLabel(dbm.map { "信号 \($0) dBm" } ?? "信号未知")
+        .accessibilityLabel(dbm.map { "Signal \($0) dBm" } ?? "Signal Unknown")
     }
 
     private func nonEmpty(_ value: String?) -> String? {
@@ -554,9 +554,9 @@ struct AirSIMLiveActivityWidget: Widget {
         _ state: AirSIMCallActivityAttributes.ContentState
     ) -> String? {
         var values: [String] = []
-        if vowlanIsOnline(state) { values.append("VoWLAN 在线") }
-        if bluetoothIsOnline(state) { values.append("VoBLE 在线") }
-        if cloudIsOnline(state) { values.append("云端在线") }
+        if vowlanIsOnline(state) { values.append("VoWLAN Online") }
+        if bluetoothIsOnline(state) { values.append("VoBLE Online") }
+        if cloudIsOnline(state) { values.append("Cloud Online") }
         return values.isEmpty ? nil : values.joined(separator: " · ")
     }
 
@@ -566,13 +566,13 @@ struct AirSIMLiveActivityWidget: Widget {
         var parts: [String] = []
         if let mode = state.networkMode, !mode.isEmpty { parts.append(mode) }
         if let band = state.radioBand, !band.isEmpty { parts.append(band) }
-        return parts.isEmpty ? "正在读取蜂窝网络" : parts.joined(separator: " · ")
+        return parts.isEmpty ? "Reading Cellular Status" : parts.joined(separator: " · ")
     }
 
     private func standbyCarrierName(
         _ state: AirSIMCallActivityAttributes.ContentState
     ) -> String {
-        nonEmpty(state.operatorName) ?? "蜂窝网络"
+        nonEmpty(state.operatorName) ?? "Cellular Network"
     }
 
     private func idleTitle(
@@ -582,7 +582,7 @@ struct AirSIMLiveActivityWidget: Widget {
         case .standby:
             return nonEmpty(state.agentDeviceName) ?? standbyCarrierName(state)
         case .cloudStandby:
-            return nonEmpty(state.agentDeviceName) ?? "云端在线"
+            return nonEmpty(state.agentDeviceName) ?? "Cloud Online"
         case .incoming, .active, .held, .offline:
             return state.displayName
         }
@@ -652,7 +652,7 @@ struct AirSIMLiveActivityWidget: Widget {
             return "\(state.phase.title) · \(transport.title)"
         case .standby:
             if let status = connectionStatusLine(state) { return status }
-            if let transport = state.transport { return "\(transport.title) 在线" }
+            if let transport = state.transport { return "\(transport.title) Online" }
             return state.phase.title
         case .cloudStandby:
             return connectionStatusLine(state) ?? state.phase.title

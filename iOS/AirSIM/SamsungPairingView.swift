@@ -12,24 +12,24 @@ struct SamsungPairingView: View {
         Form {
             Section {
                 Toggle(isOn: $localPairingOnly) {
-                    Label("本地模式配对", systemImage: "wifi")
+                    Label("Local-Only Pairing", systemImage: "wifi")
                 }
                 .disabled(pairingServiceID != nil)
                 .accessibilityIdentifier("localPairingOnly")
                 Text(localPairingOnly
-                     ? "本次配对只写入 VoWLAN 密钥，不检查或写入 Relay 和推送参数。不会改变全局通话模式。"
-                     : "本次配对写入 VoWLAN 密钥及 Relay／推送配置；需要云端凭据就绪。不会改变全局通话模式。")
+                     ? "This pairing saves only the VoWLAN key, without checking or saving Relay and push settings. Your connection mode stays unchanged."
+                     : "This pairing saves the VoWLAN key and Relay/push configuration. Cloud credentials must be ready. Your connection mode stays unchanged.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            Section("连接步骤") {
-                Label("让安卓与本机连接同一 Wi-Fi", systemImage: "wifi")
-                Label("也可让本机连接安卓移动热点", systemImage: "personalhotspot")
-                Label("在安卓 App 点击“开始一次性配对”", systemImage: "key")
+            Section("Connection Steps") {
+                Label("Connect both devices to the same Wi-Fi", systemImage: "wifi")
+                Label("Or connect this device to the Android hotspot", systemImage: "personalhotspot")
+                Label("Tap Start One-Time Pairing in the Android app", systemImage: "key")
             }
 
-            Section("发现的设备") {
+            Section("Discovered Devices") {
                 if browser.services.isEmpty {
                     HStack {
                         ProgressView()
@@ -40,13 +40,13 @@ struct SamsungPairingView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(service.displayName, systemImage: "iphone.radiowaves.left.and.right")
                             .font(.headline)
-                        TextField("安卓显示的 6 位验证码", text: $code)
+                        TextField("Six-digit code shown on Android", text: $code)
                             .keyboardType(.numberPad)
                             .textContentType(.oneTimeCode)
                             .onChange(of: code) { value in
                                 code = String(value.filter(\.isNumber).prefix(6))
                             }
-                        Button("加密配对", systemImage: "lock.shield") {
+                        Button("Pair Securely", systemImage: "lock.shield") {
                             Task { await pair(service) }
                         }
                         .buttonStyle(.borderedProminent)
@@ -57,10 +57,10 @@ struct SamsungPairingView: View {
             }
 
             if !message.isEmpty {
-                Section("结果") { Text(message) }
+                Section("Result") { Text(message) }
             }
         }
-        .navigationTitle("配对安卓手机")
+        .navigationTitle("Pair Android Phone")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { browser.start() }
         .onDisappear { browser.stop() }
@@ -70,8 +70,8 @@ struct SamsungPairingView: View {
     private func pair(_ service: SamsungPairingService) async {
         pairingServiceID = service.id
         message = localPairingOnly
-            ? "正在加密并写入 VoWLAN 本地密钥…"
-            : "正在加密并写入 Android Agent…"
+            ? "Encrypting and saving the local VoWLAN key…"
+            : "Encrypting and saving to the Android Agent…"
 #if DEBUG
         print("[AirSIM Pair] claim_started session=\(service.sessionID)")
 #endif
@@ -97,7 +97,7 @@ struct SamsungPairingView: View {
             print("[AirSIM Pair] claim_completed session=\(service.sessionID)")
 #endif
         } catch {
-            message = "配对失败：\(error.localizedDescription)"
+            message = "Pairing failed: \(error.localizedDescription)"
 #if DEBUG
             print("[AirSIM Pair] claim_failed session=\(service.sessionID) error=\(String(describing: type(of: error)))")
 #endif

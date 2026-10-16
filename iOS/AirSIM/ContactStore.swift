@@ -167,7 +167,7 @@ final class ContactStore: ObservableObject {
                 authorizationState = state
                 guard granted else {
                     isAuthorized = false
-                    errorMessage = "未获得通讯录访问权限"
+                    errorMessage = "Contacts access has not been granted"
                     return
                 }
             case .load:
@@ -178,7 +178,7 @@ final class ContactStore: ObservableObject {
                 return
             case .blocked:
                 isAuthorized = false
-                errorMessage = "通讯录权限已关闭，请在系统设置中开启"
+                errorMessage = "Contacts access is disabled. Enable it in Settings."
                 return
             }
 
@@ -192,7 +192,7 @@ final class ContactStore: ObservableObject {
                 try ContactFetcher().fetchAll()
             }.value
             guard cache.save(contacts) else {
-                errorMessage = "通讯录已读取，但保存到本机失败"
+                errorMessage = "Contacts loaded, but could not be saved locally"
                 return
             }
             errorMessage = nil
@@ -214,7 +214,7 @@ final class ContactStore: ObservableObject {
     }
 
     func displayName(for number: String?) -> String {
-        guard let number, !number.isEmpty else { return "未知号码" }
+        guard let number, !number.isEmpty else { return "Unknown Number" }
         return contact(for: number)?.name ?? number
     }
 }

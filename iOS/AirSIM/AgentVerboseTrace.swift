@@ -82,14 +82,14 @@ actor AgentVerboseTraceRecorder {
         append(
             context,
             stage: .request,
-            detail: bodyBytes > 0 ? "发起请求 · body \(bodyBytes) B" : "发起请求"
+            detail: bodyBytes > 0 ? "Request started · body \(bodyBytes) B" : "Request started"
         )
         return context
     }
 
     func recordRoute(_ context: AgentVerboseTraceContext, route: String, attempt: Int, error: String? = nil) {
         guard enabled else { return }
-        var detail = "第 \(attempt) 次尝试 · \(route)"
+        var detail = "Attempt \(attempt) · \(route)"
         if let error, !error.isEmpty { detail += " · \(error)" }
         append(context, stage: .route, detail: detail)
     }

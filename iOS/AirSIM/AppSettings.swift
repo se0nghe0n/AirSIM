@@ -59,7 +59,7 @@ final class AppSettings: ObservableObject {
     init() {
         let defaults = UserDefaults.standard
         appearance = AppAppearance(rawValue: defaults.string(forKey: L10n.appearanceKey) ?? "") ?? .system
-        language = AppLanguage(rawValue: defaults.string(forKey: L10n.languageKey) ?? "") ?? .system
+        language = AppLanguage(rawValue: defaults.string(forKey: L10n.languageKey) ?? "") ?? .en
     }
 }
 
@@ -69,7 +69,7 @@ enum L10n {
     static let languageKey = "airsim.language"
 
     static var effectiveLanguage: AppLanguage {
-        let saved = AppLanguage(rawValue: UserDefaults.standard.string(forKey: languageKey) ?? "") ?? .system
+        let saved = AppLanguage(rawValue: UserDefaults.standard.string(forKey: languageKey) ?? "") ?? .en
         if saved != .system { return saved }
         return (Locale.preferredLanguages.first ?? "").lowercased().hasPrefix("zh") ? .zh : .en
     }
@@ -80,6 +80,17 @@ enum L10n {
     }
 
     private static let english: [String: String] = [
+        "完成": "Done",
+        "轻点删除一位，长按连续删除": "Tap to delete one digit; hold to keep deleting",
+        "回拨": "Call Back",
+        "发短信": "Send Message",
+        "删除通话记录": "Delete Call Record",
+        "从通讯录选择": "Choose from Contacts",
+        "收件人：": "To:",
+        "输入号码或姓名": "Enter number or name",
+        "短信将通过 4G 模块发送": "Messages are sent through the 4G module",
+        "选择联系人": "Choose Contact",
+
         "拨号": "Dial", "最近": "Recents", "最近通话": "Recents", "短信": "Messages", "联系人": "Contacts", "通讯录": "Contacts", "设置": "Settings",
         "输入号码": "Enter number", "接听": "Accept", "拒接": "Decline", "挂断": "End", "静音": "Mute",
         "取消静音": "Unmute", "扬声器": "Speaker", "录音": "Record", "停止录音": "Stop Recording", "通话中": "On Call",

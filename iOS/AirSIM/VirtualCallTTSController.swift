@@ -7,7 +7,7 @@ enum VirtualCallTTSError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidPayload: return "虚拟来电没有可播报的内容"
+        case .invalidPayload: return "Virtual call has no speech content"
         }
     }
 }

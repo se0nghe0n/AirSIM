@@ -148,7 +148,7 @@ final class VoBLEAudioEngine: ObservableObject {
             }
         } catch {
             stopEngine()
-            errorMessage = "无法启动蓝牙通话音频：\(error.localizedDescription)"
+            errorMessage = "Unable to start Bluetooth call audio: \(error.localizedDescription)"
 #if DEBUG
             print("[AirSIM VoBLE Audio] start_failed \(error.localizedDescription)")
 #endif

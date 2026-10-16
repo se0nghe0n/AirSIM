@@ -94,11 +94,11 @@ enum VoWLANAvailability: Equatable, Sendable {
 
 enum ConnectionStatusHeadline {
     static func title(summary: ModuleConnectionSummary, vowlanOnline: Bool) -> String {
-        if vowlanOnline { return "VoWLAN 在线" }
+        if vowlanOnline { return "VoWLAN Online" }
         switch summary {
         case .localOnline: return L10n.t("在线")
-        case .localOnlineNoService: return "在线 · 蜂窝无服务"
-        case .cloudOnly: return "云端在线 · USB 重连中"
+        case .localOnlineNoService: return "Online · No Cellular Service"
+        case .cloudOnly: return "Cloud Online · Reconnecting USB"
         case .offline: return L10n.t("离线")
         }
     }
@@ -126,9 +126,9 @@ struct ModuleConnectionPresentation: Equatable {
     ) -> Self {
         if vowlanOnline {
             return Self(
-                title: "VoWLAN 在线",
-                routeTitle: "同一 Wi-Fi / 三星热点",
-                description: "VoWLAN 已连接，状态会自动刷新",
+                title: "VoWLAN Online",
+                routeTitle: "Same Wi-Fi / Android hotspot",
+                description: "VoWLAN connected. Status refreshes automatically.",
                 level: .online,
                 systemImage: "wifi"
             )
@@ -136,27 +136,27 @@ struct ModuleConnectionPresentation: Equatable {
         switch summary {
         case .localOnline:
             return Self(
-                title: "模块在线", routeTitle: "USB ECM 直连",
-                description: message ?? "USB ECM 已连接，状态会自动刷新",
+                title: "Module Online", routeTitle: "Direct USB ECM",
+                description: message ?? "USB ECM connected. Status refreshes automatically.",
                 level: .online, systemImage: "checkmark.circle.fill"
             )
         case .localOnlineNoService:
             return Self(
-                title: "模块在线 · 无服务", routeTitle: "USB ECM 已连接",
-                description: message ?? "USB ECM 已连接，蜂窝网络正在自动恢复",
+                title: "Module Online · No Service", routeTitle: "USB ECM Connected",
+                description: message ?? "USB ECM connected. Cellular network is recovering automatically.",
                 level: .warning, systemImage: "antenna.radiowaves.left.and.right.slash"
             )
         case .cloudOnly:
             return Self(
-                title: "云端在线", routeTitle: "公网 Relay",
-                description: message ?? "USB ECM 本地连接中断，模块仍可通过公网接收来电和短信",
+                title: "Cloud Online", routeTitle: "Internet Relay",
+                description: message ?? "Local USB ECM disconnected. The module can still receive calls and messages over the internet.",
                 level: .cloud, systemImage: "icloud.fill"
             )
         case .offline:
             return Self(
-                title: reconnecting ? "正在重新连接" : "模块离线",
-                routeTitle: reconnecting ? "正在恢复连接" : "连接不可用",
-                description: message ?? "请检查模块供电、蜂窝网络与 USB ECM 连接",
+                title: reconnecting ? "Reconnecting" : "Module Offline",
+                routeTitle: reconnecting ? "Restoring Connection" : "Connection Unavailable",
+                description: message ?? "Check module power, cellular service, and the USB ECM connection",
                 level: reconnecting ? .warning : .offline,
                 systemImage: reconnecting ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle.fill"
             )
@@ -172,14 +172,14 @@ enum PushRegistrationRouteSelector {
 
 enum VoWLANStatusCopy {
     static func text(for availability: VoWLANAvailability, activeCall: Bool = false) -> String {
-        if activeCall { return "通话中（VoWLAN）" }
+        if activeCall { return "On Call (VoWLAN)" }
         switch availability {
-        case .unpaired: return "未配对"
-        case .discovering: return "正在发现"
-        case .discovered: return "已发现，正在验证"
-        case .verified: return "VoWLAN 就绪"
+        case .unpaired: return "Not Paired"
+        case .discovering: return "Discovering"
+        case .discovered: return "Discovered, verifying"
+        case .verified: return "VoWLAN Ready"
         case let .unavailable(reason):
-            return reason.contains("局域网已断开") ? "局域网已断开 · 已回退云端（下一通）" : reason
+            return (reason.contains("局域网已断开") || reason.contains("VoWLAN disconnected")) ? "LAN Disconnected · Cloud for Next Call" : reason
         }
     }
 }
@@ -192,10 +192,10 @@ enum VoWLANControllerError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidAdvertisement: return "VoWLAN 广播内容无效"
-        case .notDiscovered: return "尚未发现三星 VoWLAN"
-        case .notPaired: return "VoWLAN 尚未配对"
-        case .authenticationFailed: return "VoWLAN 鉴权失败"
+        case .invalidAdvertisement: return "Invalid VoWLAN broadcast"
+        case .notDiscovered: return "Android VoWLAN has not been found"
+        case .notPaired: return "VoWLAN is not paired"
+        case .authenticationFailed: return "VoWLAN authentication failed"
         }
     }
 }
@@ -214,7 +214,7 @@ enum VoWLANProbeRecovery {
 
     static func userFacingMessage(for error: Error) -> String {
         if isDefunctConnection(error) {
-            return "VoWLAN 连接已失效，请保持 iPhone 与三星处于同一局域网"
+            return "VoWLAN connection expired. Keep iPhone and Android on the same local network."
         }
         return error.localizedDescription
     }
@@ -348,7 +348,7 @@ final class VoWLANController: ObservableObject {
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "ios", category: "vowlan", phase: "browser_restarted",
-                title: "VoWLAN 浏览器已重建",
+                title: "VoWLAN Browser Restarted",
                 fields: ["generation": String(generation)]
             )
         }
@@ -384,7 +384,7 @@ final class VoWLANController: ObservableObject {
                     self.availability = .discovered(endpoint, at: Date())
                     await AgentVerboseTraceRecorder.shared.recordEvent(
                         source: "ios", category: "vowlan", phase: "discovered",
-                        title: "VoWLAN 已发现",
+                        title: "VoWLAN Discovered",
                         fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort), "pcm_port": String(endpoint.pcmPort)]
                     )
                     await self.probeNow()
@@ -409,7 +409,7 @@ final class VoWLANController: ObservableObject {
                     )
                     await AgentVerboseTraceRecorder.shared.recordEvent(
                         source: "ios", category: "vowlan", phase: "browser_failed",
-                        title: "VoWLAN 浏览器失效", detail: error.localizedDescription,
+                        title: "VoWLAN Browser Failed", detail: error.localizedDescription,
                         fields: ["generation": String(generation)], isFailure: true
                     )
                 }
@@ -518,7 +518,7 @@ final class VoWLANController: ObservableObject {
             availability = .verified(endpoint, at: Date())
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "ios", category: "vowlan", phase: "verified",
-                title: "VoWLAN 签名健康检查通过",
+                title: "VoWLAN Signed Health Check Passed",
                 fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort)]
             )
         } catch {
@@ -526,7 +526,7 @@ final class VoWLANController: ObservableObject {
             availability = .unavailable(VoWLANProbeRecovery.userFacingMessage(for: error))
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "ios", category: "vowlan", phase: "failed",
-                title: "VoWLAN 健康检查失败", detail: error.localizedDescription,
+                title: "VoWLAN Health Check Failed", detail: error.localizedDescription,
                 isFailure: true
             )
         }
@@ -552,7 +552,7 @@ final class VoWLANController: ObservableObject {
         return VoWLANDiscoveredAgent(
             id: record["agent_id"]?.isEmpty == false ? record["agent_id"]! : fallbackID,
             endpoint: endpoint,
-            deviceName: deviceName?.isEmpty == false ? deviceName! : "Android 手机",
+            deviceName: deviceName?.isEmpty == false ? deviceName! : "Android Phone",
             manufacturer: record["manufacturer"],
             model: record["model"],
             phoneNumber: nil,

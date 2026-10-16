@@ -24,8 +24,8 @@ enum LocalAgentRoute: Equatable, Sendable {
 
     var traceDescription: String {
         switch self {
-        case .moduleLocal: return "已停用的旧模块路线"
-        case .vowlan: return "VoWLAN · 同一局域网"
+        case .moduleLocal: return "Disabled Legacy Module Route"
+        case .vowlan: return "VoWLAN · Same Local Network"
         }
     }
 
@@ -77,13 +77,13 @@ struct AirSIMAPI: Sendable {
     init(route: LocalAgentRoute = .moduleLocal) {
         self.route = route
         let baseURL = route.baseURL
-        precondition(Self.isAllowedLocalURL(baseURL), "模块代理地址必须是本地 HTTP 地址")
+        precondition(Self.isAllowedLocalURL(baseURL), "Module Agent URL must be a local HTTP URL")
         self.baseURL = baseURL
         self.transport = WiredHTTPTransport(policy: route == .moduleLocal ? .moduleLocal : .vowlan)
     }
 
     init(baseURL: URL) {
-        precondition(baseURL == LocalAgentRoute.moduleLocal.baseURL, "请通过 LocalAgentRoute 配置动态本地地址")
+        precondition(baseURL == LocalAgentRoute.moduleLocal.baseURL, "Configure dynamic local addresses through LocalAgentRoute")
         self.init(route: .moduleLocal)
     }
 
@@ -333,7 +333,7 @@ struct AirSIMAPI: Sendable {
         do {
             return try decoder.decode(type, from: data)
         } catch {
-            throw APIError.unreadablePayload("模块代理返回的数据无法识别：\(error.localizedDescription)")
+            throw APIError.unreadablePayload("Unrecognized Module Agent response: \(error.localizedDescription)")
         }
     }
 
@@ -353,10 +353,10 @@ enum APIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidResponse: return "模块代理返回了无效响应"
-        case let .http(status, message): return message?.isEmpty == false ? message : "请求失败（HTTP \(status)）"
+        case .invalidResponse: return "Module Agent returned an invalid response"
+        case let .http(status, message): return message?.isEmpty == false ? message : "Request failed (HTTP \(status))"
         case let .unreadablePayload(message): return message
-        case .disabledLegacyRoute: return "AirSIM 不支持旧模块控制路线"
+        case .disabledLegacyRoute: return "AirSIM does not support the legacy module control route"
         }
     }
 }

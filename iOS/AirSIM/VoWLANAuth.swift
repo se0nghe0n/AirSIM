@@ -26,8 +26,8 @@ enum VoWLANAuthError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidSecret: return "VoWLAN 配对密钥无效"
-        case .randomUnavailable: return "无法生成 VoWLAN 安全随机数"
+        case .invalidSecret: return "Invalid VoWLAN pairing key"
+        case .randomUnavailable: return "Unable to generate secure random data for VoWLAN"
         }
     }
 }
