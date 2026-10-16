@@ -140,6 +140,78 @@ final class AirSIMTests: XCTestCase {
         XCTAssertEqual(discarded, ["late-call"])
     }
 
+    func testCloudPCMResamplerRejectsAliasedHighFrequencyNoise() {
+        for rate in [44_100.0, 48_000.0] {
+            let speech = cloudPCMTone(frequency: 1_000, sampleRate: rate)
+            XCTAssertGreaterThan(cloudPCMRMS(speech), 0.30, "Keep speech energy at \(rate) Hz")
+            for frequency in [5_500.0, 7_000.0, 10_000.0] {
+                let noise = cloudPCMTone(frequency: frequency, sampleRate: rate)
+                XCTAssertLessThan(cloudPCMRMS(noise), cloudPCMRMS(speech) * 0.01,
+                                  "Suppress out-of-band noise before downsampling: \(frequency) Hz")
+            }
+        }
+    }
+
+    func testCloudPCMResamplerKeepsFilterContinuousBetweenMicrophoneBuffers() {
+        let rate = 48_000.0
+        let input = (0..<24_000).map { index in
+            Float(0.5 * sin(2 * Double.pi * 1_300 * Double(index) / rate))
+        }
+        var whole = CloudPCMResampler()
+        let expected = whole.encode(samples: input, sampleRate: rate, muted: false)
+        var chunked = CloudPCMResampler()
+        var actual = Data()
+        for offset in stride(from: 0, to: input.count, by: 480) {
+            actual.append(chunked.encode(samples: Array(input[offset..<min(offset + 480, input.count)]),
+                                         sampleRate: rate, muted: false))
+        }
+        XCTAssertEqual(actual, expected, "Callback boundaries must not reset the filter or click")
+        XCTAssertGreaterThan(actual.count, 7_600, "Conversion must keep pace with captured speech")
+    }
+
+    func testCloudPCMResamplerMutesAndClearsFilterWhenInputRouteChanges() {
+        var resampler = CloudPCMResampler()
+        let tone = (0..<4_800).map { index in
+            Float(0.5 * sin(2 * Double.pi * 1_000 * Double(index) / 48_000))
+        }
+        _ = resampler.encode(samples: tone, sampleRate: 48_000, muted: false)
+        let muted = resampler.encode(samples: tone, sampleRate: 48_000, muted: true)
+        XCTAssertFalse(muted.isEmpty)
+        XCTAssertTrue(muted.allSatisfy { $0 == 0 }, "Mute must silence even filter history")
+        let changedRoute = resampler.encode(samples: [Float](repeating: 0, count: 4_410),
+                                            sampleRate: 44_100, muted: false)
+        XCTAssertFalse(changedRoute.isEmpty)
+        XCTAssertTrue(changedRoute.allSatisfy { $0 == 0 }, "No old-route audio may leak after a rate change")
+    }
+
+    private func cloudPCMTone(frequency: Double, sampleRate: Double) -> Data {
+        var resampler = CloudPCMResampler()
+        var result = Data()
+        let count = Int(sampleRate)
+        let frameSize = Int(sampleRate / 50)
+        for offset in stride(from: 0, to: count, by: frameSize) {
+            let input = (offset..<min(offset + frameSize, count)).map { index in
+                Float(0.5 * sin(2 * Double.pi * frequency * Double(index) / sampleRate))
+            }
+            result.append(resampler.encode(samples: input, sampleRate: sampleRate, muted: false))
+        }
+        return result
+    }
+
+    private func cloudPCMRMS(_ pcm: Data) -> Double {
+        let bytes = [UInt8](pcm)
+        // Ignore startup and the final filter tail; measure steady-state PCM.
+        let lower = min(800, bytes.count / 2), upper = bytes.count / 2 - 400
+        guard upper > lower else { return .infinity }
+        var sum = 0.0
+        for index in lower..<upper {
+            let bits = UInt16(bytes[index * 2]) | UInt16(bytes[index * 2 + 1]) << 8
+            let value = Double(Int16(bitPattern: bits)) / 32_768
+            sum += value * value
+        }
+        return sqrt(sum / Double(upper - lower))
+    }
+
     func testCloudDownlinkActualBacklogFallsAfterBurstRecovers() {
         var buffer = CloudPCMAdaptiveJitterBuffer()
         let start = Date(timeIntervalSince1970: 0)

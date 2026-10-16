@@ -1697,6 +1697,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 }
                 self.uplinkSender.complete()
                 self.onUplinkFrame?(frame.count, Self.peak(of: frame), self.connectionID)
+                // A completion just after the 20 ms tick must not leave queued speech
+                // waiting for another full tick. The queue still enforces pacing and one send in flight.
+                self.pumpUplink()
             }
         }
     }
@@ -1774,38 +1777,57 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
 }
 
 struct CloudPCMResampler {
-    private var samples: [Float] = []
-    private var position = 0.0
+    private var converter: AVAudioConverter?
     private var sampleRate = 0.0
 
     mutating func encode(samples input: [Float], sampleRate rate: Double, muted: Bool) -> Data {
-        guard !input.isEmpty, rate >= 8_000 else { return Data() }
-        if sampleRate != rate {
+        guard !input.isEmpty, rate.isFinite, rate >= 8_000 else { return Data() }
+        if sampleRate != rate || converter == nil {
+            guard let source = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1),
+                  let destination = AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1),
+                  let converter = AVAudioConverter(from: source, to: destination) else {
+                return Data()
+            }
+            // Keep the anti-alias filter state across microphone callbacks. Selecting
+            // every sixth 48 kHz sample folds high-frequency noise into audible speech.
+            converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
+            converter.primeMethod = .normal
+            self.converter = converter
             sampleRate = rate
-            samples.removeAll(keepingCapacity: true)
-            position = 0
         }
-        samples.append(contentsOf: input)
-        let step = rate / 8_000
+        guard let converter,
+              let source = AVAudioPCMBuffer(pcmFormat: converter.inputFormat,
+                                            frameCapacity: AVAudioFrameCount(input.count)),
+              let sourceSamples = source.floatChannelData?[0] else { return Data() }
+        source.frameLength = source.frameCapacity
+        input.withUnsafeBufferPointer { buffer in
+            if let base = buffer.baseAddress { sourceSamples.update(from: base, count: input.count) }
+        }
+
+        let capacity = AVAudioFrameCount(ceil(Double(input.count) * 8_000 / rate)) + 256
+        guard let destination = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
+                                                 frameCapacity: capacity) else { return Data() }
+        var suppliedInput = false
+        var error: NSError?
+        let status = converter.convert(to: destination, error: &error) { _, inputStatus in
+            guard !suppliedInput else {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return source
+        }
+        guard status != .error, error == nil,
+              let converted = destination.floatChannelData?[0] else { return Data() }
+
         var output = Data()
-        output.reserveCapacity(input.count / max(1, Int(step)) * 2 + 4)
-        while position + 1 < Double(samples.count) {
-            let index = Int(position)
-            let fraction = Float(position - Double(index))
-            let value = samples[index] + (samples[index + 1] - samples[index]) * fraction
-            let scaled = muted ? Int16(0) : Int16(max(-1, min(1, value)) * 32_767)
+        output.reserveCapacity(Int(destination.frameLength) * 2)
+        for index in 0..<Int(destination.frameLength) {
+            let value = converted[index]
+            let scaled = muted || !value.isFinite ? Int16(0) : Int16(max(-1, min(1, value)) * 32_767)
             var littleEndian = scaled.littleEndian
             withUnsafeBytes(of: &littleEndian) { output.append(contentsOf: $0) }
-            position += step
-        }
-        let consumed = max(0, min(Int(position), samples.count - 1))
-        if consumed > 0 {
-            samples.removeFirst(consumed)
-            position -= Double(consumed)
-        }
-        if samples.count > Int(rate) {
-            samples = Array(samples.suffix(max(2, Int(rate / 10))))
-            position = 0
         }
         return output
     }
