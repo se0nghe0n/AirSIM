@@ -651,7 +651,7 @@ test("call control alarm backs off and expires an unconfirmed command without an
 
   const expired = await storage.get(key);
   assert.equal(expired.status, "expired");
-  assert.match(expired.error, /过期/);
+  assert.match(expired.error, /expired/);
   assert.equal(await storage.getAlarm(), null);
 });
 
@@ -749,7 +749,10 @@ test("dashboard is public as a shell but protects and sanitizes operational data
   const page = await worker.fetch(new Request("https://push.airsim.example/dashboard"), env);
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
-  assert.match(await page.text(), /通信中继/);
+  const html = await page.text();
+  assert.match(html, /Voice Relay/);
+  assert.match(html, /<html lang="en">/);
+  assert.doesNotMatch(html, /[\u3400-\u9fff]/);
 
   const denied = await worker.fetch(new Request("https://push.airsim.example/dashboard/api/summary"), env);
   assert.equal(denied.status, 401);
@@ -1430,8 +1433,8 @@ test("incoming SMS without an originating address still reaches iPhone", async (
     }), env);
     assert.equal(response.status, 202);
     assert.equal(captured.length, 1);
-    assert.equal(captured[0].sender, "未知号码");
-    assert.equal(captured[0].aps.alert.title, "未知号码");
+    assert.equal(captured[0].sender, "Unknown number");
+    assert.equal(captured[0].aps.alert.title, "Unknown number");
     assert.equal(captured[0].content, "运营商提醒");
   } finally {
     globalThis.fetch = originalFetch;
@@ -1478,7 +1481,7 @@ test("Agent call-state end returns the current Live Activity to cloud standby", 
   assert.equal(captured.length, 1);
   assert.equal(captured[0].payload.aps.event, "update");
   assert.equal(captured[0].payload.aps["content-state"].phase, "cloud_standby");
-  assert.equal(captured[0].payload.aps["content-state"].displayName, "公网中继已连接");
+  assert.equal(captured[0].payload.aps["content-state"].displayName, "Internet relay connected");
 });
 
 test("call lifecycle reducer rejects stale and terminal resurrection events", () => {

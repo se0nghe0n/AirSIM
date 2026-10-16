@@ -69,7 +69,7 @@ export async function handleRequest(request, env) {
       return await dashboardVirtualCall(request, env, sendAPNs);
     } catch (error) {
       console.error("dashboard virtual call failed", safeError(error));
-      return jsonResponse(500, { error: "Relay 暂时不可用，请稍后重试" });
+      return jsonResponse(500, { error: "Relay temporarily unavailable. Please try again later." });
     }
   }
   if (request.method === "GET" && url.pathname === "/healthz") {
@@ -501,7 +501,7 @@ export class DeviceCommandSession {
         if (!["pending", "delivered"].includes(record?.status)) continue;
         if (!Number.isFinite(record.expires_at_ms) || record.expires_at_ms <= now) {
           record.status = "expired";
-          record.error = "云端命令已过期";
+          record.error = "Cloud command expired";
           record.completed_at_ms = now;
           record.completed_at = new Date(now).toISOString();
           await this.storage.put(key, record);
@@ -587,7 +587,7 @@ export class DeviceCommandSession {
       if (Number.isFinite(record?.expires_at_ms) && record.expires_at_ms <= now) {
         if (!["completed", "failed", "expired"].includes(record.status)) {
           record.status = "expired";
-          record.error = "云端命令已过期";
+          record.error = "Cloud command expired";
           record.completed_at_ms = now;
           record.completed_at = new Date(now).toISOString();
           await this.storage.put(key, record);
@@ -616,7 +616,7 @@ export class DeviceCommandSession {
       if (!["pending", "delivered"].includes(record?.status)) continue;
       if (!Number.isFinite(record.expires_at_ms) || record.expires_at_ms <= now) {
         record.status = "expired";
-        record.error = "云端命令已过期";
+        record.error = "Cloud command expired";
         record.completed_at_ms = now;
         record.completed_at = new Date(now).toISOString();
         await this.storage.put(key, record);
@@ -1162,10 +1162,10 @@ async function receiveCall(request, env) {
     }
 
     if (!alertDuplicate) {
-      const displayName = stringValue(call.caller_name) || stringValue(call.number) || "未知号码";
+      const displayName = stringValue(call.caller_name) || stringValue(call.number) || "Unknown number";
       const alertBody = stringValue(call.caller_name) && stringValue(call.number)
         ? stringValue(call.number)
-        : "AirSIM 语音来电";
+        : "AirSIM incoming call";
       const alertPayload = {
         aps: {
           alert: { title: displayName, body: alertBody },
@@ -1206,7 +1206,7 @@ async function receiveCall(request, env) {
             event: isUpdate ? "update" : "start",
             callID: call.call_id,
             number: stringValue(call.number),
-            displayName: stringValue(call.caller_name) || stringValue(call.number) || "未知号码",
+            displayName: stringValue(call.caller_name) || stringValue(call.number) || "Unknown number",
             phase: "incoming",
             startedAt: call.issued_at,
           }),
@@ -1262,7 +1262,7 @@ async function receiveSMS(request, env) {
       timestamp > now + 300_000) {
     return jsonResponse(400, { error: "invalid incoming SMS" });
   }
-  const sender = nonEmpty(message.sender) ? message.sender.trim() : "未知号码";
+  const sender = nonEmpty(message.sender) ? message.sender.trim() : "Unknown number";
   // Android's carrier timestamp can be old when the inbox provider restores a message,
   // or when an offline Agent flushes its durable queue after a long Relay outage.
   // Preserve the delivery ID for deduplication, but show the arrival time on iPhone.
@@ -1442,7 +1442,7 @@ async function receiveCallOwner(request, env) {
           event: "update",
           callID: event.phase === "ended" ? "" : event.call_id,
           number: "",
-          displayName: event.phase === "ended" ? "公网中继已连接" : "通话中",
+          displayName: event.phase === "ended" ? "Internet relay connected" : "In call",
           phase: event.phase === "ended" ? "cloud_standby" : "active",
           startedAt: new Date().toISOString(),
         }),
@@ -1509,7 +1509,7 @@ async function receiveCallState(request, env) {
         event: "update",
         callID: ["ended", "failed"].includes(event.phase) ? "" : event.call_id,
         number: "",
-        displayName: ["ended", "failed"].includes(event.phase) ? "公网中继已连接" : "通话中",
+        displayName: ["ended", "failed"].includes(event.phase) ? "Internet relay connected" : "In call",
         phase: activityPhase,
         startedAt: timestamp,
       }),
@@ -1641,7 +1641,7 @@ function liveActivityPayload({ event, callID, number, displayName, phase, starte
     aps["input-push-token"] = 1;
     aps["attributes-type"] = "AirSIMCallActivityAttributes";
     aps.attributes = { moduleName: "AirSIM" };
-    aps.alert = { title: displayName, body: "模块语音来电", sound: "default" };
+    aps.alert = { title: displayName, body: "Incoming call from module", sound: "default" };
   }
   return { aps };
 }
