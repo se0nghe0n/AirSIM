@@ -386,9 +386,12 @@ struct CloudPCMBufferedFrame {
     let pcm: Data
 }
 
-/// Raw AirSIM PCM has no wire sequence, so callers assign monotonic arrival
-/// numbers. The reserve absorbs relay bursts without ever growing unbounded.
+/// Arrival ordinals preserve ordered PCM across temporary transport stalls.
+/// Reserve grows quickly for an observed stall; the separate hard cap bounds
+/// local backlog to 1.8 s (plus at most 40 ms already scheduled for rendering).
 struct CloudPCMAdaptiveJitterBuffer {
+    static let maximumTargetFrames = 60
+    static let maximumBufferedFrames = 90
     private var frames: [UInt32: CloudPCMBufferedFrame] = [:]
     private var expectedSequence: UInt32?
     private var lastArrivalAt: Date?
@@ -401,38 +404,63 @@ struct CloudPCMAdaptiveJitterBuffer {
     private(set) var droppedFrameCount: UInt64 = 0
     private(set) var underrunCount: UInt64 = 0
     private(set) var concealedFrameCount: UInt64 = 0
+    private(set) var overflowDropCount: UInt64 = 0
+    private(set) var lateDropCount: UInt64 = 0
+    private(set) var duplicateDropCount: UInt64 = 0
+    private(set) var missingSequenceCount: UInt64 = 0
+    private(set) var rebufferCount: UInt64 = 0
+    private(set) var maximumBufferedFrameCount = 0
     var bufferedFrameCount: Int { frames.count }
+
+    private var oldestSequence: UInt32? {
+        frames.keys.min { Int32(bitPattern: $0 &- $1) < 0 }
+    }
 
     mutating func enqueue(sequence: UInt32, pcm: Data, arrivedAt: Date) {
         guard pcm.count == 320 else { return }
         if let expectedSequence, Int32(bitPattern: sequence &- expectedSequence) < 0 {
             droppedFrameCount &+= 1
+            lateDropCount &+= 1
             return
         }
-        guard frames[sequence] == nil else { droppedFrameCount &+= 1; return }
+        guard frames[sequence] == nil else {
+            droppedFrameCount &+= 1
+            duplicateDropCount &+= 1
+            return
+        }
         if let previous = lastArrivalAt {
             let delta = arrivedAt.timeIntervalSince(previous)
             if delta >= 0 {
                 estimatedJitter += (abs(delta - 0.02) - estimatedJitter) / 16
-                targetFrameCount = max(targetFrameCount, min(10, 4 + Int(estimatedJitter / 0.02)))
+                targetFrameCount = max(targetFrameCount,
+                    min(Self.maximumTargetFrames, 4 + Int(estimatedJitter / 0.02)))
+                if delta >= 0.08 {
+                    // EWMA alone divides a one-second stall by 16 and misses its
+                    // burst. Keep that burst, and reserve enough for its recurrence.
+                    let stallFrames = Int(ceil(min(delta, 1.2) / 0.02)) + 2
+                    targetFrameCount = max(targetFrameCount, min(Self.maximumTargetFrames, stallFrames))
+                }
                 stableFrames = (0.015...0.025).contains(delta) ? stableFrames + 1 : 0
                 if stableFrames >= 100 {
                     targetFrameCount = max(4, targetFrameCount - 1)
                     stableFrames = 0
-                    trim(to: targetFrameCount + 2)
+                    // Lower only the next rebuffer threshold. Discarding queued
+                    // speech here turns a recovered connection into audible gaps.
                 }
             }
         }
         lastArrivalAt = arrivedAt
         frames[sequence] = CloudPCMBufferedFrame(sequence: sequence, pcm: pcm)
-        trim(to: 12)
+        trim(to: Self.maximumBufferedFrames)
+        maximumBufferedFrameCount = max(maximumBufferedFrameCount, frames.count)
         if !isPrimed, frames.count >= targetFrameCount { isPrimed = true }
     }
 
     private mutating func trim(to maximum: Int) {
-        while frames.count > maximum, let oldest = frames.keys.min() {
+        while frames.count > maximum, let oldest = oldestSequence {
             frames.removeValue(forKey: oldest)
             droppedFrameCount &+= 1
+            overflowDropCount &+= 1
             if let expectedSequence, Int32(bitPattern: oldest &- expectedSequence) >= 0 {
                 self.expectedSequence = oldest &+ 1
             }
@@ -441,7 +469,7 @@ struct CloudPCMAdaptiveJitterBuffer {
 
     mutating func dequeue(maxFrames: Int, concealIfEmpty: Bool = true) -> [CloudPCMBufferedFrame] {
         guard isPrimed, maxFrames > 0 else { return [] }
-        if expectedSequence == nil { expectedSequence = frames.keys.min() }
+        if expectedSequence == nil { expectedSequence = oldestSequence }
         var ready: [CloudPCMBufferedFrame] = []
         while ready.count < maxFrames, !frames.isEmpty {
             guard let expected = expectedSequence else { break }
@@ -458,8 +486,10 @@ struct CloudPCMAdaptiveJitterBuffer {
                 lastGoodPCM = pcm
                 ready.append(CloudPCMBufferedFrame(sequence: frame.sequence, pcm: pcm))
                 expectedSequence = expected &+ 1
-            } else if let next = frames.keys.min(), next > expected {
-                droppedFrameCount &+= UInt64(next - expected)
+            } else if let next = oldestSequence, Int32(bitPattern: next &- expected) > 0 {
+                let skipped = UInt64(next &- expected)
+                droppedFrameCount &+= skipped
+                missingSequenceCount &+= skipped
                 expectedSequence = next
             } else { break }
         }
@@ -484,7 +514,8 @@ struct CloudPCMAdaptiveJitterBuffer {
     }
 
     mutating func notePlaybackUnderrun() {
-        targetFrameCount = min(10, targetFrameCount + 1)
+        if isPrimed { rebufferCount &+= 1 }
+        targetFrameCount = min(Self.maximumTargetFrames, targetFrameCount + 1)
         stableFrames = 0
         isPrimed = false
     }
@@ -1889,6 +1920,12 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "rx_queue": String(playout.jitter.bufferedFrameCount),
                 "rx_target_ms": String(playout.jitter.targetFrameCount * 20),
                 "rx_drop": String(playout.jitter.droppedFrameCount),
+                "rx_overflow_drop": String(playout.jitter.overflowDropCount),
+                "rx_late_drop": String(playout.jitter.lateDropCount),
+                "rx_duplicate_drop": String(playout.jitter.duplicateDropCount),
+                "rx_sequence_skip": String(playout.jitter.missingSequenceCount),
+                "rx_rebuffers": String(playout.jitter.rebufferCount),
+                "rx_max_buffered": String(playout.jitter.maximumBufferedFrameCount),
                 "underruns": String(playout.jitter.underrunCount),
                 "concealed": String(playout.jitter.concealedFrameCount),
                 "rx_received": String(receivedDownlinkPackets),
