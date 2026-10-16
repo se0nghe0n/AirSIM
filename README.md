@@ -23,6 +23,15 @@ AirSIM is a source-available, noncommercial cross-device calling and messaging p
 
 **Tags / Topics:** `Samsung Android` · `iPhone` · `Apple Watch` · `CallKit` · `PushKit` · `VoWLAN` · `Android AVF` · `Cloudflare Workers` · `APNs` · `SwiftUI` · `Go`
 
+## About this fork
+
+This fork at [se0nghe0n/AirSIM](https://github.com/se0nghe0n/AirSIM) includes the rooted Q25 setup, complete English app UI and basic guides, and cloud-call reliability fixes. The original project and its attribution are retained below.
+
+- English is the default app language. The existing language preference and Chinese option remain available; caller names, SMS content, and operating-system messages keep their original language.
+- The Q25 Android package is `com.airsim.phonecontrol.q25`. Apple signing and Relay settings in this branch are configured for the fork owner; use your own identities and credentials for a separate installation. A `workers.dev` Relay endpoint can be used without a custom domain.
+- The iPhone receive buffer now adapts to observed delivery stalls and preserves queued speech during recovery. Automated replay and unit tests passed, but the latest buffer change has not been verified in a new live call. It can add playback delay on an unstable connection.
+- Release links below point to upstream binaries. They do not include this fork's additional changes; build this branch to use them.
+
 ## Buy Me A Coffee
 <img width="300" alt="05d04c887d99c9df849f81b1cff672dd" src="https://github.com/user-attachments/assets/91620ed1-727e-4a81-9d99-d20d6d55bb58" />
 
@@ -61,7 +70,7 @@ Android AirSIM Standalone APK
 
 The legacy AVF architecture remains available for compatibility and fallback, but is no longer recommended for new installations.
 
-The upstream maintainer uses `https://airsim-push.remotepilot.site`, allowing only `com.eric3u.airsim`. DJOneHub continues to use `https://push.remotepilot.site`. The domains have separate Workers, KV, Durable Objects, and Dashboard tokens; do not reuse them across services. Other signing identities require their own domains, Cloudflare resources, and APNs credentials.
+The upstream maintainer uses `https://airsim-push.remotepilot.site`, allowing only `com.eric3u.airsim`. DJOneHub continues to use `https://push.remotepilot.site`. The domains have separate Workers, KV, Durable Objects, and Dashboard tokens; do not reuse them across services. Other signing identities require their own Relay endpoints, Cloudflare resources, and APNs credentials.
 
 Each call selects VoWLAN or Relay when established and keeps that transport until the call ends, preventing media and control from switching paths mid-call.
 

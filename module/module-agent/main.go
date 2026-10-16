@@ -217,7 +217,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		return false, nil
 	}
 	if len(os.Args) != 3 {
-		return true, errors.New("用法: --startup-probe runtime|routes|listen|voice-backend|at-open|esim-read")
+		return true, errors.New("Usage: --startup-probe runtime|routes|listen|voice-backend|at-open|esim-read")
 	}
 
 	fmt.Println("启动探针标记: stage-entry")
