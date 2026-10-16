@@ -21,6 +21,8 @@ import {
 } from "./status-store.mjs";
 export { AgentStatusRegistry } from "./status-store.mjs";
 
+import { inspectPCMTrace, stampPCMTrace, PCMRelayTrace } from "./pcm-trace.mjs";
+
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_APNS_PAYLOAD_BYTES = 4096;
 const TOKEN_PATTERN = /^[0-9a-f]{16,512}$/i;
@@ -757,6 +759,7 @@ export class CallMediaSession {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    this.pcmTrace = new PCMRelayTrace();
   }
 
   async fetch(request) {
@@ -794,6 +797,8 @@ export class CallMediaSession {
   }
 
   webSocketMessage(socket, message) {
+    const receivedAt = Date.now();
+    const ingressMono = performance.now();
     const attachment = socket.deserializeAttachment() || {};
     const role = attachment.role;
     if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
@@ -808,6 +813,12 @@ export class CallMediaSession {
       return;
     }
     if (role !== "agent" && !this.acceptClientMessage(socket, role, message)) return;
+    const trace = typeof message === "string" ? null : inspectPCMTrace(message);
+    const stream = trace ? this.pcmTrace.receive(socket, role, trace, ingressMono) : null;
+    if (trace?.kind === "invalid_v2") {
+      this.pcmTrace.flush(stream, performance.now());
+      return;
+    }
     const outbound = role === "agent" ? message : bindMediaOwner(message, role);
     const control = role === "agent" ? null : callControlMetadata(outbound);
     if (control) this.logControl("received", role, control);
@@ -820,8 +831,14 @@ export class CallMediaSession {
       return;
     }
     for (const peer of peers) {
-      try { peer.send(outbound); } catch {}
+      try {
+        peer.send(trace?.kind === "v2" ? stampPCMTrace(trace, receivedAt, Date.now()) : outbound);
+        if (stream) this.pcmTrace.forwarded(stream, performance.now());
+      } catch {
+        if (stream) this.pcmTrace.sendFailed(stream, performance.now());
+      }
     }
+    if (stream) this.pcmTrace.flush(stream, performance.now());
     if (role !== "agent" && peers.length > 0 && this.isControlMessage(outbound)) {
       const current = socket.deserializeAttachment() || {};
       socket.serializeAttachment({ ...current, role, pendingControl: "" });
