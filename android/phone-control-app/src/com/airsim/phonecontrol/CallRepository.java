@@ -94,6 +94,9 @@ public final class CallRepository {
         }
         Call call = CALLS.get(command.callId);
         if (call == null) return ActionResult.failure("active call id mismatch");
+        if ("answer".equals(command.action) && call.getState() == Call.STATE_ACTIVE) {
+            return ActionResult.success();
+        }
         CountDownLatch invoked = new CountDownLatch(1);
 		AtomicReference<Throwable> invocationError = new AtomicReference<>();
         new Handler(Looper.getMainLooper()).post(() -> {

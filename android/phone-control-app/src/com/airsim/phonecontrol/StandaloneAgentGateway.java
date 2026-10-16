@@ -196,6 +196,13 @@ final class StandaloneAgentGateway {
         } else {
             output.put("error", result.error());
         }
+        // An outgoing call may still be dialing when the media owner first joins.
+        // Replays must re-check Telecom after the remote party answers, rather than
+        // permanently reusing a failure observed while it was still ringing.
+        if (!CloudAnswerReplayPolicy.isFinal(action, result.success(), result.error())) {
+            BridgeLog.info("cloud_answer_waiting_for_telecom retryable=true");
+            return output;
+        }
         return rememberCommand(commandKey, output);
     }
 

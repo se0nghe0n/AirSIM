@@ -7,7 +7,33 @@ public final class CallRepositoryTests {
         answerNeverTargetsAnActiveCallWithoutRinging();
         cloudRejectTargetsOnlyItsAuthenticatedCall();
         localRejectUsesPublishedCallIdentity();
+        answeredCallCanConfirmMediaWithoutAnsweringAgain();
+        pendingAnswerDoesNotPoisonCompletedReplay();
         System.out.println("call repository tests passed");
+    }
+
+    private static void answeredCallCanConfirmMediaWithoutAnsweringAgain() {
+        Call active = new Call(Call.STATE_ACTIVE) {
+            @Override public void answer(int videoState) {
+                throw new AssertionError("Do not answer an already active call again");
+            }
+        };
+        String id = CallRepository.add(active);
+        try {
+            assertTrue(CallRepository.execute(null,
+                    new AgentCommand("media-join", "answer", id, "")).success);
+            assertTrue(!CallRepository.execute(null,
+                    new AgentCommand("stale-join", "answer", "missing", "")).success);
+        } finally { CallRepository.remove(active); }
+    }
+
+    private static void pendingAnswerDoesNotPoisonCompletedReplay() {
+        String timeout = "Telecom state confirmation timeout";
+        assertTrue(!CloudAnswerReplayPolicy.isFinal("answer", false, timeout));
+        assertTrue(CloudAnswerReplayPolicy.isFinal("answer", true, ""));
+        assertTrue(CloudAnswerReplayPolicy.isFinal("answer", false, "active call id mismatch"));
+        assertTrue(CloudAnswerReplayPolicy.isFinal("end", false, timeout));
+        assertTrue(CloudAnswerReplayPolicy.isFinal("send_sms", false, timeout));
     }
 
     private static void answerNeverTargetsAnActiveCallWithoutRinging() {
