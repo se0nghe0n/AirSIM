@@ -41,7 +41,7 @@ enum AppLanguage: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .system: return L10n.t("跟随系统")
-        case .zh: return "简体中文"
+        case .zh: return L10n.t("简体中文")
         case .en: return "English"
         }
     }
@@ -80,6 +80,7 @@ enum L10n {
     }
 
     private static let english: [String: String] = [
+        "简体中文": "Simplified Chinese",
         "完成": "Done",
         "轻点删除一位，长按连续删除": "Tap to delete one digit; hold to keep deleting",
         "回拨": "Call Back",

@@ -52,16 +52,16 @@ struct WatchCallView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color.black)
-        .alert("连接状态", isPresented: $showConnectionStatus) {
-            Button("好", role: .cancel) {}
+        .alert("Connection Status", isPresented: $showConnectionStatus) {
+            Button("OK", role: .cancel) {}
         } message: {
-            Text("\(session.pushStatus)\n\(session.microphoneStatus)\n拨号需要配对 iPhone 可达，且 VoWLAN 或云端可用。通话音频在手表收发；连接蓝牙设备时，输出由 watchOS 选择。")
+            Text("\(session.pushStatus)\n\(session.microphoneStatus)\nCalling requires a reachable paired iPhone and an available VoWLAN or cloud connection. Call audio uses the watch microphone and speaker. When a Bluetooth device is connected, watchOS chooses the output.")
         }
-        .alert("拨号失败", isPresented: Binding(
+        .alert("Call Failed", isPresented: Binding(
             get: { session.errorMessage != nil },
             set: { if !$0 { session.errorMessage = nil } }
         )) {
-            Button("好", role: .cancel) { session.errorMessage = nil }
+            Button("OK", role: .cancel) { session.errorMessage = nil }
         } message: {
             Text(session.errorMessage ?? "")
         }
@@ -77,9 +77,9 @@ struct WatchCallView: View {
             }
             .buttonStyle(.plain)
             .disabled(session.isDialing)
-            .accessibilityLabel("输入加号")
+            .accessibilityLabel("Enter plus sign")
 
-            Text(dialNumber.isEmpty ? "输入号码" : dialNumber)
+            Text(dialNumber.isEmpty ? "Enter number" : dialNumber)
                 .font(.system(size: 23, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(dialNumber.isEmpty ? .secondary : .primary)
@@ -87,7 +87,7 @@ struct WatchCallView: View {
                 .truncationMode(.head)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .accessibilityLabel(dialNumber.isEmpty ? "尚未输入电话号码" : "电话号码，\(dialNumber)")
+                .accessibilityLabel(dialNumber.isEmpty ? "No phone number entered" : "Phone number, \(dialNumber)")
 
             Button { showConnectionStatus = true } label: {
                 Image(systemName: "info.circle")
@@ -96,7 +96,7 @@ struct WatchCallView: View {
                     .frame(width: 36, height: 36)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("查看连接状态")
+            .accessibilityLabel("View connection status")
         }
     }
 
@@ -114,7 +114,7 @@ struct WatchCallView: View {
         }
         .buttonStyle(.plain)
         .disabled(session.isDialing)
-        .accessibilityLabel("数字 \(digit)")
+        .accessibilityLabel("Digit \(digit)")
     }
 
     private func deleteButton(width: CGFloat, height: CGFloat) -> some View {
@@ -128,7 +128,7 @@ struct WatchCallView: View {
         }
         .buttonStyle(.plain)
         .disabled(session.isDialing || dialNumber.isEmpty)
-        .accessibilityLabel("删除最后一位")
+        .accessibilityLabel("Delete last digit")
     }
 
     private func callButton(width: CGFloat, height: CGFloat) -> some View {
@@ -143,7 +143,7 @@ struct WatchCallView: View {
         }
         .buttonStyle(.plain)
         .disabled(!session.isDialing && dialNumber.isEmpty)
-        .accessibilityLabel(session.isDialing ? "取消拨号" : "拨号")
+        .accessibilityLabel(session.isDialing ? "Cancel call" : "Call")
     }
 
     private var currentCall: some View {
@@ -169,7 +169,7 @@ struct WatchCallView: View {
                     .foregroundStyle(.orange)
                     .multilineTextAlignment(.center)
             } else if session.call.phase == .active {
-                Text("Apple Watch 网络语音已连接")
+                Text("Apple Watch voice connected")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -182,16 +182,16 @@ struct WatchCallView: View {
         switch session.call.phase {
         case .incoming:
             HStack(spacing: 18) {
-                actionButton("phone.down.fill", color: .red, action: session.reject)
-                actionButton("phone.fill", color: .green, action: session.answer)
+                actionButton("phone.down.fill", label: "Decline", color: .red, action: session.reject)
+                actionButton("phone.fill", label: "Answer", color: .green, action: session.answer)
             }
         case .active, .connecting:
-            actionButton("phone.down.fill", color: .red, action: session.end)
+            actionButton("phone.down.fill", label: "End Call", color: .red, action: session.end)
         case .ended, .idle: EmptyView()
         }
     }
 
-    private func actionButton(_ symbol: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func actionButton(_ symbol: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.title3.weight(.semibold))
@@ -199,6 +199,7 @@ struct WatchCallView: View {
         }
         .buttonStyle(.borderedProminent)
         .tint(color)
+        .accessibilityLabel(label)
         .disabled(session.isSendingAction)
     }
 }

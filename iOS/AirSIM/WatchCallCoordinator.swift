@@ -224,16 +224,16 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     ) async {
         guard let requestID = (message["request_id"] as? String).flatMap(UUID.init(uuidString:)),
               let number = (message["number"] as? String).flatMap(WatchDialNumber.validated) else {
-            replyHandler(["ok": false, "error": "请输入有效的电话号码"])
+            replyHandler(["ok": false, "error": "Enter a valid phone number"])
             return
         }
         guard pendingWatchDialID == nil, watchOutgoingCall == nil, localWatchCall == nil,
               CallKitController.shared.currentSystemCallUUID == nil else {
-            replyHandler(["ok": false, "error": "已有通话或拨号任务正在进行"])
+            replyHandler(["ok": false, "error": "A call or dial request is already in progress"])
             return
         }
         if cancelledWatchDialIDs.remove(requestID) != nil {
-            replyHandler(["ok": false, "error": "已取消拨号"])
+            replyHandler(["ok": false, "error": "Call canceled"])
             return
         }
         pendingWatchDialID = requestID
@@ -242,18 +242,18 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             if let model, let (api, pcmRoute) = await model.readyVoWLANRoute(),
                case let .vowlan(endpoint, credential) = pcmRoute {
                 guard !cancelledWatchDialIDs.contains(requestID) else {
-                    replyHandler(["ok": false, "error": "已取消拨号"])
+                    replyHandler(["ok": false, "error": "Call canceled"])
                     return
                 }
                 try await api.dial(number: number)
                 guard let record = await waitForOutgoingCall(api: api, number: number) else {
                     try? await api.hangupCall()
-                    replyHandler(["ok": false, "error": "VoWLAN 未确认拨号状态"])
+                    replyHandler(["ok": false, "error": "VoWLAN did not confirm the call status"])
                     return
                 }
                 if cancelledWatchDialIDs.contains(requestID) {
                     try? await api.hangupCall(callID: record.id)
-                    replyHandler(["ok": false, "error": "已取消拨号"])
+                    replyHandler(["ok": false, "error": "Call canceled"])
                     return
                 }
                 let uuid = UUID()
@@ -272,13 +272,13 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                 return
             }
             guard CloudModePreference.isEnabled() else {
-                replyHandler(["ok": false, "error": "VoWLAN 不可达，且云端模式未开启"])
+                replyHandler(["ok": false, "error": "VoWLAN is unreachable and cloud mode is disabled"])
                 return
             }
             let status = try await VoIPPushController.shared.fetchCloudAgentStatus()
             guard status.cloudOnline else { throw CloudCommandError.unavailable }
             guard !cancelledWatchDialIDs.contains(requestID) else {
-                replyHandler(["ok": false, "error": "已取消拨号"])
+                replyHandler(["ok": false, "error": "Call canceled"])
                 return
             }
             // 没有可验证的本地 VoWLAN 时才回退公网 PCM。
@@ -287,7 +287,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             )
             guard !cancelledWatchDialIDs.contains(requestID) else {
                 await endAbandonedWatchCall(outgoing)
-                replyHandler(["ok": false, "error": "已取消拨号"])
+                replyHandler(["ok": false, "error": "Call canceled"])
                 return
             }
             guard outgoing.requestedMediaTransport == .legacyPCM,
@@ -295,13 +295,13 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                   var components = URLComponents(url: authenticatedURL, resolvingAgainstBaseURL: false),
                   let secret = components.queryItems?.first(where: { $0.name == "token" })?.value else {
                 await endAbandonedWatchCall(outgoing)
-                replyHandler(["ok": false, "error": "云端未提供 Watch 可用的 PCM 音频"])
+                replyHandler(["ok": false, "error": "The cloud did not provide PCM audio for the watch"])
                 return
             }
             components.queryItems = nil
             guard let mediaURL = components.url else {
                 await endAbandonedWatchCall(outgoing)
-                replyHandler(["ok": false, "error": "云端音频地址无效"])
+                replyHandler(["ok": false, "error": "The cloud audio address is invalid"])
                 return
             }
             watchOutgoingCall = (requestID, outgoing)
@@ -363,7 +363,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
               localWatchCall == nil, let model,
               let (api, pcmRoute) = await model.readyVoWLANRoute(),
               case let .vowlan(endpoint, credential) = pcmRoute else {
-            replyHandler(["ok": false, "error": "VoWLAN 未就绪",
+            replyHandler(["ok": false, "error": "VoWLAN is not ready",
                           "cloud_media_allowed": CloudModePreference.isEnabled()])
             return
         }
@@ -371,7 +371,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             guard let current = try await api.callStatus().active,
                   current.id == callID,
                   ["incoming", "waiting"].contains(current.state) else {
-                replyHandler(["ok": false, "error": "来电已失效",
+                replyHandler(["ok": false, "error": "This incoming call is no longer available",
                               "cloud_media_allowed": CloudModePreference.isEnabled()])
                 return
             }
@@ -429,14 +429,14 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     ) async {
         guard let callID = message["call_id"] as? String, !callID.isEmpty,
               let model, let (api, _) = await model.readyVoWLANRoute() else {
-            replyHandler(["ok": false, "error": "VoWLAN 未就绪"])
+            replyHandler(["ok": false, "error": "VoWLAN is not ready"])
             return
         }
         do {
             guard let current = try await api.callStatus().active,
                   current.id == callID,
                   ["incoming", "waiting"].contains(current.state) else {
-                replyHandler(["ok": false, "error": "来电已失效"])
+                replyHandler(["ok": false, "error": "This incoming call is no longer available"])
                 return
             }
             _ = try await api.rejectCall(callID: current.id)
