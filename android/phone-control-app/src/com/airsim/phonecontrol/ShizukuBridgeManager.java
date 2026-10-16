@@ -39,6 +39,7 @@ final class ShizukuBridgeManager {
     private volatile PrivilegedBridgeClient privilegedClient;
     private DialerRoleCallback pendingRoleCallback;
     private boolean roleRequestInFlight;
+    private int bindAttempt;
 
     private final Shizuku.OnBinderReceivedListener binderReceived = this::onBinderReceived;
     private final Shizuku.OnBinderDeadListener binderDead = this::onBinderDead;
@@ -59,6 +60,7 @@ final class ShizukuBridgeManager {
             binding = false;
             worker.execute(() -> {
                 try {
+                    if (privilegedClient != null && privilegedClient.isProcessTransport()) return;
                     PrivilegedBridgeClient client = new PrivilegedBridgeClient(binder);
                     privilegedClient = client;
                     coordinator.connect(client);
@@ -76,6 +78,7 @@ final class ShizukuBridgeManager {
         }
 
         @Override public void onServiceDisconnected(ComponentName name) {
+            if (privilegedClient != null && privilegedClient.isProcessTransport()) return;
             binding = false;
             privilegedClient = null;
             coordinator.disconnect();
@@ -158,6 +161,8 @@ final class ShizukuBridgeManager {
 
     private void onBinderDead() {
         binding = false;
+        if (privilegedClient != null) privilegedClient.close();
+        privilegedClient = null;
         privilegedClient = null;
         coordinator.disconnect();
         status = "Shizuku 未运行";
@@ -298,15 +303,39 @@ final class ShizukuBridgeManager {
     }
 
     private void bindPrivilegedService() {
-        if (binding) return;
+        if (binding || privilegedClient != null) return;
         binding = true;
+        int attempt = ++bindAttempt;
         status = "正在启动 Shizuku PCM 服务";
         try {
             Shizuku.bindUserService(serviceArgs, connection);
+            mainHandler.postDelayed(() -> {
+                if (binding && bindAttempt == attempt) worker.execute(() -> bindProcessFallback(attempt));
+            }, 5000);
         } catch (RuntimeException error) {
-            binding = false;
-            status = "Shizuku PCM 服务启动失败";
             BridgeLog.error("shizuku_user_service_bind_failed", error);
+            worker.execute(() -> bindProcessFallback(attempt));
+        }
+    }
+
+    private void bindProcessFallback(int attempt) {
+        if (!binding || bindAttempt != attempt || privilegedClient != null) return;
+        PrivilegedBridgeClient client = null;
+        try {
+            client = PrivilegedBridgeClient.openProcess(app);
+            coordinator.connect(client);
+            privilegedClient = client;
+            status = "Shizuku 已连接 · Q25 process · " + client.status();
+            BridgeLog.info("shizuku_q25_process_connected " + status);
+            runPendingDialerRoleRequest(client);
+        } catch (Exception error) {
+            if (client != null) client.close();
+            coordinator.disconnect();
+            status = "Shizuku Q25 服务启动失败";
+            BridgeLog.error("shizuku_q25_process_failed", error);
+            finishDialerRoleRequest(false, "Shizuku Q25 服务启动失败");
+        } finally {
+            binding = false;
         }
     }
 

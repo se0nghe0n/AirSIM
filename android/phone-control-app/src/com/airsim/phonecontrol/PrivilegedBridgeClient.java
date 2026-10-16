@@ -3,13 +3,31 @@ package com.airsim.phonecontrol;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
+import android.content.Context;
 
 final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transport {
     private final IBinder binder;
+    private final PrivilegedProcessTransport process;
 
     PrivilegedBridgeClient(IBinder binder) {
         if (binder == null || !binder.pingBinder()) throw new IllegalArgumentException("privileged binder unavailable");
         this.binder = binder;
+        this.process = null;
+    }
+
+    private PrivilegedBridgeClient(PrivilegedProcessTransport process) {
+        this.binder = null;
+        this.process = process;
+    }
+
+    static PrivilegedBridgeClient openProcess(Context context) throws Exception {
+        return new PrivilegedBridgeClient(PrivilegedProcessTransport.open(context));
+    }
+
+    boolean isProcessTransport() { return process != null; }
+
+    void close() {
+        if (process != null) process.close();
     }
 
     @Override public String startBridge() throws RemoteException {
@@ -29,6 +47,12 @@ final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transp
     }
 
     private String transact(int code, boolean hasBoolean, boolean value) throws RemoteException {
+        if (process != null) {
+            try { return process.request(code, hasBoolean && value); }
+            catch (Exception error) {
+                throw new RemoteException("Q25 process bridge: " + error.getMessage());
+            }
+        }
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
         try {

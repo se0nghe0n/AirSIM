@@ -103,6 +103,17 @@ public final class ShizukuBridgeUserService extends Binder {
         }
     }
 
+    String executeCommand(int code, boolean value) throws Exception {
+        verifyIdentity();
+        return switch (code) {
+            case PrivilegedBridgeProtocol.TRANSACTION_START_BRIDGE -> ensureBridgeStarted();
+            case PrivilegedBridgeProtocol.TRANSACTION_STATUS -> status();
+            case PrivilegedBridgeProtocol.TRANSACTION_SET_LOCAL_OUTPUT_MUTED -> setLocalOutputMuted(value);
+            case PrivilegedBridgeProtocol.TRANSACTION_ENSURE_DIALER_ROLE -> ensureDialerRole();
+            default -> throw new IllegalArgumentException("invalid command");
+        };
+    }
+
     private void stopStaleAudioBridges() throws IOException {
         List<Integer> stalePids = findStaleAudioBridgePids();
         for (int pid : stalePids) {
@@ -265,7 +276,7 @@ public final class ShizukuBridgeUserService extends Binder {
         }
     }
 
-    public void destroy() {
+    void closeBridge() {
         synchronized (lock) {
             bridgeDesired = false;
             if (bridgeProcess != null) bridgeProcess.destroy();
@@ -273,6 +284,10 @@ public final class ShizukuBridgeUserService extends Binder {
         }
         try { setLocalOutputMuted(false); }
         catch (Throwable error) { Log.w(TAG, "restore output during destroy failed", error); }
+    }
+
+    public void destroy() {
+        closeBridge();
         System.exit(0);
     }
 
