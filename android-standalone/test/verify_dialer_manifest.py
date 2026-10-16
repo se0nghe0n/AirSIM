@@ -4,7 +4,17 @@ import xml.etree.ElementTree as ET
 
 
 ANDROID = "{http://schemas.android.com/apk/res/android}"
+if len(sys.argv) != 2:
+    sys.exit("Usage: verify_dialer_manifest.py SOURCE_MANIFEST < BUILT_MANIFEST")
+
+source = ET.parse(sys.argv[1]).getroot()
 root = ET.fromstring(sys.stdin.read())
+
+for attribute in ("package", ANDROID + "versionCode", ANDROID + "versionName"):
+    expected = source.get(attribute)
+    if not expected or root.get(attribute) != expected:
+        name = attribute.removeprefix(ANDROID)
+        sys.exit(f"FAIL: built Standalone APK {name} does not match source manifest")
 
 def component_name(item):
     name = item.get(ANDROID + "name", "")
