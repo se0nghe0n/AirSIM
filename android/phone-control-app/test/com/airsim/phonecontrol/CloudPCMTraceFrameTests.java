@@ -38,6 +38,12 @@ public final class CloudPCMTraceFrameTests {
                     "raw fallback unless trace explicitly negotiated");
         }
         check(CloudPCMTraceFrame.decode(pcm) == pcm, "raw PCM remains unchanged");
+        byte[] rawMagic = pcm.clone();
+        System.arraycopy(new byte[] {'A', 'S', 'P', 'M'}, 0, rawMagic, 0, 4);
+        check(CloudPCMTraceFrame.decode(rawMagic) == rawMagic, "raw PCM magic collision remains raw");
+        byte[] rawPair = new byte[640];
+        System.arraycopy(rawMagic, 0, rawPair, 0, rawMagic.length);
+        check(CloudPCMTraceFrame.decode(rawPair) == rawPair, "raw multi-frame magic collision remains raw");
         malformed(Arrays.copyOf(trace, 4), "truncated envelope");
         malformed(Arrays.copyOf(trace, 367), "truncated payload");
         malformed(Arrays.copyOf(trace, 369), "oversized payload");

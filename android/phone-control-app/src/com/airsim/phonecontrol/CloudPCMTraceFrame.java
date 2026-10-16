@@ -36,6 +36,8 @@ final class CloudPCMTraceFrame {
     }
 
     static byte[] decode(byte[] wire) throws IOException {
+        // PCM samples may coincidentally begin with ASPM; raw frame multiples take precedence.
+        if (wire.length > 0 && wire.length % PCM_BYTES == 0) return wire;
         if (wire.length < 4 || wire[0] != 'A' || wire[1] != 'S' || wire[2] != 'P' || wire[3] != 'M') {
             return wire;
         }
