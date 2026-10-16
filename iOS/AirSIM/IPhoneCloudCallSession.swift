@@ -1516,6 +1516,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "com.example.airsim.iphone-cloud-media", qos: .userInteractive)
     private var webSocket: URLSessionWebSocketTask?
+    private var networkSession: URLSession?
     private var connectionID = UUID()
     func isCurrentConnection(_ id: UUID) -> Bool { queue.sync { connectionID == id } }
     private var engine: AVAudioEngine?
@@ -1532,6 +1533,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var lastReceiveCallbackAt: TimeInterval?
     private var maximumReceiveGapMS: Double = 0
     private var maximumReceiveDispatchMS: Double = 0
+    private var maximumReceiveProcessingMS: Double = 0
     private var maximumReceiveBurstPackets = 0
     private var maximumRenderDispatchMS: Double = 0
     private var playbackGeneration = UUID()
@@ -1574,7 +1576,19 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 }
                 stopped = false
                 connectionID = UUID()
-                let socket = URLSession(configuration: .ephemeral).webSocketTask(with: url)
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.networkServiceType = .voice
+                let deliveryQueue = OperationQueue()
+                deliveryQueue.name = "com.example.airsim.iphone-cloud-receive"
+                deliveryQueue.qualityOfService = .userInteractive
+                deliveryQueue.maxConcurrentOperationCount = 1
+                let session = URLSession(configuration: configuration, delegate: nil,
+                                         delegateQueue: deliveryQueue)
+                networkSession = session
+                var request = URLRequest(url: url)
+                request.networkServiceType = .voice
+                let socket = session.webSocketTask(with: request)
+                socket.priority = URLSessionTask.highPriority
                 webSocket = socket
                 socket.resume()
                 receiveNext(socket)
@@ -1768,6 +1782,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     func stopAudio() { queue.sync { stopAudioLocked() } }
 
     private func stopAudioLocked() {
+        recordQuality(at: ProcessInfo.processInfo.systemUptime, final: true)
         playbackGeneration = UUID()
         uplinkGeneration = UUID()
         uplinkTimer?.cancel()
@@ -1788,6 +1803,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         lastReceiveCallbackAt = nil
         maximumReceiveGapMS = 0
         maximumReceiveDispatchMS = 0
+        maximumReceiveProcessingMS = 0
         maximumReceiveBurstPackets = 0
         maximumRenderDispatchMS = 0
         downlinkSequence = 0
@@ -1802,6 +1818,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             connectionID = UUID()
             webSocket?.cancel(with: .normalClosure, reason: nil)
             webSocket = nil
+            networkSession?.invalidateAndCancel()
+            networkSession = nil
             uplinkBuffer.removeAll(keepingCapacity: false)
             controlOperations.removeAll(keepingCapacity: false)
             stopAudioLocked()
@@ -1817,19 +1835,23 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 guard !self.stopped, self.webSocket === socket else { return }
                 switch result {
                 case let .success(.data(data)):
+                    let processingAt = ProcessInfo.processInfo.systemUptime
                     self.schedulePlayback(data, receivedAt: receivedAt, receivedUnixMS: receivedUnixMS)
-                    self.receiveNext(socket)
+                    self.maximumReceiveProcessingMS = max(self.maximumReceiveProcessingMS,
+                        (ProcessInfo.processInfo.systemUptime - processingAt) * 1_000)
                 case let .success(.string(text)):
                     self.consumeControl(text)
-                    self.receiveNext(socket)
                 case .success:
-                    self.receiveNext(socket)
+                    break
                 case .failure:
                     self.webSocket = nil
                     self.stopped = true
                     self.onConnectionLost?(self.connectionID)
                 }
             }
+            // Keep the network receive armed independently of audio scheduling.
+            // Enqueue first so the serial delivery queue preserves message order.
+            if case .success = result { self.receiveNext(socket) }
         }
     }
 
@@ -1854,10 +1876,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    private func pumpUplink() {
-        guard !stopped, let socket = webSocket else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        if now - lastQualityTraceAt >= 5 {
+    private func recordQuality(at now: TimeInterval, final: Bool = false) {
+        if final, receivedDownlinkPackets == 0, uplinkSender.capturedPackets == 0 { return }
+        if final || now - lastQualityTraceAt >= 5 {
             lastQualityTraceAt = now
             var fields = [
                 "tx_queue": String(uplinkSender.pendingPackets),
@@ -1876,21 +1897,29 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "rx_pending": String(playout.window.scheduledPackets),
                 "rx_max_gap_ms": String(Int(maximumReceiveGapMS)),
                 "rx_max_queue_ms": String(Int(maximumReceiveDispatchMS)),
+                "rx_processing_max_ms": String(Int(maximumReceiveProcessingMS)),
                 "rx_max_burst": String(maximumReceiveBurstPackets),
                 "render_max_queue_ms": String(Int(maximumRenderDispatchMS)),
             ]
             fields.merge(transportDiagnostics.takeWindow()) { _, new in new }
             Task {
                 await AgentVerboseTraceRecorder.shared.recordEvent(
-                    source: "APP", category: "cloud-call-audio", phase: "quality",
+                    source: "APP", category: "cloud-call-audio", phase: final ? "quality_final" : "quality",
                     title: "Cloud PCM Buffer Statistics", detail: "", fields: fields, isFailure: false
                 )
             }
             maximumReceiveGapMS = 0
             maximumReceiveDispatchMS = 0
+            maximumReceiveProcessingMS = 0
             maximumReceiveBurstPackets = 0
             maximumRenderDispatchMS = 0
         }
+    }
+
+    private func pumpUplink() {
+        guard !stopped, let socket = webSocket else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        recordQuality(at: now)
         if let inFlight = uplinkSender.inFlightAt, now - inFlight >= 6 {
             stopped = true
             webSocket = nil
