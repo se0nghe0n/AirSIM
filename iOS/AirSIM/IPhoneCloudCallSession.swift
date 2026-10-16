@@ -203,12 +203,17 @@ struct CloudPCMPlaybackWindow {
 struct CloudPCMUplinkSendQueue {
     private var pending: [(pcm: Data, capturedAt: TimeInterval)] = []
     private var lastSendAt: TimeInterval?
+    private var nextSendAt: TimeInterval?
     private(set) var inFlightAt: TimeInterval?
     private(set) var droppedPackets: UInt64 = 0
+    private(set) var capturedPackets: UInt64 = 0
+    private(set) var sentPackets: UInt64 = 0
+    private(set) var maximumSendDurationMS: Double = 0
     var pendingPackets: Int { pending.count }
 
     mutating func enqueue(_ pcm: Data, at now: TimeInterval) {
         guard pcm.count == 320 else { return }
+        capturedPackets &+= 1
         pending.append((pcm, now))
         if pending.count > 12 {
             pending.removeFirst()
@@ -222,13 +227,24 @@ struct CloudPCMUplinkSendQueue {
             pending.removeFirst()
             droppedPackets &+= 1
         }
-        guard !pending.isEmpty, lastSendAt.map({ now - $0 >= 0.019 }) ?? true else { return nil }
+        guard !pending.isEmpty else { return nil }
+        // Pace against the nominal 20 ms timeline, not the last timer's actual
+        // delivery time. Otherwise 1 ms of timer jitter can discard whole ticks.
+        guard lastSendAt.map({ now - $0 >= 0.010 }) ?? true,
+              nextSendAt.map({ now + 0.005 >= $0 }) ?? true else { return nil }
+        nextSendAt = max((nextSendAt ?? now) + 0.020, now + 0.010)
         lastSendAt = now
         inFlightAt = now
+        sentPackets &+= 1
         return pending.removeFirst().pcm
     }
 
-    mutating func complete() { inFlightAt = nil }
+    mutating func complete(at now: TimeInterval? = nil) {
+        if let now, let inFlightAt {
+            maximumSendDurationMS = max(maximumSendDurationMS, max(0, now - inFlightAt) * 1_000)
+        }
+        inFlightAt = nil
+    }
 }
 
 struct CloudPCMBufferedFrame {
@@ -1661,6 +1677,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             let fields = [
                 "tx_queue": String(uplinkSender.pendingPackets),
                 "tx_drop": String(uplinkSender.droppedPackets),
+                "tx_captured": String(uplinkSender.capturedPackets),
+                "tx_sent": String(uplinkSender.sentPackets),
+                "tx_max_write_ms": String(Int(uplinkSender.maximumSendDurationMS)),
                 "rx_queue": String(jitterBuffer.bufferedFrameCount),
                 "rx_target_ms": String(jitterBuffer.targetFrameCount * 20),
                 "rx_drop": String(jitterBuffer.droppedFrameCount),
@@ -1695,7 +1714,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                     self.onConnectionLost?(self.connectionID)
                     return
                 }
-                self.uplinkSender.complete()
+                self.uplinkSender.complete(at: ProcessInfo.processInfo.systemUptime)
                 self.onUplinkFrame?(frame.count, Self.peak(of: frame), self.connectionID)
                 // A completion just after the 20 ms tick must not leave queued speech
                 // waiting for another full tick. The queue still enforces pacing and one send in flight.

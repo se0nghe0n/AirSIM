@@ -221,3 +221,8 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/src/com/airsim/phonecontrol/CloudPCMMediaPump.java \
   "$ROOT"/test/com/airsim/phonecontrol/CloudPCMMediaPumpTests.java
 "$JAVA" -cp "$DIAGNOSTICS_OUT:$OUT" com.airsim.phonecontrol.CloudPCMMediaPumpTests
+
+"$JAVAC" --release 17 -cp "$ANDROID_JAR:$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/StandaloneWebSocket.java \
+  "$ROOT"/test/com/airsim/phonecontrol/StandaloneWebSocketTests.java
+"$JAVA" -cp "$OUT:$ANDROID_JAR" com.airsim.phonecontrol.StandaloneWebSocketTests

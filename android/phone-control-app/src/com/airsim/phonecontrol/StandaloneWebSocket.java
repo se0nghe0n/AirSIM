@@ -44,6 +44,8 @@ final class StandaloneWebSocket implements Closeable {
                 || target.getRawUserInfo() != null) throw new IllegalArgumentException("Invalid WSS address");
         int port = target.getPort() < 0 ? 443 : target.getPort();
         SSLSocket socket = (SSLSocket) SSLSocketFactory.getDefault().createSocket(target.getHost(), port);
+        // Voice packets are only 20 ms long; do not wait to aggregate small TCP writes.
+        socket.setTcpNoDelay(true);
         SSLParameters parameters = socket.getSSLParameters();
         parameters.setEndpointIdentificationAlgorithm("HTTPS");
         socket.setSSLParameters(parameters);
@@ -121,7 +123,7 @@ final class StandaloneWebSocket implements Closeable {
 
     void setReadTimeout(int timeoutMillis) throws IOException { socket.setSoTimeout(timeoutMillis); }
 
-    private void write(int opcode, byte[] payload) throws Exception {
+    private synchronized void write(int opcode, byte[] payload) throws Exception {
         if (payload.length > MAX_FRAME) throw new IOException("WebSocket frame too large");
         ByteArrayOutputStream header = new ByteArrayOutputStream();
         header.write(0x80 | opcode);
@@ -136,8 +138,10 @@ final class StandaloneWebSocket implements Closeable {
         header.write(mask);
         byte[] encoded = payload.clone();
         for (int index = 0; index < encoded.length; index++) encoded[index] ^= mask[index & 3];
+        // Include ping replies in the same lock and write each complete frame once.
+        // Otherwise a pong can split a media frame between its header and payload.
+        header.write(encoded);
         output.write(header.toByteArray());
-        output.write(encoded);
         output.flush();
     }
 

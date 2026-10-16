@@ -722,6 +722,44 @@ final class AirSIMTests: XCTestCase {
         XCTAssertEqual(pushed.id, synchronized.id)
     }
 
+    func testCloudUplinkMaintainsCadenceDespiteTimerJitter() {
+        for jitter in [0.001, 0.002, 0.003] {
+            var queue = CloudPCMUplinkSendQueue()
+            var events: [(time: TimeInterval, capture: Bool)] = []
+            let count = 3_000
+            for index in 0..<count {
+                events.append((Double(index) * 0.020, true))
+                events.append((0.006 + Double(index) * 0.020 + sin(Double(index) * 1.78) * jitter, false))
+            }
+            events.sort { $0.time < $1.time }
+            var sent = 0
+            for event in events {
+                if event.capture {
+                    queue.enqueue(Data(repeating: 1, count: 320), at: event.time)
+                } else if queue.next(at: event.time) != nil {
+                    sent += 1
+                    queue.complete(at: event.time)
+                }
+            }
+            XCTAssertEqual(sent, count, "Timer jitter must not reduce the 50-packet/s voice stream")
+            XCTAssertEqual(queue.droppedPackets, 0)
+            XCTAssertEqual(queue.pendingPackets, 0)
+        }
+    }
+
+    func testCloudUplinkRecordsWriteLatencyWithoutAllowingImmediateBurst() {
+        var queue = CloudPCMUplinkSendQueue()
+        for _ in 0..<3 { queue.enqueue(Data(repeating: 1, count: 320), at: 0) }
+        XCTAssertNotNil(queue.next(at: 0))
+        queue.complete(at: 0.025)
+        XCTAssertEqual(queue.maximumSendDurationMS, 25, accuracy: 0.001)
+        XCTAssertNotNil(queue.next(at: 0.025))
+        queue.complete(at: 0.026)
+        XCTAssertNil(queue.next(at: 0.026))
+        XCTAssertEqual(queue.capturedPackets, 3)
+        XCTAssertEqual(queue.sentPackets, 2)
+    }
+
     func testCloudUplinkNeverBurstsAfterBlockedSend() {
         var queue = CloudPCMUplinkSendQueue()
         for index in 0..<10 {
