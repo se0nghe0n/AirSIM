@@ -41,6 +41,7 @@
 		A10000000000000000000025 /* VirtualCallTTSController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* VirtualCallTTSController.swift */; };
 		A10000000000000000000029 /* AgentVerboseTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* AgentVerboseTrace.swift */; };
 		A1000000000000000000002A /* AgentVerboseTraceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002A /* AgentVerboseTraceView.swift */; };
+		A1000000000000000000002B /* CallLifecycleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* CallLifecycleStore.swift */; };
 		A1000000000000000000002C /* SamsungPairingCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002C /* SamsungPairingCrypto.swift */; };
 		A1000000000000000000002D /* SamsungPairingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002D /* SamsungPairingClient.swift */; };
 		A1000000000000000000002E /* SamsungPairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002E /* SamsungPairingView.swift */; };
@@ -57,7 +58,6 @@
 		A10000000000000000000039 /* VoBLEAudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000039 /* VoBLEAudioEngine.swift */; };
 		A10000000000000000000040 /* VoBLECallCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000040 /* VoBLECallCoordinator.swift */; };
 		A10000000000000000000041 /* VoBLEDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000041 /* VoBLEDiagnostics.swift */; };
-		A1000000000000000000002B /* CallLifecycleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* CallLifecycleStore.swift */; };
 		A30000000000000000000001 /* AirSIMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B30000000000000000000001 /* AirSIMTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -69,19 +69,19 @@
 			remoteGlobalIDString = E10000000000000000000003;
 			remoteInfo = AirSIMLiveActivityExtension;
 		};
-		G30000000000000000000001 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = E10000000000000000000002 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = E10000000000000000000001;
-			remoteInfo = "AirSIM";
-		};
 		G10000000000000000000002 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = E10000000000000000000002 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = E10000000000000000000004;
 			remoteInfo = AirSIMWatchApp;
+		};
+		G30000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E10000000000000000000002 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E10000000000000000000001;
+			remoteInfo = AirSIM;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -143,10 +143,10 @@
 		B10000000000000000000022 /* AirSIMWatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AirSIMWatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000023 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10000000000000000000024 /* IPhoneCloudCallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPhoneCloudCallSession.swift; sourceTree = "<group>"; };
-		B1000000000000000000002B /* CallLifecycleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallLifecycleStore.swift; sourceTree = "<group>"; };
 		B10000000000000000000025 /* VirtualCallTTSController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCallTTSController.swift; sourceTree = "<group>"; };
 		B10000000000000000000029 /* AgentVerboseTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTrace.swift; sourceTree = "<group>"; };
 		B1000000000000000000002A /* AgentVerboseTraceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTraceView.swift; sourceTree = "<group>"; };
+		B1000000000000000000002B /* CallLifecycleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallLifecycleStore.swift; sourceTree = "<group>"; };
 		B1000000000000000000002C /* SamsungPairingCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungPairingCrypto.swift; sourceTree = "<group>"; };
 		B1000000000000000000002D /* SamsungPairingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungPairingClient.swift; sourceTree = "<group>"; };
 		B1000000000000000000002E /* SamsungPairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungPairingView.swift; sourceTree = "<group>"; };
@@ -182,14 +182,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C30000000000000000000001 /* Frameworks */ = {
+		C10000000000000000000008 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C10000000000000000000008 /* Frameworks */ = {
+		C30000000000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -256,7 +256,7 @@
 				B1000000000000000000000B /* Info.plist */,
 				B1000000000000000000001C /* AirSIM.entitlements */,
 			);
-			path = "AirSIM";
+			path = AirSIM;
 			sourceTree = "<group>";
 		};
 		D10000000000000000000003 /* Products */ = {
@@ -288,14 +288,6 @@
 			path = AirSIMLiveActivityExtension;
 			sourceTree = "<group>";
 		};
-		D30000000000000000000001 /* AirSIMTests */ = {
-			isa = PBXGroup;
-			children = (
-				B30000000000000000000001 /* AirSIMTests.swift */,
-			);
-			path = "AirSIMTests";
-			sourceTree = "<group>";
-		};
 		D10000000000000000000006 /* AirSIMWatchApp */ = {
 			isa = PBXGroup;
 			children = (
@@ -305,6 +297,14 @@
 				B10000000000000000000021 /* WatchCallView.swift */,
 			);
 			path = AirSIMWatchApp;
+			sourceTree = "<group>";
+		};
+		D30000000000000000000001 /* AirSIMTests */ = {
+			isa = PBXGroup;
+			children = (
+				B30000000000000000000001 /* AirSIMTests.swift */,
+			);
+			path = AirSIMTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -326,7 +326,7 @@
 				H10000000000000000000001 /* PBXTargetDependency */,
 				H10000000000000000000002 /* PBXTargetDependency */,
 			);
-			name = "AirSIM";
+			name = AirSIM;
 			productName = AirSIM;
 			productReference = B1000000000000000000000C /* AirSIM.app */;
 			productType = "com.apple.product-type.application";
@@ -348,6 +348,23 @@
 			productReference = B10000000000000000000017 /* AirSIMLiveActivityExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		E10000000000000000000004 /* AirSIMWatchApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F10000000000000000000004 /* Build configuration list for PBXNativeTarget "AirSIMWatchApp" */;
+			buildPhases = (
+				C10000000000000000000009 /* Sources */,
+				C10000000000000000000008 /* Frameworks */,
+				C1000000000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AirSIMWatchApp;
+			productName = AirSIMWatchApp;
+			productReference = B10000000000000000000022 /* AirSIMWatchApp.app */;
+			productType = "com.apple.product-type.application";
+		};
 		E30000000000000000000001 /* AirSIMTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F30000000000000000000001 /* Build configuration list for PBXNativeTarget "AirSIMTests" */;
@@ -365,23 +382,6 @@
 			productName = AirSIMTests;
 			productReference = B30000000000000000000002 /* AirSIMTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		E10000000000000000000004 /* AirSIMWatchApp */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = F10000000000000000000004 /* Build configuration list for PBXNativeTarget "AirSIMWatchApp" */;
-			buildPhases = (
-				C10000000000000000000009 /* Sources */,
-				C10000000000000000000008 /* Frameworks */,
-				C1000000000000000000000A /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = AirSIMWatchApp;
-			productName = AirSIMWatchApp;
-			productReference = B10000000000000000000022 /* AirSIMWatchApp.app */;
-			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
@@ -442,18 +442,18 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C30000000000000000000002 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		C1000000000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000023 /* AppIcon.icon in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C30000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -517,14 +517,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		C30000000000000000000003 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				A30000000000000000000001 /* AirSIMTests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		C10000000000000000000009 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -533,6 +525,14 @@
 				A1000000000000000000001E /* AirSIMWatchApp.swift in Sources */,
 				A1000000000000000000001F /* WatchCallSession.swift in Sources */,
 				A10000000000000000000020 /* WatchCallView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C30000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A30000000000000000000001 /* AirSIMTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -588,20 +588,20 @@
 		F20000000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				AIRSIM_APNS_ENVIRONMENT = sandbox;
+				AIRSIM_PUSH_ENTITLEMENTS = AirSIM/AirSIM.entitlements;
+				AIRSIM_PUSH_RELAY_URL = "";
 				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "$(AIRSIM_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 81;
-				DEVELOPMENT_TEAM = "";
-				AIRSIM_APNS_ENVIRONMENT = sandbox;
-				AIRSIM_PUSH_ENTITLEMENTS = "AirSIM/AirSIM.entitlements";
-				AIRSIM_PUSH_RELAY_URL = "";
+				DEVELOPMENT_TEAM = 98882K9P37;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "AirSIM/Info.plist";
+				INFOPLIST_FILE = AirSIM/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
 				MARKETING_VERSION = 0.9.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25;
 				PRODUCT_NAME = AirSIM;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -614,20 +614,20 @@
 		F20000000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				AIRSIM_APNS_ENVIRONMENT = production;
+				AIRSIM_PUSH_ENTITLEMENTS = AirSIM/AirSIM.entitlements;
+				AIRSIM_PUSH_RELAY_URL = "";
 				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "$(AIRSIM_PUSH_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 81;
-				DEVELOPMENT_TEAM = "";
-				AIRSIM_APNS_ENVIRONMENT = production;
-				AIRSIM_PUSH_ENTITLEMENTS = "AirSIM/AirSIM.entitlements";
-				AIRSIM_PUSH_RELAY_URL = "";
+				DEVELOPMENT_TEAM = 98882K9P37;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "AirSIM/Info.plist";
+				INFOPLIST_FILE = AirSIM/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
 				MARKETING_VERSION = 0.9.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25;
 				PRODUCT_NAME = AirSIM;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -643,7 +643,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 81;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 98882K9P37;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AirSIMLiveActivityExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
@@ -653,7 +653,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.9.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim.liveactivity;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.liveactivity;
 				PRODUCT_NAME = AirSIMLiveActivityExtension;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -669,7 +669,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 81;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 98882K9P37;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = AirSIMLiveActivityExtension/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
@@ -679,7 +679,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 0.9.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim.liveactivity;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.liveactivity;
 				PRODUCT_NAME = AirSIMLiveActivityExtension;
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -689,56 +689,27 @@
 			};
 			name = Release;
 		};
-		F30000000000000000000002 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AirSIM.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AirSIM";
-			};
-			name = Debug;
-		};
-		F30000000000000000000003 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AirSIM.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AirSIM";
-			};
-			name = Release;
-		};
 		F20000000000000000000007 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APS_ENVIRONMENT = development;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = "AirSIMWatchApp/AirSIMWatchApp.entitlements";
+				CODE_SIGN_ENTITLEMENTS = AirSIMWatchApp/AirSIMWatchApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 81;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 98882K9P37;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "AirSIMWatchApp/Info.plist";
+				INFOPLIST_FILE = AirSIMWatchApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = AirSIM;
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.example.airsim;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.se0nghe0n.airsim.q25;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 0.9.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim.watchkitapp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.watchkitapp;
 				PRODUCT_NAME = AirSIMWatchApp;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -755,18 +726,21 @@
 			buildSettings = {
 				APS_ENVIRONMENT = production;
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = "AirSIMWatchApp/AirSIMWatchApp.entitlements";
+				CODE_SIGN_ENTITLEMENTS = AirSIMWatchApp/AirSIMWatchApp.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 81;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 98882K9P37;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = "AirSIMWatchApp/Info.plist";
+				INFOPLIST_FILE = AirSIMWatchApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = AirSIM;
 				INFOPLIST_KEY_CFBundleIconName = AppIcon;
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.example.airsim;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = com.se0nghe0n.airsim.q25;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 0.9.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.example.airsim.watchkitapp;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.watchkitapp;
 				PRODUCT_NAME = AirSIMWatchApp;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
@@ -776,6 +750,38 @@
 				TARGETED_DEVICE_FAMILY = 4;
 				VALIDATE_PRODUCT = YES;
 				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
+		F30000000000000000000002 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 98882K9P37;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AirSIM.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AirSIM";
+			};
+			name = Debug;
+		};
+		F30000000000000000000003 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 98882K9P37;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/AirSIM.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/AirSIM";
 			};
 			name = Release;
 		};
@@ -809,20 +815,20 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		F30000000000000000000001 /* Build configuration list for PBXNativeTarget "AirSIMTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				F30000000000000000000002 /* Debug */,
-				F30000000000000000000003 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		F10000000000000000000004 /* Build configuration list for PBXNativeTarget "AirSIMWatchApp" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				F20000000000000000000007 /* Debug */,
 				F20000000000000000000008 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F30000000000000000000001 /* Build configuration list for PBXNativeTarget "AirSIMTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F30000000000000000000002 /* Debug */,
+				F30000000000000000000003 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

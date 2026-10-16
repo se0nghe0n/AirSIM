@@ -1373,15 +1373,15 @@ final class AirSIMTests: XCTestCase {
     func testVoBLEPairingFailureExplainsHowToRecoverStaleCredentials() {
         XCTAssertEqual(
             VoBLEPairingRecovery.userMessage(for: "peer is already paired; authenticated reconnect required"),
-            "Android 仍保存旧的 VoBLE 凭据。请在 Android AirSIM → 设置 → VoBLE 认证中清除旧配对，再重新配对。"
+            "Android still has old VoBLE credentials. Clear the old pairing in Android AirSIM → Settings → VoBLE Authentication, then pair again."
         )
         XCTAssertEqual(
             VoBLEPairingRecovery.userMessage(for: "reconnect authentication failed"),
-            "两端 VoBLE 密钥不一致。请在 Android AirSIM → 设置 → VoBLE 认证中清除旧配对，再重新配对。"
+            "VoBLE keys do not match. Clear the old pairing in Android AirSIM → Settings → VoBLE Authentication, then pair again."
         )
         XCTAssertEqual(
             VoBLEPairingRecovery.userMessage(for: "peer is not paired"),
-            "Android 已没有对应的 VoBLE 凭据。请清除本机旧凭据，然后重新核对安全码。"
+            "Android no longer has matching VoBLE credentials. Clear local credentials, then verify the security code again."
         )
         XCTAssertEqual(VoBLEPairingRecovery.userMessage(for: "蓝牙配对失败"), "蓝牙配对失败")
     }
