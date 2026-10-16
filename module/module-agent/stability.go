@@ -87,7 +87,7 @@ func (a *requestAdmission) acquire(ctx context.Context, path string) (func(), bo
 
 func rejectBusy(response http.ResponseWriter) {
 	response.Header().Set("Retry-After", "1")
-	writeError(response, http.StatusServiceUnavailable, "Agent 正在保护通话控制，请稍后重试")
+	writeError(response, http.StatusServiceUnavailable, "Agent is protecting call control; try again later")
 }
 
 // operationFlight 让同一控制操作的并发请求等待同一结果，避免重复发送 AT 命令。

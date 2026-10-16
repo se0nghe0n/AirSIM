@@ -174,13 +174,13 @@ func normalizeOperator(value string) string {
 	upper := strings.ToUpper(strings.TrimSpace(value))
 	switch {
 	case strings.Contains(upper, "MOBILE") || upper == "CMCC" || upper == "46000" || upper == "46002" || upper == "46007":
-		return "中国移动"
+		return "China Mobile"
 	case strings.Contains(upper, "UNICOM") || upper == "46001" || upper == "46006" || upper == "46009":
-		return "中国联通"
+		return "China Unicom"
 	case strings.Contains(upper, "TELECOM") || upper == "CTCC" || upper == "46003" || upper == "46005" || upper == "46011":
-		return "中国电信"
+		return "China Telecom"
 	case strings.Contains(upper, "BROADNET") || upper == "46015":
-		return "中国广电"
+		return "China Broadnet"
 	default:
 		return strings.TrimSpace(value)
 	}
@@ -209,14 +209,14 @@ func parseRegistration(response string) int {
 func registrationText(value int) string {
 	switch value {
 	case 1:
-		return "已注册"
+		return "Registered"
 	case 5:
-		return "漫游注册"
+		return "Registered (roaming)"
 	case 2:
-		return "搜索中"
+		return "Searching"
 	case 3:
-		return "注册被拒绝"
+		return "Registration denied"
 	default:
-		return "未注册"
+		return "Not registered"
 	}
 }

@@ -35,11 +35,11 @@ func (c *moduleLPAChannel) OpenLogicalChannel(aid []byte) (byte, error) {
 	aidHex := strings.ToUpper(hex.EncodeToString(aid))
 	result, err := c.at.command(fmt.Sprintf(`AT+CCHO="%s"`, aidHex), 8*time.Second)
 	if err != nil {
-		return 0, fmt.Errorf("打开 eUICC logical channel 失败 (AID=%s): %w", aidHex, err)
+		return 0, fmt.Errorf("Failed to open eUICC logical channel (AID=%s): %w", aidHex, err)
 	}
 	channel := parseLogicalChannel(result)
 	if channel <= 0 || channel > 19 {
-		return 0, fmt.Errorf("解析 CCHO 响应失败: %s", result)
+		return 0, fmt.Errorf("Failed to parse CCHO response: %s", result)
 	}
 	c.channel = byte(channel)
 	return c.channel, nil
@@ -50,7 +50,7 @@ func (c *moduleLPAChannel) Transmit(command []byte) ([]byte, error) {
 	defer c.mu.Unlock()
 
 	if c.channel == 0 {
-		return nil, errors.New("eUICC logical channel 尚未打开")
+		return nil, errors.New("eUICC logical channel is not open")
 	}
 	commandHex := strings.ToUpper(hex.EncodeToString(command))
 	result, err := c.at.command(
@@ -58,15 +58,15 @@ func (c *moduleLPAChannel) Transmit(command []byte) ([]byte, error) {
 		20*time.Second,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("APDU 透传失败: %w", err)
+		return nil, fmt.Errorf("APDU passthrough failed: %w", err)
 	}
 	match := cglaResponsePattern.FindStringSubmatch(result)
 	if len(match) != 2 {
-		return nil, fmt.Errorf("解析 CGLA 响应失败: %s", result)
+		return nil, fmt.Errorf("Failed to parse CGLA response: %s", result)
 	}
 	response, err := hex.DecodeString(match[1])
 	if err != nil {
-		return nil, fmt.Errorf("解析 APDU 响应 hex 失败: %w", err)
+		return nil, fmt.Errorf("Failed to parse APDU response hex: %w", err)
 	}
 	return response, nil
 }
@@ -83,7 +83,7 @@ func (c *moduleLPAChannel) CloseLogicalChannel(channel byte) error {
 		c.channel = 0
 	}
 	if err != nil {
-		return fmt.Errorf("关闭 eUICC logical channel %d 失败: %w", channel, err)
+		return fmt.Errorf("Failed to close eUICC logical channel %d: %w", channel, err)
 	}
 	return nil
 }
@@ -124,7 +124,7 @@ type moduleESIMOverview struct {
 func (a *agent) newLPAClient(aidHex string) (*lpa.Client, error) {
 	aid, err := hex.DecodeString(aidHex)
 	if err != nil {
-		return nil, fmt.Errorf("AID hex 无效 %q: %w", aidHex, err)
+		return nil, fmt.Errorf("Invalid AID hex %q: %w", aidHex, err)
 	}
 	return lpa.New(&lpa.Options{
 		Channel: &moduleLPAChannel{at: a.at},
@@ -137,7 +137,7 @@ func (a *agent) newLPAClient(aidHex string) (*lpa.Client, error) {
 func safeListProfiles(client *lpa.Client, filter any) (profiles []*sgp22.ProfileInfo, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("解析 Profile 数据失败: %v", recovered)
+			err = fmt.Errorf("Failed to parse Profile data: %v", recovered)
 		}
 	}()
 	return client.ListProfile(filter, nil)
@@ -148,9 +148,9 @@ func profilePayload(profile *sgp22.ProfileInfo) moduleESIMProfile {
 	if name == "" {
 		name = strings.TrimSpace(profile.ProfileName)
 	}
-	stateText := "已禁用"
+	stateText := "Disabled"
 	if profile.ProfileState == sgp22.ProfileEnabled {
-		stateText = "已启用"
+		stateText = "Enabled"
 	}
 	return moduleESIMProfile{
 		ICCID:               profile.ICCID.String(),
@@ -166,7 +166,7 @@ func profilePayload(profile *sgp22.ProfileInfo) moduleESIMProfile {
 func (a *agent) readESIMOverview() (moduleESIMOverview, error) {
 	overview := moduleESIMOverview{
 		CardType: "esim",
-		Message:  "已通过模块本机 LPA 读取 eUICC Profile",
+		Message:  "Read eUICC Profiles using the module's local LPA",
 		ChipInfo: moduleESIMChipInfo{EIDs: []moduleEUICCInfo{}},
 		Profiles: []moduleESIMProfileGroup{},
 	}
@@ -224,9 +224,9 @@ func (a *agent) readESIMOverview() (moduleESIMOverview, error) {
 
 	if len(overview.ChipInfo.EIDs) == 0 {
 		if lastError == nil {
-			lastError = errors.New("所有候选 AID 均未开放 logical channel")
+			lastError = errors.New("No candidate AID opened a logical channel")
 		}
-		return moduleESIMOverview{}, fmt.Errorf("未发现任何 eUICC: %w", lastError)
+		return moduleESIMOverview{}, fmt.Errorf("No eUICC found: %w", lastError)
 	}
 	return overview, nil
 }
@@ -241,14 +241,14 @@ func normalizeKnownEUICCAID(value string) (string, error) {
 			return normalized, nil
 		}
 	}
-	return "", fmt.Errorf("AID 不在已验证的 eUICC 列表中: %s", normalized)
+	return "", fmt.Errorf("AID is not in the verified eUICC list: %s", normalized)
 }
 
 // resolveProfileTarget 同时验证 ICCID 与 AID 的归属，防止跨 eUICC 误操作同名参数。
 func (a *agent) resolveProfileTarget(iccidText string, requestedAID string) (string, *sgp22.ProfileInfo, error) {
 	iccid, err := sgp22.NewICCID(strings.TrimSpace(iccidText))
 	if err != nil {
-		return "", nil, fmt.Errorf("ICCID 格式无效: %w", err)
+		return "", nil, fmt.Errorf("Invalid ICCID format: %w", err)
 	}
 	aid, err := normalizeKnownEUICCAID(requestedAID)
 	if err != nil {
@@ -278,7 +278,7 @@ func (a *agent) resolveProfileTarget(iccidText string, requestedAID string) (str
 		}
 	}
 	if lastError != nil {
-		return "", nil, fmt.Errorf("查找 Profile %s 失败: %w", iccidText, lastError)
+		return "", nil, fmt.Errorf("Failed to find Profile %s: %w", iccidText, lastError)
 	}
-	return "", nil, fmt.Errorf("未找到 Profile %s", iccidText)
+	return "", nil, fmt.Errorf("Profile %s not found", iccidText)
 }

@@ -234,10 +234,10 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 	case "listen":
 		listener, err := net.Listen("tcp", listenAddress)
 		if err != nil {
-			return true, fmt.Errorf("监听 %s 失败: %w", listenAddress, err)
+			return true, fmt.Errorf("Failed to listen on %s: %w", listenAddress, err)
 		}
 		if err := listener.Close(); err != nil {
-			return true, fmt.Errorf("关闭探针监听失败: %w", err)
+			return true, fmt.Errorf("Failed to close probe listener: %w", err)
 		}
 		logger.Printf("启动探针通过: listen")
 	case "voice-backend":
@@ -248,7 +248,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		if err := probeVoicePCMBackend(endpoint, func(network, address string) (net.Conn, error) {
 			return net.DialTimeout(network, address, 3*time.Second)
 		}); err != nil {
-			return true, fmt.Errorf("三星 PCM 后端握手失败: %w", err)
+			return true, fmt.Errorf("Samsung PCM backend handshake failed: %w", err)
 		}
 		logger.Printf("启动探针通过: voice-backend")
 	case "at-open":
@@ -271,12 +271,12 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		}
 		encoded, err := json.Marshal(overview)
 		if err != nil {
-			return true, fmt.Errorf("编码 eSIM 总览失败: %w", err)
+			return true, fmt.Errorf("Failed to encode eSIM overview: %w", err)
 		}
 		fmt.Printf("__ESIM_OVERVIEW__%s\n", encoded)
 		logger.Printf("启动探针通过: esim-read")
 	default:
-		return true, fmt.Errorf("未知启动探针阶段: %s", os.Args[2])
+		return true, fmt.Errorf("Unknown startup probe stage: %s", os.Args[2])
 	}
 	return true, nil
 }
@@ -356,7 +356,7 @@ func (a *agent) routes(logger *log.Logger) http.Handler {
 	mux.HandleFunc("/api/service/shutdown", a.shutdown)
 	mux.HandleFunc("/", func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/" {
-			writeError(response, http.StatusNotFound, "接口不存在")
+			writeError(response, http.StatusNotFound, "Endpoint not found")
 			return
 		}
 		a.debugStatus(response, request)
@@ -383,7 +383,7 @@ func (a *agent) routes(logger *log.Logger) http.Handler {
 				defer release()
 				if !allowedRemoteWithNetworks(request.RemoteAddr, a.profile, localIPv4Networks()) &&
 					!allowedAVFRemoteOnSocket(request.RemoteAddr, request.Context().Value(http.LocalAddrContextKey), a.profile) {
-					writeError(capturedResponse, http.StatusForbidden, "只允许 AVF 私网访问")
+					writeError(capturedResponse, http.StatusForbidden, "Only AVF private-network access is allowed")
 					return
 				}
 				mux.ServeHTTP(capturedResponse, request)
@@ -421,7 +421,7 @@ func (a *agent) routes(logger *log.Logger) http.Handler {
 }
 
 func installerServiceRequired(response http.ResponseWriter, _ *http.Request) {
-	writeError(response, http.StatusGone, "Agent 自更新已停用；请通过 Android App 连接 AVF installerd 端口 8576")
+	writeError(response, http.StatusGone, "Agent self-update is disabled; connect to AVF installerd on port 8576 using the Android app")
 }
 
 // allowedRemote 把控制面限制在模块自身和 CDC ECM 子网。
@@ -709,7 +709,7 @@ func requireMethod(response http.ResponseWriter, request *http.Request, methods 
 			return true
 		}
 	}
-	writeError(response, http.StatusMethodNotAllowed, "请求方法不受支持")
+	writeError(response, http.StatusMethodNotAllowed, "Unsupported request method")
 	return false
 }
 
@@ -717,7 +717,7 @@ func decodeJSON(response http.ResponseWriter, request *http.Request, target any)
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 64*1024))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
-		writeError(response, http.StatusBadRequest, "JSON 请求无效: "+err.Error())
+		writeError(response, http.StatusBadRequest, "Invalid JSON request: "+err.Error())
 		return false
 	}
 	return true

@@ -318,7 +318,7 @@ func TestExpiredCloudCommandIsRejectedAndDeduplicatedBeforeAT(t *testing.T) {
 	}
 	first := agent.executeCloudCommand(command)
 	second := agent.executeCloudCommand(command)
-	if first.Status != "failed" || first.Error != "云端命令已过期" ||
+	if first.Status != "failed" || first.Error != "Cloud command expired" ||
 		second.Status != first.Status || second.Error != first.Error {
 		t.Fatalf("过期命令结果不稳定: first=%#v second=%#v", first, second)
 	}
@@ -467,8 +467,8 @@ func TestAgentHeartbeatReportsCellularStateWithoutSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := manager.sendHeartbeat(agentHeartbeatSnapshot{
-		ATOK: true, CellularState: "searching", CellularRegistration: "搜索中",
-		CellularRecovery: "正在自动选网", ECMCarrier: "1", SignalDBM: intPointer(-91),
+		ATOK: true, CellularState: "searching", CellularRegistration: "Searching",
+		CellularRecovery: "Selecting network automatically", ECMCarrier: "1", SignalDBM: intPointer(-91),
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -438,7 +438,7 @@ func TestParseModemFields(t *testing.T) {
 	if mode != "FDD LTE" || band != "BAND 3" {
 		t.Fatalf("网络解析 mode=%q band=%q", mode, band)
 	}
-	if got := normalizeOperator("CHN-UNICOM"); got != "中国联通" {
+	if got := normalizeOperator("CHN-UNICOM"); got != "China Unicom" {
 		t.Fatalf("运营商规范化=%q", got)
 	}
 }
@@ -485,7 +485,7 @@ func TestGPSRefreshPersistsNoFixError(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GPS 无定位状态=%d，期望 %d", response.Code, http.StatusServiceUnavailable)
 	}
-	if a.gps.LastError != "暂未获得定位，请移至窗边或室外后重试" {
+	if a.gps.LastError != "Location unavailable; move near a window or outdoors and try again" {
 		t.Fatalf("GPS 无定位错误未写入状态: %q", a.gps.LastError)
 	}
 }
@@ -765,7 +765,7 @@ func TestATKeepaliveRetriesOnceAfterIdlePortTimeout(t *testing.T) {
 			t.Fatalf("保活指令=%q，期望 AT", command)
 		}
 		if attempts == 1 {
-			return "", errors.New("等待 AT 响应超时")
+			return "", errors.New("Timed out waiting for AT response")
 		}
 		return "OK", nil
 	})
@@ -843,6 +843,9 @@ func TestCGLAResponsePattern(t *testing.T) {
 }
 
 func TestPhysicalSIMESIMProbeError(t *testing.T) {
+	if !isPhysicalSIMESIMProbeError(errors.New("No eUICC found: Failed to open eUICC logical channel: AT command failed: ERROR")) {
+		t.Fatal("English physical SIM probe error must be recognized")
+	}
 	err := errors.New("未发现任何 eUICC: 打开 eUICC logical channel 失败: AT 指令失败: ERROR")
 	if !isPhysicalSIMESIMProbeError(err) {
 		t.Fatal("实体 SIM 的 CCHO ERROR 应识别为卡片类型结果")
@@ -864,7 +867,7 @@ func TestProfilePayloadKeepsEUICCState(t *testing.T) {
 		ServiceProviderName: "CTExcel",
 		ProfileClass:        sgp22.ProfileClassOperational,
 	})
-	if payload.ICCID != "8944305293607172968" || payload.State != 1 || payload.StateText != "已启用" {
+	if payload.ICCID != "8944305293607172968" || payload.State != 1 || payload.StateText != "Enabled" {
 		t.Fatalf("Profile 映射错误: %#v", payload)
 	}
 }
@@ -1060,7 +1063,7 @@ func TestModuleUpdateStateUsesStableWireFields(t *testing.T) {
 }
 
 func TestModuleUpdateLogOmitsEmptyErrorField(t *testing.T) {
-	success := formatModuleUpdateLogLine("completed", 100, "新 Agent 健康检查通过", "")
+	success := formatModuleUpdateLogLine("completed", 100, "New Agent passed health check", "")
 	if strings.Contains(success, "error=") {
 		t.Fatalf("成功日志不应包含空 error 字段：%q", success)
 	}
@@ -1078,7 +1081,7 @@ func TestModuleUpdateCompletionRecoversAfterStartupRemovedPendingMarker(t *testi
 		InstalledVersion: "0.3.41",
 		TargetVersion:    "0.3.42",
 		Progress:         80,
-		Message:          "Agent 已安装，正在安全重启",
+		Message:          "Agent installed; restarting safely",
 	}
 
 	completed, ok := completedModuleUpdateState(state, "0.3.42", false)
@@ -1098,7 +1101,7 @@ func TestModuleUpdateCompletionWaitsForStartupToRemovePendingMarker(t *testing.T
 		InstalledVersion: "0.3.39",
 		TargetVersion:    "0.3.43",
 		Progress:         80,
-		Message:          "Agent 已安装，正在安全重启",
+		Message:          "Agent installed; restarting safely",
 	}
 
 	if _, ok := completedModuleUpdateState(state, "0.3.43", true); ok {

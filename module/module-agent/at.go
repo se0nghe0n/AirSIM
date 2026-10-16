@@ -97,11 +97,11 @@ func (p *atPort) open() error {
 	}
 	fd, err := syscall.Open(p.path, atOpenFlags(), 0)
 	if err != nil {
-		return fmt.Errorf("打开 AT 端口失败: %w", err)
+		return fmt.Errorf("Failed to open AT port: %w", err)
 	}
 	if err := syscall.SetNonblock(fd, true); err != nil {
 		_ = syscall.Close(fd)
-		return fmt.Errorf("设置 AT 端口非阻塞模式失败: %w", err)
+		return fmt.Errorf("Failed to set AT port nonblocking mode: %w", err)
 	}
 	p.file = os.NewFile(uintptr(fd), p.path)
 	reopened := p.openedOnce
@@ -143,7 +143,7 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 		return "", err
 	}
 	if strings.ContainsAny(command, "\r\n\x00") {
-		return "", errors.New("AT 指令包含非法控制字符")
+		return "", errors.New("AT command contains invalid control characters")
 	}
 	isCCHO := strings.HasPrefix(command, "AT+CCHO=")
 	if isCCHO {
@@ -157,7 +157,7 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 		p.recordFailure()
 		p.debug("error", command, err.Error())
 		_ = p.closeLocked()
-		return "", fmt.Errorf("写入 AT 指令失败: %w", err)
+		return "", fmt.Errorf("Failed to write AT command: %w", err)
 	}
 	if isCCHO {
 		log.Printf("AT CCHO 阶段: 指令已写入")
@@ -179,7 +179,7 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 	if hasATError(text) {
 		p.recordSuccess()
 		p.debug("error", command, text)
-		return text, fmt.Errorf("AT 指令失败: %s", lastNonEmptyLine(text))
+		return text, fmt.Errorf("AT command failed: %s", lastNonEmptyLine(text))
 	}
 	p.recordSuccess()
 	return text, nil
@@ -209,12 +209,12 @@ func (p *atPort) promptCommand(command string, payload []byte, timeout time.Dura
 		p.recordFailure()
 		p.debug("error", command, err.Error())
 		_ = p.closeLocked()
-		return string(prompt), fmt.Errorf("等待短信输入提示符失败: %w", err)
+		return string(prompt), fmt.Errorf("Failed to wait for SMS input prompt: %w", err)
 	}
 	if !bytes.Contains(prompt, []byte(">")) {
 		p.recordSuccess()
 		p.debug("error", command, normalizeATText(prompt))
-		return normalizeATText(prompt), errors.New("模块未返回短信输入提示符")
+		return normalizeATText(prompt), errors.New("Module did not return SMS input prompt")
 	}
 	if err := p.writeAll(payload, 10*time.Second); err != nil {
 		p.recordFailure()
@@ -236,7 +236,7 @@ func (p *atPort) promptCommand(command string, payload []byte, timeout time.Dura
 	if hasATError(text) {
 		p.recordSuccess()
 		p.debug("error", command, text)
-		return text, fmt.Errorf("短信发送失败: %s", lastNonEmptyLine(text))
+		return text, fmt.Errorf("SMS send failed: %s", lastNonEmptyLine(text))
 	}
 	p.recordSuccess()
 	return text, nil
@@ -269,7 +269,7 @@ func probeATWithRecovery(command func(string, time.Duration) (string, error)) er
 // writeAll 直接使用非阻塞 fd 写入，并给字符设备背压设置硬截止时间。
 func (p *atPort) writeAll(payload []byte, timeout time.Duration) error {
 	if p.file == nil {
-		return errors.New("AT 端口尚未打开")
+		return errors.New("AT port is not open")
 	}
 	deadline := time.Now().Add(timeout)
 	for len(payload) > 0 {
@@ -282,7 +282,7 @@ func (p *atPort) writeAll(payload []byte, timeout time.Duration) error {
 			return err
 		}
 		if time.Now().After(deadline) {
-			return errors.New("等待 AT 端口可写超时")
+			return errors.New("Timed out waiting for writable AT port")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -300,18 +300,18 @@ func (p *atPort) readUntil(timeout time.Duration, complete func([]byte) bool) ([
 			p.debug("rx", "AT receive", string(temporary[:count]))
 			p.urcPending = p.dispatchCompleteURCLines(p.urcPending, temporary[:count])
 			if len(buffer) > 256*1024 {
-				return buffer, errors.New("AT 响应超过安全上限")
+				return buffer, errors.New("AT response exceeds safety limit")
 			}
 			if complete(buffer) {
 				return buffer, nil
 			}
 		}
 		if err != nil && !errors.Is(err, syscall.EAGAIN) && !errors.Is(err, syscall.EWOULDBLOCK) {
-			return buffer, fmt.Errorf("读取 AT 响应失败: %w", err)
+			return buffer, fmt.Errorf("Failed to read AT response: %w", err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return buffer, errors.New("等待 AT 响应超时")
+	return buffer, errors.New("Timed out waiting for AT response")
 }
 
 // harvestPendingURCs 清走上次命令的终止残留，但先交付其中的异步事件。
@@ -407,7 +407,7 @@ func hasATError(text string) bool {
 func lastNonEmptyLine(text string) string {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	if len(lines) == 0 {
-		return "未知错误"
+		return "Unknown error"
 	}
 	return lines[len(lines)-1]
 }

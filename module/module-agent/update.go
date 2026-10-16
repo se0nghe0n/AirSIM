@@ -82,7 +82,7 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 		return
 	}
 	if !moduleUpdateRunMu.TryLock() {
-		writeError(response, http.StatusConflict, "已有 Agent 安装正在进行")
+		writeError(response, http.StatusConflict, "Agent installation already in progress")
 		return
 	}
 	defer moduleUpdateRunMu.Unlock()
@@ -91,14 +91,14 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 		mode = "normal"
 	}
 	if mode != "normal" && mode != "repair" {
-		writeError(response, http.StatusBadRequest, "Agent 安装模式无效")
+		writeError(response, http.StatusBadRequest, "Invalid Agent installation mode")
 		return
 	}
 	operationID := fmt.Sprintf("update-%d", time.Now().UnixNano())
-	updateModuleInstallState(operationID, mode, "uploading", "", 5, "正在接收签名安装包", nil, false)
+	updateModuleInstallState(operationID, mode, "uploading", "", 5, "Receiving signed package", nil, false)
 	if mediaType := strings.TrimSpace(strings.Split(request.Header.Get("Content-Type"), ";")[0]); mediaType != moduleUpdateContentType {
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "安装包类型无效", errors.New("模块更新包 Content-Type 无效"), false)
-		writeError(response, http.StatusUnsupportedMediaType, "模块更新包 Content-Type 无效")
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Invalid package type", errors.New("Invalid module update package Content-Type"), false)
+		writeError(response, http.StatusUnsupportedMediaType, "Invalid module update package Content-Type")
 		return
 	}
 
@@ -109,8 +109,8 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 	voiceActive := a.voice.command != nil || a.voice.routeCommand != nil
 	a.voice.mu.Unlock()
 	if callActive || voiceActive {
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "通话或语音运行期间拒绝安装", errors.New("通话或语音桥运行期间禁止更新模块"), false)
-		writeError(response, http.StatusConflict, "通话或语音桥运行期间禁止更新模块")
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Installation refused while a call or voice runtime is active", errors.New("Cannot update module while a call or voice bridge is active"), false)
+		writeError(response, http.StatusConflict, "Cannot update module while a call or voice bridge is active")
 		return
 	}
 	// 自动升级和手动修复都可能接在一次失败安装之后。先删除仅由更新器创建的
@@ -129,16 +129,16 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 	request.Body = http.MaxBytesReader(response, request.Body, moduleUpdateMaxBytes)
 	temporary, err := os.CreateTemp("/data/local/tmp", "airsim-update-*.tar.gz")
 	if err != nil {
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "无法创建安装缓存", err, false)
-		writeError(response, http.StatusInternalServerError, "无法创建更新临时文件: "+err.Error())
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Cannot create installation cache", err, false)
+		writeError(response, http.StatusInternalServerError, "Cannot create temporary update file: "+err.Error())
 		return
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 	if _, err = io.Copy(temporary, request.Body); err != nil {
 		temporary.Close()
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "接收安装包失败", err, false)
-		writeError(response, http.StatusBadRequest, "读取模块更新包失败: "+err.Error())
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Failed to receive package", err, false)
+		writeError(response, http.StatusBadRequest, "Failed to read module update package: "+err.Error())
 		return
 	}
 	if err = temporary.Sync(); err == nil {
@@ -147,48 +147,48 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 		_ = temporary.Close()
 	}
 	if err != nil {
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "保存安装缓存失败", err, false)
-		writeError(response, http.StatusInternalServerError, "保存模块更新包失败: "+err.Error())
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Failed to save installation cache", err, false)
+		writeError(response, http.StatusInternalServerError, "Failed to save module update package: "+err.Error())
 		return
 	}
 
 	manifest, err := verifyModuleUpdateArchive(temporaryPath)
 	if err != nil {
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "安装包验证失败", err, false)
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Package verification failed", err, false)
 		writeError(response, http.StatusBadRequest, err.Error())
 		return
 	}
-	updateModuleInstallState(operationID, mode, "verifying", manifest.Version, 25, "签名、平台与文件摘要验证通过", nil, false)
+	updateModuleInstallState(operationID, mode, "verifying", manifest.Version, 25, "Signature, platform, and file digests verified", nil, false)
 	if !shouldInstallModuleVersion(agentVersion, manifest.Version, mode) {
 		writeJSON(response, http.StatusOK, map[string]any{
-			"updated": false, "version": agentVersion, "message": "模块已是相同或更高版本",
+			"updated": false, "version": agentVersion, "message": "Module already has the same or a newer version",
 		})
-		updateModuleInstallState(operationID, mode, "completed", manifest.Version, 100, "模块已是目标版本，无需更新", nil, false)
+		updateModuleInstallState(operationID, mode, "completed", manifest.Version, 100, "Module already has the target version; no update needed", nil, false)
 		return
 	}
 
-	updateModuleInstallState(operationID, mode, "installing", manifest.Version, 55, "正在暂存并原子替换 Agent", nil, false)
+	updateModuleInstallState(operationID, mode, "installing", manifest.Version, 55, "Staging and atomically replacing Agent", nil, false)
 	backupDirectory, err := installModuleUpdate(temporaryPath, manifest)
 	if err != nil {
-		updateModuleInstallState(operationID, mode, "failed", manifest.Version, 100, "安装失败，现有 Agent 保持不变", err, false)
-		writeError(response, http.StatusInternalServerError, "安装模块更新失败: "+err.Error())
+		updateModuleInstallState(operationID, mode, "failed", manifest.Version, 100, "Installation failed; existing Agent unchanged", err, false)
+		writeError(response, http.StatusInternalServerError, "Failed to install module update: "+err.Error())
 		return
 	}
 	if err := os.WriteFile(moduleUpdateMarker, []byte(backupDirectory+"\n"), 0o600); err != nil {
 		if rollbackErr := rollbackModuleUpdate(backupDirectory); rollbackErr != nil {
-			updateModuleInstallState(operationID, mode, "failed", manifest.Version, 100, "确认标记和回滚均失败", errors.Join(err, rollbackErr), false)
-			writeError(response, http.StatusInternalServerError, fmt.Sprintf("写入更新确认标记失败: %v；回滚也失败: %v", err, rollbackErr))
+			updateModuleInstallState(operationID, mode, "failed", manifest.Version, 100, "Confirmation marker and rollback both failed", errors.Join(err, rollbackErr), false)
+			writeError(response, http.StatusInternalServerError, fmt.Sprintf("Failed to write update confirmation marker: %v; rollback also failed: %v", err, rollbackErr))
 			return
 		}
-		updateModuleInstallState(operationID, mode, "rolled_back", manifest.Version, 100, "写入确认标记失败，已恢复旧 Agent", err, true)
-		writeError(response, http.StatusInternalServerError, "写入更新确认标记失败，已回滚: "+err.Error())
+		updateModuleInstallState(operationID, mode, "rolled_back", manifest.Version, 100, "Failed to write confirmation marker; previous Agent restored", err, true)
+		writeError(response, http.StatusInternalServerError, "Failed to write update confirmation marker; rolled back: "+err.Error())
 		return
 	}
-	updateModuleInstallState(operationID, mode, "restarting", manifest.Version, 80, "Agent 已安装，正在安全重启", nil, false)
+	updateModuleInstallState(operationID, mode, "restarting", manifest.Version, 80, "Agent installed; restarting safely", nil, false)
 
 	writeJSON(response, http.StatusOK, map[string]any{
 		"updated": true, "version": manifest.Version, "restart_required": true,
-		"message": "更新已验证并安装，模块代理正在安全重启",
+		"message": "Update verified and installed; module Agent is restarting safely",
 	})
 	go func() {
 		time.Sleep(750 * time.Millisecond)
@@ -251,7 +251,7 @@ func cleanupStaleModuleUpdateArtifacts(dataRoot, temporaryRoot, markerPath strin
 func moduleUpdatePublicKey() (ed25519.PublicKey, error) {
 	decoded, err := base64.StdEncoding.DecodeString(moduleUpdatePublicKeyBase64)
 	if err != nil || len(decoded) != ed25519.PublicKeySize {
-		return nil, errors.New("模块更新公钥配置无效")
+		return nil, errors.New("Invalid module update public key configuration")
 	}
 	return ed25519.PublicKey(decoded), nil
 }
@@ -266,14 +266,14 @@ func verifyModuleUpdateArchive(path string) (moduleUpdateManifest, error) {
 		return moduleUpdateManifest{}, err
 	}
 	if len(signature) != ed25519.SignatureSize || !ed25519.Verify(publicKey, manifestData, signature) {
-		return moduleUpdateManifest{}, errors.New("模块更新包签名无效")
+		return moduleUpdateManifest{}, errors.New("Invalid module update package signature")
 	}
 
 	decoder := json.NewDecoder(strings.NewReader(string(manifestData)))
 	decoder.DisallowUnknownFields()
 	var manifest moduleUpdateManifest
 	if err := decoder.Decode(&manifest); err != nil {
-		return moduleUpdateManifest{}, fmt.Errorf("模块更新清单无效: %w", err)
+		return moduleUpdateManifest{}, fmt.Errorf("Invalid module update manifest: %w", err)
 	}
 	if err := validateModuleUpdateManifest(manifest); err != nil {
 		return moduleUpdateManifest{}, err
@@ -290,19 +290,19 @@ func readModuleUpdateMetadata(path string) ([]byte, []byte, error) {
 
 	manifestHeader, err := reader.Next()
 	if err != nil || manifestHeader.Name != "manifest.json" || manifestHeader.Size <= 0 || manifestHeader.Size > 64*1024 {
-		return nil, nil, errors.New("模块更新包必须以有效 manifest.json 开始")
+		return nil, nil, errors.New("Module update package must begin with a valid manifest.json")
 	}
 	manifestData, err := io.ReadAll(io.LimitReader(reader, manifestHeader.Size))
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取模块更新清单失败: %w", err)
+		return nil, nil, fmt.Errorf("Failed to read module update manifest: %w", err)
 	}
 	signatureHeader, err := reader.Next()
 	if err != nil || signatureHeader.Name != "manifest.sig" || signatureHeader.Size != ed25519.SignatureSize {
-		return nil, nil, errors.New("模块更新包缺少有效 manifest.sig")
+		return nil, nil, errors.New("Module update package lacks a valid manifest.sig")
 	}
 	signature, err := io.ReadAll(io.LimitReader(reader, signatureHeader.Size))
 	if err != nil {
-		return nil, nil, fmt.Errorf("读取模块更新签名失败: %w", err)
+		return nil, nil, fmt.Errorf("Failed to read module update signature: %w", err)
 	}
 	return manifestData, signature, nil
 }
@@ -315,7 +315,7 @@ func openModuleUpdateArchive(path string) (*tar.Reader, func(), error) {
 	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
 		file.Close()
-		return nil, func() {}, fmt.Errorf("模块更新包不是有效 gzip: %w", err)
+		return nil, func() {}, fmt.Errorf("Module update package is not valid gzip: %w", err)
 	}
 	closeReader := func() {
 		_ = gzipReader.Close()
@@ -326,29 +326,29 @@ func openModuleUpdateArchive(path string) (*tar.Reader, func(), error) {
 
 func validateModuleUpdateManifest(manifest moduleUpdateManifest) error {
 	if manifest.FormatVersion != moduleUpdateFormat || manifest.Platform != moduleUpdatePlatform {
-		return errors.New("模块更新包格式或硬件平台不匹配")
+		return errors.New("Module update package format or hardware platform mismatch")
 	}
 	if !regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(manifest.Version) {
-		return errors.New("模块更新版本号无效")
+		return errors.New("Invalid module update version")
 	}
 	if len(manifest.Files) != len(moduleUpdateTargets) {
-		return errors.New("模块更新包文件集合不完整")
+		return errors.New("Incomplete module update file set")
 	}
 	seen := make(map[string]bool, len(manifest.Files))
 	var totalSize int64
 	for _, item := range manifest.Files {
 		target, ok := moduleUpdateTargets[item.Name]
 		if !ok || seen[item.Name] || item.Target != target.target || item.Mode != target.mode {
-			return fmt.Errorf("模块更新文件 %q 的目标或权限无效", item.Name)
+			return fmt.Errorf("Invalid destination or permissions for module update file %q", item.Name)
 		}
 		if item.Size <= 0 || item.Size > moduleUpdateMaxBytes || !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(item.SHA256) {
-			return fmt.Errorf("模块更新文件 %q 的大小或摘要无效", item.Name)
+			return fmt.Errorf("Invalid size or digest for module update file %q", item.Name)
 		}
 		seen[item.Name] = true
 		totalSize += item.Size
 	}
 	if totalSize > moduleUpdateMaxBytes {
-		return errors.New("模块更新包解压后超过大小限制")
+		return errors.New("Extracted module update package exceeds size limit")
 	}
 	return nil
 }
@@ -368,7 +368,7 @@ func installModuleUpdate(path string, manifest moduleUpdateManifest) (string, er
 	available := filesystemFreeBytes(agentDataDirectory)
 	if stagingBytes+stagingMargin > available {
 		return "", fmt.Errorf(
-			"差量暂存空间不足: required=%d available=%d: no space left on device",
+			"Insufficient incremental staging space: required=%d available=%d: no space left on device",
 			stagingBytes+stagingMargin,
 			available,
 		)
@@ -406,12 +406,12 @@ func installModuleUpdate(path string, manifest moduleUpdateManifest) (string, er
 			continue
 		}
 		if header.Typeflag != tar.TypeReg || !strings.HasPrefix(header.Name, "payload/") {
-			return "", fmt.Errorf("模块更新包包含不允许的归档项: %s", header.Name)
+			return "", fmt.Errorf("Module update package contains a disallowed archive entry: %s", header.Name)
 		}
 		name := strings.TrimPrefix(header.Name, "payload/")
 		item, ok := manifestFiles[name]
 		if !ok || seen[name] || header.Size != item.Size {
-			return "", fmt.Errorf("模块更新载荷 %q 不在清单中或大小不匹配", name)
+			return "", fmt.Errorf("Module update payload %q is missing from manifest or has an incorrect size", name)
 		}
 		digest := sha256.New()
 		var copyErr, syncErr, closeErr error
@@ -431,12 +431,12 @@ func installModuleUpdate(path string, manifest moduleUpdateManifest) (string, er
 			return "", errors.Join(copyErr, syncErr, closeErr)
 		}
 		if hex.EncodeToString(digest.Sum(nil)) != item.SHA256 {
-			return "", fmt.Errorf("模块更新载荷 %q 的 SHA-256 不匹配", name)
+			return "", fmt.Errorf("SHA-256 mismatch for module update payload %q", name)
 		}
 		seen[name] = true
 	}
 	if len(seen) != len(manifest.Files) {
-		return "", errors.New("模块更新包缺少清单中的载荷")
+		return "", errors.New("Module update package is missing a manifest payload")
 	}
 	probePath := func(name string) string {
 		if changed[name] {
@@ -445,10 +445,10 @@ func installModuleUpdate(path string, manifest moduleUpdateManifest) (string, er
 		return filepath.Join(agentDataDirectory, manifestFiles[name].Target)
 	}
 	if output, err := exec.Command(probePath("qdc507-agent"), "--startup-probe", "runtime").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("新 Agent 启动探针失败: %v (%s)", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("New Agent startup probe failed: %v (%s)", err, strings.TrimSpace(string(output)))
 	}
 	if output, err := exec.Command(probePath(voiceHelperName), "--check").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("新 PCM helper 自检失败: %v (%s)", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("New PCM helper self-test failed: %v (%s)", err, strings.TrimSpace(string(output)))
 	}
 
 	backupDirectory := filepath.Join(agentDataDirectory, "backup", fmt.Sprintf("app-update-%d", time.Now().Unix()))
@@ -465,22 +465,22 @@ func installModuleUpdate(path string, manifest moduleUpdateManifest) (string, er
 			// payload bytes on the constrained /data filesystem.
 			if err := os.Link(targetPath, backupPath); err != nil {
 				_ = restoreInstalledUpdateFiles(backupDirectory, installed)
-				return "", fmt.Errorf("建立复用载荷 %s 的零拷贝回滚点失败: %w", item.Name, err)
+				return "", fmt.Errorf("Failed to create zero-copy rollback point for reused payload %s: %w", item.Name, err)
 			}
 			continue
 		}
 		if err := os.Rename(targetPath, backupPath); err != nil {
 			_ = restoreInstalledUpdateFiles(backupDirectory, installed)
-			return "", fmt.Errorf("备份 %s 失败: %w", item.Name, err)
+			return "", fmt.Errorf("Failed to back up %s: %w", item.Name, err)
 		}
 		if err := os.Rename(filepath.Join(stagingDirectory, item.Name), targetPath); err != nil {
 			_ = os.Rename(backupPath, targetPath)
 			_ = restoreInstalledUpdateFiles(backupDirectory, installed)
-			return "", fmt.Errorf("提交 %s 失败: %w", item.Name, err)
+			return "", fmt.Errorf("Failed to commit %s: %w", item.Name, err)
 		}
 		if err := os.Chmod(targetPath, os.FileMode(item.Mode)); err != nil {
 			_ = restoreInstalledUpdateFiles(backupDirectory, append(installed, item))
-			return "", fmt.Errorf("设置 %s 权限失败: %w", item.Name, err)
+			return "", fmt.Errorf("Failed to set permissions for %s: %w", item.Name, err)
 		}
 		installed = append(installed, item)
 	}
@@ -492,7 +492,7 @@ func moduleUpdateFilesRequiringReplacement(manifest moduleUpdateManifest, dataRo
 	for _, item := range manifest.Files {
 		matches, err := fileMatchesSHA256(filepath.Join(dataRoot, item.Target), item.SHA256)
 		if err != nil {
-			return nil, fmt.Errorf("读取已安装载荷 %s 失败: %w", item.Name, err)
+			return nil, fmt.Errorf("Failed to read installed payload %s: %w", item.Name, err)
 		}
 		if !matches {
 			changed = append(changed, item)

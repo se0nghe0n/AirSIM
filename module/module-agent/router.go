@@ -29,7 +29,7 @@ const (
 	routerHostsEnd             = "# AIRSIM WRT LITE END"
 )
 
-var errRouterRateShapingUnavailable = errors.New("当前 QDC507 内核未包含 TBF/HTB，无法启用速率整形")
+var errRouterRateShapingUnavailable = errors.New("Current QDC507 kernel lacks TBF/HTB; rate shaping unavailable")
 
 type routerCapabilities struct {
 	NAT               bool `json:"nat"`
@@ -93,27 +93,27 @@ func defaultRouterConfig() routerConfig {
 
 func validateRouterConfig(config routerConfig, capabilities routerCapabilities) error {
 	if config.QuotaResetDay < 1 || config.QuotaResetDay > 28 {
-		return errors.New("quota_reset_day 必须在 1 到 28 之间")
+		return errors.New("quota_reset_day must be between 1 and 28")
 	}
 	if config.DownloadLimitKbps < 0 || config.UploadLimitKbps < 0 {
-		return errors.New("速率限制不能为负数")
+		return errors.New("Rate limits must not be negative")
 	}
 	if !capabilities.RateShaping && (config.DownloadLimitKbps > 0 || config.UploadLimitKbps > 0) {
 		return errRouterRateShapingUnavailable
 	}
 	for _, schedule := range config.Schedules {
 		if !capabilities.Schedules {
-			return errors.New("当前 Agent 不支持定时断网")
+			return errors.New("This Agent does not support scheduled network disconnection")
 		}
 		if _, ok := parseRouterClock(schedule.Start); !ok {
-			return fmt.Errorf("定时计划 %q 的 start 无效", schedule.Name)
+			return fmt.Errorf("Invalid start for schedule %q", schedule.Name)
 		}
 		if _, ok := parseRouterClock(schedule.End); !ok {
-			return fmt.Errorf("定时计划 %q 的 end 无效", schedule.Name)
+			return fmt.Errorf("Invalid end for schedule %q", schedule.Name)
 		}
 		for _, weekday := range schedule.Weekdays {
 			if weekday < 0 || weekday > 6 {
-				return fmt.Errorf("定时计划 %q 的 weekday 无效", schedule.Name)
+				return fmt.Errorf("Invalid weekday for schedule %q", schedule.Name)
 			}
 		}
 	}
@@ -121,35 +121,35 @@ func validateRouterConfig(config routerConfig, capabilities routerCapabilities) 
 	seenPorts := make(map[string]bool)
 	for _, forward := range config.PortForwards {
 		if !capabilities.PortForwarding {
-			return errors.New("当前 Agent 不支持端口转发")
+			return errors.New("This Agent does not support port forwarding")
 		}
 		protocol := strings.ToLower(forward.Protocol)
 		if protocol != "tcp" && protocol != "udp" {
-			return fmt.Errorf("端口转发 %q 的 protocol 必须是 tcp 或 udp", forward.Name)
+			return fmt.Errorf("protocol for port forward %q must be tcp or udp", forward.Name)
 		}
 		if forward.ExternalPort < 1 || forward.ExternalPort > 65535 || forward.InternalPort < 1 || forward.InternalPort > 65535 {
-			return fmt.Errorf("端口转发 %q 的端口无效", forward.Name)
+			return fmt.Errorf("Invalid port for port forward %q", forward.Name)
 		}
 		ip := net.ParseIP(forward.InternalIP)
 		if ip == nil || ip.To4() == nil || !lanNetwork.Contains(ip) || forward.InternalIP == "192.168.225.1" {
-			return fmt.Errorf("端口转发 %q 的目标必须位于模块 LAN", forward.Name)
+			return fmt.Errorf("Destination for port forward %q must be on the module LAN", forward.Name)
 		}
 		key := fmt.Sprintf("%s:%d", protocol, forward.ExternalPort)
 		if seenPorts[key] {
-			return fmt.Errorf("端口转发外部端口重复: %s", key)
+			return fmt.Errorf("Duplicate external port for port forwarding: %s", key)
 		}
 		seenPorts[key] = true
 	}
 	for _, override := range config.DNSOverrides {
 		if !capabilities.DNSOverrides {
-			return errors.New("当前 Agent 不支持 DNS 覆盖")
+			return errors.New("This Agent does not support DNS overrides")
 		}
 		if !validRouterHostname(override.Hostname) {
-			return fmt.Errorf("DNS 主机名无效: %q", override.Hostname)
+			return fmt.Errorf("Invalid DNS hostname: %q", override.Hostname)
 		}
 		ip := net.ParseIP(override.Address)
 		if ip == nil || ip.To4() == nil {
-			return fmt.Errorf("DNS 地址无效: %q", override.Address)
+			return fmt.Errorf("Invalid DNS address: %q", override.Address)
 		}
 	}
 	return nil
@@ -530,7 +530,7 @@ func newRouterManager(dataDirectory string) *routerManager {
 	_ = readRouterJSON(manager.historyPath, &manager.history)
 	if err := validateRouterConfig(manager.config, manager.capabilities); err != nil {
 		manager.config = defaultRouterConfig()
-		manager.lastError = "配置已恢复默认值: " + err.Error()
+		manager.lastError = "Configuration reset to defaults: " + err.Error()
 	}
 	return manager
 }
@@ -637,7 +637,7 @@ func applyRouterActions(actions []routerAction) error {
 		switch action.Kind {
 		case "sysctl":
 			if action.Key != "net.ipv4.ip_forward" || (action.Value != "0" && action.Value != "1") {
-				return fmt.Errorf("拒绝未知 sysctl 动作: %#v", action)
+				return fmt.Errorf("Rejected unknown sysctl action: %#v", action)
 			}
 			if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte(action.Value+"\n"), 0o644); err != nil {
 				return err
@@ -666,7 +666,7 @@ func applyRouterActions(actions []routerAction) error {
 				}
 			}
 		default:
-			return fmt.Errorf("拒绝未知路由动作: %s", action.Kind)
+			return fmt.Errorf("Rejected unknown route action: %s", action.Kind)
 		}
 	}
 	return nil
@@ -823,15 +823,15 @@ func (manager *routerManager) monitorLoop(ctx context.Context, report func(strin
 	run := func() {
 		if err := manager.sampleUsage(time.Now()); err != nil {
 			manager.mu.Lock()
-			manager.lastError = "流量采样失败: " + err.Error()
+			manager.lastError = "Traffic sampling failed: " + err.Error()
 			manager.mu.Unlock()
 			return
 		}
 		actions, err := manager.reconcile()
 		if err != nil {
-			report("WRT Lite 路由校验失败", err.Error())
+			report("WRT Lite route validation failed", err.Error())
 		} else if len(actions) > 0 {
-			report("WRT Lite 已修复路由", fmt.Sprintf("actions=%d", len(actions)))
+			report("WRT Lite routes repaired", fmt.Sprintf("actions=%d", len(actions)))
 		}
 	}
 	run()
@@ -844,13 +844,13 @@ func (manager *routerManager) monitorLoop(ctx context.Context, report func(strin
 		case <-persistTicker.C:
 			_, usage, _, _, _ := manager.currentState()
 			if err := writeRouterJSON(manager.usagePath, usage); err != nil {
-				report("WRT Lite 流量记录保存失败", err.Error())
+				report("Failed to save WRT Lite traffic records", err.Error())
 			}
 			manager.mu.Lock()
 			history := manager.history
 			manager.mu.Unlock()
 			if err := writeRouterJSON(manager.historyPath, history); err != nil {
-				report("WRT Lite 流量历史保存失败", err.Error())
+				report("Failed to save WRT Lite traffic history", err.Error())
 			}
 		}
 	}
@@ -861,7 +861,7 @@ func (a *agent) routerStatus(response http.ResponseWriter, request *http.Request
 		return
 	}
 	if a.router == nil {
-		writeError(response, http.StatusServiceUnavailable, "WRT Lite 尚未初始化")
+		writeError(response, http.StatusServiceUnavailable, "WRT Lite is not initialized")
 		return
 	}
 	config, usage, capabilities, lastError, lastApplied := a.router.currentState()
@@ -884,7 +884,7 @@ func (a *agent) routerStatus(response http.ResponseWriter, request *http.Request
 
 func (a *agent) routerConfig(response http.ResponseWriter, request *http.Request) {
 	if a.router == nil {
-		writeError(response, http.StatusServiceUnavailable, "WRT Lite 尚未初始化")
+		writeError(response, http.StatusServiceUnavailable, "WRT Lite is not initialized")
 		return
 	}
 	switch request.Method {
@@ -920,7 +920,7 @@ func (a *agent) routerInternet(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	if a.router == nil {
-		writeError(response, http.StatusServiceUnavailable, "WRT Lite 尚未初始化")
+		writeError(response, http.StatusServiceUnavailable, "WRT Lite is not initialized")
 		return
 	}
 	var body struct {
@@ -930,7 +930,7 @@ func (a *agent) routerInternet(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	if body.Enabled == nil {
-		writeError(response, http.StatusBadRequest, "缺少 enabled")
+		writeError(response, http.StatusBadRequest, "enabled is required")
 		return
 	}
 	config, _, _, _, _ := a.router.currentState()
@@ -952,7 +952,7 @@ func (a *agent) routerQuotaReset(response http.ResponseWriter, request *http.Req
 		return
 	}
 	if a.router == nil {
-		writeError(response, http.StatusServiceUnavailable, "WRT Lite 尚未初始化")
+		writeError(response, http.StatusServiceUnavailable, "WRT Lite is not initialized")
 		return
 	}
 	if err := a.router.resetQuota(time.Now()); err != nil {
@@ -968,7 +968,7 @@ func (a *agent) routerRepair(response http.ResponseWriter, request *http.Request
 		return
 	}
 	if a.router == nil {
-		writeError(response, http.StatusServiceUnavailable, "WRT Lite 尚未初始化")
+		writeError(response, http.StatusServiceUnavailable, "WRT Lite is not initialized")
 		return
 	}
 	actions, err := a.router.reconcile()

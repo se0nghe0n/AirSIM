@@ -513,14 +513,14 @@ func (a *agent) callEvents(response http.ResponseWriter, request *http.Request) 
 	}
 	after, err := strconv.ParseUint(request.URL.Query().Get("after"), 10, 64)
 	if err != nil {
-		writeError(response, http.StatusBadRequest, "通话事件游标无效")
+		writeError(response, http.StatusBadRequest, "Invalid call event cursor")
 		return
 	}
 	timeoutMS := 25_000
 	if raw := request.URL.Query().Get("timeout_ms"); raw != "" {
 		parsed, parseErr := strconv.Atoi(raw)
 		if parseErr != nil || parsed < 100 || parsed > 30_000 {
-			writeError(response, http.StatusBadRequest, "通话事件等待时间无效")
+			writeError(response, http.StatusBadRequest, "Invalid call event wait time")
 			return
 		}
 		timeoutMS = parsed
@@ -570,14 +570,14 @@ func (a *agent) agentEvents(response http.ResponseWriter, request *http.Request)
 	}
 	after, err := strconv.ParseUint(request.URL.Query().Get("after"), 10, 64)
 	if err != nil {
-		writeError(response, http.StatusBadRequest, "事件游标无效")
+		writeError(response, http.StatusBadRequest, "Invalid event cursor")
 		return
 	}
 	timeoutMS := 15_000
 	if raw := request.URL.Query().Get("timeout_ms"); raw != "" {
 		parsed, parseErr := strconv.Atoi(raw)
 		if parseErr != nil || parsed < 100 || parsed > 30_000 {
-			writeError(response, http.StatusBadRequest, "事件等待时间无效")
+			writeError(response, http.StatusBadRequest, "Invalid event wait time")
 			return
 		}
 		timeoutMS = parsed
@@ -654,7 +654,7 @@ func (a *agent) dial(response http.ResponseWriter, request *http.Request) {
 func (a *agent) dialNumber(raw string) (map[string]any, error) {
 	number := normalizeDialNumber(raw)
 	if number == "" || len(number) > 82 {
-		return nil, errors.New("号码为空、过长或包含非法字符")
+		return nil, errors.New("Number is empty, too long, or contains invalid characters")
 	}
 	a.mu.RLock()
 	active := a.calls.Active
@@ -726,7 +726,7 @@ func (a *agent) answerCallForID(expectedID string) error {
 	a.mu.Lock()
 	if expectedID != "" && (a.calls.Active == nil || a.calls.Active.ID != expectedID) {
 		a.mu.Unlock()
-		return errors.New("通话 ID 已失效")
+		return errors.New("Call ID is no longer valid")
 	}
 	if time.Since(a.calls.LastAnswerAt) < 2*time.Second {
 		a.mu.Unlock()
@@ -803,7 +803,7 @@ func readLocalCallControlID(response http.ResponseWriter, request *http.Request)
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 8*1024))
 	if err := decoder.Decode(&body); err != nil && !errors.Is(err, io.EOF) {
-		writeError(response, http.StatusBadRequest, "通话控制请求无效")
+		writeError(response, http.StatusBadRequest, "Invalid call control request")
 		return "", false
 	}
 	return body.CallID, true
@@ -816,7 +816,7 @@ func (a *agent) requireActiveCallID(expectedID string) error {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.calls.Active == nil || a.calls.Active.ID != expectedID {
-		return errors.New("通话 ID 已失效")
+		return errors.New("Call ID is no longer valid")
 	}
 	return nil
 }
@@ -900,13 +900,13 @@ func hangupAndConfirmCall(
 		if len(parseCLCC(response)) == 0 {
 			return index + 1, lastCLCC, nil
 		}
-		lastErr = errors.New("CLCC 仍报告活动语音通话")
+		lastErr = errors.New("CLCC still reports an active voice call")
 	}
 	if lastErr == nil {
-		lastErr = errors.New("CLCC 未返回空闲状态")
+		lastErr = errors.New("CLCC did not return idle state")
 	}
 	return len(delays), lastCLCC, fmt.Errorf(
-		"挂断 AT 已返回，但 CLCC 最终确认失败: %w；last_clcc=%q",
+		"End-call AT command returned, but final CLCC confirmation failed: %w; last_clcc=%q",
 		lastErr, lastCLCC,
 	)
 }
@@ -954,7 +954,7 @@ func (a *agent) dtmf(response http.ResponseWriter, request *http.Request) {
 
 func (a *agent) sendDTMFDigit(digit string) error {
 	if len(digit) != 1 || !strings.Contains("0123456789*#", digit) {
-		return errors.New("DTMF 仅支持 0-9、*、#")
+		return errors.New("DTMF only supports 0-9, *, and #")
 	}
 	if a.profile.AndroidTelecom {
 		commandID, err := randomUUID()
@@ -1010,11 +1010,11 @@ func (a *agent) recording(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if body.Action != "start" && body.Action != "stop" {
-		writeError(response, http.StatusBadRequest, "action 必须是 start 或 stop")
+		writeError(response, http.StatusBadRequest, "action must be start or stop")
 		return
 	}
 	// 模块代理不能伪造录音成功；后续由语音桥输出双向 PCM 后才开放此接口。
-	a.unsupported(response, "模块侧双向 PCM 录音尚未接入")
+	a.unsupported(response, "Module-side bidirectional PCM recording is not supported yet")
 }
 
 func (a *agent) audioHostRegister(response http.ResponseWriter, request *http.Request) {
@@ -1032,7 +1032,7 @@ func (a *agent) audioHostRegister(response http.ResponseWriter, request *http.Re
 		callActive := a.calls.Active != nil && a.calls.Active.State == "active"
 		a.mu.RUnlock()
 		if !callActive {
-			writeError(response, http.StatusConflict, "通话尚未接通，不能启动网络 PCM")
+			writeError(response, http.StatusConflict, "Call is not connected; cannot start network PCM")
 			return
 		}
 		a.voice.mu.Lock()
@@ -1058,7 +1058,7 @@ func (a *agent) audioHostWarmup(response http.ResponseWriter, request *http.Requ
 	hasCall := a.calls.Active != nil
 	a.mu.RUnlock()
 	if !hasCall {
-		writeError(response, http.StatusConflict, "当前没有进行中的通话，不能预热语音运行时")
+		writeError(response, http.StatusConflict, "No active call; cannot warm up voice runtime")
 		return
 	}
 	go a.ensureVoiceRuntimeWarm()

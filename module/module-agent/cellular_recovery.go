@@ -64,7 +64,7 @@ type cellularRecoveryTracker struct {
 }
 
 func newCellularRecoveryTracker(now time.Time) *cellularRecoveryTracker {
-	return &cellularRecoveryTracker{lastRegisteredAt: now, status: "监测中"}
+	return &cellularRecoveryTracker{lastRegisteredAt: now, status: "Monitoring"}
 }
 
 func (tracker *cellularRecoveryTracker) snapshot() (string, time.Time) {
@@ -90,16 +90,16 @@ func (a *agent) observeCellularRegistration(registration int, source string) {
 		tracker.outageSince = time.Time{}
 		tracker.lastRegisteredAt = now
 		tracker.stage = cellularRecoveryIdle
-		tracker.status = "已注册"
+		tracker.status = "Registered"
 		tracker.mu.Unlock()
 		if wasRecovering {
-			a.debug.add("cellular", "event", "蜂窝网络已恢复注册", "", map[string]string{"source": source})
+			a.debug.add("cellular", "event", "Cellular network registration restored", "", map[string]string{"source": source})
 		}
 		return
 	}
 	if tracker.outageSince.IsZero() {
 		tracker.outageSince = now
-		tracker.status = "等待网络注册"
+		tracker.status = "Waiting for network registration"
 	}
 	if tracker.inFlight {
 		tracker.mu.Unlock()
@@ -124,10 +124,10 @@ func (a *agent) observeCellularRegistration(registration int, source string) {
 	switch action {
 	case cellularRecoveryAutomaticSelection:
 		tracker.stage = cellularRecoverySelectedNetwork
-		tracker.status = "正在自动选网"
+		tracker.status = "Selecting network automatically"
 	case cellularRecoveryRadioRestart:
 		tracker.stage = cellularRecoveryRestartedRadio
-		tracker.status = "正在软重启射频"
+		tracker.status = "Restarting radio"
 	}
 	tracker.mu.Unlock()
 	go a.executeCellularRecovery(action, source)
@@ -147,8 +147,8 @@ func (a *agent) executeCellularRecovery(action cellularRecoveryAction, source st
 	defer func() {
 		a.cellularRecovery.mu.Lock()
 		a.cellularRecovery.inFlight = false
-		if a.cellularRecovery.status == "正在自动选网" || a.cellularRecovery.status == "正在软重启射频" {
-			a.cellularRecovery.status = "等待网络注册"
+		if a.cellularRecovery.status == "Selecting network automatically" || a.cellularRecovery.status == "Restarting radio" {
+			a.cellularRecovery.status = "Waiting for network registration"
 		}
 		a.cellularRecovery.mu.Unlock()
 	}()
@@ -157,31 +157,31 @@ func (a *agent) executeCellularRecovery(action cellularRecoveryAction, source st
 	callActive := a.calls.Active != nil
 	a.mu.RUnlock()
 	if callActive {
-		a.debug.add("cellular", "event", "蜂窝恢复已取消", "通话进行中", map[string]string{"source": source})
+		a.debug.add("cellular", "event", "Cellular recovery canceled", "Call in progress", map[string]string{"source": source})
 		return
 	}
 
 	switch action {
 	case cellularRecoveryAutomaticSelection:
-		a.debug.add("cellular", "recovery", "开始自动选择运营商", "", map[string]string{"source": source})
+		a.debug.add("cellular", "recovery", "Starting automatic carrier selection", "", map[string]string{"source": source})
 		if _, err := a.at.command("AT+COPS=0", 60*time.Second); err != nil {
-			a.debug.add("cellular", "error", "自动选网失败", err.Error(), nil)
+			a.debug.add("cellular", "error", "Automatic network selection failed", err.Error(), nil)
 			return
 		}
-		a.debug.add("cellular", "recovery", "自动选网命令完成", "", nil)
+		a.debug.add("cellular", "recovery", "Automatic network selection command completed", "", nil)
 	case cellularRecoveryRadioRestart:
-		a.debug.add("cellular", "recovery", "开始射频软重启", "", map[string]string{"source": source})
+		a.debug.add("cellular", "recovery", "Starting radio restart", "", map[string]string{"source": source})
 		if _, err := a.at.command("AT+CFUN=0", 10*time.Second); err != nil {
-			a.debug.add("cellular", "error", "关闭射频失败", err.Error(), nil)
+			a.debug.add("cellular", "error", "Failed to turn off radio", err.Error(), nil)
 			return
 		}
 		time.Sleep(2 * time.Second)
 		if _, err := a.at.command("AT+CFUN=1", 20*time.Second); err != nil {
-			a.debug.add("cellular", "error", "恢复射频失败", err.Error(), nil)
+			a.debug.add("cellular", "error", "Failed to restore radio", err.Error(), nil)
 			return
 		}
 		_, _ = a.at.command("AT+CEREG=1", 3*time.Second)
-		a.debug.add("cellular", "recovery", "射频软重启完成", "", nil)
+		a.debug.add("cellular", "recovery", "Radio restart complete", "", nil)
 	}
 }
 
@@ -219,9 +219,9 @@ func (a *agent) cloudHeartbeatLoop() {
 			ECMCarrier: readDebugFile(usbCarrierPath), SignalDBM: signal,
 		})
 		if err != nil {
-			a.debug.add("cloud", "heartbeat", "Agent 云端心跳失败", err.Error(), nil)
+			a.debug.add("cloud", "heartbeat", "Agent cloud heartbeat failed", err.Error(), nil)
 		} else if syncErr := a.syncCloudCommandsOnce(); syncErr != nil {
-			a.debug.add("cloud-command", "pull_failed", "心跳后拉取待处理命令失败", syncErr.Error(), nil)
+			a.debug.add("cloud-command", "pull_failed", "Failed to fetch pending commands after heartbeat", syncErr.Error(), nil)
 		}
 		timer.Reset(30 * time.Second)
 	}

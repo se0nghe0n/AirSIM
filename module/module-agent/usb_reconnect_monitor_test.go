@@ -20,7 +20,7 @@ func TestECMLinkPowerCycleDoesNotDisconnectUSBDevice(t *testing.T) {
 		return nil
 	}
 	if err := powerCycleECMLink(run, func(time.Duration) {}); err != nil {
-		t.Fatalf("ECM 网卡下电重启失败: %v", err)
+		t.Fatalf("Failed to power-cycle ECM interface: %v", err)
 	}
 	want := []string{"ifconfig ecm0 down", "ifconfig ecm0 up"}
 	if !reflect.DeepEqual(commands, want) {

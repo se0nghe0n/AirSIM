@@ -156,13 +156,13 @@ func (a *agent) initializeVoiceAudioGateAtStartup() {
 	installed, err := validateVoiceRuntime()
 	if err != nil || !installed {
 		if err != nil {
-			appendVoiceDiagnosticEvent("启动阶段检查语音运行时失败: " + err.Error())
+			appendVoiceDiagnosticEvent("Failed to check voice runtime at startup: " + err.Error())
 		}
 		return
 	}
 	appendVoiceSystemSnapshot("audio-gate-before")
 	if err := a.ensureVoiceAudioGate(); err != nil {
-		appendVoiceDiagnosticEvent("启动阶段保持 f_audio/audio_enable 失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Failed to retain f_audio/audio_enable at startup: " + err.Error())
 		return
 	}
 	appendVoiceSystemSnapshot("audio-gate-after")
@@ -178,13 +178,13 @@ func (a *agent) ensureVoiceAudioGate() error {
 
 	current, err := os.ReadFile(voiceAudioEnablePath)
 	if err != nil {
-		return fmt.Errorf("读取 %s 失败: %w", voiceAudioEnablePath, err)
+		return fmt.Errorf("Failed to read %s: %w", voiceAudioEnablePath, err)
 	}
 	if strings.TrimSpace(string(current)) != "1" {
 		if err := os.WriteFile(voiceAudioEnablePath, []byte("1\n"), 0o600); err != nil {
-			return fmt.Errorf("启用 %s 失败: %w", voiceAudioEnablePath, err)
+			return fmt.Errorf("Failed to enable %s: %w", voiceAudioEnablePath, err)
 		}
-		appendVoiceDiagnosticEvent("f_audio/audio_enable 已在 Agent 启动周期内固定为 1")
+		appendVoiceDiagnosticEvent("f_audio/audio_enable fixed at 1 for this Agent session")
 	}
 	voiceAudioGateReady = true
 	return nil
@@ -196,18 +196,18 @@ func (a *agent) ensureVoiceRuntimeWarm() {
 	if !a.usesLocalVoiceRuntime() {
 		return
 	}
-	appendVoiceDiagnosticEvent("开始预热语音运行时")
+	appendVoiceDiagnosticEvent("Warming up voice runtime")
 	if err := prepareVoiceRuntime(); err != nil {
 		a.voice.mu.Lock()
 		a.voice.lastError = err.Error()
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("语音运行时预热失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Voice runtime warmup failed: " + err.Error())
 		return
 	}
 	a.voice.mu.Lock()
 	a.voice.lastError = ""
 	a.voice.mu.Unlock()
-	appendVoiceDiagnosticEvent("语音运行时预热完成")
+	appendVoiceDiagnosticEvent("Voice runtime warmup complete")
 }
 
 // validateVoiceRuntime 在执行任何内核模块前校验固定上游文件，拒绝运行被替换的二进制。
@@ -230,19 +230,19 @@ func validateVoiceRuntimeFiles(directory string, files map[string]string) (bool,
 			return false, nil
 		}
 		if err != nil {
-			return false, fmt.Errorf("读取语音运行时 %s 失败: %w", name, err)
+			return false, fmt.Errorf("Failed to read voice runtime %s: %w", name, err)
 		}
 		digest := sha256.New()
 		_, copyErr := io.CopyBuffer(digest, file, make([]byte, 32*1024))
 		closeErr := file.Close()
 		if copyErr != nil {
-			return false, fmt.Errorf("校验语音运行时 %s 失败: %w", name, copyErr)
+			return false, fmt.Errorf("Failed to verify voice runtime %s: %w", name, copyErr)
 		}
 		if closeErr != nil {
-			return false, fmt.Errorf("关闭语音运行时 %s 失败: %w", name, closeErr)
+			return false, fmt.Errorf("Failed to close voice runtime %s: %w", name, closeErr)
 		}
 		if hex.EncodeToString(digest.Sum(nil)) != expected {
-			return false, fmt.Errorf("语音运行时 %s 的 SHA-256 校验失败", name)
+			return false, fmt.Errorf("SHA-256 verification failed for voice runtime %s", name)
 		}
 	}
 	return true, nil
@@ -261,10 +261,10 @@ func (a *agent) ensureVoiceRouteListening() error {
 		a.voice.lastError = errorText(err)
 		a.voice.mu.Unlock()
 		if err != nil {
-			a.debug.add("voice-backend", "error", "三星 PCM 后端不可用", err.Error(), nil)
+			a.debug.add("voice-backend", "error", "Samsung PCM backend unavailable", err.Error(), nil)
 			return err
 		}
-		a.debug.add("voice-backend", "configured", "三星 PCM 端点已配置，等待媒体握手", "", map[string]string{
+		a.debug.add("voice-backend", "configured", "Samsung PCM endpoint configured; waiting for media handshake", "", map[string]string{
 			"backend": string(a.voiceBackend.kind),
 		})
 		return nil
@@ -288,7 +288,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 		a.voice.routeReady = false
 		a.voice.mediaRouteStarted = false
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("清理未完成的旧网络 PCM 会话")
+		appendVoiceDiagnosticEvent("Cleaning up incomplete previous network PCM session")
 		terminateVoiceProcess(oldCommand)
 		terminateVoiceProcess(oldRouteCommand)
 		if oldMediaRouteStarted {
@@ -297,26 +297,26 @@ func (a *agent) ensureVoiceRouteListening() error {
 	} else {
 		a.voice.mu.Unlock()
 	}
-	appendVoiceDiagnosticEvent("收到语音桥启动请求")
+	appendVoiceDiagnosticEvent("Voice bridge start request received")
 	if err := prepareVoiceRuntime(); err != nil {
 		a.voice.mu.Lock()
 		a.voice.lastError = err.Error()
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("语音运行时准备失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Voice runtime preparation failed: " + err.Error())
 		return err
 	}
 	if err := a.ensureVoiceAudioGate(); err != nil {
 		a.voice.mu.Lock()
 		a.voice.lastError = err.Error()
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("语音音频门准备失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Voice audio gate preparation failed: " + err.Error())
 		return err
 	}
 
 	helper := filepath.Join(voiceRuntimePath, voiceHelperName)
 	if output, err := exec.Command(helper, "--check").CombinedOutput(); err != nil {
 		a.voice.mu.Lock()
-		a.voice.lastError = commandFailure("语音桥自检失败", output, err).Error()
+		a.voice.lastError = commandFailure("Voice bridge self-test failed", output, err).Error()
 		lastError := a.voice.lastError
 		a.voice.mu.Unlock()
 		appendVoiceDiagnosticEvent(lastError)
@@ -329,7 +329,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 		return err
 	}
 	startedAt := time.Now().UTC()
-	appendVoiceDiagnosticEvent("开始新的网络 PCM 会话")
+	appendVoiceDiagnosticEvent("Starting new network PCM session")
 	logOffset := voiceDiagnosticLogSize()
 	a.voice.mu.Lock()
 	a.voice.startedAt = startedAt
@@ -339,7 +339,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 		a.voice.mu.Lock()
 		a.voice.lastError = err.Error()
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("VoLTE 路由会话启动失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Failed to start VoLTE route session: " + err.Error())
 		return err
 	}
 	// D4 只建立 AFE hostless 路由；voc_svr 的 S 命令负责启动基带媒体时钟，二者缺一不可。
@@ -348,14 +348,14 @@ func (a *agent) ensureVoiceRouteListening() error {
 		a.voice.lastError = err.Error()
 		routeCommand := a.voice.routeCommand
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("基带语音媒体路由启动失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Failed to start modem voice media route: " + err.Error())
 		terminateVoiceProcess(routeCommand)
 		return err
 	}
 	a.voice.mu.Lock()
 	a.voice.mediaRouteStarted = true
 	a.voice.mu.Unlock()
-	appendVoiceDiagnosticEvent("基带语音媒体路由已启动")
+	appendVoiceDiagnosticEvent("Modem voice media route started")
 	logFile, err := os.OpenFile(voiceRouteLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		a.voice.mu.Lock()
@@ -391,7 +391,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 		routeCommand := a.voice.routeCommand
 		mediaRouteStarted := a.voice.mediaRouteStarted
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("语音桥进程启动失败: " + err.Error())
+		appendVoiceDiagnosticEvent("Failed to start voice bridge process: " + err.Error())
 		terminateVoiceProcess(routeCommand)
 		if mediaRouteStarted {
 			stopVoiceMediaRouteForLifecycle()
@@ -405,7 +405,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 	a.voice.command = command
 	a.voice.mu.Unlock()
 	_ = os.WriteFile(voiceRoutePIDFile, []byte(strconv.Itoa(command.Process.Pid)+"\n"), 0o600)
-	appendVoiceDiagnosticEvent(fmt.Sprintf("语音桥进程已启动 pid=%d", command.Process.Pid))
+	appendVoiceDiagnosticEvent(fmt.Sprintf("Voice bridge process started pid=%d", command.Process.Pid))
 
 	done := make(chan error, 1)
 	go func() {
@@ -435,9 +435,9 @@ func (a *agent) ensureVoiceRouteListening() error {
 		}
 		exitDetail := errorText(waitErr)
 		if exitDetail == "" {
-			exitDetail = "正常退出"
+			exitDetail = "Exited normally"
 		}
-		appendVoiceDiagnosticEvent("语音桥进程退出: " + exitDetail)
+		appendVoiceDiagnosticEvent("Voice bridge process exited: " + exitDetail)
 	}()
 
 	deadline := time.Now().Add(voiceListenerReadyTimeout)
@@ -457,7 +457,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 				a.voice.mediaRouteStarted = false
 				a.voice.mu.Unlock()
 			}
-			return fmt.Errorf("语音桥在监听前退出: %s", errorText(waitErr))
+			return fmt.Errorf("Voice bridge exited before listening: %s", errorText(waitErr))
 		default:
 		}
 		if voiceRouteListeningFrom(logOffset) {
@@ -467,7 +467,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 			}
 			a.voice.lastError = ""
 			a.voice.mu.Unlock()
-			appendVoiceDiagnosticEvent("网络 PCM 已监听，等待客户端握手")
+			appendVoiceDiagnosticEvent("Network PCM listening; waiting for client handshake")
 			go a.observeVoiceRouteHandshake(command, logOffset)
 			return nil
 		}
@@ -477,7 +477,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 	a.voice.mu.Lock()
 	routeCommand := a.voice.routeCommand
 	a.voice.listening = false
-	a.voice.lastError = "网络 PCM 监听未在限定时间内就绪"
+	a.voice.lastError = "Network PCM listener did not become ready in time"
 	lastError := a.voice.lastError
 	mediaRouteStarted := a.voice.mediaRouteStarted
 	a.voice.mu.Unlock()
@@ -523,7 +523,7 @@ func (a *agent) observeVoiceRouteHandshake(command *exec.Cmd, logOffset int64) {
 			a.voice.lastError = ""
 		}
 		a.voice.mu.Unlock()
-		appendVoiceDiagnosticEvent("网络 PCM 握手与双向工作线程已就绪")
+		appendVoiceDiagnosticEvent("Network PCM handshake and bidirectional workers ready")
 		return
 	}
 }
@@ -575,7 +575,7 @@ func (a *agent) startVoiceRouteSession(helper string, logOffset int64) error {
 	a.voice.routeReady = false
 	a.voice.mu.Unlock()
 	_ = os.WriteFile(voiceSessionPIDFile, []byte(strconv.Itoa(command.Process.Pid)+"\n"), 0o600)
-	appendVoiceDiagnosticEvent(fmt.Sprintf("VoLTE 路由会话已启动 pid=%d", command.Process.Pid))
+	appendVoiceDiagnosticEvent(fmt.Sprintf("VoLTE route session started pid=%d", command.Process.Pid))
 
 	done := make(chan error, 1)
 	go func() {
@@ -593,9 +593,9 @@ func (a *agent) startVoiceRouteSession(helper string, logOffset int64) error {
 		a.voice.mu.Unlock()
 		exitDetail := errorText(waitErr)
 		if exitDetail == "" {
-			exitDetail = "正常退出"
+			exitDetail = "Exited normally"
 		}
-		appendVoiceDiagnosticEvent("VoLTE 路由会话退出: " + exitDetail)
+		appendVoiceDiagnosticEvent("VoLTE route session exited: " + exitDetail)
 	}()
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -605,20 +605,20 @@ func (a *agent) startVoiceRouteSession(helper string, logOffset int64) error {
 			a.voice.mu.Lock()
 			a.voice.routeCommand = nil
 			a.voice.mu.Unlock()
-			return fmt.Errorf("VoLTE 路由会话提前退出: %s", errorText(waitErr))
+			return fmt.Errorf("VoLTE route session exited early: %s", errorText(waitErr))
 		default:
 		}
 		if voiceRouteSessionReadyFrom(logOffset) {
 			a.voice.mu.Lock()
 			a.voice.routeReady = true
 			a.voice.mu.Unlock()
-			appendVoiceDiagnosticEvent("VoLTE D4 路由与 AFE mixer 已就绪")
+			appendVoiceDiagnosticEvent("VoLTE D4 route and AFE mixer ready")
 			return nil
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	terminateVoiceProcess(command)
-	return errors.New("VoLTE D4 路由会话未在限定时间内就绪")
+	return errors.New("VoLTE D4 route session did not become ready in time")
 }
 
 func stopVoiceMediaRoute() {
@@ -629,7 +629,7 @@ var stopVoiceMediaRouteForLifecycle = stopVoiceMediaRoute
 
 func startVoiceMediaRoute() error {
 	if err := writeVoiceMediaRoute(voiceMediaRouteFIFO, "S\n"); err != nil {
-		return fmt.Errorf("启动模块 D5/D6 基带媒体路由失败: %w", err)
+		return fmt.Errorf("Failed to start module D5/D6 modem media route: %w", err)
 	}
 	return nil
 }
@@ -637,7 +637,7 @@ func startVoiceMediaRoute() error {
 func writeVoiceMediaRoute(path string, command string) error {
 	fifo, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return fmt.Errorf("打开语音路由 FIFO 失败: %w", err)
+		return fmt.Errorf("Failed to open voice route FIFO: %w", err)
 	}
 	_, writeErr := fifo.WriteString(command)
 	closeErr := fifo.Close()
@@ -660,11 +660,11 @@ func prepareVoiceRuntimeUnlocked() error {
 		return err
 	}
 	if !installed {
-		return errors.New("模块语音运行时未安装")
+		return errors.New("Module voice runtime not installed")
 	}
 	release, err := os.ReadFile("/proc/sys/kernel/osrelease")
 	if err != nil || !strings.Contains(string(release), voiceExpectedKernel) {
-		return fmt.Errorf("模块内核不匹配，需要 %s，实际 %s", voiceExpectedKernel, strings.TrimSpace(string(release)))
+		return fmt.Errorf("Module kernel mismatch: requires %s; found %s", voiceExpectedKernel, strings.TrimSpace(string(release)))
 	}
 	modules, _ := os.ReadFile("/proc/modules")
 	for _, item := range []struct{ file, module string }{{"qdc507_aprv3.ko", "qdc507_aprv3"}, {"qdc507_voice.ko", "qdc507_voice"}} {
@@ -676,7 +676,7 @@ func prepareVoiceRuntimeUnlocked() error {
 			output, commandErr = exec.Command("insmod", filepath.Join(voiceRuntimePath, item.file)).CombinedOutput()
 		}
 		if commandErr != nil {
-			return commandFailure("加载 "+item.file+" 失败", output, commandErr)
+			return commandFailure("Loading "+item.file+" failed", output, commandErr)
 		}
 	}
 	deadline := time.Now().Add(20 * time.Second)
@@ -686,7 +686,7 @@ func prepareVoiceRuntimeUnlocked() error {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return errors.New("语音驱动已加载，但 ALSA D4/D5/D6 设备没有出现")
+	return errors.New("Voice driver loaded, but ALSA D4/D5/D6 devices did not appear")
 }
 
 func voiceDevicesReady() bool {
@@ -712,7 +712,7 @@ func ensureVoiceCalibration() error {
 	command.Stderr = logFile
 	if err := command.Start(); err != nil {
 		logFile.Close()
-		return fmt.Errorf("启动 VoLTE ACDB 校准服务失败: %w", err)
+		return fmt.Errorf("Failed to start VoLTE ACDB calibration service: %w", err)
 	}
 	go func() {
 		_ = command.Wait()
@@ -724,11 +724,11 @@ func ensureVoiceCalibration() error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !fileExists(voiceCalibrationFIFO) {
-		return errors.New("VoLTE ACDB 校准 FIFO 没有出现")
+		return errors.New("VoLTE ACDB calibration FIFO did not appear")
 	}
 	fifo, err := os.OpenFile(voiceCalibrationFIFO, os.O_WRONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return fmt.Errorf("打开 VoLTE ACDB 校准 FIFO 失败: %w", err)
+		return fmt.Errorf("Failed to open VoLTE ACDB calibration FIFO: %w", err)
 	}
 	_, writeErr := fifo.WriteString("open snd_soc_msm_9x07_Tomtom_I2S\nset _verb VoLTE\nset _enadev Auxpcm Rx\nset _enadev Auxpcm Tx\n")
 	_ = fifo.Close()
@@ -742,7 +742,7 @@ func ensureVoiceCalibration() error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return errors.New("VoLTE ACDB 校准未确认完成")
+	return errors.New("VoLTE ACDB calibration did not confirm completion")
 }
 
 func voiceRouteReadyFrom(offset int64) bool {
@@ -784,7 +784,7 @@ func (a *agent) stopVoiceRoute() {
 		a.voice.mediaRouteStarted = false
 		a.voice.lastError = ""
 		a.voice.mu.Unlock()
-		a.debug.add("voice-backend", "stopped", "三星 PCM Agent 会话已释放", "", map[string]string{
+		a.debug.add("voice-backend", "stopped", "Samsung PCM Agent session released", "", map[string]string{
 			"backend": string(a.voiceBackend.kind),
 		})
 		return
@@ -849,7 +849,7 @@ func appendVoiceSystemSnapshot(label string) {
 		"usb_functions=" + readSystemState("/sys/class/android_usb/android0/functions"),
 		"audio_enable=" + readSystemState(voiceAudioEnablePath),
 	}
-	appendVoiceDiagnosticEvent("系统快照[" + label + "]: " + strings.Join(values, " "))
+	appendVoiceDiagnosticEvent("System snapshot[" + label + "]: " + strings.Join(values, " "))
 }
 
 func readSystemState(path string) string {
@@ -894,20 +894,20 @@ func prepareVoiceDiagnosticLog() error {
 	voiceDiagnosticLogMu.Lock()
 	defer voiceDiagnosticLogMu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(voiceRouteLogFile), 0o700); err != nil {
-		return fmt.Errorf("创建语音诊断目录失败: %w", err)
+		return fmt.Errorf("Failed to create voice diagnostics directory: %w", err)
 	}
 	info, err := os.Stat(voiceRouteLogFile)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("读取语音诊断日志失败: %w", err)
+		return fmt.Errorf("Failed to read voice diagnostics log: %w", err)
 	}
 	if info.Size() < voiceRouteLogMaxBytes {
 		return nil
 	}
 	if err := os.Rename(voiceRouteLogFile, voiceRouteLogBackup); err != nil {
-		return fmt.Errorf("轮换语音诊断日志失败: %w", err)
+		return fmt.Errorf("Failed to rotate voice diagnostics log: %w", err)
 	}
 	return nil
 }

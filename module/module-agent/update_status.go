@@ -47,7 +47,7 @@ var (
 func defaultModuleUpdateState() moduleUpdateState {
 	return moduleUpdateState{
 		Phase: "idle", InstalledVersion: agentVersion,
-		Message: "尚未执行安装", UpdatedAt: time.Now().UTC(),
+		Message: "No installation has run yet", UpdatedAt: time.Now().UTC(),
 	}
 }
 
@@ -160,7 +160,7 @@ func (a *agent) systemUpdateLog(response http.ResponseWriter, request *http.Requ
 		err = nil
 	}
 	if err != nil || after < 0 {
-		writeError(response, http.StatusBadRequest, "日志偏移无效")
+		writeError(response, http.StatusBadRequest, "Invalid log offset")
 		return
 	}
 	file, err := os.Open(moduleUpdateLogPath)
@@ -169,26 +169,26 @@ func (a *agent) systemUpdateLog(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "无法读取安装日志")
+		writeError(response, http.StatusInternalServerError, "Cannot read installation log")
 		return
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		writeError(response, http.StatusInternalServerError, "无法读取安装日志状态")
+		writeError(response, http.StatusInternalServerError, "Cannot read installation log status")
 		return
 	}
 	if after > info.Size() {
 		after = 0
 	}
 	if _, err = file.Seek(after, io.SeekStart); err != nil {
-		writeError(response, http.StatusInternalServerError, "无法定位安装日志")
+		writeError(response, http.StatusInternalServerError, "Cannot seek installation log")
 		return
 	}
 	buffer := make([]byte, moduleUpdateLogChunk)
 	count, readErr := file.Read(buffer)
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
-		writeError(response, http.StatusInternalServerError, "无法读取安装日志")
+		writeError(response, http.StatusInternalServerError, "Cannot read installation log")
 		return
 	}
 	next := after + int64(count)
@@ -243,7 +243,7 @@ func completedModuleUpdateState(state moduleUpdateState, runningVersion string, 
 	state.Phase = "completed"
 	state.InstalledVersion = runningVersion
 	state.Progress = 100
-	state.Message = "新 Agent 健康检查通过"
+	state.Message = "New Agent passed health check"
 	state.Error = ""
 	state.RollbackConfirmed = false
 	return state, true

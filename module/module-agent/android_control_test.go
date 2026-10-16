@@ -581,7 +581,7 @@ func TestCloudMediaRejectDoesNotTargetNewAndroidCall(t *testing.T) {
 	err := a.executeIncomingCloudCallAction(cloudCallAction{
 		CallID: "old-call", CommandID: "cloud-media-reject",
 	}, "reject")
-	if err == nil || !strings.Contains(err.Error(), "通话 ID 已失效") {
+	if err == nil || !strings.Contains(err.Error(), "Call ID is no longer valid") {
 		t.Fatalf("stale media reject should fail without a Telecom command, err=%v", err)
 	}
 	if _, ok := a.android.next(context.Background(), 10*time.Millisecond); ok {

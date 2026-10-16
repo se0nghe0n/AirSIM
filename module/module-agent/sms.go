@@ -182,10 +182,10 @@ func containsSMS(messages []smsMessage, candidate smsMessage) bool {
 
 func (a *agent) readAllSMS() ([]storedSMS, error) {
 	if _, err := a.at.command("AT+CMGF=1", 3*time.Second); err != nil {
-		return nil, formatError("切换短信文本模式", err)
+		return nil, formatError("Switching to SMS text mode", err)
 	}
 	if _, err := a.at.command(`AT+CSCS="UCS2"`, 3*time.Second); err != nil {
-		return nil, formatError("切换短信 UCS2 字符集", err)
+		return nil, formatError("Switching to SMS UCS2 character set", err)
 	}
 
 	var result []storedSMS
@@ -203,7 +203,7 @@ func (a *agent) readAllSMS() ([]storedSMS, error) {
 		result = append(result, parseTextModeSMS(response, memory)...)
 	}
 	if len(result) == 0 && len(failures) == 2 {
-		return nil, fmt.Errorf("读取短信失败: %s", strings.Join(failures, "; "))
+		return nil, fmt.Errorf("Failed to read SMS: %s", strings.Join(failures, "; "))
 	}
 	return result, nil
 }
@@ -377,11 +377,11 @@ func (a *agent) smsSend(response http.ResponseWriter, request *http.Request) {
 func (a *agent) sendSMSMessage(rawPhone, message string) (int, error) {
 	phone := normalizeDialNumber(rawPhone)
 	if phone == "" || len(phone) > 82 || strings.TrimSpace(message) == "" || len([]rune(message)) > 2000 {
-		return 0, errors.New("号码或短信内容无效")
+		return 0, errors.New("Invalid number or SMS content")
 	}
 	segments := splitUCS2(message, 70)
 	if len(segments) == 0 {
-		return 0, errors.New("短信内容为空")
+		return 0, errors.New("SMS content is empty")
 	}
 	if a.profile.AndroidTelecom {
 		commandID, err := randomUUID()
@@ -410,7 +410,7 @@ func (a *agent) sendSMSMessage(rawPhone, message string) (int, error) {
 	for index, segment := range segments {
 		payload := append([]byte(encodeUCS2(segment)), 0x1a)
 		if _, err := a.at.promptCommand(`AT+CMGS="`+encodeUCS2(phone)+`"`, payload, 45*time.Second); err != nil {
-			return 0, fmt.Errorf("发送第 %d/%d 段失败: %v", index+1, len(segments), err)
+			return 0, fmt.Errorf("Failed to send segment %d/%d: %v", index+1, len(segments), err)
 		}
 	}
 	return len(segments), nil
@@ -478,7 +478,7 @@ func (a *agent) smsAck(response http.ResponseWriter, request *http.Request) {
 	a.messages = remaining
 	a.mu.Unlock()
 	if len(failures) > 0 {
-		writeError(response, http.StatusBadGateway, "删除已交付模块短信失败: "+strings.Join(failures, "; "))
+		writeError(response, http.StatusBadGateway, "Failed to delete delivered module SMS: "+strings.Join(failures, "; "))
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]int{"acknowledged": len(succeeded)})
@@ -489,7 +489,7 @@ func (a *agent) deleteStoredSMS(item storedSMS) error {
 		return nil
 	}
 	if item.Memory != "SM" && item.Memory != "ME" {
-		return fmt.Errorf("未知短信存储区 %q", item.Memory)
+		return fmt.Errorf("Unknown SMS storage %q", item.Memory)
 	}
 	if _, err := a.at.command(fmt.Sprintf(`AT+CPMS="%s","%s","%s"`, item.Memory, item.Memory, item.Memory), 5*time.Second); err != nil {
 		return err
@@ -509,7 +509,7 @@ func (a *agent) smsSettings(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if body.AutoCleanup == nil {
-		writeError(response, http.StatusBadRequest, "缺少 auto_cleanup_me")
+		writeError(response, http.StatusBadRequest, "auto_cleanup_me is required")
 		return
 	}
 	// 新协议始终在手机确认落盘后清理，旧客户端的开关请求只保留兼容响应。

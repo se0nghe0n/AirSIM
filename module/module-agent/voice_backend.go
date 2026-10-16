@@ -36,7 +36,7 @@ func loadVoiceBackend(getenv func(string) string) (voiceBackendConfig, error) {
 		}
 		return voiceBackendConfig{kind: kind, endpoint: endpoint}, nil
 	default:
-		return voiceBackendConfig{}, fmt.Errorf("不支持的语音后端 %q", kind)
+		return voiceBackendConfig{}, fmt.Errorf("Unsupported voice backend %q", kind)
 	}
 }
 
@@ -49,10 +49,10 @@ func (a *agent) voicePCMEndpoint() (string, error) {
 		return "", a.voiceBackendErr
 	}
 	if a.voiceBackend.kind == "" && a.voiceBackend.endpoint == "" {
-		return "", errors.New("AirSIM 三星 PCM 端点未配置")
+		return "", errors.New("AirSIM Samsung PCM endpoint not configured")
 	}
 	if a.voiceBackend.endpoint == "" {
-		return "", errors.New("语音 PCM 端点未配置")
+		return "", errors.New("Voice PCM endpoint not configured")
 	}
 	if a.voiceBackend.kind == voiceBackendSamsungAndroid && a.profile.AndroidTelecom {
 		readRoute := a.defaultRoute
@@ -119,19 +119,19 @@ func probeVoicePCMBackend(
 
 func validateSamsungPCMEndpoint(endpoint string) error {
 	if endpoint == "" {
-		return errors.New("三星 PCM 端点不能为空")
+		return errors.New("Samsung PCM endpoint must not be empty")
 	}
 	host, portText, err := net.SplitHostPort(endpoint)
 	if err != nil {
-		return fmt.Errorf("三星 PCM 端点格式无效: %w", err)
+		return fmt.Errorf("Invalid Samsung PCM endpoint format: %w", err)
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsLoopback() || !ip.IsPrivate() {
-		return errors.New("三星 PCM 端点必须是非环回私有 IPv4 地址")
+		return errors.New("Samsung PCM endpoint must be a non-loopback private IPv4 address")
 	}
 	port, err := strconv.Atoi(portText)
 	if err != nil || port < 1024 || port > 65535 {
-		return errors.New("三星 PCM 端口必须是 1024..65535")
+		return errors.New("Samsung PCM port must be 1024..65535")
 	}
 	return nil
 }

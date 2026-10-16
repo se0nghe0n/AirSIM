@@ -302,7 +302,7 @@ func TestConfirmedHangupRetiresDescriptorBeforeARescueCanTargetIt(t *testing.T) 
 	base.CommandID = "a1a2a3a4-b5b6-47c8-89d0-e1e2e3e4e5e6"
 	base.Action = "rescue_hangup"
 	rescue := agent.executeCloudCommand(base)
-	if rescue.Status != "failed" || !strings.Contains(rescue.Error, "没有可控制") {
+	if rescue.Status != "failed" || !strings.Contains(rescue.Error, "No controllable cloud call") {
 		t.Fatalf("已结束通话的救援必须被拒绝: %#v", rescue)
 	}
 	if atCalls != 2 {

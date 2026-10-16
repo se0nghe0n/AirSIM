@@ -18,7 +18,7 @@ func TestUSBRecoveryRetriesWhenRebindCooldownHasNotExpired(t *testing.T) {
 }
 
 func TestUSBRecoveryRetriesTemporarySafetyBlocks(t *testing.T) {
-	for _, reason := range []string{"通话进行中", "媒体路由运行中", "USB 组合暂不可重绑"} {
+	for _, reason := range []string{"Call in progress", "Media route running", "USB 组合暂不可重绑"} {
 		outcome := usbBlockedOutcome(reason)
 		if !outcome.Retry || outcome.RetryAfter <= 0 {
 			t.Fatalf("临时阻塞 %q 不应永久放弃恢复: %#v", reason, outcome)
@@ -52,7 +52,7 @@ func TestUSBFaultStoreCoalescesRepeatedIdenticalFaults(t *testing.T) {
 		Timestamp:       time.Date(2026, 8, 21, 1, 0, 0, 0, time.UTC),
 		Phase:           "rebind-deferred",
 		Trigger:         "netlink-carrier-down",
-		Reason:          "通话进行中",
+		Reason:          "Call in progress",
 		Carrier:         "0",
 		FactoryPID:      "12",
 		AgentListening:  true,
@@ -72,7 +72,7 @@ func TestUSBFaultStoreCoalescesRepeatedIdenticalFaults(t *testing.T) {
 
 	changed := second
 	changed.Timestamp = first.Timestamp.Add(20 * time.Second)
-	changed.Reason = "媒体路由运行中"
+	changed.Reason = "Media route running"
 	if err := store.append(changed); err != nil {
 		t.Fatal(err)
 	}

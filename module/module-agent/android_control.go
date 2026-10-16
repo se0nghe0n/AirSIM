@@ -195,12 +195,12 @@ func (control *androidControl) observeEvent(eventID string) bool {
 
 func (a *agent) requireAndroidControl(response http.ResponseWriter, request *http.Request) bool {
 	if !a.profile.AndroidTelecom || a.android == nil || !a.android.configured() {
-		writeError(response, http.StatusServiceUnavailable, "Android Telecom 控制未配置")
+		writeError(response, http.StatusServiceUnavailable, "Android Telecom control not configured")
 		return false
 	}
 	if !a.android.authorized(request.Header.Get("Authorization")) {
 		response.Header().Set("WWW-Authenticate", "Bearer")
-		writeError(response, http.StatusUnauthorized, "Android 控制鉴权失败")
+		writeError(response, http.StatusUnauthorized, "Android control authentication failed")
 		return false
 	}
 	return true
@@ -236,7 +236,7 @@ func (a *agent) androidCallEvent(response http.ResponseWriter, request *http.Req
 		return
 	}
 	a.applyAndroidCallEvent(event, time.Now())
-	a.debug.add("android-telecom", "event", "Android Telecom 通话状态", event.State, map[string]string{
+	a.debug.add("android-telecom", "event", "Android Telecom call state", event.State, map[string]string{
 		"event_id": event.EventID, "call_id": event.CallID, "direction": event.Direction, "mode": event.Mode,
 	})
 	writeJSON(response, http.StatusOK, map[string]bool{"accepted": true})
@@ -267,7 +267,7 @@ func (a *agent) androidSMSEvent(response http.ResponseWriter, request *http.Requ
 		Sender: event.Sender, Content: event.Content, Code: code,
 		Timestamp: timestamp, DeliveryID: event.DeliveryID,
 	}}})
-	a.debug.add("android-sms", "event", "Android 系统短信已进入交付队列", "", map[string]string{
+	a.debug.add("android-sms", "event", "Android system SMS added to delivery queue", "", map[string]string{
 		"event_id": event.EventID, "delivery_id": event.DeliveryID,
 	})
 	writeJSON(response, http.StatusOK, map[string]bool{"accepted": true})
@@ -276,15 +276,15 @@ func (a *agent) androidSMSEvent(response http.ResponseWriter, request *http.Requ
 func validateAndroidSMSEvent(event androidSMSEvent) (time.Time, error) {
 	if strings.TrimSpace(event.EventID) == "" || len(event.EventID) > 128 ||
 		strings.TrimSpace(event.DeliveryID) == "" || len(event.DeliveryID) > 128 {
-		return time.Time{}, errors.New("Android 短信事件标识无效")
+		return time.Time{}, errors.New("Invalid Android SMS event identity")
 	}
 	if strings.TrimSpace(event.Sender) == "" || len(event.Sender) > 128 ||
 		strings.TrimSpace(event.Content) == "" || len([]rune(event.Content)) > 2000 {
-		return time.Time{}, errors.New("Android 短信内容无效")
+		return time.Time{}, errors.New("Invalid Android SMS content")
 	}
 	timestamp, err := time.Parse(time.RFC3339Nano, event.Timestamp)
 	if err != nil {
-		return time.Time{}, errors.New("Android 短信时间无效")
+		return time.Time{}, errors.New("Invalid Android SMS timestamp")
 	}
 	return timestamp, nil
 }
@@ -294,7 +294,7 @@ func (a *agent) androidPairRegister(response http.ResponseWriter, request *http.
 		return
 	}
 	if a.push == nil {
-		writeError(response, http.StatusServiceUnavailable, "Push 管理器不可用")
+		writeError(response, http.StatusServiceUnavailable, "Push manager unavailable")
 		return
 	}
 	var registration pushRegistration
@@ -310,7 +310,7 @@ func (a *agent) androidPairRegister(response http.ResponseWriter, request *http.
 	if len(hint) > 8 {
 		hint = "…" + hint[len(hint)-8:]
 	}
-	a.debug.add("android-pair", "completed", "iOS Push 身份已安全写入 Agent", "", map[string]string{
+	a.debug.add("android-pair", "completed", "iOS Push identity securely saved to Agent", "", map[string]string{
 		"device_id_hint": hint,
 	})
 	if a.pairRegistrationSync != nil {
@@ -323,21 +323,21 @@ func (a *agent) androidPairRegister(response http.ResponseWriter, request *http.
 
 func validateAndroidCallEvent(event androidCallEvent) error {
 	if strings.TrimSpace(event.EventID) == "" || len(event.EventID) > 128 || strings.TrimSpace(event.CallID) == "" || len(event.CallID) > 128 {
-		return errors.New("Android 通话事件标识无效")
+		return errors.New("Invalid Android call event identity")
 	}
 	if event.Direction != "incoming" && event.Direction != "outgoing" {
-		return errors.New("Android 通话方向无效")
+		return errors.New("Invalid Android call direction")
 	}
 	switch event.State {
 	case "incoming", "dialing", "alerting", "active", "held", "ended":
 	default:
-		return errors.New("Android 通话状态无效")
+		return errors.New("Invalid Android call state")
 	}
 	if event.Mode != "" && event.Mode != "remote_silent" && event.Mode != "local_and_push" {
-		return errors.New("Android 通话显示模式无效")
+		return errors.New("Invalid Android call display mode")
 	}
 	if len(event.Number) > 128 {
-		return errors.New("Android 通话号码过长")
+		return errors.New("Android call number is too long")
 	}
 	return nil
 }
@@ -357,7 +357,7 @@ func (a *agent) androidCommandNext(response http.ResponseWriter, request *http.R
 		response.WriteHeader(http.StatusNoContent)
 		return
 	}
-	a.debug.add("android-telecom", "command", "向 Android 下发 Telecom 命令", command.Action, map[string]string{
+	a.debug.add("android-telecom", "command", "Sending Telecom command to Android", command.Action, map[string]string{
 		"command_id": command.ID, "call_id": command.CallID,
 	})
 	writeJSON(response, http.StatusOK, command)
@@ -375,7 +375,7 @@ func (a *agent) androidCommandResult(response http.ResponseWriter, request *http
 		writeError(response, http.StatusConflict, err.Error())
 		return
 	}
-	a.debug.add("android-telecom", "result", "Android Telecom 命令完成", fmt.Sprintf("success=%v", result.Success), map[string]string{
+	a.debug.add("android-telecom", "result", "Android Telecom command completed", fmt.Sprintf("success=%v", result.Success), map[string]string{
 		"command_id": result.ID,
 	})
 	writeJSON(response, http.StatusOK, map[string]bool{"accepted": true})

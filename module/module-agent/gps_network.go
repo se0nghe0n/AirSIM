@@ -43,11 +43,11 @@ func (a *agent) runGPSCommand(command string, timeout time.Duration) (string, er
 func parseGPSLocation(response string) (*gpsFix, error) {
 	value := commandValue(response, "+QGPSLOC:")
 	if value == "" {
-		return nil, fmt.Errorf("暂未获得定位，请移至窗边或室外后重试")
+		return nil, fmt.Errorf("Location unavailable; move near a window or outdoors and try again")
 	}
 	fields := strings.Split(value, ",")
 	if len(fields) < 11 {
-		return nil, fmt.Errorf("定位响应格式不完整")
+		return nil, fmt.Errorf("Incomplete location response")
 	}
 	return &gpsFix{
 		UTC: strings.TrimSpace(fields[0]), Latitude: strings.TrimSpace(fields[1]), Longitude: strings.TrimSpace(fields[2]),
@@ -111,7 +111,7 @@ func (a *agent) gpsRefresh(response http.ResponseWriter, request *http.Request) 
 	enabled := a.gps.Enabled
 	a.mu.RUnlock()
 	if !enabled {
-		writeError(response, http.StatusConflict, "请先启动定位")
+		writeError(response, http.StatusConflict, "Start location tracking first")
 		return
 	}
 	result, err := a.runGPSCommand("AT+QGPSLOC=2", 12*time.Second)
@@ -149,7 +149,7 @@ func (a *agent) executeAT(response http.ResponseWriter, request *http.Request) {
 	}
 	command := strings.TrimSpace(body.Command)
 	if len(command) < 2 || len(command) > 256 || !strings.HasPrefix(strings.ToUpper(command), "AT") || strings.ContainsAny(command, "\r\n\x00\x1a") {
-		writeError(response, http.StatusBadRequest, "AT 指令格式无效")
+		writeError(response, http.StatusBadRequest, "Invalid AT command format")
 		return
 	}
 	result, err := a.at.command(command, 15*time.Second)
@@ -175,7 +175,7 @@ func (a *agent) cellularPolicy(response http.ResponseWriter, request *http.Reque
 			return
 		}
 		if body.ForceOff == nil {
-			writeError(response, http.StatusBadRequest, "缺少 force_off")
+			writeError(response, http.StatusBadRequest, "force_off is required")
 			return
 		}
 		command := "AT+CGATT=1"
@@ -202,9 +202,9 @@ func (a *agent) check4G(response http.ResponseWriter, request *http.Request) {
 	addressResponse, addressErr := a.at.command("AT+CGPADDR=1", 5*time.Second)
 	attachResponse, attachErr := a.at.command("AT+CGATT?", 5*time.Second)
 	ok := addressErr == nil && attachErr == nil && strings.Contains(attachResponse, "+CGATT: 1") && hasPDPAddress(addressResponse)
-	summary := "模块 4G 数据出口不可用"
+	summary := "Module 4G data connection unavailable"
 	if ok {
-		summary = "模块 4G 数据出口正常"
+		summary = "Module 4G data connection working"
 	}
 	detail := strings.TrimSpace(attachResponse + "\n" + addressResponse)
 	writeJSON(response, http.StatusOK, map[string]any{"ok": ok, "summary": summary, "detail": detail})
@@ -227,7 +227,7 @@ func (a *agent) checkProxy(response http.ResponseWriter, request *http.Request) 
 	}
 	// iPad 直连版不再经过 Mac HTTP 代理，这里的“代理”即模块本地控制服务。
 	writeJSON(response, http.StatusOK, map[string]any{
-		"ok": true, "summary": "模块本地控制服务正常", "detail": "直连模式无需 Mac 代理，控制面监听 192.168.225.1:7575",
+		"ok": true, "summary": "Module local control service working", "detail": "Direct mode does not require a Mac proxy; control service listens on 192.168.225.1:7575",
 	})
 }
 
@@ -263,10 +263,10 @@ func parseUSBConfiguration(response string) (usbConfiguration, error) {
 	}
 	fields := splitCSV(value)
 	if len(fields) != 9 {
-		return usbConfiguration{}, fmt.Errorf("USBCFG 功能位数量异常（%d）", len(fields))
+		return usbConfiguration{}, fmt.Errorf("Unexpected USBCFG feature bit count (%d)", len(fields))
 	}
 	if fields[8] != "0" && fields[8] != "1" {
-		return usbConfiguration{}, fmt.Errorf("USBCFG UAC 位异常（%s）", fields[8])
+		return usbConfiguration{}, fmt.Errorf("Invalid USBCFG UAC bit (%s)", fields[8])
 	}
 	return usbConfiguration{fields: fields}, nil
 }
@@ -297,11 +297,11 @@ func inferQDC507USBConfiguration(readFile func(string) ([]byte, error)) (usbConf
 	product, productErr := readFile(usbGadgetPath + "/idProduct")
 	functions, functionsErr := readFile(usbGadgetPath + "/functions")
 	if vendorErr != nil || productErr != nil || functionsErr != nil {
-		return usbConfiguration{}, "", fmt.Errorf("无法读取 USB gadget 身份或功能")
+		return usbConfiguration{}, "", fmt.Errorf("Cannot read USB gadget identity or functions")
 	}
 	if strings.ToLower(strings.TrimSpace(string(vendor))) != qdc507USBVendorID ||
 		strings.ToLower(strings.TrimSpace(string(product))) != qdc507USBProductID {
-		return usbConfiguration{}, "", fmt.Errorf("USB gadget 不是已验证的 QDC507 2c7c:0125")
+		return usbConfiguration{}, "", fmt.Errorf("USB gadget is not the verified QDC507 2c7c:0125")
 	}
 	rawFunctions := strings.TrimSpace(string(functions))
 	uacEnabled := false
@@ -322,7 +322,7 @@ func (a *agent) readUSBConfiguration() (usbConfiguration, string, error) {
 	}
 	configuration, raw, fallbackErr := inferQDC507USBConfiguration(os.ReadFile)
 	if fallbackErr != nil {
-		return usbConfiguration{}, "", fmt.Errorf("读取 USBCFG 失败（%v），gadget 回退也失败：%w", err, fallbackErr)
+		return usbConfiguration{}, "", fmt.Errorf("Failed to read USBCFG (%v); gadget fallback also failed: %w", err, fallbackErr)
 	}
 	return configuration, raw, nil
 }
@@ -378,7 +378,7 @@ func (a *agent) usbProfile(response http.ResponseWriter, request *http.Request) 
 	}
 	mode := strings.ToLower(strings.TrimSpace(body.Mode))
 	if mode != "mobile" && mode != "mac" {
-		writeError(response, http.StatusBadRequest, "mode 必须是 mobile 或 mac")
+		writeError(response, http.StatusBadRequest, "mode must be mobile or mac")
 		return
 	}
 	wantUAC := mode == "mac"
@@ -392,15 +392,15 @@ func (a *agent) usbProfile(response http.ResponseWriter, request *http.Request) 
 	}
 	markerChanged, markerErr := persistUSBModeMarker(usbMacModeMarker, mode)
 	if markerErr != nil {
-		writeError(response, http.StatusInternalServerError, "保存 USB 模式失败: "+markerErr.Error())
+		writeError(response, http.StatusInternalServerError, "Failed to save USB mode: "+markerErr.Error())
 		return
 	}
-	message := "当前已经是 iPad 直连模式"
+	message := "Already in iPad direct mode"
 	needsReconnect := changed || markerChanged
 	if mode == "mac" {
-		message = "已切换为 Mac 完整模式，模块正在重启；重连后可直接插到 Mac"
+		message = "Switched to full Mac mode; module is restarting. Connect it to the Mac after reconnection"
 	} else if changed {
-		message = "已切换为 iPad 直连模式，模块正在重启；重连后请重新插拔 USB"
+		message = "Switched to iPad direct mode; module is restarting. Unplug and reconnect USB after reconnection"
 	}
 	writeUSBProfile(response, configuration, configuration.withUAC(wantUAC), needsReconnect, message)
 	if needsReconnect {
@@ -557,7 +557,7 @@ func (a *agent) shutdown(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if !body.Confirm {
-		writeError(response, http.StatusBadRequest, "必须明确确认停止服务")
+		writeError(response, http.StatusBadRequest, "Explicit confirmation is required to stop the service")
 		return
 	}
 	writeJSON(response, http.StatusAccepted, map[string]bool{"stopping": true})

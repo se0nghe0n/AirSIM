@@ -180,11 +180,11 @@ func newPushManager(configPath string) *pushManager {
 			if backupErr == nil && json.Unmarshal(backup, &manager.config) == nil {
 				_ = writePushConfigAtomically(configPath, backup)
 			} else {
-				manager.lastError = "读取推送配置失败: " + decodeErr.Error()
+				manager.lastError = "Failed to read push configuration: " + decodeErr.Error()
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		manager.lastError = "读取推送配置失败: " + err.Error()
+		manager.lastError = "Failed to read push configuration: " + err.Error()
 	}
 	return manager
 }
@@ -231,7 +231,7 @@ func dialPushAddress(ctx context.Context, baseDialer *net.Dialer, network, addre
 		return connection, nil
 	}
 	if fallbackErr != nil {
-		return nil, fmt.Errorf("公网 IPv4 DNS/连接失败: %v；系统 DNS 也失败: %w", fallbackErr, systemErr)
+		return nil, fmt.Errorf("Cloud IPv4 DNS/connection failed: %v; system DNS also failed: %w", fallbackErr, systemErr)
 	}
 	return nil, systemErr
 }
@@ -259,12 +259,12 @@ func lookupPushIPv4(ctx context.Context, host string) ([]net.IP, error) {
 		if len(ipv4) > 0 {
 			return ipv4, nil
 		}
-		fallbackErr = errors.New("DNS 只返回模块当前不可达的 IPv6 地址")
+		fallbackErr = errors.New("DNS only returned IPv6 addresses currently unreachable by the module")
 	}
 	if fallbackErr != nil {
 		return nil, fallbackErr
 	}
-	return nil, errors.New("公网 DNS 没有返回 IPv4 地址")
+	return nil, errors.New("Cloud DNS returned no IPv4 address")
 }
 
 func pushIPv4Addresses(addresses []net.IPAddr) []net.IP {
@@ -287,44 +287,44 @@ func validatePushRegistration(registration pushRegistration) error {
 	registration.RelayURL = strings.TrimSpace(registration.RelayURL)
 	if registration.LocalMode {
 		if registration.CloudEnabled != nil && *registration.CloudEnabled {
-			return errors.New("本地模式不能启用云端模式")
+			return errors.New("Cannot enable cloud mode in local mode")
 		}
 		return nil
 	}
 	if registration.DeviceID == "" || len(registration.DeviceID) > 128 {
-		return errors.New("device_id 无效")
+		return errors.New("Invalid device_id")
 	}
 	if len(registration.DeviceSecret) < 16 || len(registration.DeviceSecret) > 512 {
-		return errors.New("device_secret 无效")
+		return errors.New("Invalid device_secret")
 	}
 	if registration.VoIPToken == "" && registration.AlertToken == "" && registration.WatchVoIPToken == "" && registration.LiveActivityPushToStartToken == "" {
-		return errors.New("至少需要一个 APNs token")
+		return errors.New("At least one APNs token is required")
 	}
 	if !validOptionalPushToken(registration.VoIPToken) {
-		return errors.New("voip_token 无效")
+		return errors.New("Invalid voip_token")
 	}
 	if !validOptionalPushToken(registration.AlertToken) {
-		return errors.New("alert_token 无效")
+		return errors.New("Invalid alert_token")
 	}
 	if !validOptionalPushToken(registration.WatchVoIPToken) {
-		return errors.New("watch_voip_token 无效")
+		return errors.New("Invalid watch_voip_token")
 	}
 	if !validOptionalPushToken(registration.LiveActivityPushToStartToken) {
-		return errors.New("live_activity_push_to_start_token 无效")
+		return errors.New("Invalid live_activity_push_to_start_token")
 	}
 	if registration.BundleID == "" || len(registration.BundleID) > 255 {
-		return errors.New("bundle_id 无效")
+		return errors.New("Invalid bundle_id")
 	}
 	if registration.WatchVoIPToken != "" && registration.WatchBundleID != registration.BundleID+".watchkitapp" {
-		return errors.New("watch_bundle_id 与主应用不匹配")
+		return errors.New("watch_bundle_id does not match the main app")
 	}
 	if registration.Environment != "sandbox" && registration.Environment != "production" {
-		return errors.New("environment 必须是 sandbox 或 production")
+		return errors.New("environment must be sandbox or production")
 	}
 	if registration.RelayURL != "" {
 		relay, err := url.Parse(registration.RelayURL)
 		if err != nil || relay.Scheme != "https" || relay.Host == "" || relay.User != nil {
-			return errors.New("relay_url 必须是无凭据的 HTTPS 地址")
+			return errors.New("relay_url must be a credential-free HTTPS address")
 		}
 	}
 	return nil
@@ -432,7 +432,7 @@ func (p *pushManager) setCloudEnabled(enabled bool) error {
 	registration := p.config
 	p.mu.Unlock()
 	if registration.LocalMode && enabled {
-		return errors.New("本地模式不能启用云端模式")
+		return errors.New("Cannot enable cloud mode in local mode")
 	}
 	registration.CloudEnabled = &enabled
 	return p.store(registration)
@@ -467,7 +467,7 @@ func (p *pushManager) sendRegistration() error {
 		return nil
 	}
 	if registration.RelayURL == "" {
-		return errors.New("尚未配置公网推送中继")
+		return errors.New("Cloud push relay not configured")
 	}
 	// This Agent build intentionally advertises only the transport it can
 	// actually execute. Relay rollout therefore cannot select WebRTC early.
@@ -609,7 +609,7 @@ func (p *pushManager) sendCallOwner(callID, callUUID, owner, phase string) error
 	if callID == "" || callUUID == "" ||
 		(owner != "watch" && owner != "iphone") ||
 		(phase != "active" && phase != "ended") {
-		return errors.New("通话所有权事件无效")
+		return errors.New("Invalid call ownership event")
 	}
 	p.mu.Lock()
 	registration := p.config
@@ -629,7 +629,7 @@ func (p *pushManager) sendCallOwner(callID, callUUID, owner, phase string) error
 
 func (p *pushManager) sendCallState(callID, phase string) error {
 	if callID == "" || !validCallLifecyclePhase(phase) {
-		return errors.New("通话状态事件无效")
+		return errors.New("Invalid call state event")
 	}
 	p.mu.Lock()
 	registration := p.config
@@ -666,7 +666,7 @@ func validCallLifecyclePhase(phase string) bool {
 func (p *pushManager) sendHeartbeat(snapshot agentHeartbeatSnapshot) error {
 	if snapshot.CellularState != "registered" && snapshot.CellularState != "searching" &&
 		snapshot.CellularState != "denied" && snapshot.CellularState != "unregistered" {
-		return errors.New("蜂窝心跳状态无效")
+		return errors.New("Invalid cellular heartbeat state")
 	}
 	p.mu.Lock()
 	registration := p.config
@@ -723,7 +723,7 @@ func (p *pushManager) pullCommands() ([]cloudDeviceCommand, error) {
 func (p *pushManager) completeCommand(result cloudCommandResult) error {
 	registration, ready := p.commandRegistration()
 	if !ready {
-		return errors.New("公网命令设备身份无效")
+		return errors.New("Invalid cloud command device identity")
 	}
 	payload := struct {
 		DeviceID     string         `json:"device_id"`
@@ -760,11 +760,11 @@ func (p *pushManager) postJSONResponse(client *http.Client, endpoint string, val
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("推送中继返回 HTTP %d", response.StatusCode)
+		return fmt.Errorf("Push relay returned HTTP %d", response.StatusCode)
 	}
 	if output != nil {
 		if err := json.NewDecoder(response.Body).Decode(output); err != nil {
-			return fmt.Errorf("解析推送中继响应失败: %w", err)
+			return fmt.Errorf("Failed to parse push relay response: %w", err)
 		}
 	}
 	return nil
@@ -852,7 +852,7 @@ func (a *agent) syncPushRegistration() {
 		}
 		if err := a.push.sendRegistration(); err == nil {
 			if syncErr := a.syncCloudCommandsOnce(); syncErr != nil {
-				a.debug.add("cloud-command", "pull_failed", "注册后拉取待处理命令失败", syncErr.Error(), nil)
+				a.debug.add("cloud-command", "pull_failed", "Failed to fetch pending commands after registration", syncErr.Error(), nil)
 			}
 			return
 		} else {
@@ -892,7 +892,7 @@ func (a *agent) scheduleIncomingPush(callID string) {
 			}
 		}
 		if lastErr != nil {
-			a.debug.add("push", "tx", "来电推送失败", lastErr.Error(), map[string]string{"call_id": callID})
+			a.debug.add("push", "tx", "Incoming call push failed", lastErr.Error(), map[string]string{"call_id": callID})
 		}
 	}()
 }
@@ -914,7 +914,7 @@ func (a *agent) scheduleSMSPush(message smsMessage) {
 			}
 		}
 		if lastErr != nil {
-			a.debug.add("push", "tx", "短信推送失败", lastErr.Error(), map[string]string{"delivery_id": message.DeliveryID})
+			a.debug.add("push", "tx", "SMS push failed", lastErr.Error(), map[string]string{"delivery_id": message.DeliveryID})
 		}
 	}()
 }

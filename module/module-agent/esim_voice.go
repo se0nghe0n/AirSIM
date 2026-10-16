@@ -75,7 +75,7 @@ func (a *agent) esimOverview(response http.ResponseWriter, request *http.Request
 	if err != nil {
 		message := err.Error()
 		if isPhysicalSIMESIMProbeError(err) {
-			message = "当前卡片为实体卡，非 eSIM 卡片"
+			message = "Current card is a physical SIM, not an eSIM"
 		}
 		writeJSON(response, http.StatusOK, map[string]any{
 			"card_type": "physical_sim", "message": message,
@@ -92,8 +92,9 @@ func isPhysicalSIMESIMProbeError(err error) bool {
 		return false
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "未发现任何 euicc") &&
-		strings.Contains(message, "at 指令失败") &&
+	noEUICC := strings.Contains(message, "no euicc found") || strings.Contains(message, "未发现任何 euicc")
+	atFailed := strings.Contains(message, "at command failed") || strings.Contains(message, "at 指令失败")
+	return noEUICC && atFailed &&
 		strings.Contains(message, "error")
 }
 
@@ -104,7 +105,7 @@ func (a *agent) esimHealth(response http.ResponseWriter, request *http.Request) 
 	a.mu.RLock()
 	status := a.modem
 	a.mu.RUnlock()
-	registered := status.RegistrationText == "已注册" || status.RegistrationText == "漫游注册"
+	registered := status.RegistrationText == "Registered" || status.RegistrationText == "Registered (roaming)"
 	writeJSON(response, http.StatusOK, map[string]any{
 		"ok": status.SIMInserted && registered, "module_iccid": status.ICCID,
 		"registration": status.RegistrationText, "registered": registered,
@@ -133,7 +134,7 @@ func (a *agent) esimNotes(response http.ResponseWriter, request *http.Request) {
 		}
 		body.ICCID = strings.TrimSpace(body.ICCID)
 		if body.ICCID == "" || len(body.ICCID) > 32 || !digitsPattern.MatchString(body.ICCID) {
-			writeError(response, http.StatusBadRequest, "ICCID 格式无效")
+			writeError(response, http.StatusBadRequest, "Invalid ICCID format")
 			return
 		}
 		notes, err := loadESIMNotes()
@@ -146,7 +147,7 @@ func (a *agent) esimNotes(response http.ResponseWriter, request *http.Request) {
 			writeError(response, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(response, http.StatusOK, map[string]string{"message": "备注已保存"})
+		writeJSON(response, http.StatusOK, map[string]string{"message": "Note saved"})
 	default:
 		requireMethod(response, request, http.MethodGet, http.MethodPost, http.MethodPut)
 	}
@@ -159,17 +160,17 @@ func loadESIMNotes() (map[string]esimNote, error) {
 		return notes, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("读取 eSIM 备注失败: %w", err)
+		return nil, fmt.Errorf("Failed to read eSIM notes: %w", err)
 	}
 	if err := json.Unmarshal(data, &notes); err != nil {
-		return nil, fmt.Errorf("解析 eSIM 备注失败: %w", err)
+		return nil, fmt.Errorf("Failed to parse eSIM notes: %w", err)
 	}
 	return notes, nil
 }
 
 func saveESIMNotes(notes map[string]esimNote) error {
 	if err := os.MkdirAll(agentDataDirectory, 0o700); err != nil {
-		return fmt.Errorf("创建数据目录失败: %w", err)
+		return fmt.Errorf("Failed to create data directory: %w", err)
 	}
 	data, err := json.MarshalIndent(notes, "", "  ")
 	if err != nil {
@@ -227,7 +228,7 @@ func (a *agent) esimSwitch(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	if !digitsPattern.MatchString(strings.TrimSpace(body.ICCID)) {
-		writeError(response, http.StatusBadRequest, "ICCID 格式无效")
+		writeError(response, http.StatusBadRequest, "Invalid ICCID format")
 		return
 	}
 	a.esimMu.Lock()
@@ -253,11 +254,11 @@ func (a *agent) esimSwitch(response http.ResponseWriter, request *http.Request) 
 	enableErr := client.EnableProfile(iccid, false)
 	closeErr := client.Close()
 	if enableErr != nil {
-		writeError(response, http.StatusBadGateway, "启用 Profile 失败: "+enableErr.Error())
+		writeError(response, http.StatusBadGateway, "Failed to enable Profile: "+enableErr.Error())
 		return
 	}
 	if closeErr != nil {
-		writeError(response, http.StatusBadGateway, "关闭 eUICC 通道失败: "+closeErr.Error())
+		writeError(response, http.StatusBadGateway, "Failed to close eUICC channel: "+closeErr.Error())
 		return
 	}
 	// 先返回 HTTP 结果，再重启基带；否则 iPad 会把预期的 USB 断开误报成切换失败。
@@ -284,7 +285,7 @@ func (a *agent) esimProfile(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if !digitsPattern.MatchString(strings.TrimSpace(body.ICCID)) {
-		writeError(response, http.StatusBadRequest, "ICCID 格式无效")
+		writeError(response, http.StatusBadRequest, "Invalid ICCID format")
 		return
 	}
 	a.esimMu.Lock()
@@ -305,24 +306,24 @@ func (a *agent) esimProfile(response http.ResponseWriter, request *http.Request)
 	case http.MethodPatch:
 		name := strings.TrimSpace(body.Name)
 		if name == "" || len([]byte(name)) > 64 {
-			writeError(response, http.StatusBadRequest, "Profile 名称必须为 1 到 64 字节")
+			writeError(response, http.StatusBadRequest, "Profile name must be 1 to 64 bytes")
 			return
 		}
 		if err := client.SetNickname(iccid, name); err != nil {
-			writeError(response, http.StatusBadGateway, "修改 Profile 名称失败: "+err.Error())
+			writeError(response, http.StatusBadGateway, "Failed to rename Profile: "+err.Error())
 			return
 		}
-		writeJSON(response, http.StatusOK, map[string]string{"message": "Profile 名称已修改"})
+		writeJSON(response, http.StatusOK, map[string]string{"message": "Profile renamed"})
 	case http.MethodDelete:
 		if profile.ProfileState == sgp22.ProfileEnabled {
-			writeError(response, http.StatusConflict, "正在使用的 Profile 不能删除，请先切换到其他 Profile")
+			writeError(response, http.StatusConflict, "Cannot delete the active Profile; switch to another Profile first")
 			return
 		}
 		if err := client.DeleteProfile(iccid); err != nil {
-			writeError(response, http.StatusBadGateway, "删除 Profile 失败: "+err.Error())
+			writeError(response, http.StatusBadGateway, "Failed to delete Profile: "+err.Error())
 			return
 		}
-		writeJSON(response, http.StatusOK, map[string]string{"message": "Profile 已删除"})
+		writeJSON(response, http.StatusOK, map[string]string{"message": "Profile deleted"})
 	}
 }
 
@@ -341,19 +342,19 @@ func (a *agent) esimDownload(response http.ResponseWriter, request *http.Request
 		return
 	}
 	if strings.TrimSpace(body.SMDP) == "" {
-		writeError(response, http.StatusBadRequest, "SMDP 地址不能为空")
+		writeError(response, http.StatusBadRequest, "SMDP address must not be empty")
 		return
 	}
-	a.unsupported(response, "eSIM 下载需要模块内完整 LPA 和 TLS 事务，当前代理尚未接入")
+	a.unsupported(response, "eSIM download requires a complete LPA and TLS transaction on the module; this Agent does not support it yet")
 }
 
 func (a *agent) moduleSetup(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
 		result, err := a.at.command("AT", 3*time.Second)
 		ready := err == nil && strings.Contains(result, "OK")
-		summary := "模块代理需要初始化"
+		summary := "Module Agent needs initialization"
 		if ready {
-			summary = "模块代理已就绪"
+			summary = "Module Agent ready"
 		}
 		writeJSON(response, http.StatusOK, map[string]any{
 			"state": map[bool]string{true: "ready", false: "error"}[ready], "summary": summary,
@@ -372,18 +373,18 @@ func (a *agent) moduleSetup(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if !body.Confirm {
-		writeError(response, http.StatusBadRequest, "必须明确确认初始化")
+		writeError(response, http.StatusBadRequest, "Explicit confirmation is required to initialize")
 		return
 	}
 	commands := []string{"ATE0", "AT+CMEE=2", "AT+CLIP=1", "AT+CMGF=1"}
 	for _, command := range commands {
 		if _, err := a.at.command(command, 5*time.Second); err != nil {
-			writeError(response, http.StatusBadGateway, fmt.Sprintf("初始化 %s 失败: %v", command, err))
+			writeError(response, http.StatusBadGateway, fmt.Sprintf("Failed to initialize %s: %v", command, err))
 			return
 		}
 	}
 	writeJSON(response, http.StatusOK, map[string]any{
-		"state": "ready", "summary": "模块代理初始化完成", "detail": "AT、来电显示和短信文本模式已配置",
+		"state": "ready", "summary": "Module Agent initialized", "detail": "AT, caller ID, and SMS text mode configured",
 		"can_initialize": false, "requires_confirmation": false,
 	})
 }
@@ -408,9 +409,9 @@ func (a *agent) currentVoiceStatus() map[string]any {
 	routeReady := a.voice.ready
 	lastError := a.voice.lastError
 	a.voice.mu.Unlock()
-	detail := "模块语音运行时未安装"
+	detail := "Module voice runtime not installed"
 	if runtimeInstalled {
-		detail = "模块语音运行时已安装；通话建立后由模块内 helper 启动 ECM 网络 PCM"
+		detail = "Module voice runtime installed; the on-module helper starts ECM network PCM when a call connects"
 	} else if validationError != nil {
 		detail = validationError.Error()
 	}
@@ -431,12 +432,12 @@ func (a *agent) voiceProvision(response http.ResponseWriter, request *http.Reque
 		return
 	}
 	if !body.Confirm {
-		writeError(response, http.StatusBadRequest, "必须明确确认安装语音运行时")
+		writeError(response, http.StatusBadRequest, "Explicit confirmation is required to install the voice runtime")
 		return
 	}
 	if installed, _ := validateVoiceRuntime(); installed {
 		writeJSON(response, http.StatusOK, a.currentVoiceStatus())
 		return
 	}
-	writeError(response, http.StatusConflict, "代理包不包含受限语音运行时，请在首次部署时由 Mac 安装用户本机缓存")
+	writeError(response, http.StatusConflict, "Agent package does not include the restricted voice runtime; install the local user cache from Mac during initial deployment")
 }
