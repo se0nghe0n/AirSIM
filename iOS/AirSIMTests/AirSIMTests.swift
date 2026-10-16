@@ -90,6 +90,103 @@ private struct AgentSMSInboxProbe: AgentSMSInboxServicing {
 }
 
 final class AirSIMTests: XCTestCase {
+
+    private func traceFrame(sequence: UInt32 = 1, source: UInt64 = 1_000,
+                            relay: UInt64 = 10_000, queue: UInt32 = 7) -> Data {
+        var data = Data([65, 83, 80, 77, 2, 0, 0, 48])
+        func append(_ value: UInt64, bytes: Int) {
+            for shift in stride(from: (bytes - 1) * 8, through: 0, by: -8) {
+                data.append(UInt8(truncatingIfNeeded: value >> shift))
+            }
+        }
+        append(UInt64(sequence), bytes: 4)
+        append(UInt64(queue), bytes: 4)
+        append(source, bytes: 8)
+        append(source + 500_000, bytes: 8)
+        append(relay, bytes: 8)
+        append(relay, bytes: 8)
+        data.append(Data(repeating: 0x7b, count: 320))
+        return data
+    }
+
+    func testCloudPCMTraceWireDecodeAndLegacyCompatibility() throws {
+        let frame = try XCTUnwrap(CloudPCMTransportFrame.decode(
+            traceFrame(sequence: 0xfedcba98, source: 9_876, relay: 55_000, queue: 17)))
+        XCTAssertEqual(frame.pcm, Data(repeating: 0x7b, count: 320))
+        let trace = try XCTUnwrap(frame.trace)
+        XCTAssertEqual(trace.sequence, 0xfedcba98)
+        XCTAssertEqual(trace.sourceQueueMS, 17)
+        XCTAssertEqual(trace.sourceSendMonoMS, 9_876)
+        XCTAssertEqual(trace.sourceSendUnixMS, 509_876)
+        XCTAssertEqual(trace.relayReceiveUnixMS, 55_000)
+        XCTAssertEqual(trace.relayForwardUnixMS, 55_000)
+        for size in [320, 640] {
+            var raw = Data(repeating: 0, count: size)
+            raw.replaceSubrange(0..<4, with: [65, 83, 80, 77])
+            XCTAssertEqual(CloudPCMTransportFrame.decode(raw)?.pcm, raw)
+            XCTAssertNil(CloudPCMTransportFrame.decode(raw)?.trace)
+        }
+        var legacy = Data([65, 83, 80, 77, 1, 0, 0, 20])
+        legacy.append(Data(repeating: 0, count: 12))
+        legacy.append(Data(repeating: 7, count: 320))
+        XCTAssertEqual(CloudPCMTransportFrame.decode(legacy)?.pcm, Data(repeating: 7, count: 320))
+    }
+
+    func testCloudPCMTraceRejectsMalformedEnvelope() {
+        var bad = traceFrame()
+        bad[7] = 47
+        XCTAssertNil(CloudPCMTransportFrame.decode(bad))
+        bad = traceFrame()
+        bad[4] = 3
+        XCTAssertNil(CloudPCMTransportFrame.decode(bad))
+        bad = traceFrame()
+        bad[5] = 1
+        XCTAssertNil(CloudPCMTransportFrame.decode(bad))
+        XCTAssertNil(CloudPCMTransportFrame.decode(Data(traceFrame().dropLast())))
+        XCTAssertNil(CloudPCMTransportFrame.decode(Data()))
+    }
+
+    func testCloudPCMTraceSeparatesUpstreamAndDownstreamDelayWithoutClockSync() throws {
+        func trace(_ sequence: UInt32, _ source: UInt64, _ relay: UInt64) throws -> CloudPCMTransportFrame.Trace {
+            try XCTUnwrap(CloudPCMTransportFrame.decode(
+                traceFrame(sequence: sequence, source: source, relay: relay))?.trace)
+        }
+        var upstream = CloudPCMTransportDiagnostics()
+        _ = upstream.record(try trace(1, 1_000, 9_000), receivedMonoMS: 10_000, receivedUnixMS: 999_000)
+        _ = upstream.record(try trace(2, 1_020, 9_420), receivedMonoMS: 10_420, receivedUnixMS: 999_420)
+        let upstreamWindow = upstream.takeWindow()
+        XCTAssertEqual(upstreamWindow["rx_source_gap_max_ms"], "20")
+        XCTAssertEqual(upstreamWindow["rx_upstream_excess_max_ms"], "400")
+        XCTAssertEqual(upstreamWindow["rx_downstream_excess_max_ms"], "0")
+
+        var downstream = CloudPCMTransportDiagnostics()
+        _ = downstream.record(try trace(1, 1_000, 9_000), receivedMonoMS: 10_000, receivedUnixMS: 999_000)
+        _ = downstream.record(try trace(2, 1_020, 9_020), receivedMonoMS: 10_620, receivedUnixMS: 999_620)
+        let downstreamWindow = downstream.takeWindow()
+        XCTAssertEqual(downstreamWindow["rx_upstream_excess_max_ms"], "0")
+        XCTAssertEqual(downstreamWindow["rx_downstream_excess_max_ms"], "600")
+    }
+
+    func testCloudPCMTraceTracksSequenceWrapAndResetsOnlyWindowMaxima() throws {
+        func trace(_ sequence: UInt32, _ time: UInt64) throws -> CloudPCMTransportFrame.Trace {
+            try XCTUnwrap(CloudPCMTransportFrame.decode(
+                traceFrame(sequence: sequence, source: time, relay: time + 8_000))?.trace)
+        }
+        var stats = CloudPCMTransportDiagnostics()
+        XCTAssertNotNil(stats.record(try trace(UInt32.max, 1_000), receivedMonoMS: 5_000, receivedUnixMS: 80_000))
+        XCTAssertNil(stats.record(try trace(0, 1_020), receivedMonoMS: 5_020, receivedUnixMS: 80_020))
+        _ = stats.record(try trace(3, 1_080), receivedMonoMS: 5_080, receivedUnixMS: 80_080)
+        let first = stats.takeWindow()
+        XCTAssertEqual(first["rx_wire_seq_missing"], "2")
+        XCTAssertEqual(first["rx_wire_seq_reordered"], "0")
+        XCTAssertEqual(first["rx_source_gap_max_ms"], "60")
+        _ = stats.record(try trace(4, 1_100), receivedMonoMS: 5_100, receivedUnixMS: 80_100)
+        let second = stats.takeWindow()
+        XCTAssertEqual(second["rx_wire_seq_missing"], "2")
+        XCTAssertEqual(second["rx_trace_frames"], "4")
+        XCTAssertEqual(second["rx_source_gap_max_ms"], "20")
+    }
+
     func testOldEndedHistoryCannotFinishANewSystemCall() {
         XCTAssertTrue(CallKitSynchronizationPolicy.mayFinishEndedHistory(currentBackendID: "a", endedID: "a"))
         XCTAssertFalse(CallKitSynchronizationPolicy.mayFinishEndedHistory(currentBackendID: "b", endedID: "a"))

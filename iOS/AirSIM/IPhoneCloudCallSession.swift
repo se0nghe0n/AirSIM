@@ -191,6 +191,140 @@ enum CloudMediaTransportPreference {
     }
 }
 
+
+struct CloudPCMTransportFrame {
+    struct Trace {
+        let sequence: UInt32
+        let sourceQueueMS: UInt32
+        let sourceSendMonoMS: UInt64
+        let sourceSendUnixMS: UInt64
+        let relayReceiveUnixMS: UInt64
+        let relayForwardUnixMS: UInt64
+    }
+
+    let pcm: Data
+    let trace: Trace?
+
+    static func decode(_ wire: Data) -> CloudPCMTransportFrame? {
+        // A raw PCM frame can legitimately start with the envelope magic.
+        if !wire.isEmpty, wire.count.isMultiple(of: 320) {
+            return .init(pcm: wire, trace: nil)
+        }
+        guard wire.count >= 20, Array(wire.prefix(4)) == [65, 83, 80, 77] else { return nil }
+        let version = wire[wire.startIndex + 4]
+        let header = number(wire, at: 6, bytes: 2)
+        if version == 1, header == 20, wire.count == 340 {
+            return .init(pcm: Data(wire.dropFirst(20)), trace: nil)
+        }
+        guard version == 2, header == 48, wire.count == 368,
+              wire[wire.startIndex + 5] == 0 else { return nil }
+        return .init(pcm: Data(wire.dropFirst(48)), trace: .init(
+            sequence: UInt32(number(wire, at: 8, bytes: 4)),
+            sourceQueueMS: UInt32(number(wire, at: 12, bytes: 4)),
+            sourceSendMonoMS: number(wire, at: 16, bytes: 8),
+            sourceSendUnixMS: number(wire, at: 24, bytes: 8),
+            relayReceiveUnixMS: number(wire, at: 32, bytes: 8),
+            relayForwardUnixMS: number(wire, at: 40, bytes: 8)
+        ))
+    }
+
+    private static func number(_ data: Data, at offset: Int, bytes: Int) -> UInt64 {
+        (offset..<(offset + bytes)).reduce(0) { ($0 << 8) | UInt64(data[data.startIndex + $1]) }
+    }
+}
+
+struct CloudPCMTransportDiagnostics {
+    private var previous: CloudPCMTransportFrame.Trace?
+    private var previousReceiveMS: Double?
+    private var lastTraceMS: Double?
+    private(set) var frames: UInt64 = 0
+    private(set) var missingSequences: UInt64 = 0
+    private(set) var reorderedSequences: UInt64 = 0
+    private var sourceGapMax: Double = 0
+    private var sourceQueueMax: Double = 0
+    private var relayGapMax: Double = 0
+    private var relayWorkMax: Double = 0
+    private var upstreamExcessMax: Double = 0
+    private var downstreamExcessMax: Double = 0
+
+    mutating func record(_ trace: CloudPCMTransportFrame.Trace,
+                         receivedMonoMS: Double, receivedUnixMS: UInt64) -> [String: String]? {
+        frames &+= 1
+        sourceQueueMax = max(sourceQueueMax, Double(trace.sourceQueueMS))
+        if trace.relayForwardUnixMS >= trace.relayReceiveUnixMS, trace.relayReceiveUnixMS > 0 {
+            relayWorkMax = max(relayWorkMax, Double(trace.relayForwardUnixMS - trace.relayReceiveUnixMS))
+        }
+        var fields: [String: String] = [
+            "seq": String(trace.sequence),
+            "source_queue_ms": String(trace.sourceQueueMS),
+            "source_send_mono_ms": String(trace.sourceSendMonoMS),
+            "source_send_unix_ms": String(trace.sourceSendUnixMS),
+            "relay_receive_unix_ms": String(trace.relayReceiveUnixMS),
+            "relay_forward_unix_ms": String(trace.relayForwardUnixMS),
+            "client_receive_unix_ms": String(receivedUnixMS),
+        ]
+        var anomalous = false
+        if let previous, let previousReceiveMS {
+            let sequenceDelta = trace.sequence &- previous.sequence
+            if sequenceDelta > 0, sequenceDelta < UInt32.max / 2 {
+                missingSequences &+= UInt64(sequenceDelta - 1)
+            } else {
+                reorderedSequences &+= 1
+            }
+            let receiveGap = max(0, receivedMonoMS - previousReceiveMS)
+            fields["client_gap_ms"] = String(Int(receiveGap))
+            fields["previous_seq"] = String(previous.sequence)
+            anomalous = receiveGap >= 80
+            if trace.sourceSendMonoMS >= previous.sourceSendMonoMS {
+                let sourceGap = Double(trace.sourceSendMonoMS - previous.sourceSendMonoMS)
+                sourceGapMax = max(sourceGapMax, sourceGap)
+                fields["source_gap_ms"] = String(Int(sourceGap))
+                if trace.relayReceiveUnixMS >= previous.relayReceiveUnixMS,
+                   previous.relayReceiveUnixMS > 0 {
+                    let relayGap = Double(trace.relayReceiveUnixMS - previous.relayReceiveUnixMS)
+                    relayGapMax = max(relayGapMax, relayGap)
+                    upstreamExcessMax = max(upstreamExcessMax, relayGap - sourceGap)
+                    fields["relay_receive_gap_ms"] = String(Int(relayGap))
+                }
+            }
+            if trace.relayForwardUnixMS >= previous.relayForwardUnixMS,
+               previous.relayForwardUnixMS > 0 {
+                let relayGap = Double(trace.relayForwardUnixMS - previous.relayForwardUnixMS)
+                downstreamExcessMax = max(downstreamExcessMax, receiveGap - relayGap)
+                fields["relay_forward_gap_ms"] = String(Int(relayGap))
+            }
+        }
+        previous = trace
+        previousReceiveMS = receivedMonoMS
+        // One regular sample per second; gap samples are capped at ten per second.
+        if let lastTraceMS, receivedMonoMS - lastTraceMS < (anomalous ? 100 : 1_000) { return nil }
+        lastTraceMS = receivedMonoMS
+        fields["gap_event"] = anomalous ? "true" : "false"
+        return fields
+    }
+
+    mutating func takeWindow() -> [String: String] {
+        let result = [
+            "rx_trace_frames": String(frames),
+            "rx_wire_seq_missing": String(missingSequences),
+            "rx_wire_seq_reordered": String(reorderedSequences),
+            "rx_source_gap_max_ms": String(Int(sourceGapMax)),
+            "rx_source_queue_max_ms": String(Int(sourceQueueMax)),
+            "rx_relay_gap_max_ms": String(Int(relayGapMax)),
+            "rx_relay_work_max_ms": String(Int(relayWorkMax)),
+            "rx_upstream_excess_max_ms": String(Int(upstreamExcessMax)),
+            "rx_downstream_excess_max_ms": String(Int(downstreamExcessMax)),
+        ]
+        sourceGapMax = 0
+        sourceQueueMax = 0
+        relayGapMax = 0
+        relayWorkMax = 0
+        upstreamExcessMax = 0
+        downstreamExcessMax = 0
+        return result
+    }
+}
+
 struct CloudPCMPlaybackWindow {
     static let completionType: AVAudioPlayerNodeCompletionCallbackType = .dataRendered
     private(set) var scheduledPackets = 0
@@ -544,9 +678,11 @@ struct CloudCallControlEnvelope: Codable, Equatable, Sendable {
     let generation: UInt64
     let commandID: String
     let traceID: String
+    var mediaProtocol: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case action, generation
+        case mediaProtocol = "media_protocol"
         case callID = "call_id"
         case callUUID = "call_uuid"
         case commandID = "command_id"
@@ -1392,6 +1528,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var uplinkGeneration = UUID()
     private var playout = CloudPCMPlayoutBuffer()
     private var receivedDownlinkPackets: UInt64 = 0
+    private var transportDiagnostics = CloudPCMTransportDiagnostics()
     private var lastReceiveCallbackAt: TimeInterval?
     private var maximumReceiveGapMS: Double = 0
     private var maximumReceiveDispatchMS: Double = 0
@@ -1527,7 +1664,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             callUUID: call.uuid.uuidString.lowercased(),
             generation: call.generation,
             commandID: identity.commandID,
-            traceID: identity.traceID
+            traceID: identity.traceID,
+            mediaProtocol: action == "answer" ? "airsim-pcm-trace-v2" : nil
         )
         return envelope
     }
@@ -1646,6 +1784,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         encoder = nil
         playout = CloudPCMPlayoutBuffer()
         receivedDownlinkPackets = 0
+        transportDiagnostics = CloudPCMTransportDiagnostics()
         lastReceiveCallbackAt = nil
         maximumReceiveGapMS = 0
         maximumReceiveDispatchMS = 0
@@ -1673,11 +1812,12 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         socket.receive { [weak self, weak socket] result in
             guard let self, let socket else { return }
             let receivedAt = ProcessInfo.processInfo.systemUptime
+            let receivedUnixMS = UInt64(Date().timeIntervalSince1970 * 1_000)
             queue.async {
                 guard !self.stopped, self.webSocket === socket else { return }
                 switch result {
                 case let .success(.data(data)):
-                    self.schedulePlayback(data, receivedAt: receivedAt)
+                    self.schedulePlayback(data, receivedAt: receivedAt, receivedUnixMS: receivedUnixMS)
                     self.receiveNext(socket)
                 case let .success(.string(text)):
                     self.consumeControl(text)
@@ -1719,7 +1859,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastQualityTraceAt >= 5 {
             lastQualityTraceAt = now
-            let fields = [
+            var fields = [
                 "tx_queue": String(uplinkSender.pendingPackets),
                 "tx_drop": String(uplinkSender.droppedPackets),
                 "tx_captured": String(uplinkSender.capturedPackets),
@@ -1739,6 +1879,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "rx_max_burst": String(maximumReceiveBurstPackets),
                 "render_max_queue_ms": String(Int(maximumRenderDispatchMS)),
             ]
+            fields.merge(transportDiagnostics.takeWindow()) { _, new in new }
             Task {
                 await AgentVerboseTraceRecorder.shared.recordEvent(
                     source: "APP", category: "cloud-call-audio", phase: "quality",
@@ -1780,8 +1921,19 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    private func schedulePlayback(_ pcm: Data, receivedAt: TimeInterval) {
-        guard !pcm.isEmpty, pcm.count.isMultiple(of: 320) else { return }
+    private func schedulePlayback(_ wire: Data, receivedAt: TimeInterval, receivedUnixMS: UInt64) {
+        guard let frame = CloudPCMTransportFrame.decode(wire) else { return }
+        let pcm = frame.pcm
+        if let trace = frame.trace,
+           let fields = transportDiagnostics.record(trace, receivedMonoMS: receivedAt * 1_000,
+                                                     receivedUnixMS: receivedUnixMS) {
+            Task {
+                await AgentVerboseTraceRecorder.shared.recordEvent(
+                    source: "APP", category: "cloud-call-transport", phase: "sample",
+                    title: "Cloud PCM Transport Timing", detail: "", fields: fields, isFailure: false
+                )
+            }
+        }
         receivedDownlink = true
         let now = ProcessInfo.processInfo.systemUptime
         if let previous = lastReceiveCallbackAt {
