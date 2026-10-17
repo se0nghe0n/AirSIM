@@ -1243,6 +1243,12 @@ async function registerDevice(request, env) {
     force_legacy_pcm: device.force_legacy_pcm === undefined
       ? existing?.force_legacy_pcm === true : device.force_legacy_pcm === true,
   };
+  if (device.registration_source === "agent" && existing) {
+    // Agent registration can carry an older copy of the paired app settings.
+    record.media_transport_requested = existing.media_transport_requested || "legacy_pcm";
+    record.app_media_capabilities = normalizedMediaCapabilities(existing.app_media_capabilities);
+    record.force_legacy_pcm = existing.force_legacy_pcm === true;
+  }
   record.media_transport = assignedMediaTransport(record, env);
   await writeDeviceRecord(env, record.device_id, record);
   await recordDashboardEvent(env, {

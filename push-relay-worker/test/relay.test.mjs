@@ -1974,3 +1974,40 @@ test("late Watch connections and replacements preserve the owning iPhone WebRTC 
     assert.equal(state.getWebSockets("watch")[0].attachment.mediaTransport, "legacy_pcm");
   }
 });
+
+test("agent registration bootstraps app settings but cannot overwrite existing app transport policy", async () => {
+  const env = { ...testEnvironment(), ...turnTestConfig,
+    WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+  const bootstrap = { ...registration, registration_source: "agent", media_transport: "webrtc",
+    app_media_capabilities: ["legacy_pcm", "webrtc"], agent_media_capabilities: ["legacy_pcm", "webrtc"] };
+  const initial = await worker.fetch(post("/v1/devices/register", bootstrap), env);
+  assert.equal((await initial.json()).media_transport, "webrtc");
+  const stale = { ...bootstrap, media_transport: "legacy_pcm",
+    app_media_capabilities: ["legacy_pcm"], force_legacy_pcm: true };
+  const updated = await worker.fetch(post("/v1/devices/register", stale), env);
+  assert.equal((await updated.json()).media_transport, "webrtc");
+  let stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+  assert.equal(stored.media_transport_requested, "webrtc");
+  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
+  assert.equal(stored.force_legacy_pcm, false);
+
+  // A normal app registration still owns the policy and may enforce legacy.
+  await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
+  await worker.fetch(post("/v1/devices/register", { ...stale, force_legacy_pcm: false,
+    agent_media_capabilities: ["legacy_pcm"] }), env);
+  stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+  assert.equal(stored.force_legacy_pcm, true);
+  assert.equal(stored.media_transport_requested, "webrtc");
+  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
+  assert.deepEqual(stored.agent_media_capabilities, ["legacy_pcm"]);
+  assert.equal(stored.media_transport, "legacy_pcm");
+
+  // Existing clients without a source keep their previous update semantics.
+  const noSource = { ...stale, force_legacy_pcm: false };
+  delete noSource.registration_source;
+  await worker.fetch(post("/v1/devices/register", noSource), env);
+  stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+  assert.equal(stored.media_transport_requested, "legacy_pcm");
+  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm"]);
+  assert.equal(stored.force_legacy_pcm, false);
+});
