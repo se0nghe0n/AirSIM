@@ -13,6 +13,7 @@ import worker, {
   validateRegistration,
 } from "../src/index.mjs";
 import { AgentStatusRegistry } from "../src/status-store.mjs";
+import { readBoundedJSON, RequestBodyError } from "../src/request-body.mjs";
 
 globalThis.crypto ??= webcrypto;
 
@@ -161,6 +162,7 @@ function testEnvironment() {
     APNS_P8: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
     ALLOWED_BUNDLE_ID: "com.example.airsim",
     DASHBOARD_TOKEN: "dashboard-test-token-0123456789",
+    NEW_DEVICE_ENROLLMENT_ENABLED: "true",
   };
 }
 
@@ -196,6 +198,44 @@ test("health and registration persist without returning credentials", async () =
   const stored = JSON.parse(await env.DEVICES.get("device:iphone-air"));
   assert.equal(stored.device_secret, undefined);
   assert.equal(stored.secret_hash.length, 64);
+});
+
+test("new enrollment is closed by default, while an existing device can renew its registration", async () => {
+  const env = testEnvironment();
+  assert.equal((await worker.fetch(post("/v1/devices/register", registration), {
+    ...env, NEW_DEVICE_ENROLLMENT_ENABLED: "false",
+  })).status, 403);
+  assert.equal((await worker.fetch(post("/v1/devices/register", registration), env)).status, 200);
+  assert.equal((await worker.fetch(post("/v1/devices/register", registration), {
+    ...env, NEW_DEVICE_ENROLLMENT_ENABLED: "false",
+  })).status, 200);
+});
+
+test("temporary enrollment window has a global hourly quota", async () => {
+  const env = { ...testEnvironment(), STATUS: new MemoryStatusNamespace() };
+  for (let index = 0; index < 8; index++) {
+    const candidate = { ...registration, device_id: `new-device-${index}` };
+    assert.equal((await worker.fetch(post("/v1/devices/register", candidate), env)).status, 200);
+  }
+  assert.equal((await worker.fetch(post("/v1/devices/register", {
+    ...registration, device_id: "new-device-9",
+  }), env)).status, 429);
+});
+
+test("request bodies stop at their byte limit before buffering unbounded input", async () => {
+  let cancelled = false;
+  const body = new ReadableStream({
+    pull(controller) { controller.enqueue(new Uint8Array(65 * 1024)); },
+    cancel() { cancelled = true; },
+  });
+  const request = new Request("https://push.airsim.example/v1/devices/register", {
+    method: "POST", body, duplex: "half",
+  });
+  const response = await worker.fetch(request, testEnvironment());
+  assert.equal(response.status, 413);
+  assert.equal(cancelled, true);
+  await assert.rejects(readBoundedJSON(post("/test", [1]), 1024),
+    (error) => error instanceof RequestBodyError && error.status === 400);
 });
 
 test("device registration remains available when KV daily writes are exhausted", async () => {
@@ -1472,6 +1512,8 @@ test("incoming SMS without an originating address still reaches iPhone", async (
 
 test("registration is pinned to the signed app bundle", () => {
   assert.equal(validateRegistration({ ...registration, bundle_id: "com.attacker.app" }, "com.example.airsim"), "bundle id is not allowed");
+  assert.equal(validateRegistration({ ...registration, device_id: "bad\nheader" }, "com.example.airsim"), "invalid device identity");
+  assert.equal(validateRegistration({ ...registration, device_secret: `safe${"s".repeat(20)}\r\nInjected: yes` }, "com.example.airsim"), "invalid device identity");
 });
 
 test("provider JWT is ES256-shaped and names the Apple key", async () => {
@@ -1816,14 +1858,29 @@ test("call connect authenticates and forwards authoritative transport and identi
     return new Response("ok");
   } }) };
   const connect = (token, role = "iphone") => new Request(
-    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}&token=${token}`,
-    { headers: { upgrade: "websocket", "x-airsim-media-transport": "legacy_pcm" } });
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}`,
+    { headers: { upgrade: "websocket", authorization: `Bearer ${token}`,
+      "x-visitor-supplied": "should-not-pass",
+      "x-airsim-media-transport": "legacy_pcm" } });
   assert.equal((await worker.fetch(connect("wrong"), env)).status, 401);
   assert.equal((await worker.fetch(connect("call-secret", "other"), env)).status, 400);
+  assert.equal((await worker.fetch(new Request(
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone&token=call-secret`,
+    { headers: { upgrade: "websocket" } }), env)).status, 401);
+  env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "true";
+  assert.equal((await worker.fetch(new Request(
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone&token=call-secret`,
+    { headers: { upgrade: "websocket" } }), env)).status, 401);
+  assert.equal((await worker.fetch(new Request(
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=agent&token=call-secret`,
+    { headers: { upgrade: "websocket" } }), env)).status, 200);
+  delete env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED;
   assert.equal((await worker.fetch(connect("call-secret"), env)).status, 200);
   assert.equal(forwarded.headers.get("x-airsim-media-transport"), "webrtc");
   assert.equal(forwarded.headers.get("x-airsim-call-uuid"), webRTCCallUUID);
   assert.equal(forwarded.headers.get("x-airsim-generation"), "3");
+  assert.equal(forwarded.headers.get("authorization"), null);
+  assert.equal(forwarded.headers.get("x-visitor-supplied"), null);
   const call = JSON.parse(await env.DEVICES.get(`call:${webRTCCallUUID}`));
   call.media_expires_at = new Date(Date.now() - 6000).toISOString();
   await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify(call));
@@ -1938,6 +1995,27 @@ test("managed Cloudflare TURN validates configuration and returns sanitized cred
   assert.equal(JSON.stringify(body).includes("ignored"), false);
   assert.equal(body.ice_servers.at(-1).credential, "temporary-password");
   assert.equal(JSON.stringify(body).includes(managedTURNConfig.CLOUDFLARE_TURN_API_TOKEN), false);
+});
+
+test("managed TURN credentials are reused for the same authenticated call and role", async (t) => {
+  const env = await iceTestEnvironment(managedTURNConfig);
+  env.STATUS = new MemoryStatusNamespace();
+  let issued = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    issued += 1;
+    return new Response(JSON.stringify({ iceServers: [{
+      urls: ["turn:managed.example:3478?transport=udp"],
+      username: "temporary-user", credential: "temporary-password",
+    }] }), { status: 201 });
+  });
+  const first = await worker.fetch(iceRequest(), env);
+  const second = await worker.fetch(iceRequest(), env);
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  assert.equal(issued, 1);
+  assert.deepEqual((await first.json()).ice_servers, (await second.json()).ice_servers);
+  assert.equal((await worker.fetch(iceRequest("iphone", "wrong"), env)).status, 401);
+  assert.equal(issued, 1);
 });
 
 test("managed TURN failures, malformed responses and timeout fail closed without exposing provider secrets", async (t) => {
@@ -2075,8 +2153,8 @@ function mockMediaUpgrade(t) {
 }
 
 function terminalConnect(role = "iphone") {
-  return new Request(`https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}&token=call-secret`, {
-    headers: { upgrade: "websocket" },
+  return new Request(`https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}`, {
+    headers: { upgrade: "websocket", authorization: "Bearer call-secret" },
   });
 }
 

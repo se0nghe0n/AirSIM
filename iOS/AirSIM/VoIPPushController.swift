@@ -34,8 +34,9 @@ struct IncomingVoIPCall: Equatable, Sendable {
     let isVirtual: Bool
     let isOutgoing: Bool
     let ttsText: String?
-    /// 公网 PCM 仅作为本地 ECM 控制链路不可用时的回退。完整带签名地址只保存在内存中。
+    /// Cloud media uses an in-memory bearer secret, never a URL query parameter.
     let authenticatedMediaURL: URL?
+    let mediaSecret: String?
     let requestedMediaTransport: CloudMediaTransport
 
     init(userInfo: [AnyHashable: Any], now: Date = Date()) throws {
@@ -73,6 +74,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
             ttsText = nil
         }
         authenticatedMediaURL = Self.authenticatedMediaURL(from: userInfo)
+        mediaSecret = authenticatedMediaURL != nil ? Self.nonEmpty(userInfo["call_secret"] as? String) : nil
         requestedMediaTransport = CloudMediaTransport(
             rawValue: Self.nonEmpty(userInfo["media_transport"] as? String) ?? ""
         ) ?? .legacyPCM
@@ -89,12 +91,12 @@ struct IncomingVoIPCall: Equatable, Sendable {
     ) throws {
         guard !outgoingCallID.isEmpty, secret.count >= 24,
               var components = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
-              components.scheme?.lowercased() == "wss", components.host?.isEmpty == false else {
+              components.scheme?.lowercased() == "wss", components.host?.isEmpty == false,
+              components.user == nil, components.password == nil else {
             throw VoIPPushPayloadError.invalidCallUUID
         }
         components.queryItems = [
             URLQueryItem(name: "role", value: "iphone"),
-            URLQueryItem(name: "token", value: secret),
         ]
         guard let authenticatedURL = components.url else {
             throw VoIPPushPayloadError.invalidCallUUID
@@ -109,6 +111,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
         isOutgoing = true
         ttsText = nil
         authenticatedMediaURL = authenticatedURL
+        mediaSecret = secret
         requestedMediaTransport = mediaTransport
     }
 
@@ -128,6 +131,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
         isOutgoing = false
         ttsText = nil
         authenticatedMediaURL = nil
+        mediaSecret = nil
         requestedMediaTransport = .legacyPCM
     }
 
@@ -167,10 +171,10 @@ struct IncomingVoIPCall: Equatable, Sendable {
               let rawURL = nonEmpty(userInfo["media_url"] as? String),
               var components = URLComponents(string: rawURL),
               components.scheme?.lowercased() == "wss",
-              components.host?.isEmpty == false else { return nil }
+              components.host?.isEmpty == false,
+              components.user == nil, components.password == nil else { return nil }
         components.queryItems = [
             URLQueryItem(name: "role", value: "iphone"),
-            URLQueryItem(name: "token", value: secret),
         ]
         return components.url
     }
@@ -563,7 +567,8 @@ enum RelayEndpoint {
     static func url(base: String, path: String) -> URL? {
         guard var components = URLComponents(string: base.trimmingCharacters(in: .whitespacesAndNewlines)),
               components.scheme?.lowercased() == "https",
-              components.host?.isEmpty == false else { return nil }
+              components.host?.isEmpty == false,
+              components.user == nil, components.password == nil else { return nil }
         let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let requestedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         components.path = "/" + [basePath, requestedPath]
@@ -1494,8 +1499,7 @@ final class VoIPPushController: NSObject {
         let (data, response) = try await URLSession(configuration: configuration).data(for: request)
 #if DEBUG
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            let detail = String(data: data.prefix(1_024), encoding: .utf8) ?? "<非文本响应>"
-            print("[AirSIM PushKit] Relay 注册被拒绝；HTTP=\(http.statusCode) body=\(detail)")
+            print("[AirSIM PushKit] Relay registration rejected; HTTP=\(http.statusCode)")
         }
 #endif
         guard let http = response as? HTTPURLResponse else {

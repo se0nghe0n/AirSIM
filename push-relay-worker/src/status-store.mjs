@@ -16,6 +16,7 @@ export class AgentStatusRegistry {
     const agentMatch = url.pathname.match(/^\/heartbeat\/([^/]+)\/([^/]+)$/);
     const rosterMatch = url.pathname.match(/^\/heartbeats\/([^/]+)$/);
     const rateMatch = url.pathname.match(/^\/rate\/([^/]+)$/);
+    const quotaMatch = url.pathname.match(/^\/quota\/([^/]+)$/);
     const deviceMatch = url.pathname.match(/^\/device\/([^/]+)$/);
     const stateMatch = url.pathname.match(/^\/state\/([^/]+)$/);
 
@@ -147,6 +148,21 @@ export class AgentStatusRegistry {
         return new Response(null, { status: 204 });
       }
       return new Response("method not allowed", { status: 405 });
+    }
+
+    if (quotaMatch && request.method === "PUT") {
+      const key = `quota:${decodeURIComponent(quotaMatch[1])}`;
+      const { now, window_ms: windowMS, maximum } = await request.json();
+      if (!Number.isFinite(now) || !Number.isSafeInteger(windowMS) || windowMS < 1 ||
+          windowMS > 86_400_000 || !Number.isSafeInteger(maximum) || maximum < 1 || maximum > 100) {
+        return Response.json({ error: "invalid quota" }, { status: 400 });
+      }
+      const previous = await this.storage.get(key);
+      const record = previous && now - previous.started_at_ms < windowMS
+        ? previous : { started_at_ms: now, count: 0 };
+      if (record.count >= maximum) return Response.json({ allowed: false });
+      await this.storage.put(key, { ...record, count: record.count + 1 });
+      return Response.json({ allowed: true });
     }
 
     if (rosterMatch && request.method === "GET") {
@@ -472,6 +488,28 @@ export async function claimRateLimit(env, key, now, windowMS) {
   });
   if (!response.ok) throw new Error(`status rate limiter returned HTTP ${response.status}`);
   return (await response.json()).allowed === true;
+}
+
+export async function claimQuota(env, key, now, windowMS, maximum) {
+  const stub = registryStub(env);
+  if (stub) {
+    const response = await stub.fetch(`https://status.internal/quota/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ now, window_ms: windowMS, maximum }),
+    });
+    if (!response.ok) throw new Error(`status quota returned HTTP ${response.status}`);
+    return (await response.json()).allowed === true;
+  }
+  const kvKey = `quota:${key}`;
+  const previous = JSON.parse(await env.DEVICES.get(kvKey) || "null");
+  const record = previous && now - previous.started_at_ms < windowMS
+    ? previous : { started_at_ms: now, count: 0 };
+  if (record.count >= maximum) return false;
+  await env.DEVICES.put(kvKey, JSON.stringify({ ...record, count: record.count + 1 }), {
+    expirationTtl: Math.max(60, Math.ceil(windowMS / 1000)),
+  });
+  return true;
 }
 
 export async function clearRateLimit(env, key) {

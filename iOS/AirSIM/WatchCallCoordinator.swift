@@ -292,10 +292,14 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             }
             guard outgoing.requestedMediaTransport == .legacyPCM,
                   let authenticatedURL = outgoing.authenticatedMediaURL,
-                  var components = URLComponents(url: authenticatedURL, resolvingAgainstBaseURL: false),
-                  let secret = components.queryItems?.first(where: { $0.name == "token" })?.value else {
+                  let secret = outgoing.mediaSecret else {
                 await endAbandonedWatchCall(outgoing)
                 replyHandler(["ok": false, "error": "The cloud did not provide PCM audio for the watch"])
+                return
+            }
+            guard var components = URLComponents(url: authenticatedURL, resolvingAgainstBaseURL: false) else {
+                await endAbandonedWatchCall(outgoing)
+                replyHandler(["ok": false, "error": "The cloud audio address is invalid"])
                 return
             }
             components.queryItems = nil

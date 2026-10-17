@@ -6,6 +6,7 @@ import {
   recordDashboardEvent,
 } from "./dashboard.mjs";
 import { constantTimeEqual, sha256Hex } from "./auth-crypto.mjs";
+import { readBoundedJSON, RequestBodyError } from "./request-body.mjs";
 import {
   authenticateAndReadAgentHeartbeats,
   authenticateAndWriteAgentHeartbeat,
@@ -13,6 +14,7 @@ import {
   readAgentHeartbeat,
   readAgentHeartbeats,
   readAgentHeartbeatsFromKV,
+  claimQuota,
   readDeviceRecord,
   readRelayState,
   writeAgentHeartbeat,
@@ -139,6 +141,7 @@ export async function handleRequest(request, env) {
     }
     return jsonResponse(404, { error: "not found" });
   } catch (error) {
+    if (error instanceof RequestBodyError) return jsonResponse(error.status, { error: error.message });
     console.error("relay request failed", safeError(error));
     return jsonResponse(500, { error: "relay internal error" });
   }
@@ -157,8 +160,7 @@ async function connectDeviceCommands(request, env, deviceID) {
   if (authenticated.response) return authenticated.response;
 
   const stub = env.COMMANDS.get(env.COMMANDS.idFromName(deviceID));
-  const headers = new Headers(request.headers);
-  headers.set("x-airsim-device-id", deviceID);
+  const headers = new Headers({ upgrade: "websocket", "x-airsim-device-id": deviceID });
   return stub.fetch(new Request("https://commands.internal/connect", { headers }));
 }
 
@@ -860,11 +862,25 @@ async function callICEConfiguration(request, env, callUUID) {
     Math.floor((auth.expiresAt - Date.now()) / 1000));
   if (ttl <= 0) return noStore(jsonResponse(410, { error: "call expired" }));
   if (env.TURN_PROVIDER === "cloudflare") {
+    const cacheKey = `ice:${callUUID.toLowerCase()}:${role}:${env.CLOUDFLARE_TURN_KEY_ID}`;
+    const cached = await readRelayRecord(env, cacheKey);
+    if (cached?.expires_at_ms > Date.now() + 30_000 && Array.isArray(cached.ice_servers)) {
+      return noStore(jsonResponse(200, {
+        ice_servers: cached.ice_servers,
+        ttl: Math.min(ttl, Math.floor((cached.expires_at_ms - Date.now()) / 1000)),
+      }));
+    }
+    if (!await claimQuota(env, `ice-issuance:${callUUID.toLowerCase()}:${role}`, Date.now(),
+      6 * 60 * 60 * 1000, 12)) {
+      return noStore(jsonResponse(429, { error: "TURN credential issue limit reached" }));
+    }
     const servers = await cloudflareICEServers(env, ttl);
     if (!servers) return noStore(jsonResponse(503, { error: "TURN credentials temporarily unavailable" }));
-    return noStore(jsonResponse(200, { ice_servers: [
-      ...(stun.length ? [{ urls: stun }] : []), ...servers,
-    ], ttl }));
+    const iceServers = [...(stun.length ? [{ urls: stun }] : []), ...servers];
+    await writeRelayState(env, cacheKey, JSON.stringify({
+      ice_servers: iceServers, expires_at_ms: Date.now() + ttl * 1000,
+    }), Math.max(60, ttl));
+    return noStore(jsonResponse(200, { ice_servers: iceServers, ttl }));
   }
   const username = `${Math.floor(Date.now() / 1000) + ttl}:${callUUID.toLowerCase()}:${role}`;
   const key = await crypto.subtle.importKey("raw", encoder.encode(env.TURN_SHARED_SECRET),
@@ -889,15 +905,27 @@ async function connectCallMedia(request, env, callUUID) {
   if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
     return jsonResponse(400, { error: "invalid media role" });
   }
-  const token = url.searchParams.get("token") || "";
+  const headerToken = (request.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  // Older Watch/phone installs still use the URL token for legacy PCM calls.
+  // WebRTC clients must keep credentials out of request URLs.
+  const token = headerToken || (url.searchParams.has("token") ? url.searchParams.get("token") || "" : "");
   const auth = await authenticateCall(callUUID, token, env);
   if (auth.response) return auth.response;
   const { call } = auth;
+  const legacyAgentQuery = role === "agent" &&
+    env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED === "true" &&
+    !headerToken && url.searchParams.has("token");
+  if (call.media_transport === "webrtc" &&
+      (!headerToken || url.searchParams.has("token")) && !legacyAgentQuery) {
+    return jsonResponse(401, { error: "media authorization header required" });
+  }
   if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
 
   const id = env.MEDIA.idFromName(callUUID.toLowerCase());
   const stub = env.MEDIA.get(id);
-  const headers = new Headers(request.headers);
+  // Authentication terminates at the public Worker; never forward bearer or
+  // arbitrary visitor headers into the media Durable Object.
+  const headers = new Headers({ upgrade: "websocket" });
   headers.set("x-airsim-role", role);
   headers.set("x-airsim-call-id", call.call_id || "");
   headers.set("x-airsim-call-uuid", callUUID.toLowerCase());
@@ -1313,6 +1341,14 @@ async function registerDevice(request, env) {
   if (existing && !constantTimeEqual(existing.secret_hash, secretHash)) {
     return jsonResponse(401, { error: "device authentication failed" });
   }
+  if (!existing) {
+    if (env.NEW_DEVICE_ENROLLMENT_ENABLED !== "true") {
+      return jsonResponse(403, { error: "new device enrollment is closed" });
+    }
+    if (!await claimQuota(env, "new-device-enrollment", Date.now(), 60 * 60 * 1000, 8)) {
+      return jsonResponse(429, { error: "new device enrollment rate exceeded" });
+    }
+  }
 
   const record = {
     device_id: device.device_id.trim(),
@@ -1387,7 +1423,8 @@ async function receiveCall(request, env) {
   const expiresAt = Date.parse(call.expires_at);
   const callSecretSupplied = typeof call.call_secret === "string" && call.call_secret.length > 0;
   const mediaReady = typeof call.call_secret === "string" &&
-    call.call_secret.length >= 24 && call.call_secret.length <= 256;
+    call.call_secret.length >= 24 && call.call_secret.length <= 256 &&
+    /^[\x21-\x7e]+$/.test(call.call_secret);
   const generation = Number.isSafeInteger(call.generation) && call.generation > 0
     ? call.generation
     : 1;
@@ -2051,8 +2088,7 @@ export async function sendAPNs(env, device, token, options) {
     body,
   });
   if (!response.ok) {
-    const detail = (await response.text()).slice(0, 1024);
-    throw new Error(`APNs HTTP ${response.status}: ${detail}`);
+    throw new Error(`APNs HTTP ${response.status}`);
   }
 }
 
@@ -2093,8 +2129,11 @@ export async function createProviderToken(env, now = Date.now()) {
 
 export function validateRegistration(device, allowedBundleID) {
   if (!nonEmpty(device.device_id) || device.device_id.trim().length > 128 ||
+      !/^[a-z0-9._:-]+$/i.test(device.device_id.trim()) ||
       typeof device.device_secret !== "string" || device.device_secret.length < 16 ||
-      device.device_secret.length > 512) return "invalid device identity";
+      device.device_secret.length > 512 || !/^[\x21-\x7e]+$/.test(device.device_secret)) {
+    return "invalid device identity";
+  }
   const voip = device.voip_token || "";
   const alert = device.alert_token || "";
   const watchVoIP = device.watch_voip_token || "";
@@ -2116,13 +2155,7 @@ export function validateRegistration(device, allowedBundleID) {
 }
 
 async function readJSON(request) {
-  const declared = Number(request.headers.get("content-length") || "0");
-  if (declared > MAX_BODY_BYTES) throw new Error("request body too large");
-  const body = await request.text();
-  if (encoder.encode(body).byteLength > MAX_BODY_BYTES) throw new Error("request body too large");
-  const value = JSON.parse(body);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid JSON");
-  return value;
+  return readBoundedJSON(request, MAX_BODY_BYTES);
 }
 
 async function readRelayRecord(env, key) {

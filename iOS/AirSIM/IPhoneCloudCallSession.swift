@@ -1199,7 +1199,8 @@ final class IPhoneCloudCallSession {
     }
 
     func answer(_ incoming: IncomingVoIPCall) async throws {
-        guard let url = incoming.authenticatedMediaURL else {
+        guard let url = incoming.authenticatedMediaURL,
+              let secret = incoming.mediaSecret else {
             throw IPhoneCloudCallError.mediaUnavailable
         }
         try media.prepareForCallKit(webRTC: incoming.requestedMediaTransport == .webRTC)
@@ -1216,7 +1217,7 @@ final class IPhoneCloudCallSession {
         if callChanged || !media.isConnected {
             media.stop()
             do {
-                try await media.connect(to: url)
+                try await media.connect(to: url, secret: secret)
             } catch {
                 // 系统接听动作不能因为第一次 WebSocket 建连抖动而直接失败。
                 // 保留同一通话并在后台有界重连，成功后再补发 answer 控制帧。
@@ -1769,7 +1770,8 @@ final class IPhoneCloudCallSession {
 
     private func recoverConnectionIfNeeded() {
         guard reconnectTask == nil, let call, answered,
-              let url = call.authenticatedMediaURL else { return }
+              let url = call.authenticatedMediaURL,
+              let secret = call.mediaSecret else { return }
         webRTCReadiness.reset()
         webRTCStartID = UUID()
         webRTCStartTask?.cancel()
@@ -1788,7 +1790,7 @@ final class IPhoneCloudCallSession {
                 connect: { index in
                     self.audioState = .connecting(attempt: index + 1, maximumAttempts: delays.count)
                     self.media.stop()
-                    try await self.media.connect(to: url)
+                    try await self.media.connect(to: url, secret: secret)
                 }, connected: {
                     self.answerHandshake.invalidate()
                     self.replayAnswerIfNeeded()
@@ -1931,7 +1933,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    func connect(to url: URL) async throws {
+    func connect(to url: URL, secret: String) async throws {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             queue.async { [weak self] in
@@ -1952,6 +1954,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 networkSession = session
                 var request = URLRequest(url: url)
                 request.networkServiceType = .voice
+                request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
                 let socket = session.webSocketTask(with: request)
                 socket.priority = URLSessionTask.highPriority
                 webSocket = socket

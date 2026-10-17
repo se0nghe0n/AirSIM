@@ -42,6 +42,14 @@ final class StandaloneWebSocket implements Closeable {
     static StandaloneWebSocket connect(URI target, String bearerToken) throws Exception {
         if (!"wss".equalsIgnoreCase(target.getScheme()) || target.getHost() == null
                 || target.getRawUserInfo() != null) throw new IllegalArgumentException("Invalid WSS address");
+        if (bearerToken != null) {
+            for (int index = 0; index < bearerToken.length(); index++) {
+                char character = bearerToken.charAt(index);
+                if (character < 0x21 || character > 0x7e) {
+                    throw new IllegalArgumentException("Invalid bearer credential");
+                }
+            }
+        }
         int port = target.getPort() < 0 ? 443 : target.getPort();
         SSLSocket socket = (SSLSocket) SSLSocketFactory.getDefault().createSocket(target.getHost(), port);
         // Voice packets are only 20 ms long; do not wait to aggregate small TCP writes.

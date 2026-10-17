@@ -686,8 +686,10 @@ private final class WatchCallMediaBridge: @unchecked Sendable {
             guard let self else { return }
             stopped = false
             switch media {
-            case let .cloud(url):
-                let socket = URLSession(configuration: .ephemeral).webSocketTask(with: url)
+            case let .cloud(url, secret):
+                var request = URLRequest(url: url)
+                request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+                let socket = URLSession(configuration: .ephemeral).webSocketTask(with: request)
                 webSocket = socket
                 socket.resume()
                 receiveNext(socket)

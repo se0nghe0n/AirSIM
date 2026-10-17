@@ -37,7 +37,7 @@
     <application
         android:name="com.airsim.phonecontrol.StandaloneBridgeApplication"
         android:allowBackup="false"
-        android:debuggable="true"
+        android:debuggable="false"
         android:icon="@mipmap/ic_launcher"
         android:label="AirSIM Q25"
         android:roundIcon="@mipmap/ic_launcher"
@@ -103,14 +103,15 @@
         <receiver
             android:name="com.airsim.phonecontrol.BootReceiver"
             android:enabled="true"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
         <receiver android:name="com.airsim.phonecontrol.IncomingSMSReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
             <intent-filter>
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>

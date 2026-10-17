@@ -23,6 +23,19 @@ do {
     ])
     check(outgoing.isOutgoing, "Expected Watch outgoing call")
     check(outgoing.authenticatedMediaURL == nil, "Local media cannot use cloud URL")
+    let cloudSecret = String(repeating: "c", count: 32)
+    let cloud = try WatchVoIPCall(userInfo: [
+        "event": "incoming_call", "call_id": "cloud-watch",
+        "call_uuid": UUID().uuidString,
+        "media_url": "wss://relay.example/v1/calls/test/connect",
+        "call_secret": cloudSecret,
+    ])
+    if case let .cloud(url, bearer) = cloud.media {
+        check(bearer == cloudSecret, "Watch bearer secret was lost")
+        check(!url.absoluteString.contains(cloudSecret), "Watch bearer must not be in the URL")
+    } else {
+        fatalError("Expected cloud Watch media")
+    }
     check(WatchLocalPCMEndpoint(dictionary: [
         "pcm_host": "8.8.8.8", "pcm_port": 7591, "pcm_secret": secret,
     ]) == nil, "Public PCM host must be rejected")
