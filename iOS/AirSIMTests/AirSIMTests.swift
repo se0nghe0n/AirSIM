@@ -89,6 +89,64 @@ private struct AgentSMSInboxProbe: AgentSMSInboxServicing {
     func messages() async throws -> [SMSMessage] { inbox }
 }
 
+final class CloudCallControlReceiptTests: XCTestCase {
+    private func receipt(
+        status: String = "completed",
+        result: [String: Bool],
+        rescueCommandID: String? = nil
+    ) throws -> CloudCallControlReceipt {
+        var payload: [String: Any] = [
+            "command_id": "test-command",
+            "status": status,
+            "result": result,
+        ]
+        if let rescueCommandID { payload["rescue_command_id"] = rescueCommandID }
+        return try JSONDecoder().decode(
+            CloudCallControlReceipt.self,
+            from: JSONSerialization.data(withJSONObject: payload)
+        )
+    }
+
+    func testAndroidTelecomConfirmedEndIsAccepted() throws {
+        let value = try receipt(result: ["ended": true, "android_confirmed": true])
+        XCTAssertTrue(value.cellularEndConfirmed)
+        XCTAssertEqual(value.confirmationPhase, "android_confirmed")
+    }
+
+    func testAndroidConfirmationRequiresCompletedEnd() throws {
+        for result in [
+            ["ended": true],
+            ["android_confirmed": true],
+            ["ended": false, "android_confirmed": true],
+            ["ended": true, "android_confirmed": false],
+        ] {
+            XCTAssertFalse(try receipt(result: result).cellularEndConfirmed)
+        }
+        for status in ["delivered", "failed", "expired"] {
+            XCTAssertFalse(try receipt(
+                status: status,
+                result: ["ended": true, "android_confirmed": true]
+            ).cellularEndConfirmed)
+        }
+    }
+
+    func testLegacyModemConfirmationRemainsSupported() throws {
+        let value = try receipt(result: ["modem_confirmed": true])
+        XCTAssertTrue(value.cellularEndConfirmed)
+        XCTAssertEqual(value.confirmationPhase, "modem_confirmed")
+        XCTAssertFalse(try receipt(status: "failed", result: ["modem_confirmed": true]).cellularEndConfirmed)
+    }
+
+    func testRescueConfirmationRetainsItsSource() throws {
+        XCTAssertEqual(try receipt(
+            result: ["ended": true, "android_confirmed": true], rescueCommandID: "rescue"
+        ).confirmationPhase, "rescue_android_confirmed")
+        XCTAssertEqual(try receipt(
+            result: ["modem_confirmed": true], rescueCommandID: "rescue"
+        ).confirmationPhase, "rescue_modem_confirmed")
+    }
+}
+
 final class AirSIMTests: XCTestCase {
 
     private func traceFrame(sequence: UInt32 = 1, source: UInt64 = 1_000,

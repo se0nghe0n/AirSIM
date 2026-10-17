@@ -140,6 +140,7 @@ mkdir -p "$OUT"
   "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java \
   "$ROOT"/src/com/airsim/phonecontrol/RelayRetryPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CommandPollingPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CommandRegistrationPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/RecoveryPolicy.java \
 	"$ROOT"/src/com/airsim/phonecontrol/RecoveryLaunchPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallEventDeduplicator.java \
@@ -248,3 +249,7 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCStatistics.java \
   "$ROOT"/test/com/airsim/phonecontrol/WebRTCStatisticsTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCStatisticsTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/test/com/airsim/phonecontrol/CommandRegistrationPolicyTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.CommandRegistrationPolicyTests
