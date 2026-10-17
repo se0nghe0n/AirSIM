@@ -1123,10 +1123,7 @@ final class IPhoneCloudCallSession {
                 }
                 switch status {
                 case _ where CloudCallAnswerPolicy.isAcknowledged(status: status):
-                    session.confirmAnswer(status: status)
-                    if status == "active" {
-                        session.emitLifecycle(.active, source: .agent, traceID: control.traceID)
-                    }
+                    session.confirmAnswer(status: status, traceID: control.traceID)
                 case _ where CloudCallAnswerPolicy.shouldReplayImmediately(status: status):
                     session.replayAnswerIfNeeded()
                 case "ownership_lost":
@@ -1627,8 +1624,10 @@ final class IPhoneCloudCallSession {
         answerHandshake.replayIfNeeded { media.sendControl("answer", call: call) }
     }
 
-    private func confirmAnswer(status: String) {
-        answerHandshake.confirm(status: status) { startWebRTCIfReady() }
+    private func confirmAnswer(status: String, traceID: String?) {
+        answerHandshake.confirm(status: status, callConnected: {
+            emitLifecycle(.active, source: .agent, traceID: traceID)
+        }) { startWebRTCIfReady() }
         guard answerAcknowledged else { return }
         answerRetryGeneration &+= 1
         answerRetryTask?.cancel()

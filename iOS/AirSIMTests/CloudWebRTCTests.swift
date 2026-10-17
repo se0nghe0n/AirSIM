@@ -166,6 +166,70 @@ final class CloudWebRTCTests: XCTestCase {
         XCTAssertTrue(signal.isValid)
     }
     @MainActor
+    func testStandaloneAnswerOKPublishesConnectedBeforeMediaWithoutActiveMessage() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        var events: [String] = []
+        // The standalone agent sends answer_ok only after Telecom is active.
+        // No later legacy PCM active event is present on its WebRTC path.
+        handshake.confirm(status: "answer_ok", callConnected: {
+            events.append("call_connected")
+        }) {
+            XCTAssertEqual(events, ["call_connected"])
+            events.append("start_media")
+        }
+        XCTAssertEqual(events, ["call_connected", "start_media"])
+        handshake.confirm(status: "active", callConnected: {
+            XCTFail("Duplicate status republished connection")
+        }) { XCTFail("Duplicate status restarted media") }
+    }
+
+    @MainActor
+    func testStandaloneAnswerEnablesRecordingInAppModelAndEndingDisablesIt() {
+        let session = IPhoneCloudCallSession.shared
+        let previousLifecycle = session.onLifecycleEvent
+        let previousAudio = session.onAudioStateChange
+        defer {
+            session.onLifecycleEvent = previousLifecycle
+            session.onAudioStateChange = previousAudio
+        }
+        let model = AppModel()
+        let id = UUID()
+        func publish(_ state: CallLifecycleState) {
+            session.onLifecycleEvent?(.init(callID: "record-button-test", callUUID: id,
+                generation: 1, state: state, source: .agent, timestamp: Date(), traceID: nil, failure: nil))
+        }
+        publish(.connecting)
+        XCTAssertFalse(model.canToggleRecording)
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.confirm(status: "answer_ok", callConnected: { publish(.active) }) {}
+        XCTAssertEqual(model.callLifecycleSnapshot.state, .active)
+        XCTAssertTrue(model.canToggleRecording)
+        publish(.ending)
+        XCTAssertFalse(model.canToggleRecording)
+        // Late confirmation may not undo an explicit hangup.
+        handshake.invalidate()
+        handshake.confirm(status: "answer_ok", callConnected: { publish(.active) }) {}
+        XCTAssertEqual(model.callLifecycleSnapshot.state, .ending)
+        XCTAssertFalse(model.canToggleRecording)
+    }
+
+    @MainActor
+    func testUnconfirmedAnswerCannotPublishConnectedOrEnableRecording() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        for status in ["agent_ready", "action_queued", "action_forwarded", "action_error", "webrtc_ready"] {
+            handshake.confirm(status: status, callConnected: {
+                XCTFail("Unconfirmed call became connected")
+            }) { XCTFail("Unconfirmed call started media") }
+        }
+        XCTAssertFalse(handshake.acknowledged)
+        handshake.invalidate(requiringAnswerOK: true)
+        handshake.confirm(status: "active", callConnected: {
+            XCTFail("Reconnect requires fresh answer confirmation")
+        }) { XCTFail("Stale activity restarted media") }
+        XCTAssertFalse(handshake.acknowledged)
+    }
+
+    @MainActor
     func testAgentReconnectReplaysAnswerBeforeAllowingNewOffer() {
         let handshake = CloudWebRTCAnswerHandshake()
         var events: [String] = []

@@ -74,9 +74,12 @@ final class CloudWebRTCAnswerHandshake {
         sendAnswer()
     }
 
-    func confirm(status: String = "answer_ok", _ startMedia: () -> Void) {
+    func confirm(status: String = "answer_ok", callConnected: () -> Void = {}, _ startMedia: () -> Void) {
         guard !acknowledged, status == "answer_ok" || (!requiresAnswerOK && status == "active") else { return }
         acknowledged = true
+        // Standalone WebRTC confirms Telecom with answer_ok; only legacy PCM
+        // emits a subsequent active event. Publish connection before media starts.
+        callConnected()
         startMedia()
     }
 }

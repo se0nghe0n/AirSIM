@@ -1818,6 +1818,10 @@ final class AppModel: ObservableObject {
         errorMessage = nil
     }
 
+    var canToggleRecording: Bool {
+        !isRecordingBusy && (isRecording || callLifecycleSnapshot.state == .active)
+    }
+
     func toggleRecording() async {
         guard !recordings.isBusy else { return }
         do {
