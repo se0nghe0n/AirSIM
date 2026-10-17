@@ -40,6 +40,7 @@ final class WebRTCCloudPeer implements Closeable {
     private String sessionID = "";
     private final Set<String> previousSessions = new HashSet<>();
     private final List<IceCandidate> pendingICE = new ArrayList<>();
+    private final WebRTCReadiness readiness = new WebRTCReadiness();
     private boolean remoteSet;
     private List<PeerConnection.IceServer> iceServers;
     private long captureDeadline;
@@ -128,7 +129,7 @@ final class WebRTCCloudPeer implements Closeable {
                 if (previousSessions.size() >= 64) throw new IOException("Too many WebRTC negotiations");
                 previousSessions.add(id);
                 disposePeer();
-                sessionID = id; remoteSet = false; pendingICE.clear();
+                sessionID = id; readiness.beginSession(id); remoteSet = false; pendingICE.clear();
                 PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(iceServers);
                 config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
                 config.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
@@ -194,9 +195,9 @@ final class WebRTCCloudPeer implements Closeable {
                 });
             }
             public void onConnectionChange(PeerConnection.PeerConnectionState state) {
-                if (state == PeerConnection.PeerConnectionState.CONNECTED) submit(() -> {
-                    if (sessionID.equals(id)) signals.send(new JSONObject().put("status", "webrtc_ready")
-                            .put("call_uuid", callUUID).put("generation", generation).put("session_id", id));
+                submit(() -> {
+                    readiness.connectionChanged(id, state == PeerConnection.PeerConnectionState.CONNECTED);
+                    maybeEmitReady();
                 });
             }
             public void onIceConnectionReceivingChange(boolean receiving) {}
@@ -213,6 +214,12 @@ final class WebRTCCloudPeer implements Closeable {
             public void onDataChannel(DataChannel channel) { channel.close(); channel.dispose(); }
             public void onRenegotiationNeeded() {}
         };
+    }
+
+    private void maybeEmitReady() throws Exception {
+        String readySession = readiness.takeReadySession();
+        if (readySession != null) signals.send(new JSONObject().put("status", "webrtc_ready")
+                .put("call_uuid", callUUID).put("generation", generation).put("session_id", readySession));
     }
 
     private abstract class DescriptionObserver implements SdpObserver {
@@ -279,6 +286,10 @@ final class WebRTCCloudPeer implements Closeable {
                 if (closed.get()) { connection.close(); return; }
                 pcmReady = true;
                 io.execute(() -> writePCM(output));
+                submit(() -> {
+                    readiness.pcmConnected();
+                    maybeEmitReady();
+                });
                 byte[] buffer = new byte[320];
                 while (!closed.get()) {
                     int count = input.read(buffer);

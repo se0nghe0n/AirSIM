@@ -238,3 +238,8 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCOpusSDP.java \
   "$ROOT"/test/com/airsim/phonecontrol/WebRTCMediaTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCMediaTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCReadiness.java \
+  "$ROOT"/test/com/airsim/phonecontrol/WebRTCReadinessTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCReadinessTests
