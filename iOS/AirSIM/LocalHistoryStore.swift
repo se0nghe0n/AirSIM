@@ -1,11 +1,29 @@
 import Foundation
 
+enum CallHistoryPolicy {
+    static func merged(
+        local: [CallRecord], remote: [CallRecord],
+        deletedIDs: Set<String>, limit: Int
+    ) -> [CallRecord] {
+        var byID: [String: CallRecord] = [:]
+        for record in local + remote where !deletedIDs.contains(record.id) {
+            if let existing = byID[record.id], existing.updatedAt > record.updatedAt { continue }
+            byID[record.id] = record
+        }
+        return Array(byID.values.sorted {
+            if $0.startedAt == $1.startedAt { return $0.id < $1.id }
+            return $0.startedAt > $1.startedAt
+        }.prefix(max(0, limit)))
+    }
+}
+
 /// 负责保存手机本地的通话记录和短信，不依赖模块是否在线。
 final class LocalHistoryStore {
     private let fileManager: FileManager
     private let directoryURL: URL
     private let callHistoryURL: URL
     private let messagesURL: URL
+    private let deletedCallIDsURL: URL
 
     init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
         self.fileManager = fileManager
@@ -21,6 +39,7 @@ final class LocalHistoryStore {
         self.directoryURL = resolvedDirectoryURL
         callHistoryURL = resolvedDirectoryURL.appendingPathComponent("call-history.json")
         messagesURL = resolvedDirectoryURL.appendingPathComponent("messages.json")
+        deletedCallIDsURL = resolvedDirectoryURL.appendingPathComponent("deleted-call-ids.json")
 
         do {
             try fileManager.createDirectory(
@@ -36,6 +55,15 @@ final class LocalHistoryStore {
 
     func loadCallHistory() -> [CallRecord] {
         load(CallRecord.self, from: callHistoryURL) ?? []
+    }
+
+    func loadDeletedCallIDs() -> Set<String> {
+        Set(load(String.self, from: deletedCallIDsURL) ?? [])
+    }
+
+    @discardableResult
+    func saveDeletedCallIDs(_ ids: Set<String>) -> Bool {
+        save(ids.sorted(), to: deletedCallIDsURL)
     }
 
     func loadMessages() -> [SMSMessage] {

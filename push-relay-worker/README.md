@@ -44,6 +44,8 @@ The backend includes:
 - `/v1/calls/:uuid/connect`, `/v1/devices/:deviceID/commands/connect`: authenticated WebSockets.
 - `GET /healthz`, `GET /dashboard`: health check and operations UI.
 
+`POST /v1/commands/enqueue` also accepts the read-only `call_history` type with a device ID/secret, UUID command ID, and optional `limit` from 1 to 100 (default 100). Omit number, message, call, and action fields. It creates no cellular call. Fetch completion through `/v1/commands/result`; `result.history` contains native Android records with stable agent/provider IDs and ISO 8601 timestamps. Permission/provider failures are explicit failed results. Responses are bounded below the command WebSocket frame limit.
+
 Storage responsibilities:
 
 - `DEVICES` KV: recovery mirrors of devices/status and short-lived Relay data.

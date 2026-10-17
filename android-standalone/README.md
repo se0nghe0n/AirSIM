@@ -80,6 +80,12 @@ Release output is `android-standalone/build/android/AirSIM-Android-Standalone-re
 4. Enter your Relay URL, device identifier, and pairing details on Android. If using your own Apple Bundle ID, Relay `ALLOWED_BUNDLE_ID` and APNs topics must match.
 5. First validate VoWLAN with iPhone and Android on the same hotspot/LAN, then validate remote Relay mode.
 
+### Call history on iPhone
+
+Grant Android AirSIM the optional call-log permission to show system call history in the iPhone app's **Recents** tab, including calls made before an app restart. Recents refreshes when opened, when the app returns to the foreground, and shortly after a cloud call ends. Pull down or use the refresh button to retry. History queries wait until the current call ends.
+
+VoWLAN and Cloud mode retrieve the same latest 100 Android records. iPhone retains up to 500 records locally, so existing history stays visible while Android is offline. Deleting a row hides it on that iPhone and keeps it hidden after later refreshes; it does not delete Android's system call log. Denying call-log access does not prevent calls, but remote history reports a permission error.
+
 ### Default calling SIM (dual/multi-SIM)
 
 Under Android AirSIM “Settings → Default Calling SIM,” select “Follow System Default” or an enabled SIM/eSIM. Slots and carriers come from the system; a number is shown only when permission and carrier data are available. The local preference survives restart and in-place upgrades. BLE, VoWLAN, Relay, and Android local dialing all use it, without network access for SIM selection.
