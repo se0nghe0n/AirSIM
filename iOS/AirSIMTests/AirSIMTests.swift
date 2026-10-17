@@ -4,6 +4,30 @@ import AVFoundation
 import XCTest
 @testable import AirSIM
 
+final class CloudMediaCredentialTests: XCTestCase {
+    func testIncomingWebRTCCredentialStaysOutOfWebSocketAndICEURLs() throws {
+        let callUUID = UUID()
+        let secret = String(repeating: "s", count: 32)
+        let call = try IncomingVoIPCall(userInfo: [
+            "event": "incoming_call", "call_id": "security-test",
+            "call_uuid": callUUID.uuidString,
+            "media_url": "wss://relay.example/v1/calls/\(callUUID.uuidString)/connect",
+            "call_secret": secret, "media_transport": "webrtc",
+        ])
+        let mediaURL = try XCTUnwrap(call.authenticatedMediaURL)
+        XCTAssertEqual(call.mediaSecret, secret)
+        XCTAssertEqual(URLComponents(url: mediaURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "role" })?.value, "iphone")
+        XCTAssertFalse(mediaURL.absoluteString.contains(secret))
+        XCTAssertNil(URLComponents(url: mediaURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "token" }))
+
+        let iceRequest = try CloudICEConfiguration.request(for: call)
+        XCTAssertEqual(iceRequest.value(forHTTPHeaderField: "Authorization"), "Bearer \(secret)")
+        XCTAssertFalse(iceRequest.url?.absoluteString.contains(secret) ?? true)
+    }
+}
+
 // Simulator test runner is unsigned and has no Keychain entitlement (-34018).
 // Keep the real controller; replace only the OS credential persistence boundary.
 private final class InMemoryVoBLEPairingStore: VoBLEPairingStoring, @unchecked Sendable {

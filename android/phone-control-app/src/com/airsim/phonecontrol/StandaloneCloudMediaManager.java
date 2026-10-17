@@ -8,7 +8,6 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -139,9 +138,8 @@ final class StandaloneCloudMediaManager implements Closeable {
                 StandaloneWebSocket owner = null;
                 try {
                     URI endpoint = URI.create(descriptor.relayURL.replaceFirst("^https", "wss")
-                            + "/v1/calls/" + descriptor.callUUID + "/connect?role=agent&token="
-                            + URLEncoder.encode(descriptor.secret, "UTF-8"));
-                    owner = StandaloneWebSocket.connect(endpoint, "");
+                            + "/v1/calls/" + descriptor.callUUID + "/connect?role=agent");
+                    owner = StandaloneWebSocket.connect(endpoint, descriptor.secret);
                     synchronized (this) {
                         if (!running) { closeSocket(owner); return; }
                         webSocket = owner;

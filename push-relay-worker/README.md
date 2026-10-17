@@ -157,6 +157,8 @@ APNS_KEY_ID = "YOUR_APNS_KEY_ID"
 ALLOWED_BUNDLE_ID = "org.example.airsim"
 WEBRTC_TRANSPORT_READY = "false"
 WEBRTC_ROLLOUT_PERCENT = "0"
+WEBRTC_HEADER_AUTH_REQUIRED = "true"
+NEW_DEVICE_ENROLLMENT_ENABLED = "false"
 
 [[kv_namespaces]]
 binding = "DEVICES"
@@ -319,14 +321,14 @@ For a release, use `Release`, `production`, and distribution signing. Never ask 
 Wrangler deploys the Worker, binds KV/DO, and configures domains and Secrets. **It does not generate or populate per-device APNs tokens.** Signed apps register themselves:
 
 1. At first launch, the app registers PushKit and separately requests normal notification permission. The system returns separate VoIP and regular APNs tokens; Watch and Live Activity tokens may be added later.
-2. The app generates and stores its own `device_id` and `device_secret`.
+2. The app generates and stores its own `device_id` and `device_secret`. Temporarily set `NEW_DEVICE_ENROLLMENT_ENABLED = "true"` and deploy only while adding a new paired device. New IDs are closed by default and limited to eight enrollments per hour while open.
 3. It submits tokens, Bundle ID, APNs environment, Relay URL, and media capabilities to `POST /v1/devices/register`, and synchronizes them with the paired Agent.
 4. The Relay validates Bundle ID, token format, and environment, storing a hash of `device_secret`, not its plaintext. `STATUS` Durable Object is authoritative; KV is a mirror/fallback.
-5. Later registrations for the same `device_id` must use the same Secret. The app re-registers automatically on system changes or APNs token rotation.
+5. Later registrations for the same `device_id` must use the same Secret. The app re-registers automatically on system changes or APNs token rotation even when new enrollment is closed. Once the new device appears, set `NEW_DEVICE_ENROLLMENT_ENABLED = "false"` and redeploy.
 
 To add a device: install the signed app → set Relay URL → pair with the Agent → enable cloud mode/notifications → keep the app foregrounded once until registration succeeds. Do not maintain a device list in Wrangler configuration or manually populate KV.
 
-Only in a diagnostic test environment, use placeholders to inspect the API shape:
+Only in a diagnostic test environment with new enrollment enabled, use placeholders to inspect the API shape:
 
 ```sh
 curl --fail-with-body \
@@ -431,13 +433,23 @@ a TURN service.
 <call_secret>`. It returns `ice_servers` and `ttl`, with `Cache-Control: no-store`
 on successes and failures. TURN credentials use the standard coturn REST
 `expiry:call_uuid:role` username and base64 HMAC-SHA1 password. No TURN secret,
-credential, or SDP is logged or saved in Relay records. Missing TURN produces a
-503 response and prevents rollout selection; a readiness flag alone is not
+credential, or SDP is logged. Coturn credentials are generated on demand;
+managed Cloudflare TURN credentials are cached server-side for the authenticated
+call and role until they expire, with at most 12 issuance attempts per call role.
+Missing TURN produces a 503 response and prevents rollout selection; a readiness flag alone is not
 sufficient.
 
 On the authenticated call WebSocket, the owning iPhone sends `webrtc_offer`, the
 agent sends `webrtc_answer`, and both may send `webrtc_ice` after an offer. Every
-message includes `call_uuid`, integer `generation`, and UUID `session_id`. SDP is
+WebRTC client authenticates the upgrade with `Authorization: Bearer <call_secret>`;
+the URL contains only the media role. Query-string secrets are rejected for
+WebRTC calls. During a coordinated upgrade only, an operator may set
+`WEBRTC_HEADER_AUTH_REQUIRED = "false"`, deploy the Relay, install updated clients,
+and then restore `"true"`. Older legacy PCM calls retain query-token compatibility
+until their clients are upgraded. Disable automatic Worker invocation logs while
+that compatibility remains, because they include request URLs; explicit
+structured application logs can remain enabled. Every message includes `call_uuid`, integer
+`generation`, and UUID `session_id`. SDP is
 limited to 48 KiB, ICE candidate strings to 4096 characters, and frames to 64 KiB.
 Only negotiation identities are kept in hibernation attachments. Relay never
 queues SDP or candidates: clients queue at most 128 ICE candidates until remote

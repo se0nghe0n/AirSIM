@@ -12,12 +12,20 @@ workers_dev = true
 [observability]
 enabled = true
 
+# Automatic invocation logs contain request URLs. Legacy PCM clients may still
+# include a short-lived call token in the URL; retain only explicit app logs.
+[observability.logs]
+invocation_logs = false
+
 [vars]
 APNS_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APNS_KEY_ID = "REPLACE_WITH_APNS_KEY_ID"
 ALLOWED_BUNDLE_ID = "com.example.airsim"
 WEBRTC_TRANSPORT_READY = "false"
 WEBRTC_ROLLOUT_PERCENT = "0"
+WEBRTC_HEADER_AUTH_REQUIRED = "true"
+# Closed by default. Open only while enrolling a new paired device, then close.
+NEW_DEVICE_ENROLLMENT_ENABLED = "false"
 # TURN is required before enabling WebRTC. Choose coturn (default) or cloudflare.
 TURN_PROVIDER = "coturn"
 # coturn: replace with your own service.

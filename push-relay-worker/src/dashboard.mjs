@@ -1,5 +1,6 @@
 const DASHBOARD_EVENT_PREFIX = "dashboard:event:";
 const DEVICE_PREFIX = "device:";
+import { readBoundedJSON, RequestBodyError } from "./request-body.mjs";
 import {
   claimRateLimit,
   clearRateLimit,
@@ -94,12 +95,11 @@ export async function dashboardSummary(env, now = Date.now()) {
 export async function dashboardVirtualCall(request, env, sendAPNs) {
   let value;
   try {
-    const body = await request.text();
-    if (new TextEncoder().encode(body).byteLength > 8 * 1024) {
+    value = await readBoundedJSON(request, 8 * 1024);
+  } catch (error) {
+    if (error instanceof RequestBodyError && error.status === 413) {
       return jsonResponse(413, { error: "The request is too large." });
     }
-    value = JSON.parse(body);
-  } catch {
     return jsonResponse(400, { error: "Invalid request format." });
   }
   const controlID = stringValue(value?.device_id).trim();

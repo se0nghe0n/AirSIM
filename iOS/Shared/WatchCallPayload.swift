@@ -115,7 +115,7 @@ struct WatchLocalPCMEndpoint: Equatable, Sendable {
 }
 
 enum WatchCallMedia: Equatable, Sendable {
-    case cloud(URL)
+    case cloud(URL, String)
     case local(WatchLocalPCMEndpoint)
     /// APNs does not carry the paired VoWLAN secret; fetch it from the paired iPhone on answer.
     case pendingLocal
@@ -133,7 +133,7 @@ struct WatchVoIPCall: Equatable, Sendable {
     let isOutgoing: Bool
 
     var authenticatedMediaURL: URL? {
-        if case let .cloud(url) = media { return url }
+        if case let .cloud(url, _) = media { return url }
         return nil
     }
 
@@ -167,15 +167,15 @@ struct WatchVoIPCall: Equatable, Sendable {
             guard let rawMediaURL = Self.nonEmpty(userInfo["media_url"] as? String),
                   var components = URLComponents(string: rawMediaURL),
                   components.scheme?.lowercased() == "wss",
-                  components.host?.isEmpty == false else {
+                  components.host?.isEmpty == false,
+                  components.user == nil, components.password == nil else {
                 throw WatchVoIPPayloadError.invalidMediaURL
             }
             components.queryItems = [
                 URLQueryItem(name: "role", value: "watch"),
-                URLQueryItem(name: "token", value: secret),
             ]
             guard let url = components.url else { throw WatchVoIPPayloadError.invalidMediaURL }
-            media = .cloud(url)
+            media = .cloud(url, secret)
         } else {
             media = .pendingLocal
         }

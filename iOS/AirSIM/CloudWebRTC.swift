@@ -118,7 +118,7 @@ struct CloudICEConfiguration: Decodable, Sendable {
     static func request(for call: IncomingVoIPCall) throws -> URLRequest {
         guard let mediaURL = call.authenticatedMediaURL,
               var url = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
-              let secret = url.queryItems?.first(where: { $0.name == "token" })?.value,
+              let secret = call.mediaSecret,
               !secret.isEmpty else { throw IPhoneCloudCallError.mediaUnavailable }
         url.scheme = "https"
         url.path = "/v1/calls/\(call.uuid.uuidString.lowercased())/ice"

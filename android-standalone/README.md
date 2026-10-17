@@ -52,7 +52,7 @@ Requires JDK 17, Android SDK Platform 35, Build Tools 35, and Python 3. The buil
 ./android-standalone/build.sh
 ```
 
-Debug APK output:
+Debug-signed APK output (the app itself is non-debuggable to protect its private registration data):
 
 ```text
 android-standalone/build/android/AirSIM-Android-Standalone-debug.apk
