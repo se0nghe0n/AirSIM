@@ -4,6 +4,156 @@ import AudioToolbox
 @testable import AirSIM
 
 final class CloudWebRTCTests: XCTestCase {
+    @MainActor
+    func testICEPrefetchAndConcurrentAudioStartsShareOneRequest() async throws {
+        let gate = ICEFetchGate()
+        let preparation = CloudICEPreparation(fetch: { try await gate.fetch($0) })
+        let call = try iceCall()
+        preparation.prefetch(for: call)
+        await fulfillment(of: [gate.firstRequest], timeout: 2)
+        let first = Task { try await preparation.configuration(for: call) }
+        let second = Task { try await preparation.configuration(for: call) }
+        gate.complete(0, username: "one")
+        let results = try await [first.value, second.value]
+        XCTAssertEqual(results.map { $0.iceServers.first?.username }, ["one", "one"])
+        XCTAssertEqual(gate.calls.count, 1)
+    }
+
+    @MainActor
+    func testICELeaseRefreshesBeforeExpiryAndReusesFreshLease() async throws {
+        var time: TimeInterval = 100
+        var requests = 0
+        let preparation = CloudICEPreparation(fetch: { _ in
+            requests += 1
+            return self.iceConfig(username: String(requests), ttl: 100)
+        }, now: { time })
+        let call = try iceCall()
+        preparation.prefetch(for: call)
+        let first = try await preparation.configuration(for: call)
+        time = 189
+        let reused = try await preparation.configuration(for: call)
+        XCTAssertEqual(first.iceServers.first?.username, reused.iceServers.first?.username)
+        XCTAssertEqual(requests, 1)
+        time = 190
+        let refreshed = try await preparation.configuration(for: call)
+        XCTAssertEqual(refreshed.iceServers.first?.username, "2")
+        XCTAssertEqual(requests, 2)
+    }
+
+    @MainActor
+    func testICEFailedPrefetchRetriesOnceWhenAudioNeedsIt() async throws {
+        let fetched = expectation(description: "prefetch failed")
+        var requests = 0
+        let preparation = CloudICEPreparation(fetch: { _ in
+            requests += 1
+            if requests == 1 {
+                fetched.fulfill()
+                throw CloudWebRTCError.iceUnavailable
+            }
+            return self.iceConfig(username: "retry")
+        })
+        let call = try iceCall()
+        preparation.prefetch(for: call)
+        await fulfillment(of: [fetched], timeout: 2)
+        let config = try await preparation.configuration(for: call)
+        XCTAssertEqual(config.iceServers.first?.username, "retry")
+        XCTAssertEqual(requests, 2)
+    }
+
+    @MainActor
+    func testICERepeatedFailureStopsAfterOneRetry() async throws {
+        var requests = 0
+        let preparation = CloudICEPreparation(fetch: { _ in
+            requests += 1
+            throw CloudWebRTCError.iceUnavailable
+        })
+        do {
+            _ = try await preparation.configuration(for: iceCall())
+            XCTFail("Unavailable credentials must fail")
+        } catch is CloudWebRTCError {} catch { XCTFail("Unexpected error") }
+        XCTAssertEqual(requests, 2)
+    }
+
+    @MainActor
+    func testICEHangupDiscardsLateResponseBeforeNextCall() async throws {
+        let gate = ICEFetchGate()
+        let preparation = CloudICEPreparation(fetch: { try await gate.fetch($0) })
+        let old = try iceCall(), next = try iceCall()
+        preparation.prefetch(for: old)
+        await fulfillment(of: [gate.firstRequest], timeout: 2)
+        let started = expectation(description: "old waiter entered")
+        let waiter = Task {
+            started.fulfill()
+            return try await preparation.configuration(for: old)
+        }
+        await fulfillment(of: [started], timeout: 2)
+        preparation.cancel()
+        preparation.prefetch(for: next)
+        await fulfillment(of: [gate.secondRequest], timeout: 2)
+        // Simulate a transport that delivers a response despite cancellation.
+        gate.complete(0, username: "stale")
+        do { _ = try await waiter.value; XCTFail("Ended call reused credentials") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error") }
+        gate.complete(1, username: "next")
+        let config = try await preparation.configuration(for: next)
+        XCTAssertEqual(config.iceServers.first?.username, "next")
+        XCTAssertEqual(gate.calls.map(\.uuid), [old.uuid, next.uuid])
+    }
+
+    @MainActor
+    func testICEAudioInterruptionDoesNotCancelSharedPreparation() async throws {
+        let gate = ICEFetchGate()
+        let preparation = CloudICEPreparation(fetch: { try await gate.fetch($0) })
+        let call = try iceCall()
+        preparation.prefetch(for: call)
+        await fulfillment(of: [gate.firstRequest], timeout: 2)
+        let started = expectation(description: "audio waiter entered")
+        let waiter = Task {
+            started.fulfill()
+            return try await preparation.configuration(for: call)
+        }
+        await fulfillment(of: [started], timeout: 2)
+        waiter.cancel()
+        gate.complete(0, username: "retained")
+        do { _ = try await waiter.value; XCTFail("Cancelled audio start continued") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error") }
+        let config = try await preparation.configuration(for: call)
+        XCTAssertEqual(config.iceServers.first?.username, "retained")
+        XCTAssertEqual(gate.calls.count, 1)
+    }
+
+    @MainActor
+    func testICECredentialsAreScopedToGenerationSecretAndRelay() async throws {
+        var requests = 0
+        let preparation = CloudICEPreparation(fetch: { _ in
+            requests += 1
+            return self.iceConfig(username: String(requests))
+        })
+        let id = UUID()
+        let calls = try [
+            iceCall(id: id),
+            iceCall(id: id, generation: 2),
+            iceCall(id: id, generation: 2, secret: "y"),
+            iceCall(id: id, generation: 2, secret: "y", host: "other.test")
+        ]
+        for (index, call) in calls.enumerated() {
+            let config = try await preparation.configuration(for: call)
+            XCTAssertEqual(config.iceServers.first?.username, String(index + 1))
+        }
+        XCTAssertEqual(requests, 4)
+    }
+
+    private func iceCall(id: UUID = UUID(), generation: UInt64 = 1, secret: String = "x",
+                         host: String = "relay.test") throws -> IncomingVoIPCall {
+        try IncomingVoIPCall(outgoingCallID: "test", uuid: id, number: "1",
+            secret: String(repeating: secret, count: 32), mediaURL: URL(string: "wss://\(host)/connect")!,
+            generation: generation, mediaTransport: .webRTC)
+    }
+
+    private func iceConfig(username: String, ttl: Int = 600) -> CloudICEConfiguration {
+        .init(iceServers: [.init(urls: ["turn:relay.test"], username: username, credential: "test")], ttl: ttl)
+    }
+
     func testSignalUsesContractKeysAndRoundTrips() throws {
         let signal = CloudWebRTCSignal(action: .ice, callUUID: UUID(), generation: 7, sessionID: UUID(),
             candidate: .init(candidate: "candidate:1 1 udp 1 127.0.0.1 1234 typ host", sdpMid: "0", sdpMlineIndex: 0))
@@ -15,6 +165,70 @@ final class CloudWebRTCTests: XCTestCase {
         XCTAssertEqual((json["candidate"] as? [String: Any])?["sdp_mline_index"] as? Int, 0)
         XCTAssertTrue(signal.isValid)
     }
+    @MainActor
+    func testStandaloneAnswerOKPublishesConnectedBeforeMediaWithoutActiveMessage() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        var events: [String] = []
+        // The standalone agent sends answer_ok only after Telecom is active.
+        // No later legacy PCM active event is present on its WebRTC path.
+        handshake.confirm(status: "answer_ok", callConnected: {
+            events.append("call_connected")
+        }) {
+            XCTAssertEqual(events, ["call_connected"])
+            events.append("start_media")
+        }
+        XCTAssertEqual(events, ["call_connected", "start_media"])
+        handshake.confirm(status: "active", callConnected: {
+            XCTFail("Duplicate status republished connection")
+        }) { XCTFail("Duplicate status restarted media") }
+    }
+
+    @MainActor
+    func testStandaloneAnswerEnablesRecordingInAppModelAndEndingDisablesIt() {
+        let session = IPhoneCloudCallSession.shared
+        let previousLifecycle = session.onLifecycleEvent
+        let previousAudio = session.onAudioStateChange
+        defer {
+            session.onLifecycleEvent = previousLifecycle
+            session.onAudioStateChange = previousAudio
+        }
+        let model = AppModel()
+        let id = UUID()
+        func publish(_ state: CallLifecycleState) {
+            session.onLifecycleEvent?(.init(callID: "record-button-test", callUUID: id,
+                generation: 1, state: state, source: .agent, timestamp: Date(), traceID: nil, failure: nil))
+        }
+        publish(.connecting)
+        XCTAssertFalse(model.canToggleRecording)
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.confirm(status: "answer_ok", callConnected: { publish(.active) }) {}
+        XCTAssertEqual(model.callLifecycleSnapshot.state, .active)
+        XCTAssertTrue(model.canToggleRecording)
+        publish(.ending)
+        XCTAssertFalse(model.canToggleRecording)
+        // Late confirmation may not undo an explicit hangup.
+        handshake.invalidate()
+        handshake.confirm(status: "answer_ok", callConnected: { publish(.active) }) {}
+        XCTAssertEqual(model.callLifecycleSnapshot.state, .ending)
+        XCTAssertFalse(model.canToggleRecording)
+    }
+
+    @MainActor
+    func testUnconfirmedAnswerCannotPublishConnectedOrEnableRecording() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        for status in ["agent_ready", "action_queued", "action_forwarded", "action_error", "webrtc_ready"] {
+            handshake.confirm(status: status, callConnected: {
+                XCTFail("Unconfirmed call became connected")
+            }) { XCTFail("Unconfirmed call started media") }
+        }
+        XCTAssertFalse(handshake.acknowledged)
+        handshake.invalidate(requiringAnswerOK: true)
+        handshake.confirm(status: "active", callConnected: {
+            XCTFail("Reconnect requires fresh answer confirmation")
+        }) { XCTFail("Stale activity restarted media") }
+        XCTAssertFalse(handshake.acknowledged)
+    }
+
     @MainActor
     func testAgentReconnectReplaysAnswerBeforeAllowingNewOffer() {
         let handshake = CloudWebRTCAnswerHandshake()
@@ -386,5 +600,27 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
             }
             Thread.sleep(forTimeInterval: 0.01)
         }
+    }
+}
+
+@MainActor
+private final class ICEFetchGate {
+    let firstRequest = XCTestExpectation(description: "first ICE request")
+    let secondRequest = XCTestExpectation(description: "second ICE request")
+    private(set) var calls: [IncomingVoIPCall] = []
+    private var continuations: [CheckedContinuation<CloudICEConfiguration, Error>] = []
+
+    func fetch(_ call: IncomingVoIPCall) async throws -> CloudICEConfiguration {
+        try await withCheckedThrowingContinuation { continuation in
+            calls.append(call)
+            continuations.append(continuation)
+            if calls.count == 1 { firstRequest.fulfill() }
+            if calls.count == 2 { secondRequest.fulfill() }
+        }
+    }
+
+    func complete(_ index: Int, username: String) {
+        continuations[index].resume(returning: .init(
+            iceServers: [.init(urls: ["turn:relay.test"], username: username, credential: "test")], ttl: 600))
     }
 }

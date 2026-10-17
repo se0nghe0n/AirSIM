@@ -74,9 +74,12 @@ final class CloudWebRTCAnswerHandshake {
         sendAnswer()
     }
 
-    func confirm(status: String = "answer_ok", _ startMedia: () -> Void) {
+    func confirm(status: String = "answer_ok", callConnected: () -> Void = {}, _ startMedia: () -> Void) {
         guard !acknowledged, status == "answer_ok" || (!requiresAnswerOK && status == "active") else { return }
         acknowledged = true
+        // Standalone WebRTC confirms Telecom with answer_ok; only legacy PCM
+        // emits a subsequent active event. Publish connection before media starts.
+        callConnected()
         startMedia()
     }
 }
@@ -142,6 +145,90 @@ struct CloudICEConfiguration: Decodable, Sendable {
             $0.urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
         }) else { throw CloudWebRTCError.turnUnavailable }
         return config
+    }
+}
+
+/// Per-call TURN preparation overlaps the control handshake without starting audio.
+/// Credentials never survive a call, credential rotation, or an expired lease.
+@MainActor
+final class CloudICEPreparation {
+    private struct Identity: Equatable {
+        let callUUID: UUID
+        let generation: UInt64
+        let endpoint: URL?
+        let authorization: String?
+    }
+    private struct Prepared {
+        let configuration: CloudICEConfiguration
+        let validUntil: TimeInterval
+    }
+    private struct Pending {
+        let id: UUID
+        let identity: Identity
+        let task: Task<Prepared, Error>
+    }
+    private var pending: Pending?
+    private let fetch: (IncomingVoIPCall) async throws -> CloudICEConfiguration
+    private let now: () -> TimeInterval
+
+    init(fetch: @escaping (IncomingVoIPCall) async throws -> CloudICEConfiguration = { try await CloudICEConfiguration.fetch(for: $0) },
+         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.fetch = fetch
+        self.now = now
+    }
+
+    func prefetch(for call: IncomingVoIPCall) {
+        // Failure stays private until audio needs the result; it can then retry once.
+        _ = try? prepare(for: call)
+    }
+
+    func cancel() {
+        pending?.task.cancel()
+        pending = nil
+    }
+
+    func configuration(for call: IncomingVoIPCall) async throws -> CloudICEConfiguration {
+        for attempt in 0..<2 {
+            try Task.checkCancellation()
+            let request = try prepare(for: call)
+            do {
+                let prepared = try await request.task.value
+                try Task.checkCancellation()
+                guard pending?.id == request.id else { throw CancellationError() }
+                guard now() < prepared.validUntil else { throw CloudWebRTCError.iceUnavailable }
+                return prepared.configuration
+            } catch {
+                // An interrupted audio start must not cancel another waiter's
+                // preparation. Hangup/new-call cancellation is explicit above.
+                try Task.checkCancellation()
+                guard pending?.id == request.id else { throw CancellationError() }
+                pending = nil
+                if attempt == 1 { throw error }
+            }
+        }
+        throw CloudWebRTCError.iceUnavailable
+    }
+
+    private func prepare(for call: IncomingVoIPCall) throws -> Pending {
+        let request = try CloudICEConfiguration.request(for: call)
+        let identity = Identity(callUUID: call.uuid, generation: call.generation,
+                                endpoint: request.url, authorization: request.value(forHTTPHeaderField: "Authorization"))
+        if let pending, pending.identity == identity { return pending }
+        cancel()
+        let startedAt = now()
+        let fetch = self.fetch
+        let task = Task { @MainActor in
+            let configuration = try await fetch(call)
+            try Task.checkCancellation()
+            // Start the lease at request time, leaving room for network delay
+            // and clock differences. A reconnect may reuse only a fresh lease.
+            let ttl = Double(configuration.ttl)
+            return Prepared(configuration: configuration,
+                            validUntil: startedAt + ttl - min(30, ttl * 0.1))
+        }
+        let requestState = Pending(id: UUID(), identity: identity, task: task)
+        pending = requestState
+        return requestState
     }
 }
 
@@ -274,6 +361,10 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             encoderFactory: RTCVideoEncoderFactoryH264(), decoderFactory: RTCVideoDecoderFactoryH264(),
             audioProcessingModule: recordingAudio.module)
     }()
+    /// Initializes shared native resources only. Manual audio remains disabled
+    /// until the normal CallKit/answer acknowledgement gates permit it.
+    static func prepareFactory() { _ = factory }
+
     let sessionID: UUID
     private let callUUID: UUID
     private let generation: UInt64

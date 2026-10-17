@@ -1864,9 +1864,12 @@ struct ActiveCallView: View {
                         }
                     }
                     .frame(width: 44, height: 44)
+                    .contentShape(Circle())
                 }
+                .buttonStyle(.plain)
                 .callControlGlass(tint: model.isRecording ? .red.opacity(0.16) : nil)
-                .disabled(model.isRecordingBusy || (!model.isRecording && call.state != "active"))
+                .disabled(!model.canToggleRecording)
+                .opacity(model.canToggleRecording ? 1 : 0.45)
                 .accessibilityLabel(model.isRecording ? L10n.t("停止录音") : L10n.t("录音"))
             }
         }

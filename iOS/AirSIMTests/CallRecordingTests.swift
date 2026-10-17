@@ -1,8 +1,23 @@
 import XCTest
 import AVFoundation
+import WebRTC
 @testable import AirSIM
 
 final class CallRecordingTests: XCTestCase {
+    func testWebRTCModuleActuallyRegistersAndRetainsBothRecordingObservers() throws {
+        let audio = CloudWebRTCRecordingAudio()
+        // Test the real SDK getters, not a mock initializer: this SDK accepts
+        // constructor delegates but does not bind them to the native adapter.
+        let capture = try XCTUnwrap(audio.module.capturePostProcessingDelegate)
+        let render = try XCTUnwrap(audio.module.renderPreProcessingDelegate)
+        XCTAssertFalse(capture === render)
+        capture.audioProcessingInitialize(sampleRate: 48_000, channels: 1)
+        render.audioProcessingInitialize(sampleRate: 48_000, channels: 1)
+        XCTAssertTrue(audio.module.capturePostProcessingDelegate === capture)
+        XCTAssertTrue(audio.module.renderPreProcessingDelegate === render)
+        withExtendedLifetime(audio) {}
+    }
+
     private func fixture() throws -> (CallAudioRecorder, URL) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         return (CallAudioRecorder(directoryURL: directory), directory)
