@@ -1059,6 +1059,7 @@ final class IPhoneCloudCallSession {
     private var mediaHealthTracker: CloudMediaHealthTracker?
     private var answerRetryTask: Task<Void, Never>?
     private var answerRetryGeneration = 0
+    private let icePreparation = CloudICEPreparation()
     private let answerHandshake = CloudWebRTCAnswerHandshake()
     private var answerAcknowledged: Bool { answerHandshake.acknowledged }
     private var webRTCReadiness = CloudWebRTCReadiness()
@@ -1209,6 +1210,14 @@ final class IPhoneCloudCallSession {
         answered = true
         lifecycleState = .connecting
         answerHandshake.invalidate()
+        if incoming.requestedMediaTransport == .webRTC {
+            icePreparation.prefetch(for: incoming)
+            // Native initialization and HTTPS can overlap the WebSocket and
+            // Q25 answer confirmation. Neither creates a peer or opens a mic.
+            Task.detached(priority: .userInitiated) { CloudWebRTCPeer.prepareFactory() }
+        } else {
+            icePreparation.cancel()
+        }
         if callChanged || mediaHealthTracker == nil {
             mediaHealthTracker = CloudMediaHealthTracker(startedAt: Date(), maximumRebuilds: 3)
             mediaHealthTracker?.recordRoute(media.audioRouteDescription)
@@ -1496,6 +1505,7 @@ final class IPhoneCloudCallSession {
         title: String,
         detail: String = "",
         attempt: Int? = nil,
+        additionalFields: [String: String] = [:],
         isFailure: Bool = false
     ) {
         guard let call else { return }
@@ -1506,6 +1516,7 @@ final class IPhoneCloudCallSession {
             "audio_route": media.audioRouteDescription,
             "downlink_received": String(media.hasReceivedDownlink),
         ]
+        fields.merge(additionalFields) { current, _ in current }
         if let attempt { fields["attempt"] = String(attempt) }
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
@@ -1559,6 +1570,7 @@ final class IPhoneCloudCallSession {
     }
 
     func stop() {
+        icePreparation.cancel()
         webRTCReadiness.reset()
         releaseWebRTCAudioActivation()
         audioStartupPermitted = false
@@ -1674,10 +1686,13 @@ final class IPhoneCloudCallSession {
                     AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
                 } }
                 guard permission else { throw IPhoneCloudCallError.microphonePermissionDenied }
-                let config = try await CloudICEConfiguration.fetch(for: call)
+                let iceWaitStarted = ProcessInfo.processInfo.systemUptime
+                let config = try await icePreparation.configuration(for: call)
                 guard !Task.isCancelled, self.call?.uuid == call.uuid,
                       webRTCStartID == id, audioStartupPermitted, answerAcknowledged,
                       !CallKitController.shared.managesCurrentCall || CallKitController.shared.audioSessionIsActive else { return }
+                traceAudio(phase: "ice_prepared", title: "WebRTC ICE Prepared",
+                           additionalFields: ["ice_wait_ms": String(format: "%.1f", (ProcessInfo.processInfo.systemUptime - iceWaitStarted) * 1_000)])
                 let rtc = RTCAudioSession.sharedInstance()
                 if !CallKitController.shared.managesCurrentCall, !ownsWebRTCAudioActivation {
                     rtc.lockForConfiguration()
