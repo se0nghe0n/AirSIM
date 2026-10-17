@@ -1612,12 +1612,10 @@ struct ActiveCallView: View {
     let call: CallRecord
     @State private var showingKeypad = false
 
-    private var isCompact: Bool { horizontalSizeClass == .compact }
     private var content: CallSurfaceContent { CallSurfaceContent(state: call.state) }
-    private var avatarSize: CGFloat {
+    private func avatarSize(isCompact: Bool) -> CGFloat {
         content.phase == .incoming ? (isCompact ? 116 : 132) : (isCompact ? 92 : 112)
     }
-    private var controlSize: CGFloat { isCompact ? 62 : 68 }
     private var displayName: String { model.contacts.displayName(for: call.number) }
     private var contactPhotoData: Data? {
         guard let number = call.number else { return nil }
@@ -1627,16 +1625,19 @@ struct ActiveCallView: View {
     var body: some View {
         ZStack {
             CallBackdrop()
-            Group {
-                if content.phase == .incoming {
-                    incomingSurface
-                } else {
-                    connectedSurface
+            GeometryReader { proxy in
+                let isCompact = horizontalSizeClass == .compact || proxy.size.height < 700
+                Group {
+                    if content.phase == .incoming {
+                        incomingSurface(isCompact: isCompact)
+                    } else {
+                        connectedSurface(isCompact: isCompact)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, isCompact ? 20 : 32)
+                .padding(.vertical, isCompact ? 18 : 26)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, isCompact ? 20 : 32)
-            .padding(.vertical, isCompact ? 18 : 26)
         }
         // 来电提醒与接通后的通话都是聚焦型全屏任务。保持固定画布，避免
         // ScrollView 的拖动/回弹，也避免手势误触影响接听和挂断。
@@ -1650,16 +1651,16 @@ struct ActiveCallView: View {
         .onDisappear { UIDevice.current.isProximityMonitoringEnabled = false }
     }
 
-    private var incomingSurface: some View {
+    private func incomingSurface(isCompact: Bool) -> some View {
         VStack(spacing: 0) {
             callHeader(title: "AirSIM Incoming Call", showsRecording: false)
 
-            Spacer(minLength: isCompact ? 36 : 54)
+            Spacer(minLength: 0)
 
             InitialAvatar(
                 name: displayName,
                 photoData: contactPhotoData,
-                size: avatarSize
+                size: avatarSize(isCompact: isCompact)
             )
             .overlay { Circle().strokeBorder(.white.opacity(0.20), lineWidth: 1) }
             .shadow(color: .black.opacity(0.34), radius: 28, y: 16)
@@ -1689,7 +1690,7 @@ struct ActiveCallView: View {
             connectivityBadge
                 .padding(.top, 22)
 
-            Spacer(minLength: isCompact ? 52 : 76)
+            Spacer(minLength: 0)
 
             HStack {
                 CallDecisionButton(
@@ -1717,13 +1718,14 @@ struct ActiveCallView: View {
         .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
     }
 
-    private var connectedSurface: some View {
-        VStack(spacing: 0) {
+    private func connectedSurface(isCompact: Bool) -> some View {
+        let controlSize: CGFloat = isCompact ? 62 : 68
+        return VStack(spacing: 0) {
             callHeader(title: "AirSIM Call", showsRecording: true)
 
-            Spacer(minLength: isCompact ? 24 : 42)
+            Spacer(minLength: 0)
 
-            InitialAvatar(name: displayName, photoData: contactPhotoData, size: avatarSize)
+            InitialAvatar(name: displayName, photoData: contactPhotoData, size: avatarSize(isCompact: isCompact))
                 .overlay { Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1) }
                 .shadow(color: .black.opacity(0.28), radius: 22, y: 12)
                 .accessibilityHidden(true)
@@ -1764,7 +1766,7 @@ struct ActiveCallView: View {
                     .padding(.top, 10)
             }
 
-            Spacer(minLength: isCompact ? 34 : 54)
+            Spacer(minLength: 0)
 
             HStack(spacing: isCompact ? 20 : 34) {
                 CallCircleButton(

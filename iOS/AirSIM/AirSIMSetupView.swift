@@ -9,57 +9,70 @@ struct AirSIMFirstConnectionView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 24) {
-                Image(systemName: "iphone.radiowaves.left.and.right")
-                    .font(.system(size: 42, weight: .medium))
-                    .foregroundStyle(.blue)
-                    .frame(width: 76, height: 76)
-                    .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 22))
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    Image(systemName: "iphone.radiowaves.left.and.right")
+                        .font(.system(size: 42, weight: .medium))
+                        .foregroundStyle(.blue)
+                        .frame(width: 76, height: 76)
+                        .background(.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 22))
 
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Connect Android Phone")
-                        .font(.largeTitle.bold())
-                    Text("AirSIM connects to your Android phone over VoWLAN, Bluetooth, or a cloud Relay.")
-                        .foregroundStyle(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 18) {
-                    Label("Start AirSIM and the audio bridge on Android", systemImage: "1.circle.fill")
-                    Label(selectedMode == .bluetooth ? "Turn on Bluetooth on both devices" : "Set up the network or Bluetooth for your selected mode", systemImage: "2.circle.fill")
-                    Label("Verify the security code and finish pairing", systemImage: "3.circle.fill")
-                }
-                .font(.body.weight(.medium))
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-
-                Picker("Connection Mode", selection: $connectionModeRaw) {
-                    ForEach(AirSIMConnectionMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Connect Android Phone")
+                            .font(.largeTitle.bold())
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("AirSIM connects to your Android phone over VoWLAN, Bluetooth, or a cloud Relay.")
+                            .foregroundStyle(.secondary)
                     }
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: connectionModeRaw) { rawValue in
-                    guard let mode = AirSIMConnectionMode(rawValue: rawValue) else { return }
-                    model.setConnectionMode(mode)
-                }
-                Text(selectedMode.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
-                Spacer()
+                    VStack(alignment: .leading, spacing: 18) {
+                        Label("Start AirSIM and the audio bridge on Android", systemImage: "1.circle.fill")
+                        Label(selectedMode == .bluetooth ? "Turn on Bluetooth on both devices" : "Set up the network or Bluetooth for your selected mode", systemImage: "2.circle.fill")
+                        Label("Verify the security code and finish pairing", systemImage: "3.circle.fill")
+                    }
+                    .font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
 
-                Button("Start Pairing", systemImage: "lock.shield") {
-                    showingPairing = true
+                    Picker("Connection Mode", selection: $connectionModeRaw) {
+                        ForEach(AirSIMConnectionMode.allCases) { mode in
+                            Text(mode.title).tag(mode.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: connectionModeRaw) { rawValue in
+                        guard let mode = AirSIMConnectionMode(rawValue: rawValue) else { return }
+                        model.setConnectionMode(mode)
+                    }
+                    Text(selectedMode.detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .frame(maxWidth: 600, alignment: .leading)
+                .padding(24)
                 .frame(maxWidth: .infinity)
-
-                Button("Pair Later in Settings") { completed = true }
-                    .frame(maxWidth: .infinity)
             }
-            .padding(24)
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 16) {
+                    Button("Start Pairing", systemImage: "lock.shield") {
+                        showingPairing = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity)
+
+                    Button("Pair Later in Settings") { completed = true }
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: 600)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
+            }
             .navigationTitle("AirSIM")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingPairing, onDismiss: {

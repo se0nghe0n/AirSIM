@@ -98,7 +98,16 @@ struct RootView: View {
                 ActiveCallView(call: call)
                     .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
+#if DEBUG
+            if let call = Self.layoutPreviewCall {
+                // Presentation-only fixture: never changes AppModel or sends call commands.
+                ActiveCallView(call: call)
+            }
+#endif
         }
+#if DEBUG
+        .allowsHitTesting(Self.layoutPreviewCall == nil)
+#endif
         .background(PhoneBackdrop())
         .animation(.easeInOut(duration: 0.2), value: model.inAppPresentedCall?.id)
         .preferredColorScheme(settings.appearance.colorScheme)
@@ -136,6 +145,21 @@ struct RootView: View {
             Text(model.errorMessage ?? "")
         }
     }
+
+#if DEBUG
+    private static var layoutPreviewCall: CallRecord? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--airsim-layout-call"),
+              arguments.indices.contains(index + 1),
+              ["incoming", "active"].contains(arguments[index + 1]) else { return nil }
+        return CallRecord(
+            id: "layout-preview", index: 0, direction: "incoming",
+            state: arguments[index + 1], number: "+1 202 555 0100",
+            startedAt: Date().addingTimeInterval(-65), updatedAt: Date(),
+            endedAt: nil, missed: false
+        )
+    }
+#endif
 
     private var errorBinding: Binding<Bool> {
         Binding(
