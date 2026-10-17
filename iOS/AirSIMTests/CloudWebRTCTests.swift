@@ -146,6 +146,112 @@ final class CloudWebRTCTests: XCTestCase {
             XCTAssertEqual(failures, 1)
         }
     }
+    func testStatisticsUseSelectedAudioPathAndDoNotLeakCandidates() {
+        var reducer = CloudWebRTCStatistics()
+        var records = statisticsRecords()
+        records["decoy"] = .init(type: "candidate-pair", values: [
+            "state": "succeeded", "nominated": "true", "currentRoundTripTime": "9",
+            "localCandidateId": "unused", "remoteCandidateId": "unused"
+        ])
+        records["unused"] = .init(type: "local-candidate", values: [
+            "candidateType": "relay", "address": "private-candidate-address", "url": "private-turn-url"
+        ])
+        records["video"] = .init(type: "inbound-rtp", values: [
+            "kind": "video", "jitter": "99", "packetsReceived": "999999", "transportId": "video-transport"
+        ])
+        let fields = reducer.fields(for: records, at: 10)
+        XCTAssertEqual(fields["path_rtt_ms"], "125.000")
+        XCTAssertEqual(fields["candidate-pair.currentRoundTripTime"], "0.125")
+        XCTAssertEqual(fields["local-candidate.candidateType"], "host")
+        XCTAssertEqual(fields["remote-candidate.candidateType"], "srflx")
+        XCTAssertEqual(fields["rx_jitter_ms"], "12.000")
+        XCTAssertEqual(fields["codec.mimeType"], "audio/opus")
+        XCTAssertEqual(fields["inbound-rtp.packetsReceived"], "100")
+        XCTAssertNil(fields["rx_buffer_ms"], "The first sample is not a measurement interval")
+        XCTAssertFalse(fields.values.contains(where: { $0.contains("private-") }))
+    }
+
+    func testStatisticsOmitPathWithoutExplicitSelectedPair() {
+        var reducer = CloudWebRTCStatistics()
+        var records = statisticsRecords()
+        records["transport"] = .init(type: "transport", values: [:])
+        let fields = reducer.fields(for: records, at: 10)
+        XCTAssertNil(fields["path_rtt_ms"])
+        XCTAssertNil(fields["candidate-pair.currentRoundTripTime"])
+        XCTAssertNil(fields["local-candidate.candidateType"])
+        XCTAssertEqual(fields["rx_jitter_ms"], "12.000")
+    }
+
+    func testStatisticsReportIntervalDelayAndConcealment() {
+        var reducer = CloudWebRTCStatistics()
+        _ = reducer.fields(for: statisticsRecords(), at: 10)
+        let fields = reducer.fields(for: statisticsRecords(packets: 350, lost: 5,
+            concealed: 320, samples: 48_000, delay: 1_440, emitted: 24_000), at: 15)
+        XCTAssertEqual(fields["rx_sample_interval_ms"], "5000.000")
+        XCTAssertEqual(fields["rx_buffer_ms"], "80.000") // (1440 - 800) / (24000 - 16000)
+        XCTAssertEqual(fields["rx_concealed_samples"], "160.000")
+        XCTAssertEqual(fields["rx_concealment_pct"], "1.000")
+        XCTAssertEqual(fields["rx_lost_packets"], "3.000")
+    }
+
+    func testStatisticsResetIntervalsForNewStreamAndCounterRestart() {
+        var reducer = CloudWebRTCStatistics()
+        _ = reducer.fields(for: statisticsRecords(), at: 10)
+        let reset = reducer.fields(for: statisticsRecords(packets: 1, lost: 0,
+            concealed: 0, samples: 160, delay: 8, emitted: 160), at: 15)
+        XCTAssertNil(reset["rx_buffer_ms"])
+        XCTAssertNil(reset["rx_concealment_pct"])
+        var replacement = statisticsRecords()
+        replacement["replacement"] = replacement.removeValue(forKey: "rx")
+        XCTAssertNil(reducer.fields(for: replacement, at: 20)["rx_buffer_ms"])
+        _ = reducer.fields(for: [:], at: 21)
+        XCTAssertNil(reducer.fields(for: replacement, at: 22)["rx_buffer_ms"])
+    }
+
+    func testStatisticsHandleIdleAndCorrectedLossWithoutInventingDelay() {
+        var reducer = CloudWebRTCStatistics()
+        _ = reducer.fields(for: statisticsRecords(), at: 10)
+        let fields = reducer.fields(for: statisticsRecords(lost: 1), at: 15)
+        XCTAssertEqual(fields["rx_lost_packets"], "-1.000")
+        XCTAssertNil(fields["rx_buffer_ms"])
+        XCTAssertNil(fields["rx_concealment_pct"])
+        var invalid = statisticsRecords()
+        invalid["path"] = .init(type: "candidate-pair", values: [
+            "state": "succeeded", "currentRoundTripTime": "nan"
+        ])
+        XCTAssertNil(reducer.fields(for: invalid, at: 20)["path_rtt_ms"])
+    }
+
+    private func statisticsRecords(packets: Int = 100, lost: Int = 2, concealed: Int = 160,
+                                   samples: Int = 32_000, delay: Int = 800, emitted: Int = 16_000)
+        -> [String: CloudWebRTCStatistics.Record] {
+        [
+            "rx": .init(type: "inbound-rtp", values: [
+                "kind": "audio", "transportId": "transport", "codecId": "opus",
+                "packetsReceived": String(packets), "packetsLost": String(lost), "jitter": "0.012",
+                "concealedSamples": String(concealed), "totalSamplesReceived": String(samples),
+                "jitterBufferDelay": String(delay), "jitterBufferEmittedCount": String(emitted)
+            ]),
+            "tx": .init(type: "outbound-rtp", values: [
+                "kind": "audio", "transportId": "transport", "codecId": "opus",
+                "packetsSent": "90", "bytesSent": "5000"
+            ]),
+            "opus": .init(type: "codec", values: ["mimeType": "audio/opus", "clockRate": "48000", "channels": "2"]),
+            "transport": .init(type: "transport", values: ["selectedCandidatePairId": "path"]),
+            "path": .init(type: "candidate-pair", values: [
+                "state": "succeeded", "currentRoundTripTime": "0.125",
+                "localCandidateId": "local", "remoteCandidateId": "remote",
+                "availableOutgoingBitrate": "64000"
+            ]),
+            "local": .init(type: "local-candidate", values: [
+                "candidateType": "host", "protocol": "udp", "address": "private-local-address"
+            ]),
+            "remote": .init(type: "remote-candidate", values: [
+                "candidateType": "srflx", "protocol": "udp", "address": "private-remote-address"
+            ])
+        ]
+    }
+
     func testNativePeersNegotiateOpusOverHostICE() async throws {
         try await runLoopback(servers: [], relayOnly: false)
     }
@@ -173,12 +279,16 @@ final class CloudWebRTCTests: XCTestCase {
         var reported = Set<String>()
         var negotiatedOpus = false
         var observedRelayCandidate = false
+        var observedSelectedPath = false
         try queue.sync {
             offerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryA, relayOnly: relayOnly,
                 signal: { signal in answerer.receive(signal, answering: true) }, connected: { connected.fulfill() },
                 failure: { XCTFail("Offerer native negotiation failed") }, statistics: { fields in
                     if fields["codec.mimeType"]?.lowercased() == "audio/opus" { negotiatedOpus = true }
                     if fields["local-candidate.candidateType"] == "relay" { observedRelayCandidate = true }
+                    if fields["local-candidate.candidateType"] != nil && fields["remote-candidate.candidateType"] != nil {
+                        observedSelectedPath = true
+                    }
                     if Int(fields["outbound-rtp.packetsSent"] ?? "0") ?? 0 > 0, reported.insert("offerer").inserted { stats.fulfill() }
                 })
             answerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryB, relayOnly: relayOnly,
@@ -189,8 +299,9 @@ final class CloudWebRTCTests: XCTestCase {
             offerer.offer()
         }
         await fulfillment(of: [connected, stats], timeout: 20)
-        let observed = queue.sync { (negotiatedOpus, observedRelayCandidate) }
+        let observed = queue.sync { (negotiatedOpus, observedRelayCandidate, observedSelectedPath) }
         XCTAssertTrue(observed.0, "Native codec stats must identify audio/opus")
+        XCTAssertTrue(observed.2, "Native transport references must resolve the selected candidate pair")
         if relayOnly { XCTAssertTrue(observed.1, "Force-relay test must gather TURN candidates") }
         XCTAssertGreaterThan(outputA.receivedAudibleFrames, 0, "Real Opus decode must deliver audible PCM to peer A")
         XCTAssertGreaterThan(outputB.receivedAudibleFrames, 0, "Real Opus decode must deliver audible PCM to peer B")

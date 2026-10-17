@@ -157,6 +157,111 @@ enum CloudWebRTCError: LocalizedError {
     }
 }
 
+/// Reduces native reports to the active audio path. Never expose candidate
+/// addresses, URLs, credentials or unrelated streams in diagnostic output.
+struct CloudWebRTCStatistics {
+    struct Record {
+        let type: String
+        let values: [String: String]
+    }
+    private struct Sample {
+        let id: String
+        let time: TimeInterval
+        let counters: [String: Double]
+    }
+    private var previous: Sample?
+
+    mutating func fields(for records: [String: Record], at time: TimeInterval) -> [String: String] {
+        var fields: [String: String] = [:]
+        func audio(_ record: Record) -> Bool {
+            if let kind = record.values["kind"] ?? record.values["mediaType"] { return kind == "audio" }
+            guard let id = record.values["codecId"] else { return false }
+            return records[id]?.values["mimeType"]?.lowercased().hasPrefix("audio/") == true
+        }
+        func single(_ type: String) -> (key: String, value: Record)? {
+            let matches = records.filter { $0.value.type == type && audio($0.value) }
+            return matches.count == 1 ? matches.first : nil
+        }
+        func copy(_ record: Record?, prefix: String, keys: [String]) {
+            guard let record else { return }
+            for key in keys {
+                if let value = record.values[key] { fields["\(prefix).\(key)"] = value }
+            }
+        }
+        let inbound = single("inbound-rtp")
+        let outbound = single("outbound-rtp")
+        copy(inbound?.value, prefix: "inbound-rtp", keys: [
+            "packetsReceived", "bytesReceived", "packetsLost", "jitter", "concealedSamples",
+            "totalSamplesReceived", "jitterBufferDelay", "jitterBufferEmittedCount"
+        ])
+        copy(outbound?.value, prefix: "outbound-rtp", keys: ["packetsSent", "bytesSent"])
+        let codecID = inbound?.value.values["codecId"] ?? outbound?.value.values["codecId"]
+        copy(codecID.flatMap { records[$0] }, prefix: "codec", keys: ["mimeType", "clockRate", "channels"])
+
+        let transportIDs = Set([inbound?.value.values["transportId"], outbound?.value.values["transportId"]].compactMap { $0 })
+        // The native audio-only peer normally has one transport. Refuse to pick
+        // a path if the report is ambiguous or its reference is incomplete.
+        let transports = transportIDs.isEmpty
+            ? records.filter { $0.value.type == "transport" }.map(\.value)
+            : transportIDs.compactMap { records[$0] }.filter { $0.type == "transport" }
+        if transports.count == 1, let id = transports.first?.values["selectedCandidatePairId"],
+           let pair = records[id], pair.type == "candidate-pair", pair.values["state"] == "succeeded" {
+            copy(pair, prefix: "candidate-pair", keys: ["currentRoundTripTime", "availableOutgoingBitrate"])
+            if let rtt = number(pair.values["currentRoundTripTime"]), rtt >= 0 {
+                fields["path_rtt_ms"] = formatted(rtt * 1_000)
+            }
+            if let id = pair.values["localCandidateId"], let candidate = records[id], candidate.type == "local-candidate" {
+                copy(candidate, prefix: "local-candidate", keys: ["candidateType", "protocol"])
+            }
+            if let id = pair.values["remoteCandidateId"], let candidate = records[id], candidate.type == "remote-candidate" {
+                copy(candidate, prefix: "remote-candidate", keys: ["candidateType", "protocol"])
+            }
+        }
+        if let jitter = number(inbound?.value.values["jitter"]), jitter >= 0 {
+            fields["rx_jitter_ms"] = formatted(jitter * 1_000)
+        }
+
+        guard let inbound else { previous = nil; return fields }
+        let keys = ["packetsReceived", "packetsLost", "concealedSamples", "totalSamplesReceived",
+                    "jitterBufferDelay", "jitterBufferEmittedCount"]
+        let counters = Dictionary(uniqueKeysWithValues: keys.compactMap { key -> (String, Double)? in
+            number(inbound.value.values[key]).map { (key, $0) }
+        })
+        let current = Sample(id: inbound.key, time: time, counters: counters)
+        defer { previous = current }
+        guard let previous, previous.id == current.id, current.time > previous.time else { return fields }
+        // packetsLost may fall when a late packet corrects the loss estimate.
+        // The other cumulative counters must not run backwards.
+        for key in keys where key != "packetsLost" {
+            if let old = previous.counters[key], let new = counters[key], new < old { return fields }
+        }
+        func delta(_ key: String) -> Double? {
+            guard let old = previous.counters[key], let new = counters[key] else { return nil }
+            return new - old
+        }
+        fields["rx_sample_interval_ms"] = formatted((time - previous.time) * 1_000)
+        if let loss = delta("packetsLost") { fields["rx_lost_packets"] = formatted(loss) }
+        if let concealed = delta("concealedSamples") {
+            fields["rx_concealed_samples"] = formatted(concealed)
+            if let total = delta("totalSamplesReceived"), total > 0 {
+                fields["rx_concealment_pct"] = formatted(100 * concealed / total)
+            }
+        }
+        if let delay = delta("jitterBufferDelay"), let emitted = delta("jitterBufferEmittedCount"), emitted > 0 {
+            fields["rx_buffer_ms"] = formatted(1_000 * delay / emitted)
+        }
+        return fields
+    }
+
+    private func number(_ value: String?) -> Double? {
+        guard let value, let number = Double(value), number.isFinite else { return nil }
+        return number
+    }
+    private func formatted(_ number: Double) -> String {
+        String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), number)
+    }
+}
+
 /// All peer operations and callbacks run on the owning transport's serial queue.
 /// Native WebRTC owns capture, Opus, AEC, jitter buffering, PLC and playout.
 final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sendable {
@@ -180,6 +285,8 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     private var localDescriptionSent = false
     private var localCandidates: [RTCIceCandidate] = []
     private var timer: DispatchSourceTimer?
+    private var statisticsReducer = CloudWebRTCStatistics()
+    private var statisticsPending = false
     private(set) var isConnected = false
 
     init(callUUID: UUID, generation: UInt64, sessionID: UUID = UUID(), servers: [RTCIceServer],
@@ -345,23 +452,18 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             candidate: .init(candidate: candidate.sdp, sdpMid: candidate.sdpMid, sdpMlineIndex: candidate.sdpMLineIndex)))
     }
     func collectStatistics() {
-        guard let peer else { return }
+        guard let peer, !statisticsPending else { return }
+        statisticsPending = true
         peer.statistics { [weak self] report in
             self?.queue.async { [weak self] in
                 guard let self, self.peer === peer else { return }
-                var fields = ["transport": "webrtc", "session_id": self.sessionID.uuidString.lowercased()]
-                for stat in report.statistics.values {
-                    let allowed: [String]
-                    switch stat.type {
-                    case "inbound-rtp": allowed = ["packetsReceived", "bytesReceived", "packetsLost", "jitter", "concealedSamples", "totalSamplesReceived", "jitterBufferDelay", "jitterBufferEmittedCount"]
-                    case "outbound-rtp": allowed = ["packetsSent", "bytesSent"]
-                    case "codec": allowed = ["mimeType", "clockRate", "channels"]
-                    case "local-candidate": allowed = ["candidateType"]
-                    case "candidate-pair": allowed = ["currentRoundTripTime", "availableOutgoingBitrate"]
-                    default: continue
-                    }
-                    for key in allowed { if let value = stat.values[key] { fields["\(stat.type).\(key)"] = "\(value)" } }
+                self.statisticsPending = false
+                let records = report.statistics.mapValues {
+                    CloudWebRTCStatistics.Record(type: $0.type, values: $0.values.mapValues { String(describing: $0) })
                 }
+                var fields = self.statisticsReducer.fields(for: records, at: ProcessInfo.processInfo.systemUptime)
+                fields["transport"] = "webrtc"
+                fields["session_id"] = self.sessionID.uuidString.lowercased()
                 self.statistics(fields)
             }
         }

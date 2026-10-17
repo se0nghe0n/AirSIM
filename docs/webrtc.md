@@ -55,6 +55,43 @@ To stop new WebRTC selections, set `WEBRTC_TRANSPORT_READY=false` or `WEBRTC_ROL
 
 The [protocol contract](webrtc-implementation-contract.md) defines call/session identity, candidate bounds, offer ownership, and the authenticated ICE endpoint. Android and iOS pin WebRTC SDK `144.7559.15` with artifact checksums. The SDK is published by [webrtc-sdk/android](https://github.com/webrtc-sdk/android) and [webrtc-sdk/Specs](https://github.com/webrtc-sdk/Specs); it is not an Android or Apple system framework. Each app includes the upstream BSD license, patent grant and supplemental dependency notices.
 
+## Latency and stability diagnostics
+
+Keep Cloudflare for control, APNs, and optional TURN. In WebRTC mode, the
+selected ICE path carries audio and the existing PCM jitter/time-pitch path is
+not applied a second time. Buffer or codec changes should follow measurements
+from that path rather than the legacy WebSocket timing alone.
+
+iOS records `webrtc_stats`; Android records `standalone_webrtc_stats`. Samples
+are taken approximately every five seconds and belong to one negotiation.
+The selected path is resolved through the audio RTP transport's
+`selectedCandidatePairId`, not an arbitrary gathered candidate. Addresses,
+candidate strings, SDP, and TURN credentials are excluded from these records.
+
+| Field | Interpretation |
+| --- | --- |
+| `path_rtt_ms` | Round-trip time reported for the selected ICE pair; not one-way or mouth-to-ear latency |
+| `local-candidate.candidateType`, `remote-candidate.candidateType` | Whether the selected path uses host, reflexive, or relay candidates |
+| `rx_jitter_ms` | Current RTP interarrival jitter estimate |
+| `rx_buffer_ms` | Mean receive jitter-buffer residence during the latest sample interval |
+| `rx_lost_packets` | Change in the receive loss estimate; may be negative when late packets correct earlier loss |
+| `rx_concealed_samples`, `rx_concealment_pct` | Concealed audio samples and their share of received samples during the interval |
+
+The buffer mean uses the change in `jitterBufferDelay` divided by the change in
+`jitterBufferEmittedCount`, following the [WebRTC statistics specification](https://www.w3.org/TR/webrtc-stats/).
+Interval measurements are omitted on the first sample, after a stream/counter
+reset, or when their denominator is zero. Missing metrics mean unavailable,
+not zero. Unselected candidate pairs must not influence the displayed RTT.
+
+Compare both endpoints: increasing RTT/jitter/loss points to transport trouble;
+stable path metrics with increasing receive-buffer residence points to local
+playout accumulation. These are diagnostic clues, not proof of the precise
+source of delay. Rooted PCM socket buffering, AudioTrack/device latency, and
+acoustic output are outside the WebRTC receive-buffer measurement. In
+particular, a stalled Android AudioTrack can retain queued PCM in the local TCP
+path even when the application's PCM queue remains small. A physical-device
+stall/recovery measurement is needed before changing that buffering policy.
+
 ## Validation
 
 Recorded local validation on 2026-10-17:
@@ -67,6 +104,14 @@ Recorded local validation on 2026-10-17:
 | iOS simulator | Full 152-test run passed (147 existing tests plus five initial native tests); final twelve focused tests passed after readiness/role/wire-bound and agent reconnect-order fixes |
 | iOS native media | Two generated signals decoded over host ICE and forced TURN; final source matched all 50 Swift/project files in the tested staging tree |
 | Local TURN service | Task-local coturn 4.18.0: authenticated relay smoke test delivered 40/40 packets; stopped and temporary credentials removed after native tests |
+
+Quality-telemetry follow-up on 2026-10-17: the iOS focused suite passed 16
+tests; its forced-TURN test was skipped because no temporary TURN configuration
+was supplied for this run. The native host-ICE test was then rerun successfully
+with an assertion that the real SDK report resolves both selected candidates.
+Android's complete JVM regression suite and Standalone APK build/signature
+verification passed. Audio-buffer policies and production deployment were
+unchanged.
 
 Native loopback tests use generated tones and local test peers; they do not contact a carrier or record private conversations. They exercise the real SDK and audio device adapters, but bypass the full app WebSocket → ICE HTTP endpoint → rooted TCP call orchestration. Passing local tests does not establish KT/Q25 physical audio routing, real network handover, production Cloudflare TURN reachability, or subjective call quality. Production Relay deployment and physical app installation were not performed.
 
