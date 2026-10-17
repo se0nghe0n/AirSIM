@@ -54,6 +54,7 @@ public final class MainActivity extends Activity {
     private static final int ROLE_REQUEST = 100;
     private static final int DEFAULT_APPS_REQUEST = 102;
     private static final int OPTIONAL_SMS_REQUEST = 103;
+    private static final int OPTIONAL_CALL_HISTORY_REQUEST = 106;
     private static final int CALL_ACCOUNT_PERMISSION_REQUEST = 104;
     private static final int SHIZUKU_SETUP_REQUEST = 105;
     private static final String SHIZUKU_STARTUP_CHECKED = "shizuku_startup_checked";
@@ -203,9 +204,10 @@ public final class MainActivity extends Activity {
 		}
 		if (requestCode == OPTIONAL_SMS_REQUEST) {
 			startSMSInboxBaselineIfAuthorized();
-			continueStartupSetup();
+			requestOptionalCallHistoryPermission();
 			if (currentPage == Page.SETTINGS) showPage(Page.SETTINGS);
 		}
+        if (requestCode == OPTIONAL_CALL_HISTORY_REQUEST) continueStartupSetup();
 		if (requestCode == CALL_ACCOUNT_PERMISSION_REQUEST && currentPage == Page.SETTINGS) {
 			showPage(Page.SETTINGS);
 		}
@@ -216,12 +218,25 @@ public final class MainActivity extends Activity {
 		boolean prompted = getPreferences(MODE_PRIVATE).getBoolean(OPTIONAL_SMS_PROMPTED, false);
 		String[] missing = RuntimePermissionPolicy.optionalInboxPermissions(granted, prompted);
 		if (missing.length == 0) {
-			continueStartupSetup();
+			requestOptionalCallHistoryPermission();
 			return;
 		}
 		getPreferences(MODE_PRIVATE).edit().putBoolean(OPTIONAL_SMS_PROMPTED, true).apply();
 		requestPermissions(missing, OPTIONAL_SMS_REQUEST);
 	}
+
+    private void requestOptionalCallHistoryPermission() {
+        String key = "optional_call_history_prompted";
+        String[] missing = RuntimePermissionPolicy.optionalCallHistoryPermissions(
+                checkSelfPermission(Manifest.permission.READ_CALL_LOG) == PackageManager.PERMISSION_GRANTED,
+                getPreferences(MODE_PRIVATE).getBoolean(key, false));
+        if (missing.length == 0) {
+            continueStartupSetup();
+            return;
+        }
+        getPreferences(MODE_PRIVATE).edit().putBoolean(key, true).apply();
+        requestPermissions(missing, OPTIONAL_CALL_HISTORY_REQUEST);
+    }
 
 	private boolean hasVoBLEPermissions() {
 		return Build.VERSION.SDK_INT < 31

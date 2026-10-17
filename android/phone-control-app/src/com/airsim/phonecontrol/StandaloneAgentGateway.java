@@ -168,6 +168,18 @@ final class StandaloneAgentGateway {
             }
         }
         String type = command.optString("type", "");
+        if ("call_history".equals(type)) {
+            JSONObject output = new JSONObject().put("command_id", commandID);
+            try {
+                output.put("status", "completed").put("result", new JSONObject()
+                        .put("history", NativeCallHistory.read(context, command.optInt("limit", 100))));
+            } catch (SecurityException denied) {
+                output.put("status", "failed").put("error", "Call history permission is not granted");
+            } catch (Exception unavailable) {
+                output.put("status", "failed").put("error", "Call history provider is unavailable");
+            }
+            return rememberCommand(commandKey, output);
+        }
         String action = switch (type) {
             case "dial" -> "dial";
             case "send_sms" -> "send_sms";
@@ -280,9 +292,15 @@ final class StandaloneAgentGateway {
     }
 
     private JSONObject callSnapshot() throws Exception {
+        JSONArray nativeHistory = null;
+        try {
+            nativeHistory = NativeCallHistory.read(context, NativeCallHistoryRecord.MAX_ROWS);
+        } catch (Exception unavailable) {
+            // Local calling remains usable before optional permission is granted.
+        }
         synchronized (callsLock) {
             return new JSONObject().put("active", activeCall == null ? JSONObject.NULL : activeCall)
-                    .put("history", callHistory).put("polling", false).put("event_driven", true)
+                    .put("history", nativeHistory == null ? callHistory : nativeHistory).put("polling", false).put("event_driven", true)
                     .put("poll_interval_s", 0).put("last_poll_error", "")
                     .put("revision", callEvents.revision());
         }

@@ -16,6 +16,10 @@ final class RuntimePermissionPolicy {
 
     private RuntimePermissionPolicy() {}
 
+    static String[] optionalCallHistoryPermissions(boolean granted, boolean alreadyPrompted) {
+        return granted || alreadyPrompted ? new String[0] : new String[]{"android.permission.READ_CALL_LOG"};
+    }
+
     static String[] optionalInboxPermissions(boolean readSMSGranted, boolean alreadyPrompted) {
         return readSMSGranted || alreadyPrompted ? new String[0] : new String[]{READ_SMS};
     }

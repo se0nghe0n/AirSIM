@@ -2236,3 +2236,70 @@ test("old terminal retry after APNs failure drains without changing a newer call
     status: "remote_ended", call_id: event.call_id, call_uuid: event.call_uuid, generation: 3,
   }]);
 });
+
+test("call history is authenticated, read-only, bounded, and device scoped", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace();
+  const second = { ...registration, device_id: "second", device_secret: "t".repeat(32) };
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  await worker.fetch(post("/v1/devices/register", second), env);
+  const agent = env.COMMANDS.addAgent(registration.device_id);
+  const commandID = crypto.randomUUID();
+  const input = { device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: commandID, type: "call_history" };
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", { ...input, device_secret: second.device_secret }), env)).status, 401);
+  for (const fields of [{ limit: 0 }, { limit: 101 }, { limit: 1.2 }, { number: "123" },
+    { message: "text" }, { call: {} }, { action: "dial" }, { media_transport: "webrtc" }]) {
+    assert.equal((await worker.fetch(post("/v1/commands/enqueue", { ...input, ...fields }), env)).status, 400);
+  }
+  const response = await worker.fetch(post("/v1/commands/enqueue", input), env);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).call, undefined);
+  const command = JSON.parse(agent.sent[0]);
+  assert.equal(command.limit, 100);
+  assert.equal(command.number, undefined);
+  assert.equal(command.call, undefined);
+  assert.equal([...env.DEVICES.values.keys()].some(key => key.startsWith("call:")), false);
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", { ...input, limit: 1 }), env)).status, 409);
+  const row = { id: "calllog-android-test-1", index: 1, direction: "outgoing", state: "ended",
+    number: "123", started_at: "2026-10-16T01:00:00Z", updated_at: "2026-10-16T01:01:00Z",
+    ended_at: "2026-10-16T01:01:00Z", missed: false };
+  const completion = { ...input, status: "completed", result: { history: Array.from({ length: 100 }, () => row) } };
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion, device_secret: "x".repeat(32) }), env)).status, 401);
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion,
+    result: { history: Array.from({ length: 101 }, () => row) } }), env)).status, 400);
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion,
+    result: { history: [row], extra: "x".repeat(61 * 1024) } }), env)).status, 400);
+  for (const fields of [{ number: "x".repeat(83) }, { missed: "false" }, { started_at: "invalid" }, { state: "active" }]) {
+    assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion,
+      result: { history: [{ ...row, ...fields }] } }), env)).status, 400);
+  }
+  await env.COMMANDS.session(registration.device_id).webSocketMessage(agent, JSON.stringify({ ...completion,
+    result: { history: Array.from({ length: 101 }, () => row) } }));
+  const pending = await worker.fetch(post("/v1/commands/result", input), env);
+  assert.notEqual((await pending.json()).status, "completed");
+  assert.equal((await worker.fetch(post("/v1/commands/complete", completion), env)).status, 202);
+  const result = await worker.fetch(post("/v1/commands/result", input), env);
+  assert.equal((await result.json()).result.history.length, 100);
+  assert.equal((await worker.fetch(post("/v1/commands/result", { ...input,
+    device_id: second.device_id, device_secret: second.device_secret }), env)).status, 404);
+});
+
+test("history respects requested bounds and preserves explicit permission failures", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace();
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  const input = { device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: crypto.randomUUID(), type: "call_history", limit: 1 };
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", input), env)).status, 202);
+  const row = { id: "native-1", index: 1, direction: "incoming", state: "ended", number: "",
+    started_at: "2026-10-16T01:00:00Z", updated_at: "2026-10-16T01:00:00Z",
+    ended_at: "2026-10-16T01:00:00Z", missed: true };
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...input, status: "completed",
+    result: { history: [row, row] } }), env)).status, 400);
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...input, status: "failed",
+    error: "Call history permission is not granted" }), env)).status, 202);
+  const result = await (await worker.fetch(post("/v1/commands/result", input), env)).json();
+  assert.equal(result.status, "failed");
+  assert.equal(result.error, "Call history permission is not granted");
+});

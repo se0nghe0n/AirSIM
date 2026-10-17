@@ -29,7 +29,7 @@ const TOKEN_PATTERN = /^[0-9a-f]{16,512}$/i;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const encoder = new TextEncoder();
 const MEDIA_CLIENT_ROLES = new Set(["watch", "iphone"]);
-const COMMAND_TYPES = new Set(["dial", "send_sms", "dtmf"]);
+const COMMAND_TYPES = new Set(["dial", "send_sms", "dtmf", "call_history"]);
 const MEDIA_TRANSPORTS = new Set(["legacy_pcm", "webrtc"]);
 
 let cachedProviderToken = "";
@@ -175,7 +175,7 @@ async function enqueueDeviceCommand(request, env) {
     type: value.type,
     issued_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + (value.type === "send_sms" ? 5 : 2) * 60_000).toISOString(),
-    number: normalizePhoneNumber(value.number),
+    ...(value.type === "call_history" ? { limit: value.limit ?? 100 } : { number: normalizePhoneNumber(value.number) }),
     ...(value.type === "send_sms" ? { message: value.message.trim() } : {}),
   };
   let call = null;
@@ -380,6 +380,15 @@ function validateDeviceCommand(value) {
       (value.type !== "dial" || !MEDIA_TRANSPORTS.has(value.media_transport))) {
     return "invalid media transport";
   }
+  if (value.type === "call_history") {
+    if (value.number !== undefined || value.message !== undefined || value.call !== undefined || value.action !== undefined) {
+      return "call history does not accept call or message fields";
+    }
+    if (value.limit !== undefined && (!Number.isInteger(value.limit) || value.limit < 1 || value.limit > 100)) {
+      return "invalid call history limit";
+    }
+    return "";
+  }
   const number = normalizePhoneNumber(value.number);
   if (!number || number.length > 82) return "invalid phone number";
   if (value.type === "dtmf" && (number.length !== 1 || !/^[0-9*#]$/.test(number))) {
@@ -390,6 +399,21 @@ function validateDeviceCommand(value) {
         [...value.message].length > 2_000) return "invalid SMS content";
   }
   return "";
+}
+
+// A history response stays below the command websocket's 64 KiB frame ceiling.
+function validCallHistoryCompletion(value, limit = 100) {
+  if (encoder.encode(JSON.stringify(value)).byteLength > 60 * 1024) return false;
+  if (value.status === "failed") return true;
+  const history = value.result?.history;
+  if (!Array.isArray(history) || history.length > Math.min(limit, 100)) return false;
+  return history.every(row => row && typeof row === "object" &&
+    typeof row.id === "string" && row.id.length > 0 && row.id.length <= 128 &&
+    Number.isSafeInteger(row.index) && row.index >= 0 &&
+    ["incoming", "outgoing"].includes(row.direction) && row.state === "ended" &&
+    typeof row.number === "string" && row.number.length <= 82 && typeof row.missed === "boolean" &&
+    [row.started_at, row.updated_at, row.ended_at].every(at =>
+      typeof at === "string" && at.length <= 40 && Number.isFinite(Date.parse(at))));
 }
 
 function normalizePhoneNumber(value) {
@@ -526,6 +550,10 @@ export class DeviceCommandSession {
           !["completed", "failed"].includes(value?.status)) {
         return jsonResponse(400, { error: "invalid command completion" });
       }
+      const record = await this.storage.get(`command:${value.command_id.toLowerCase()}`);
+      if (record?.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) {
+        return jsonResponse(400, { error: "invalid call history result" });
+      }
       const updated = await this.completeCommand(value);
       return updated ? jsonResponse(202, { received: true }) : jsonResponse(404, { error: "command not found" });
     }
@@ -545,6 +573,7 @@ export class DeviceCommandSession {
     const key = `command:${value.command_id.toLowerCase()}`;
     const record = await this.storage.get(key);
     if (!record) return false;
+    if (record.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) return false;
     if (["completed", "failed", "expired"].includes(record.status)) return true;
     record.status = value.status;
     record.completed_at_ms = Date.now();
@@ -719,6 +748,7 @@ export class DeviceCommandSession {
 
 function sameCommandIntent(left, right) {
   if (left?.type !== right?.type) return false;
+  if (left?.type === "call_history") return left.limit === right.limit;
   if (left?.type !== "call_control") return true;
   return left.action === right.action &&
     left.owner === right.owner &&

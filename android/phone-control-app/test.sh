@@ -253,3 +253,8 @@ mkdir -p "$SMS_OUT"
 "$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
   "$ROOT"/test/com/airsim/phonecontrol/CommandRegistrationPolicyTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.CommandRegistrationPolicyTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/NativeCallHistoryRecord.java \
+  "$ROOT"/test/com/airsim/phonecontrol/NativeCallHistoryTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.NativeCallHistoryTests
