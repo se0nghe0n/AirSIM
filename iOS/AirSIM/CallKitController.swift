@@ -699,6 +699,7 @@ extension CallKitController: CXProviderDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.audioSessionIsActive = true
+            IPhoneCloudCallSession.shared.callKitAudioDidActivate(audioSession)
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "APP",
                 category: "callkit-audio",
@@ -717,6 +718,7 @@ extension CallKitController: CXProviderDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             self.audioSessionIsActive = false
+            IPhoneCloudCallSession.shared.callKitAudioDidDeactivate(audioSession)
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "APP",
                 category: "callkit-audio",

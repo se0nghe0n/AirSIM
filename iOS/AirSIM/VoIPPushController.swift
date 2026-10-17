@@ -604,9 +604,9 @@ struct AgentPushRegistration: Encodable, Equatable, Sendable {
     let bundleID: String
     let environment: String
     let relayURL: String
-    var mediaTransport: String = CloudMediaTransport.legacyPCM.rawValue
-    var appMediaCapabilities: [String] = [CloudMediaTransport.legacyPCM.rawValue]
-    var forceLegacyPCM: Bool = true
+    var mediaTransport: String = CloudMediaTransport.webRTC.rawValue
+    var appMediaCapabilities: [String] = CloudMediaTransport.allCases.map(\.rawValue)
+    var forceLegacyPCM: Bool = false
     var vowlanSecret: String? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -1577,7 +1577,7 @@ final class VoIPPushController: NSObject {
             environment: APNsEnvironment.current,
             relayURL: relayURL,
             mediaTransport: CloudMediaTransportPreference.requested().rawValue,
-            appMediaCapabilities: [CloudMediaTransport.legacyPCM.rawValue],
+            appMediaCapabilities: CloudMediaTransport.allCases.map(\.rawValue),
             forceLegacyPCM: CloudMediaTransportPreference.forceLegacy(),
             vowlanSecret: nil
         )

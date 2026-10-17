@@ -119,3 +119,41 @@ The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is an arm64 build for re-
 ## Current status
 
 Simulator builds and tests cover the main protocol and transport-selection logic. A release still requires Apple signing, installation on physical iPhone/Apple Watch devices, Samsung dialing and answering, bidirectional voice, SMS, and background-push acceptance.
+
+## Native cloud WebRTC audio
+
+The iPhone advertises `legacy_pcm` and `webrtc` and requests WebRTC by default.
+Relay selects the call's `media_transport` only when both endpoints and its TURN
+configuration are ready; missing/old endpoint capabilities and Watch retain PCM.
+`airsim.cloud-media-force-legacy-pcm` remains an explicit compatibility override.
+Once a call is assigned WebRTC, negotiation failures never silently downgrade it.
+
+The iPhone offers only after its WebSocket answer is acknowledged and the existing
+CallKit audio startup policy permits capture. `CloudWebRTCSignal` implements the
+v1 JSON SDP/ICE envelope. Each negotiation has a new UUID, remote ICE is bounded to
+128 candidates, and callbacks are fenced by connection, call and session identity.
+Only an agent reconnect triggers a new offer; a late Watch connection does not.
+Connected audio requires both native DTLS readiness and the agent's session-scoped
+`webrtc_ready` after its phone PCM bridge is ready. Peer reconnect and failed ICE
+use the existing bounded media recovery. Hangup,
+CallKit deactivation, mute and system route changes retain the existing lifecycle.
+Native WebRTC owns the device audio, Opus, 20 ms packetization, FEC/DTX, AEC, PLC and
+jitter handling; it never feeds the legacy PCM resampler/time-pitch graph. Stats
+contain only numeric media counters and session identity, never SDP or ICE secrets.
+
+`WebRTCDependency/Package.swift` pins the official `webrtc-sdk/Specs` 144.7559.15
+XCFramework URL and SHA-256 (SPM verifies every downloaded binary). The manifest
+matches upstream tag `f86eaecba843c8e0fe859d556c7c7831b0d9a132` except for limiting
+platform declarations to iOS, avoiding the upstream Swift 5.9/visionOS v26 manifest
+incompatibility. `WebRTCDependency/LICENSE` is the SDK's bundled BSD license (also copied into the app bundle)
+and must accompany redistribution. `THIRD_PARTY_NOTICES.txt` includes the pinned
+SDK dependency notices; the BSD license, patent grant, and supplemental notices are bundled with the app. Engine source revision:
+`30d5e63ae91da483e06577b5c35ee91cc5e5c3db`.
+
+`CloudWebRTCTests` exercises the actual native peers with deterministic 440 Hz
+input through a test-only audio-device adapter, verifies Opus RTP and audible
+PCM output, and tests signaling identity and authenticated ICE request shaping.
+The optional TURN test requires `AIRSIM_WEBRTC_TURN_CONFIG` pointing to a private
+JSON file with `ios_url`, `username`, and `credential`; it forces relay candidates.
+Never commit that file. Physical CallKit/headset routing and real carrier calls
+still require separately authorized device testing.

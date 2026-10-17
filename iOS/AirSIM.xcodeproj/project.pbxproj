@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        AA0000000000000000000006 /* WebRTC patents in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000006; };
+        AA0000000000000000000005 /* WebRTC notices in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000005; };
+        AA0000000000000000000004 /* WebRTC license in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000004; };
+        AA0000000000000000000001 /* CloudWebRTC.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000001; };
+        AA0000000000000000000002 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000001; };
+        AA0000000000000000000003 /* CloudWebRTCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000003; };
 		A10000000000000000000001 /* AirSIMIPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* AirSIMIPadApp.swift */; };
 		A10000000000000000000002 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* APIModels.swift */; };
 		A10000000000000000000003 /* AirSIMAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* AirSIMAPI.swift */; };
@@ -111,6 +117,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        BB0000000000000000000006 /* WebRTC-PATENTS */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-PATENTS"; path = WebRTCDependency/PATENTS; sourceTree = SOURCE_ROOT; };
+        BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-THIRD-PARTY-NOTICES"; path = WebRTCDependency/THIRD_PARTY_NOTICES.txt; sourceTree = SOURCE_ROOT; };
+        BB0000000000000000000004 /* WebRTC-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-LICENSE"; path = WebRTCDependency/LICENSE; sourceTree = SOURCE_ROOT; };
+        BB0000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTC.swift; sourceTree = "<group>"; };
+        BB0000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTCTests.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* AirSIMIPadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMIPadApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* AirSIMAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMAPI.swift; sourceTree = "<group>"; };
@@ -172,6 +183,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+                AA0000000000000000000002,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -203,6 +215,9 @@
 			isa = PBXGroup;
 			children = (
 				D10000000000000000000002 /* AirSIM */,
+                BB0000000000000000000004 /* WebRTC-LICENSE */,
+                BB0000000000000000000006 /* WebRTC-PATENTS */,
+                BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */,
 				D10000000000000000000004 /* Shared */,
 				D10000000000000000000005 /* AirSIMLiveActivityExtension */,
 				D10000000000000000000006 /* AirSIMWatchApp */,
@@ -227,6 +242,7 @@
 				B10000000000000000000010 /* CallKitController.swift */,
 				B1000000000000000000001B /* VoIPPushController.swift */,
 				B10000000000000000000024 /* IPhoneCloudCallSession.swift */,
+                BB0000000000000000000001,
 				B1000000000000000000002B /* CallLifecycleStore.swift */,
 				B10000000000000000000025 /* VirtualCallTTSController.swift */,
 				B10000000000000000000029 /* AgentVerboseTrace.swift */,
@@ -303,6 +319,7 @@
 			isa = PBXGroup;
 			children = (
 				B30000000000000000000001 /* AirSIMTests.swift */,
+                BB0000000000000000000003,
 			);
 			path = AirSIMTests;
 			sourceTree = "<group>";
@@ -326,6 +343,7 @@
 				H10000000000000000000001 /* PBXTargetDependency */,
 				H10000000000000000000002 /* PBXTargetDependency */,
 			);
+			packageProductDependencies = (EE0000000000000000000001,);
 			name = AirSIM;
 			productName = AirSIM;
 			productReference = B1000000000000000000000C /* AirSIM.app */;
@@ -405,6 +423,7 @@
 				};
 			};
 			buildConfigurationList = F10000000000000000000001 /* Build configuration list for PBXProject "AirSIM" */;
+			packageReferences = (DD0000000000000000000001,);
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -432,6 +451,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000018 /* AppIcon.icon in Resources */,
+                AA0000000000000000000004 /* WebRTC license in Resources */,
+                AA0000000000000000000006 /* WebRTC patents in Resources */,
+                AA0000000000000000000005 /* WebRTC notices in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -481,6 +503,7 @@
 				A1000000000000000000000E /* CallKitController.swift in Sources */,
 				A1000000000000000000001A /* VoIPPushController.swift in Sources */,
 				A10000000000000000000024 /* IPhoneCloudCallSession.swift in Sources */,
+                AA0000000000000000000001,
 				A1000000000000000000002B /* CallLifecycleStore.swift in Sources */,
 				A10000000000000000000025 /* VirtualCallTTSController.swift in Sources */,
 				A10000000000000000000029 /* AgentVerboseTrace.swift in Sources */,
@@ -533,6 +556,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A30000000000000000000001 /* AirSIMTests.swift in Sources */,
+                AA0000000000000000000003,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -834,6 +858,8 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+        DD0000000000000000000001 = {isa = XCLocalSwiftPackageReference; relativePath = WebRTCDependency; };
+        EE0000000000000000000001 = {isa = XCSwiftPackageProductDependency; package = DD0000000000000000000001; productName = WebRTC; };
 	};
 	rootObject = E10000000000000000000002 /* Project object */;
 }
