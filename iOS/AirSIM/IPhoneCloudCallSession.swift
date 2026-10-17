@@ -327,8 +327,14 @@ struct CloudPCMTransportDiagnostics {
 
 struct CloudPCMPlaybackWindow {
     static let completionType: AVAudioPlayerNodeCompletionCallbackType = .dataRendered
+    static let maximumAcceleratedPackets = 4
     private(set) var scheduledPackets = 0
-    var availablePackets: Int { max(0, 2 - scheduledPackets) }
+    private(set) var packetLimit = 2
+    var availablePackets: Int { max(0, packetLimit - scheduledPackets) }
+    mutating func setAccelerated(_ accelerated: Bool) {
+        // Reduce only future reservations. Already scheduled speech drains normally.
+        packetLimit = accelerated ? Self.maximumAcceleratedPackets : 2
+    }
     mutating func schedulePacket() { scheduledPackets += 1 }
     mutating func didRenderPacket() { scheduledPackets = max(0, scheduledPackets - 1) }
 }
@@ -387,7 +393,8 @@ struct CloudPCMBufferedFrame {
     var receivedAt: TimeInterval? = nil
 }
 
-/// Measures only this device's receive-to-render residence, using its monotonic clock.
+/// Measures receive-to-player-render residence on this device's monotonic clock.
+/// Excludes the downstream time-pitch processor and hardware presentation latency.
 struct CloudPCMRenderLatency {
     private(set) var sampleCount: UInt64 = 0
     private(set) var latestMS: Double = 0
@@ -404,7 +411,7 @@ struct CloudPCMRenderLatency {
 
 /// Arrival ordinals preserve ordered PCM across temporary transport stalls.
 /// Reserve grows quickly for an observed stall; the separate hard cap bounds
-/// local backlog to 1.8 s (plus at most 40 ms already scheduled for rendering).
+/// local backlog to 1.8 s (plus 40 ms scheduled normally, or 80 ms while accelerating).
 struct CloudPCMAdaptiveJitterBuffer {
     static let maximumTargetFrames = 60
     static let maximumBufferedFrames = 90
@@ -413,6 +420,8 @@ struct CloudPCMAdaptiveJitterBuffer {
     private var lastArrivalAt: Date?
     private var estimatedJitter: TimeInterval = 0
     private var stableFrames = 0
+    private var reserveHoldStartedAt: Date?
+    private var holdOnNextArrival = false
     private var missingFrames = 0
     private var lastGoodPCM: Data?
     private var lastGoodSequence: UInt32?
@@ -430,6 +439,8 @@ struct CloudPCMAdaptiveJitterBuffer {
     private(set) var maximumBufferedFrameCount = 0
     private(set) var silenceCompactedFrames: UInt64 = 0
     var bufferedFrameCount: Int { frames.count }
+    var mostRecentArrival: TimeInterval? { lastArrivalAt?.timeIntervalSince1970 }
+    var isRecovering: Bool { !isPrimed || missingFrames > 0 }
 
     private var oldestSequence: UInt32? {
         frames.keys.min { Int32(bitPattern: $0 &- $1) < 0 }
@@ -447,6 +458,10 @@ struct CloudPCMAdaptiveJitterBuffer {
             duplicateDropCount &+= 1
             return
         }
+        if holdOnNextArrival {
+            reserveHoldStartedAt = arrivedAt
+            holdOnNextArrival = false
+        }
         if let previous = lastArrivalAt {
             let delta = arrivedAt.timeIntervalSince(previous)
             if delta >= 0 {
@@ -454,6 +469,7 @@ struct CloudPCMAdaptiveJitterBuffer {
                 targetFrameCount = max(targetFrameCount,
                     min(Self.maximumTargetFrames, 4 + Int(estimatedJitter / 0.02)))
                 if delta >= 0.08 {
+                    reserveHoldStartedAt = arrivedAt
                     // EWMA alone divides a one-second stall by 16 and misses its
                     // burst. Keep that burst, and reserve enough for its recurrence.
                     let stallFrames = Int(ceil(min(delta, 1.2) / 0.02)) + 2
@@ -461,10 +477,14 @@ struct CloudPCMAdaptiveJitterBuffer {
                 }
                 stableFrames = (0.015...0.025).contains(delta) ? stableFrames + 1 : 0
                 if stableFrames >= 100 {
-                    targetFrameCount = max(4, targetFrameCount - 1)
+                    // Keep a recurring stall's reserve. Only age a transient spike
+                    // after ten seconds without another gap or playback starvation.
+                    if reserveHoldStartedAt.map({ arrivedAt.timeIntervalSince($0) >= 10 }) ?? true {
+                        targetFrameCount = max(4, targetFrameCount - 5)
+                    }
                     stableFrames = 0
-                    // Lower only the next rebuffer threshold. Discarding queued
-                    // speech here turns a recovered connection into audible gaps.
+                    // This changes the reserve, never removes queued speech. The
+                    // playout controller may recover excess with pitch-preserving rate.
                 }
             }
         }
@@ -487,12 +507,13 @@ struct CloudPCMAdaptiveJitterBuffer {
         }
     }
 
-    mutating func dequeue(maxFrames: Int, concealIfEmpty: Bool = true) -> [CloudPCMBufferedFrame] {
+    mutating func dequeue(maxFrames: Int, concealIfEmpty: Bool = true,
+                          compactSilence: Bool = true) -> [CloudPCMBufferedFrame] {
         guard isPrimed, maxFrames > 0 else { return [] }
         if expectedSequence == nil { expectedSequence = oldestSequence }
         var ready: [CloudPCMBufferedFrame] = []
         while ready.count < maxFrames, !frames.isEmpty {
-            compactDigitalSilence(reserving: maxFrames - ready.count)
+            if compactSilence { compactDigitalSilence(reserving: maxFrames - ready.count) }
             guard let expected = expectedSequence else { break }
             if let frame = frames.removeValue(forKey: expected) {
                 var pcm = frame.pcm
@@ -562,6 +583,8 @@ struct CloudPCMAdaptiveJitterBuffer {
         targetFrameCount = min(Self.maximumTargetFrames, targetFrameCount + 1)
         realFramesSinceCompaction = 0
         stableFrames = 0
+        // The next arrival supplies the same monotonic clock used by enqueue.
+        holdOnNextArrival = true
         isPrimed = false
     }
 
@@ -577,6 +600,36 @@ struct CloudPCMAdaptiveJitterBuffer {
     mutating func reset() { self = CloudPCMAdaptiveJitterBuffer() }
 }
 
+/// Bounds source consumption above the learned reserve. The two-frame guard is
+/// additional to both the next player reservation and the learned jitter target.
+/// All times are from the receive/render monotonic clock, never wall-clock Date().
+struct CloudPCMPlaybackRateController {
+    static let maximumRate = 1.04
+    private(set) var rate = 1.0
+    private var lastUpdateAt: TimeInterval?
+
+    mutating func update(at now: TimeInterval?, queuedAfterRefill: Int, target: Int,
+                         lastArrival: TimeInterval?, recovering: Bool) {
+        // Date's reference-date conversion can round this monotonic value by
+        // sub-microseconds; do not mistake that for a backwards-running clock.
+        guard let now, now.isFinite, let lastArrival, now + 0.000_001 >= lastArrival,
+              now - lastArrival <= 0.04, !recovering,
+              queuedAfterRefill > target + 2 else {
+            rate = 1
+            lastUpdateAt = now
+            return
+        }
+        // Hysteresis prevents toggling when the reserve is close to its floor.
+        guard rate > 1 || queuedAfterRefill >= target + 4 else {
+            lastUpdateAt = now
+            return
+        }
+        let elapsed = min(0.02, max(0, now - (lastUpdateAt ?? (now - 0.02))))
+        rate = min(Self.maximumRate, rate + elapsed * 0.25)
+        lastUpdateAt = now
+    }
+}
+
 /// Network and render callbacks refill real audio immediately. Only the playout
 /// timer may conceal a shortage, and only after scheduled audio is exhausted.
 struct CloudPCMPlayoutBuffer {
@@ -584,25 +637,38 @@ struct CloudPCMPlayoutBuffer {
     private(set) var window = CloudPCMPlaybackWindow()
     private(set) var scheduledPackets: UInt64 = 0
     private(set) var renderedPackets: UInt64 = 0
+    private(set) var rateController = CloudPCMPlaybackRateController()
+    var playbackRate: Double { rateController.rate }
+    private(set) var maximumScheduledPackets = 0
 
     mutating func enqueue(sequence: UInt32, pcm: Data, arrivedAt: Date) {
         jitter.enqueue(sequence: sequence, pcm: pcm, arrivedAt: arrivedAt)
     }
 
-    mutating func refill(allowConcealment: Bool = false) -> [CloudPCMBufferedFrame] {
+    mutating func refill(allowConcealment: Bool = false, at now: TimeInterval? = nil) -> [CloudPCMBufferedFrame] {
+        rateController.update(at: now,
+                              queuedAfterRefill: jitter.bufferedFrameCount - max(0,
+                                CloudPCMPlaybackWindow.maximumAcceleratedPackets - window.scheduledPackets),
+                              target: jitter.targetFrameCount, lastArrival: jitter.mostRecentArrival,
+                              recovering: jitter.isRecovering)
+        // iOS's time-pitch node needs four 20 ms input buffers to sustain 1.04x.
+        // Two are sufficient at 1x. Account all four before permitting acceleration.
+        window.setAccelerated(playbackRate > 1)
         let ready = jitter.dequeue(
             maxFrames: window.availablePackets,
-            concealIfEmpty: allowConcealment && window.scheduledPackets == 0
+            concealIfEmpty: allowConcealment && window.scheduledPackets == 0,
+            compactSilence: playbackRate == 1
         )
         for _ in ready { window.schedulePacket() }
+        maximumScheduledPackets = max(maximumScheduledPackets, window.scheduledPackets)
         scheduledPackets &+= UInt64(ready.count)
         return ready
     }
 
-    mutating func rendered(canRefill: Bool = true) -> [CloudPCMBufferedFrame] {
+    mutating func rendered(canRefill: Bool = true, at now: TimeInterval? = nil) -> [CloudPCMBufferedFrame] {
         window.didRenderPacket()
         renderedPackets &+= 1
-        return canRefill ? refill() : []
+        return canRefill ? refill(at: now) : []
     }
 
     mutating func discardReservation() {
@@ -1597,6 +1663,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     func isCurrentConnection(_ id: UUID) -> Bool { queue.sync { connectionID == id } }
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
+    private var timePitch: AVAudioUnitTimePitch?
     private var encoder: IPhoneCloudVoicePCMEncoder?
     private var uplinkBuffer = Data()
     private var uplinkSender = CloudPCMUplinkSendQueue()
@@ -1817,7 +1884,15 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             channels: 1,
             interleaved: false
         ) else { throw IPhoneCloudCallError.invalidAudioFormat }
-        engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+        // Keep a stable graph even at 1x: bypass/reconnection can discard the
+        // processor tail. Offline probes measure about 40 ms of added processing
+        // delay; player dataRendered callbacks do not include that output tail.
+        let timePitch = AVAudioUnitTimePitch()
+        timePitch.rate = 1
+        timePitch.pitch = 0
+        engine.attach(timePitch)
+        engine.connect(player, to: timePitch, format: playbackFormat)
+        engine.connect(timePitch, to: engine.mainMixerNode, format: playbackFormat)
 
         let input = engine.inputNode
         try input.setVoiceProcessingEnabled(true)
@@ -1843,6 +1918,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         player.play()
         self.engine = engine
         self.player = player
+        self.timePitch = timePitch
         self.encoder = encoder
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(20), leeway: .milliseconds(1))
@@ -1873,6 +1949,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         engine?.stop()
         engine = nil
         player = nil
+        timePitch = nil
         encoder = nil
         playout = CloudPCMPlayoutBuffer()
         renderLatency = CloudPCMRenderLatency()
@@ -1969,6 +2046,10 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "tx_max_write_ms": String(Int(uplinkSender.maximumSendDurationMS)),
                 "rx_queue": String(playout.jitter.bufferedFrameCount),
                 "rx_target_ms": String(playout.jitter.targetFrameCount * 20),
+                "rx_playback_rate": String(format: "%.3f", playout.playbackRate),
+                // A zero reported unit latency can mean unknown; output probes,
+                // not this field or dataRendered, establish audible processing delay.
+                "rx_unit_reported_latency_ms": String(Int((timePitch?.latency ?? 0) * 1_000)),
                 "rx_drop": String(playout.jitter.droppedFrameCount),
                 "rx_overflow_drop": String(playout.jitter.overflowDropCount),
                 "rx_late_drop": String(playout.jitter.lateDropCount),
@@ -1990,6 +2071,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "rx_scheduled": String(playout.scheduledPackets),
                 "rx_rendered": String(playout.renderedPackets),
                 "rx_pending": String(playout.window.scheduledPackets),
+                "rx_scheduled_source_ms": String(playout.window.scheduledPackets * 20),
+                "rx_scheduled_source_max_ms": String(playout.maximumScheduledPackets * 20),
                 "rx_max_gap_ms": String(Int(maximumReceiveGapMS)),
                 "rx_max_queue_ms": String(Int(maximumReceiveDispatchMS)),
                 "rx_processing_max_ms": String(Int(maximumReceiveProcessingMS)),
@@ -2078,15 +2161,18 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                          playout.jitter.bufferedFrameCount + playout.window.scheduledPackets,
                          Int(playout.jitter.droppedFrameCount - droppedBefore), connectionID)
         guard let player, engine?.isRunning == true else { return }
-        schedulePackets(playout.refill(), player: player)
+        schedulePackets(playout.refill(at: now), player: player)
     }
 
     private func drainPlayback() {
         guard let player, engine?.isRunning == true else { return }
-        schedulePackets(playout.refill(allowConcealment: true), player: player)
+        schedulePackets(playout.refill(allowConcealment: true, at: ProcessInfo.processInfo.systemUptime), player: player)
     }
 
     private func schedulePackets(_ frames: [CloudPCMBufferedFrame], player: AVAudioPlayerNode) {
+        if let timePitch, timePitch.rate != Float(playout.playbackRate) {
+            timePitch.rate = Float(playout.playbackRate)
+        }
         for frame in frames { schedulePacket(frame, player: player) }
         if !frames.isEmpty, !player.isPlaying { player.play() }
     }
@@ -2126,7 +2212,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 self.renderLatency.record(receivedAt: frame.receivedAt, renderedAt: completedAt)
                 let currentPlayer = self.engine?.isRunning == true ? self.player : nil
                 // Release completed reservations even during a temporary engine pause.
-                let ready = self.playout.rendered(canRefill: currentPlayer != nil)
+                let ready = self.playout.rendered(canRefill: currentPlayer != nil, at: ProcessInfo.processInfo.systemUptime)
                 self.onDownlinkPlayback?(self.connectionID)
                 if let currentPlayer { self.schedulePackets(ready, player: currentPlayer) }
             }

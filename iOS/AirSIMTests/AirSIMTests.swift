@@ -309,6 +309,326 @@ final class AirSIMTests: XCTestCase {
         return sqrt(sum / Double(upper - lower))
     }
 
+    func testCloudNativeTimePitchPreservesPitchWithBoundedCompletionFedBuffers() throws {
+        let normal = try renderCloudTone(rate: 1)
+        let faster = try renderCloudTone(rate: 1.04, window: 4)
+        XCTAssertEqual(normal.completed, 200)
+        XCTAssertEqual(faster.completed, 200)
+        XCTAssertLessThanOrEqual(normal.maximumPending, 2)
+        XCTAssertLessThanOrEqual(faster.maximumPending, 4)
+        func lastAudible(_ samples: [Float]) -> Int {
+            samples.lastIndex(where: { abs($0) > 0.01 }) ?? 0
+        }
+        let recovered = Double(lastAudible(normal.samples) - lastAudible(faster.samples)) / 8_000
+        XCTAssertGreaterThan(recovered, 0.10, "Measure final output, including the processor tail")
+        XCTAssertLessThan(recovered, 0.24)
+        for samples in [normal.samples, faster.samples] {
+            let section = Array(samples[4_000..<20_000])
+            let crossings = zip(section, section.dropFirst()).filter { $0 <= 0 && $1 > 0 }.count
+            XCTAssertEqual(Double(crossings) / 2, 440, accuracy: 2, "Pitch must not rise with playback rate")
+            for offset in stride(from: 4_000, to: 20_000, by: 160) {
+                let energy = samples[offset..<(offset + 160)].reduce(0.0) { $0 + Double($1 * $1) } / 160
+                XCTAssertGreaterThan(energy, 0.01, "Completion-driven refill must not introduce silent blocks")
+            }
+        }
+    }
+
+    /// Real AVAudioEngine output; callbacks refill immediately on a serial media
+    /// queue, with the production two/four buffer cap and no polling refill.
+    private func renderCloudTone(rate: Float, window: Int = 2) throws -> (samples: [Float], completed: Int, maximumPending: Int) {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1)!
+        let engine = AVAudioEngine(), player = AVAudioPlayerNode(), pitch = AVAudioUnitTimePitch()
+        engine.attach(player)
+        engine.attach(pitch)
+        pitch.pitch = 0
+        pitch.rate = rate
+        engine.connect(player, to: pitch, format: format)
+        engine.connect(pitch, to: engine.mainMixerNode, format: format)
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 160)
+        try engine.start()
+        defer { engine.stop() }
+        player.play()
+        let queue = DispatchQueue(label: "com.example.airsim.test-time-pitch")
+        var nextPacket = 0, completed = 0, maximumPending = 0
+        func feed() {
+            while nextPacket - completed < window, nextPacket < 200 {
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)!
+                buffer.frameLength = 160
+                for i in 0..<160 {
+                    buffer.floatChannelData![0][i] = Float(sin(2 * .pi * 440 * Double(nextPacket * 160 + i) / 8_000)) * 0.3
+                }
+                nextPacket += 1
+                maximumPending = max(maximumPending, nextPacket - completed)
+                player.scheduleBuffer(buffer, completionCallbackType: .dataRendered) { _ in
+                    queue.async {
+                        completed += 1
+                        feed()
+                    }
+                }
+            }
+        }
+        queue.sync { feed() }
+        let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)!
+        var samples: [Float] = []
+        for _ in 0..<240 {
+            XCTAssertEqual(try engine.renderOffline(160, to: output), .success)
+            samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
+            // Give asynchronous completion delivery real audio cadence. This is
+            // an offline graph and never selects or records a physical device.
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return queue.sync { (samples, completed, maximumPending) }
+    }
+
+    func testCloudContinuousVoicedWaveformRecoversAtFinalEngineOutput() throws {
+        let reference = try renderCloudRecovery(accelerate: false)
+        let recovered = try renderCloudRecovery(accelerate: true)
+        let renewed = try renderCloudRecovery(accelerate: true, renewedStall: true)
+        let referenceEnd = Double(reference.samples.lastIndex(where: { abs($0) > 0.01 }) ?? 0) / 8_000
+        for result in [recovered, renewed] {
+            XCTAssertTrue(result.sequences == (0..<2_750).map(UInt32.init), "Source frames must be scheduled in order")
+            XCTAssertTrue(result.completedSequences.sorted() == (0..<2_750).map(UInt32.init), "Every real frame must complete once")
+            XCTAssertEqual(result.dropped, 0)
+            XCTAssertEqual(result.compacted, 0, "Fixture is continuously voiced, not digital silence")
+            XCTAssertEqual(result.underruns, reference.underruns)
+            XCTAssertEqual(result.maximumPending, 4)
+            XCTAssertEqual(result.finalLimit, 2, "Return to the normal window without flushing")
+            XCTAssertEqual(result.maximumRate, 1.04, accuracy: 0.0001)
+            let end = Double(result.samples.lastIndex(where: { abs($0) > 0.01 }) ?? 0) / 8_000
+            XCTAssertLessThan(end, referenceEnd - 0.7, "Final waveform must recover latency, including processor tail")
+            XCTAssertLessThan(end - 55, 0.4)
+            for offset in stride(from: 5 * 8_000, to: 54 * 8_000, by: 160) {
+                let energy = result.samples[offset..<(offset + 160)].reduce(0.0) { $0 + Double($1 * $1) } / 160
+                XCTAssertGreaterThan(energy, 0.001, "No new silent block after the first unseen stall at \(Double(offset) / 8_000)s")
+            }
+            print("CLOUD_WAVEFORM finalOutputS=\(end) referenceOutputS=\(referenceEnd) underruns=\(result.underruns) maxPending=\(result.maximumPending) allFrames=\(result.sequences.count)")
+        }
+        XCTAssertTrue(renewed.stoppedOnRenewedStall)
+    }
+
+    private struct CloudWaveformResult {
+        var samples: [Float]
+        var sequences: [UInt32]
+        var completedSequences: [UInt32]
+        var dropped: UInt64
+        var compacted: UInt64
+        var underruns: UInt64
+        var maximumPending: Int
+        var finalLimit: Int
+        var maximumRate: Double
+        var stoppedOnRenewedStall: Bool
+    }
+
+    /// Actual iOS AVAudioEngine output and production playout state. Source is
+    /// 55 seconds of continuous varying-F0 harmonics with a nonzero envelope.
+    /// The virtual 20ms clock controls arrival; real callbacks refill the player.
+    private func renderCloudRecovery(accelerate: Bool, renewedStall: Bool = false) throws -> CloudWaveformResult {
+        let count = 2_750
+        var source: [Data] = [], phase = 0.0
+        for packet in 0..<count {
+            var data = Data()
+            for i in 0..<160 {
+                let time = Double(packet * 160 + i) / 8_000
+                let f0 = 170 + 24 * sin(2 * .pi * 0.31 * time) + 7 * sin(2 * .pi * 0.83 * time)
+                phase += 2 * .pi * f0 / 8_000
+                let envelope = 0.25 + 0.05 * sin(2 * .pi * 1.7 * time)
+                let value = envelope * (sin(phase) + 0.35 * sin(2 * phase + 0.2) + 0.16 * sin(3 * phase + 0.7))
+                let sample = UInt16(bitPattern: Int16(value * 32_767))
+                data.append(UInt8(truncatingIfNeeded: sample))
+                data.append(UInt8(truncatingIfNeeded: sample >> 8))
+            }
+            source.append(data)
+        }
+        let format = AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1)!
+        let engine = AVAudioEngine(), player = AVAudioPlayerNode(), pitch = AVAudioUnitTimePitch()
+        engine.attach(player)
+        if accelerate {
+            engine.attach(pitch)
+            pitch.pitch = 0
+            pitch.rate = 1
+            engine.connect(player, to: pitch, format: format)
+            engine.connect(pitch, to: engine.mainMixerNode, format: format)
+        } else {
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+        }
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 160)
+        try engine.start()
+        defer { engine.stop() }
+        player.play()
+        let queue = DispatchQueue(label: "com.example.airsim.test-waveform")
+        var playout = CloudPCMPlayoutBuffer(), now = 0.0, delivered = 0
+        var sequences: [UInt32] = [], completedSequences: [UInt32] = []
+        var maximumRate = 1.0, stoppedOnRenewedStall = false
+        func schedule(_ frames: [CloudPCMBufferedFrame]) {
+            if pitch.rate != Float(playout.playbackRate) { pitch.rate = Float(playout.playbackRate) }
+            maximumRate = max(maximumRate, playout.playbackRate)
+            for frame in frames {
+                if frame.receivedAt != nil { sequences.append(frame.sequence) }
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)!
+                buffer.frameLength = 160
+                for i in 0..<160 {
+                    let bits = UInt16(frame.pcm[i * 2]) | UInt16(frame.pcm[i * 2 + 1]) << 8
+                    buffer.floatChannelData![0][i] = Float(Int16(bitPattern: bits)) / 32_768
+                }
+                player.scheduleBuffer(buffer, completionCallbackType: .dataRendered) { _ in
+                    queue.async {
+                        // A render quantum can complete several buffers, and the
+                        // native callbacks need not be delivered in source order.
+                        if frame.receivedAt != nil { completedSequences.append(frame.sequence) }
+                        schedule(playout.rendered(at: accelerate ? now : nil))
+                    }
+                }
+            }
+        }
+        var samples: [Float] = []
+        let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)!
+        for block in 0..<(count + 160) {
+            queue.sync {
+                now = Double(block) * 0.02
+                while delivered < count {
+                    let time = Double(delivered) * 0.02
+                    var arrival = (2..<3.052).contains(time) ? 3.052 : time
+                    if renewedStall, (24..<24.6).contains(time) { arrival = 24.6 }
+                    if arrival > now + 0.00001 { break }
+                    playout.enqueue(sequence: UInt32(delivered), pcm: source[delivered],
+                                    arrivedAt: Date(timeIntervalSince1970: now))
+                    delivered += 1
+                    schedule(playout.refill(at: accelerate ? now : nil))
+                }
+                if delivered < count || playout.jitter.bufferedFrameCount > 0 {
+                    schedule(playout.refill(allowConcealment: true, at: accelerate ? now : nil))
+                }
+                if renewedStall, (24.06..<24.6).contains(now), playout.playbackRate == 1 {
+                    stoppedOnRenewedStall = true
+                }
+            }
+            XCTAssertEqual(try engine.renderOffline(160, to: output), .success)
+            samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
+            // Keep real callback cadence. Running virtual audio ten times faster
+            // than wall time can starve asynchronous callbacks under host load.
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return queue.sync {
+            CloudWaveformResult(samples: samples, sequences: sequences,
+                                completedSequences: completedSequences, dropped: playout.jitter.droppedFrameCount,
+                                compacted: playout.jitter.silenceCompactedFrames,
+                                underruns: playout.jitter.underrunCount,
+                                maximumPending: playout.maximumScheduledPackets,
+                                finalLimit: playout.window.packetLimit, maximumRate: maximumRate,
+                                stoppedOnRenewedStall: stoppedOnRenewedStall)
+        }
+    }
+
+    func testCloudSpeechRateRecoversTransientBacklogWithoutDeletingFrames() {
+        let delivery: (Int) -> Int = { sequence in
+            let source = sequence * 20
+            return (2_000..<3_052).contains(source) ? 3_052 : source
+        }
+        let reference = replayCloudDownlink(count: 3_000, delivery: delivery)
+        let faster = replayCloudDownlink(count: 3_000, accelerate: true, delivery: delivery)
+        XCTAssertEqual(faster.renderedSequences, (0..<3_000).map(UInt32.init))
+        XCTAssertEqual(faster.dropped, 0)
+        XCTAssertEqual(faster.silenceCompacted, 0)
+        XCTAssertEqual(faster.underruns, reference.underruns)
+        XCTAssertLessThan(faster.lateMaximumDelayMS, 220)
+        XCTAssertGreaterThan(reference.lateMaximumDelayMS - faster.lateMaximumDelayMS, 800)
+    }
+
+    func testCloudSpeechRateKeepsRepeatedStallProtection() {
+        for stallMS in [600, 850, 1_052] {
+            let result = replayCloudDownlink(count: 2_000, accelerate: true) { sequence in
+                let source = sequence * 20, phase = source % 4_000
+                return (2_000..<(2_000 + stallMS)).contains(phase)
+                    ? source - phase + 2_000 + stallMS : source
+            }
+            XCTAssertEqual(result.renderedSequences, (0..<2_000).map(UInt32.init))
+            XCTAssertEqual(result.dropped, 0)
+            XCTAssertEqual(result.underruns, 3)
+            XCTAssertLessThanOrEqual(result.maximumBuffered, 90)
+        }
+    }
+
+    func testCloudPlaybackWindowDrainsAcceleratedReservationsWithoutDiscarding() {
+        var window = CloudPCMPlaybackWindow()
+        window.setAccelerated(true)
+        for _ in 0..<4 { window.schedulePacket() }
+        window.setAccelerated(false)
+        XCTAssertEqual(window.scheduledPackets, 4)
+        XCTAssertEqual(window.availablePackets, 0)
+        window.didRenderPacket()
+        XCTAssertEqual(window.availablePackets, 0)
+        window.didRenderPacket()
+        XCTAssertEqual(window.availablePackets, 0)
+        window.didRenderPacket()
+        XCTAssertEqual(window.availablePackets, 1)
+    }
+
+    func testCloudSpeechRateToleratesMonotonicDateRoundTrip() {
+        var controller = CloudPCMPlaybackRateController()
+        for i in 0..<20 {
+            let now = 15 + Double(i) * 0.02
+            controller.update(at: now, queuedAfterRefill: 20, target: 4,
+                              lastArrival: Date(timeIntervalSince1970: now).timeIntervalSince1970,
+                              recovering: false)
+        }
+        XCTAssertEqual(controller.rate, 1.04, accuracy: 0.00001)
+    }
+
+    func testCloudSpeechRateStopsAtReserveAndWhenArrivalsStall() {
+        var controller = CloudPCMPlaybackRateController()
+        for i in 0..<20 {
+            let now = Double(i) * 0.02
+            controller.update(at: now, queuedAfterRefill: 20, target: 4,
+                              lastArrival: now, recovering: false)
+        }
+        XCTAssertEqual(controller.rate, 1.04, accuracy: 0.00001)
+        controller.update(at: 0.40, queuedAfterRefill: 6, target: 4, lastArrival: 0.40, recovering: false)
+        XCTAssertEqual(controller.rate, 1)
+        controller.update(at: 0.42, queuedAfterRefill: 7, target: 4, lastArrival: 0.42, recovering: false)
+        XCTAssertEqual(controller.rate, 1, "Hysteresis requires four excess frames to restart")
+        controller.update(at: 0.44, queuedAfterRefill: 20, target: 4, lastArrival: 0.44, recovering: false)
+        XCTAssertGreaterThan(controller.rate, 1)
+        controller.update(at: 0.50, queuedAfterRefill: 20, target: 4, lastArrival: 0.44, recovering: false)
+        XCTAssertEqual(controller.rate, 1, "Stop before the transport's 80ms stall threshold")
+        controller.update(at: 0.52, queuedAfterRefill: 20, target: 4, lastArrival: 0.52, recovering: true)
+        XCTAssertEqual(controller.rate, 1)
+        controller.update(at: nil, queuedAfterRefill: 20, target: 4, lastArrival: 0.52, recovering: false)
+        XCTAssertEqual(controller.rate, 1, "Unknown time never authorizes acceleration")
+    }
+
+    func testCloudSpeechRateAndSilenceCompactionDoNotSpendReserveTogether() {
+        var playout = CloudPCMPlayoutBuffer()
+        for i in 0..<40 {
+            playout.enqueue(sequence: UInt32(i), pcm: Data(repeating: 0, count: 320),
+                            arrivedAt: Date(timeIntervalSince1970: 1))
+        }
+        _ = playout.refill(at: 1)
+        for _ in 0..<15 { _ = playout.rendered(at: 1.02) }
+        XCTAssertGreaterThan(playout.playbackRate, 1)
+        XCTAssertEqual(playout.jitter.silenceCompactedFrames, 0)
+        XCTAssertGreaterThanOrEqual(playout.jitter.bufferedFrameCount, playout.jitter.targetFrameCount + 2)
+    }
+
+    func testCloudStallReserveHoldsForTenSecondsOnArrivalClock() {
+        var buffer = CloudPCMAdaptiveJitterBuffer()
+        let epoch = Date(timeIntervalSince1970: 10)
+        buffer.enqueue(sequence: 0, pcm: Data(repeating: 1, count: 320), arrivedAt: epoch)
+        buffer.enqueue(sequence: 1, pcm: Data(repeating: 1, count: 320), arrivedAt: epoch.addingTimeInterval(1))
+        let learned = buffer.targetFrameCount
+        for i in 2..<452 {
+            buffer.enqueue(sequence: UInt32(i), pcm: Data(repeating: 1, count: 320),
+                           arrivedAt: epoch.addingTimeInterval(1 + Double(i - 1) * 0.02))
+            _ = buffer.dequeue(maxFrames: 1)
+        }
+        XCTAssertEqual(buffer.targetFrameCount, learned, "Nine regular seconds do not spend learned reserve")
+        for i in 452..<752 {
+            buffer.enqueue(sequence: UInt32(i), pcm: Data(repeating: 1, count: 320),
+                           arrivedAt: epoch.addingTimeInterval(1 + Double(i - 1) * 0.02))
+            _ = buffer.dequeue(maxFrames: 1)
+        }
+        XCTAssertLessThan(buffer.targetFrameCount, learned)
+    }
+
     func testCloudDownlinkPreservesSpeechAcrossRepeatedObservedStalls() {
         for stallMS in [600, 850, 1_052] {
             let result = replayCloudDownlink(count: 1_000) { sequence in
@@ -417,16 +737,17 @@ final class AirSIMTests: XCTestCase {
         count: Int,
         payload: (Int) -> Data = { _ in Data(repeating: 1, count: 320) },
         sourceTime: (Int) -> Int = { $0 * 20 },
+        accelerate: Bool = false,
         delivery: (Int) -> Int
     ) -> CloudReplayMetrics {
         var playout = CloudPCMPlayoutBuffer()
         let arrivals = Dictionary(grouping: 0..<count, by: delivery)
         var rendered: [UInt32] = []
-        var scheduled: [(time: Int, sequence: UInt32, real: Bool)] = []
+        var scheduled: [(time: Double, sequence: UInt32, real: Bool)] = []
         var maximumBuffered = 0, maximumDelayMS = 0, lateMaximumDelayMS = 0
-        func schedule(_ frames: [CloudPCMBufferedFrame], at time: Int, synthetic: Bool = false) {
+        func schedule(_ frames: [CloudPCMBufferedFrame], at time: Double, synthetic: Bool = false) {
             for frame in frames {
-                let due = max(time, scheduled.last?.time ?? time) + 20
+                let due = max(time, scheduled.last?.time ?? time) + 20 / playout.playbackRate
                 scheduled.append((due, frame.sequence, !synthetic))
             }
         }
@@ -435,26 +756,26 @@ final class AirSIMTests: XCTestCase {
             for sequence in arrivals[time] ?? [] {
                 playout.enqueue(sequence: UInt32(sequence), pcm: payload(sequence),
                                 arrivedAt: Date(timeIntervalSince1970: Double(time) / 1_000))
-                schedule(playout.refill(), at: time)
+                schedule(playout.refill(at: accelerate ? Double(time) / 1_000 : nil), at: Double(time))
                 maximumBuffered = max(maximumBuffered, playout.jitter.bufferedFrameCount)
             }
-            while let first = scheduled.first, first.time <= time {
+            while let first = scheduled.first, first.time <= Double(time) {
                 scheduled.removeFirst()
                 if first.real {
                     rendered.append(first.sequence)
-                    let delay = time - sourceTime(Int(first.sequence))
+                    let delay = Int(ceil(first.time)) - sourceTime(Int(first.sequence))
                     maximumDelayMS = max(maximumDelayMS, delay)
                     if first.sequence >= UInt32(max(0, count - 50)) {
                         lateMaximumDelayMS = max(lateMaximumDelayMS, delay)
                     }
                 }
-                schedule(playout.rendered(), at: time)
+                schedule(playout.rendered(at: accelerate ? Double(time) / 1_000 : nil), at: first.time)
             }
             if time % 20 == 0, rendered.count + Int(playout.jitter.silenceCompactedFrames) < count {
                 let before = playout.jitter.concealedFrameCount
-                let frames = playout.refill(allowConcealment: true)
+                let frames = playout.refill(allowConcealment: true, at: accelerate ? Double(time) / 1_000 : nil)
                 let synthetic = playout.jitter.concealedFrameCount > before
-                schedule(frames, at: time, synthetic: synthetic)
+                schedule(frames, at: Double(time), synthetic: synthetic)
             }
         }
         return .init(renderedSequences: rendered, dropped: playout.jitter.droppedFrameCount,
@@ -710,7 +1031,7 @@ final class AirSIMTests: XCTestCase {
         for _ in 0..<6 { buffer.notePlaybackUnderrun() }
         let raised = buffer.targetFrameCount
         let epoch = Date(timeIntervalSince1970: 100)
-        for sequence in 0..<500 {
+        for sequence in 0..<800 {
             buffer.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320),
                            arrivedAt: epoch.addingTimeInterval(Double(sequence) * 0.02))
             _ = buffer.dequeue(maxFrames: 1)
