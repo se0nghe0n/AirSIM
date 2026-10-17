@@ -1,7 +1,7 @@
 # AirSIM — Cross-device Calls, SMS, and VoWLAN for Android, iPhone, and Apple Watch
 
 [![Android Standalone](https://img.shields.io/badge/Android-Standalone%20APK-3DDC84?logo=android&logoColor=white)](android-standalone/README.md)
-[![iOS](https://img.shields.io/badge/iOS-16.3%2B-000000?logo=apple&logoColor=white)](iOS/README.md)
+[![iOS](https://img.shields.io/badge/iOS-17.0%2B-000000?logo=apple&logoColor=white)](iOS/README.md)
 [![watchOS](https://img.shields.io/badge/watchOS-10%2B-000000?logo=apple&logoColor=white)](iOS/README.md)
 [![Android AVF](https://img.shields.io/badge/Android%20AVF-Linux%20arm64-FCC624?logo=linux&logoColor=black)](module/packaging/README.md)
 [![Apps release](https://img.shields.io/badge/Apps-v0.9.7.1-2563EB)](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1)
@@ -117,7 +117,7 @@ The hotfix was installed on Redmi M2004J19C (Android 12) without clearing data, 
 
 - An Android test phone supporting Android Telecom, Shizuku, and wireless debugging. Standalone does not require Android AVF Linux.
 - Android builds: JDK 17, Android SDK Platform 35, and Build Tools 35.
-- Apple builds: Xcode; minimum targets are iOS 16.3 and watchOS 10.
+- Apple builds: Xcode; minimum targets are iOS 17.0 and watchOS 10.
 - Agent builds: Go 1.24.
 - Relay deployment: Node.js 20 or newer, Cloudflare Wrangler, and your own Cloudflare and Apple Developer resources.
 

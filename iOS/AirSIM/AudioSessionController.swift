@@ -111,22 +111,11 @@ final class AudioSessionController: ObservableObject {
     }
 
     var microphonePermissionIsUndetermined: Bool {
-        if #available(iOS 17.0, *) {
-            return AVAudioApplication.shared.recordPermission == .undetermined
-        }
-        return AVAudioSession.sharedInstance().recordPermission == .undetermined
+        AVAudioApplication.shared.recordPermission == .undetermined
     }
 
     func requestMicrophonePermission() async -> Bool {
-        if #available(iOS 17.0, *) {
-            return await AVAudioApplication.requestRecordPermission()
-        }
-        // iOS 16 仍通过 AVAudioSession 的回调接口请求录音权限。
-        return await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                continuation.resume(returning: granted)
-            }
-        }
+        await AVAudioApplication.requestRecordPermission()
     }
 
     @discardableResult

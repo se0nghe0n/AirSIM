@@ -1516,41 +1516,23 @@ struct InitialAvatar: View {
     }
 }
 
-/// 新系统使用原生 ContentUnavailableView，iOS 16 保留等价回退。
+/// 使用系统原生 ContentUnavailableView 展示空状态。
 private struct EmptyStateView: View {
     let title: String
     let systemImage: String
     var actionTitle: String? = nil
     var action: (() -> Void)? = nil
 
-    @ViewBuilder
     var body: some View {
-        if #available(iOS 17.0, *) {
-            ContentUnavailableView {
-                Label(title, systemImage: systemImage)
-            } description: {
-                Text(emptyStateDescription)
-            } actions: {
-                if let actionTitle, let action {
-                    Button(actionTitle, action: action)
-                        .buttonStyle(.borderedProminent)
-                }
+        ContentUnavailableView {
+            Label(title, systemImage: systemImage)
+        } description: {
+            Text(emptyStateDescription)
+        } actions: {
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(.borderedProminent)
             }
-        } else {
-            VStack(spacing: 14) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 42))
-                    .foregroundStyle(.secondary)
-                Text(title)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                if let actionTitle, let action {
-                    Button(actionTitle, action: action)
-                        .buttonStyle(.borderedProminent)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
         }
     }
 

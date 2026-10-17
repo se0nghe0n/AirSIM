@@ -369,13 +369,8 @@ extension View {
         modifier(PhoneToolbarGlassMorph(id: id))
     }
 
-    @ViewBuilder
     func phoneTabSelectionFeedback(_ trigger: String) -> some View {
-        if #available(iOS 17.0, *) {
-            sensoryFeedback(.selection, trigger: trigger)
-        } else {
-            self
-        }
+        sensoryFeedback(.selection, trigger: trigger)
     }
 }
 

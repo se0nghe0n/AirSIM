@@ -41,7 +41,7 @@ module/packaging
   Builds one airsim-avf-agent_<version>-<release>_arm64.deb plus signatures and bootstrap assets. Hardware differences belong in Android capability detection, not separate Debian packages.
 
 iOS
-  iPhone, Apple Watch, Live Activity, CallKit, PushKit, VoWLAN, SMS, APNs, and transport selection. Minimum project settings currently target iOS 16.3 and watchOS 10.
+  iPhone, Apple Watch, Live Activity, CallKit, PushKit, VoWLAN, SMS, APNs, and transport selection. Minimum project settings currently target iOS 17.0 and watchOS 10.
 
 push-relay-worker
   Cloudflare Worker, KV, Durable Objects, APNs provider, command/media WebSockets, health endpoint, and authenticated Dashboard.

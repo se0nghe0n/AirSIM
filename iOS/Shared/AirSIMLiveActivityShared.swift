@@ -286,7 +286,6 @@ private enum LiveActivityCallClient {
     }
 }
 
-@available(iOS 17.0, *)
 struct AnswerAirSIMCallIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Answer Module Call"
     static var openAppWhenRun = false
@@ -302,7 +301,6 @@ struct AnswerAirSIMCallIntent: LiveActivityIntent {
     }
 }
 
-@available(iOS 17.0, *)
 struct RejectAirSIMCallIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "Decline Module Call"
     static var openAppWhenRun = false
@@ -318,7 +316,6 @@ struct RejectAirSIMCallIntent: LiveActivityIntent {
     }
 }
 
-@available(iOS 17.0, *)
 struct HangUpAirSIMCallIntent: LiveActivityIntent {
     static var title: LocalizedStringResource = "End Module Call"
     static var openAppWhenRun = false

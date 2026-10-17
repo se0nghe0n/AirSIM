@@ -1361,11 +1361,7 @@ final class IPhoneCloudCallSession {
             guard let self else { return }
             defer { if webRTCStartID == id { webRTCStartTask = nil } }
             do {
-                let permission: Bool
-                if #available(iOS 17.0, *) { permission = await AVAudioApplication.requestRecordPermission() }
-                else { permission = await withCheckedContinuation { continuation in
-                    AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
-                } }
+                let permission = await AVAudioApplication.requestRecordPermission()
                 guard permission else { throw IPhoneCloudCallError.microphonePermissionDenied }
                 let iceWaitStarted = ProcessInfo.processInfo.systemUptime
                 let config = try await icePreparation.configuration(for: call)
