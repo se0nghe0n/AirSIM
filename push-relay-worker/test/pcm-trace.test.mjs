@@ -31,6 +31,8 @@ class Socket {
 
 function session(sockets) {
   return new CallMediaSession({
+    storage: { async get() { return undefined; } },
+    blockConcurrencyWhile(callback) { return callback(); },
     getWebSockets(role) { return sockets.filter((socket) => !role || socket.attachment.role === role); },
   }, {});
 }

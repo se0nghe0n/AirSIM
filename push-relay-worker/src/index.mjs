@@ -882,9 +882,17 @@ export class CallMediaSession {
     this.state = state;
     this.env = env;
     this.pcmTrace = new PCMRelayTrace();
+    this.terminal = null;
+    this.ready = state.blockConcurrencyWhile(async () => {
+      this.terminal = await state.storage.get("terminal") || null;
+    });
   }
 
   async fetch(request) {
+    await this.ready;
+    if (request.method === "POST" && new URL(request.url).pathname === "/terminal") {
+      return this.receiveTerminal(await readJSON(request));
+    }
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "websocket upgrade required" });
     }
@@ -892,6 +900,11 @@ export class CallMediaSession {
     if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
       return jsonResponse(400, { error: "invalid media role" });
     }
+    if (this.terminal && !this.matchesTerminal({
+      callID: request.headers.get("x-airsim-call-id"),
+      callUUID: request.headers.get("x-airsim-call-uuid"),
+      generation: Number(request.headers.get("x-airsim-generation")),
+    })) return jsonResponse(409, { error: "terminal call identity mismatch" });
     const currentOwner = this.ownerRole();
     let inheritsOwnership = false;
     let inheritedPendingControl = "";
@@ -921,12 +934,58 @@ export class CallMediaSession {
       this.clearNegotiation();
     }
     this.state.acceptWebSocket(server, [role]);
+    if (this.terminal) {
+      this.sendTerminal(server);
+      return new Response(null, { status: 101, webSocket: client });
+    }
     if (role === "agent") this.flushPendingControls(server);
     this.broadcastStatus("peer_connected", role);
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  matchesTerminal(attachment) {
+    return this.terminal && attachment.callID === this.terminal.call_id &&
+      attachment.callUUID === this.terminal.call_uuid &&
+      attachment.generation === this.terminal.generation;
+  }
+
+  sendTerminal(socket) {
+    const attachment = socket.deserializeAttachment() || {};
+    if (MEDIA_CLIENT_ROLES.has(attachment.role) && this.matchesTerminal(attachment)) {
+      socket.send(JSON.stringify(this.terminal));
+    }
+  }
+
+  async receiveTerminal(value) {
+    if (value.status !== "remote_ended" || !nonEmpty(value.call_id) ||
+        !UUID_PATTERN.test(value.call_uuid || "") ||
+        !Number.isSafeInteger(value.generation) || value.generation <= 0) {
+      return jsonResponse(400, { error: "invalid terminal call identity" });
+    }
+    if (this.terminal && !this.matchesTerminal({
+      callID: value.call_id, callUUID: value.call_uuid, generation: value.generation,
+    })) return jsonResponse(409, { error: "terminal call identity mismatch" });
+    const terminal = { status: "remote_ended", call_id: value.call_id,
+      call_uuid: value.call_uuid, generation: value.generation };
+    // Persist before acknowledging, including when no client is currently connected.
+    await this.state.storage.put("terminal", terminal);
+    this.terminal = terminal;
+    this.clearNegotiation();
+    let deliveryFailed = false;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() || {};
+      socket.serializeAttachment({ ...attachment, pendingControl: "" });
+      try { this.sendTerminal(socket); } catch { deliveryFailed = true; }
+    }
+    // Keep the socket open: clients asynchronously trace before handling the status.
+    return jsonResponse(deliveryFailed ? 503 : 202, { delivered: !deliveryFailed });
+  }
+
   webSocketMessage(socket, message) {
+    if (this.terminal) {
+      try { this.sendTerminal(socket); } catch {}
+      return;
+    }
     const receivedAt = Date.now();
     const ingressMono = performance.now();
     const attachment = socket.deserializeAttachment() || {};
@@ -1006,6 +1065,7 @@ export class CallMediaSession {
   }
 
   relayWebRTC(socket, value) {
+    if (this.terminal) return;
     const attachment = socket.deserializeAttachment() || {};
     const role = attachment.role;
     // Hibernation may provide a different JS wrapper for the same socket.
@@ -1110,6 +1170,7 @@ export class CallMediaSession {
   }
 
   flushPendingControls(agentSocket) {
+    if (this.terminal) return;
     for (const role of MEDIA_CLIENT_ROLES) {
       for (const client of this.state.getWebSockets(role)) {
         const attachment = client.deserializeAttachment() || {};
@@ -1145,6 +1206,7 @@ export class CallMediaSession {
   webSocketClose(socket, code, reason) {
     const role = socket.deserializeAttachment()?.role || "unknown";
     try { socket.close(code, reason); } catch {}
+    if (this.terminal) return;
     const sessionID = socket.deserializeAttachment()?.negotiation?.sessionID;
     if (sessionID && this.state.getWebSockets().some((peer) =>
       peer.deserializeAttachment()?.negotiation?.sessionID === sessionID)) this.clearNegotiation();
@@ -1163,6 +1225,7 @@ export class CallMediaSession {
   webSocketError(socket) {
     const role = socket.deserializeAttachment()?.role || "unknown";
     try { socket.close(1011, "media relay error"); } catch {}
+    if (this.terminal) return;
     const sessionID = socket.deserializeAttachment()?.negotiation?.sessionID;
     if (sessionID && this.state.getWebSockets().some((peer) =>
       peer.deserializeAttachment()?.negotiation?.sessionID === sessionID)) this.clearNegotiation();
@@ -1713,6 +1776,16 @@ async function receiveCallState(request, env) {
       !Number.isFinite(Date.parse(timestamp))) {
     return jsonResponse(400, { error: "invalid call state event" });
   }
+  const terminal = ["ended", "failed"].includes(event.phase);
+  if (terminal) {
+    const call = await readRelayRecord(env, `call:${event.call_uuid.toLowerCase()}`);
+    if (!call || call.device_id !== authenticated.device.device_id ||
+        call.call_id !== event.call_id.trim() ||
+        call.call_uuid?.toLowerCase() !== event.call_uuid.toLowerCase() ||
+        Number(call.generation || 1) !== generation) {
+      return jsonResponse(409, { accepted: false, reason: "call_identity_mismatch" });
+    }
+  }
   const lifecycleKey = `call-lifecycle:${authenticated.device.device_id}`;
   const currentLifecycle = await readRelayRecord(env, lifecycleKey);
   const transition = applyCallLifecycle(currentLifecycle, {
@@ -1725,10 +1798,32 @@ async function receiveCallState(request, env) {
     trace_id: nonEmpty(event.trace_id) ? event.trace_id : null,
     failure: nonEmpty(event.failure) ? event.failure : null,
   });
-  if (!transition.accepted) {
+  if (!transition.accepted && !terminal) {
     return jsonResponse(409, { accepted: false, reason: transition.reason, lifecycle: transition.snapshot });
   }
-  await writeRelayState(env, lifecycleKey, JSON.stringify(transition.snapshot), 5 * 60 * 60);
+  if (transition.accepted) {
+    await writeRelayState(env, lifecycleKey, JSON.stringify(transition.snapshot), 5 * 60 * 60);
+  }
+  if (terminal) {
+    if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
+    try {
+      const session = env.MEDIA.get(env.MEDIA.idFromName(event.call_uuid.toLowerCase()));
+      const delivery = await session.fetch("https://media.internal/terminal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "remote_ended", call_id: event.call_id.trim(),
+          call_uuid: event.call_uuid.toLowerCase(), generation }),
+      });
+      if (!delivery.ok) return jsonResponse(503, { error: "media terminal delivery failed" });
+    } catch {
+      return jsonResponse(503, { error: "media terminal delivery failed" });
+    }
+  }
+  // An old call can still have a queued terminal event after another call starts.
+  // Its validated UUID session must end without changing the current call/activity.
+  if (!transition.accepted) {
+    return jsonResponse(202, { accepted: true, obsolete: true, lifecycle: transition.snapshot });
+  }
   const dedupeKey = `dedupe:call-state:${authenticated.device.device_id}:${event.call_uuid}:${generation}:${event.phase}`;
   if (await readRelayState(env, dedupeKey)) return jsonResponse(202, { duplicate: true });
   const currentActivity = await readRelayRecord(
