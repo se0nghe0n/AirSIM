@@ -1944,3 +1944,33 @@ test("managed TURN failures, malformed responses and timeout fail closed without
   assert.equal(response.status, 503);
   assert.equal((await response.text()).includes("provider secret"), false);
 });
+
+test("late Watch connections and replacements preserve the owning iPhone WebRTC session", async (t) => {
+  const { relay, state, iphone, agent } = webRTCSession();
+  const sessionID = crypto.randomUUID();
+  relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
+  relay.webSocketMessage(agent, signaling("webrtc_answer", sessionID));
+  const NativeResponse = globalThis.Response;
+  t.mock.method(globalThis, "Response", function(body, init) {
+    return init?.status === 101 ? { status: 101, webSocket: init.webSocket } : new NativeResponse(body, init);
+  });
+  globalThis.WebSocketPair = class {
+    constructor() { this[0] = new MemoryMediaSocket("watch"); this[1] = new MemoryMediaSocket("watch"); }
+  };
+  t.after(() => { delete globalThis.WebSocketPair; });
+  state.acceptWebSocket = (socket) => state.sockets.push(socket);
+  for (let reconnect = 0; reconnect < 2; reconnect++) {
+    const response = await relay.fetch(new Request("https://media.internal/session", { headers: {
+      upgrade: "websocket", "x-airsim-role": "watch", "x-airsim-media-transport": "webrtc",
+      "x-airsim-call-uuid": webRTCCallUUID, "x-airsim-generation": "3",
+    } }));
+    assert.equal(response.status, 101);
+    assert.equal(iphone.attachment.negotiation.sessionID, sessionID);
+    assert.equal(agent.attachment.negotiation.sessionID, sessionID);
+    relay.webSocketMessage(iphone, signaling("webrtc_ice", sessionID));
+    assert.equal(JSON.parse(agent.sent.at(-1)).action, "webrtc_ice");
+    relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID));
+    assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_ice");
+    assert.equal(state.getWebSockets("watch")[0].attachment.mediaTransport, "legacy_pcm");
+  }
+});

@@ -419,7 +419,8 @@ Configure `TURN_URLS` as a JSON array of `turn:`/`turns:` URLs (optional
 `?transport=udp|tcp`), and store coturn's shared REST secret as the Worker secret
 `TURN_SHARED_SECRET`. Optional `STUN_URLS` is a JSON array of `stun:`/`stuns:` URLs.
 No public STUN/TURN service is hardcoded. Set `TURN_TTL_SECONDS` to a lifetime in
-seconds (default 3600, clamped to 60–86400 and shortened to the call's expiry).
+seconds (default 3600, minimum 60, maximum 86400 / 24 hours, and shortened
+to the call's expiry). The 86400-second maximum applies to both TURN providers.
 The TURN service must independently enable its matching REST authentication
 secret. This repository does not provision, deploy, or validate reachability of
 a TURN service.

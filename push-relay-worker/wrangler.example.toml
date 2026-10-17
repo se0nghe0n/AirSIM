@@ -23,6 +23,7 @@ TURN_PROVIDER = "coturn"
 # coturn: replace with your own service.
 TURN_URLS = '[]'
 STUN_URLS = '[]'
+# Default 3600 seconds; clamped to 60–86400 and the remaining call lifetime.
 TURN_TTL_SECONDS = "3600"
 # TURN_SHARED_SECRET is an optional Worker secret until WebRTC rollout is enabled.
 # It must match coturn's REST authentication secret. Never place its value here.

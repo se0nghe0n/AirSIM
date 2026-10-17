@@ -535,7 +535,7 @@ export class DeviceCommandSession {
   async webSocketMessage(socket, message) {
     if (typeof message !== "string" || encoder.encode(message).byteLength > 64 * 1024) return;
     let value;
-    try { value = JSON.parse(message); } catch {}
+    try { value = JSON.parse(message); } catch { return; }
     if (!UUID_PATTERN.test(value?.command_id || "") ||
         !["completed", "failed"].includes(value?.status)) return;
     await this.completeCommand(value);
@@ -892,6 +892,7 @@ export class CallMediaSession {
     if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
       return jsonResponse(400, { error: "invalid media role" });
     }
+    const currentOwner = this.ownerRole();
     let inheritsOwnership = false;
     let inheritedPendingControl = "";
     for (const existing of this.state.getWebSockets(role)) {
@@ -914,7 +915,11 @@ export class CallMediaSession {
       callUUID: request.headers.get("x-airsim-call-uuid") || "",
       generation: Number(request.headers.get("x-airsim-generation")) || 1,
     });
-    this.clearNegotiation();
+    // Only an endpoint participating in negotiation can invalidate its identity.
+    // A late Watch connection must leave the owning iPhone/agent session intact.
+    if (role === "agent" || role === currentOwner || (!currentOwner && role === "iphone")) {
+      this.clearNegotiation();
+    }
     this.state.acceptWebSocket(server, [role]);
     if (role === "agent") this.flushPendingControls(server);
     this.broadcastStatus("peer_connected", role);
