@@ -384,6 +384,22 @@ struct CloudPCMUplinkSendQueue {
 struct CloudPCMBufferedFrame {
     let sequence: UInt32
     let pcm: Data
+    var receivedAt: TimeInterval? = nil
+}
+
+/// Measures only this device's receive-to-render residence, using its monotonic clock.
+struct CloudPCMRenderLatency {
+    private(set) var sampleCount: UInt64 = 0
+    private(set) var latestMS: Double = 0
+    private(set) var maximumMS: Double = 0
+
+    mutating func record(receivedAt: TimeInterval?, renderedAt: TimeInterval) {
+        guard let receivedAt, receivedAt.isFinite, renderedAt.isFinite,
+              renderedAt >= receivedAt else { return }
+        latestMS = (renderedAt - receivedAt) * 1_000
+        maximumMS = max(maximumMS, latestMS)
+        sampleCount &+= 1
+    }
 }
 
 /// Arrival ordinals preserve ordered PCM across temporary transport stalls.
@@ -399,6 +415,8 @@ struct CloudPCMAdaptiveJitterBuffer {
     private var stableFrames = 0
     private var missingFrames = 0
     private var lastGoodPCM: Data?
+    private var lastGoodSequence: UInt32?
+    private var realFramesSinceCompaction = 0
     private(set) var targetFrameCount = 4
     private(set) var isPrimed = false
     private(set) var droppedFrameCount: UInt64 = 0
@@ -410,6 +428,7 @@ struct CloudPCMAdaptiveJitterBuffer {
     private(set) var missingSequenceCount: UInt64 = 0
     private(set) var rebufferCount: UInt64 = 0
     private(set) var maximumBufferedFrameCount = 0
+    private(set) var silenceCompactedFrames: UInt64 = 0
     var bufferedFrameCount: Int { frames.count }
 
     private var oldestSequence: UInt32? {
@@ -450,7 +469,8 @@ struct CloudPCMAdaptiveJitterBuffer {
             }
         }
         lastArrivalAt = arrivedAt
-        frames[sequence] = CloudPCMBufferedFrame(sequence: sequence, pcm: pcm)
+        frames[sequence] = CloudPCMBufferedFrame(sequence: sequence, pcm: pcm,
+                                                receivedAt: arrivedAt.timeIntervalSince1970)
         trim(to: Self.maximumBufferedFrames)
         maximumBufferedFrameCount = max(maximumBufferedFrameCount, frames.count)
         if !isPrimed, frames.count >= targetFrameCount { isPrimed = true }
@@ -472,6 +492,7 @@ struct CloudPCMAdaptiveJitterBuffer {
         if expectedSequence == nil { expectedSequence = oldestSequence }
         var ready: [CloudPCMBufferedFrame] = []
         while ready.count < maxFrames, !frames.isEmpty {
+            compactDigitalSilence(reserving: maxFrames - ready.count)
             guard let expected = expectedSequence else { break }
             if let frame = frames.removeValue(forKey: expected) {
                 var pcm = frame.pcm
@@ -484,7 +505,10 @@ struct CloudPCMAdaptiveJitterBuffer {
                 }
                 missingFrames = 0
                 lastGoodPCM = pcm
-                ready.append(CloudPCMBufferedFrame(sequence: frame.sequence, pcm: pcm))
+                lastGoodSequence = frame.sequence
+                realFramesSinceCompaction = min(5, realFramesSinceCompaction + 1)
+                ready.append(CloudPCMBufferedFrame(sequence: frame.sequence, pcm: pcm,
+                                                    receivedAt: frame.receivedAt))
                 expectedSequence = expected &+ 1
             } else if let next = oldestSequence, Int32(bitPattern: next &- expected) > 0 {
                 let skipped = UInt64(next &- expected)
@@ -496,6 +520,7 @@ struct CloudPCMAdaptiveJitterBuffer {
         if concealIfEmpty, ready.isEmpty, frames.isEmpty {
             underrunCount &+= 1
             missingFrames += 1
+            realFramesSinceCompaction = 0
             stableFrames = 0
             if missingFrames <= 2, let lastGoodPCM, let expectedSequence {
                 var pcm = Data(repeating: 0, count: 320)
@@ -513,9 +538,29 @@ struct CloudPCMAdaptiveJitterBuffer {
         return ready
     }
 
+    private mutating func compactDigitalSilence(reserving outputFrames: Int) {
+        // Retain the learned reserve after filling the player. Only shorten the
+        // interior of a five-frame digital-zero run; even +/-1 samples survive.
+        // No more than 20 ms is removed per 100 ms of real scheduled audio.
+        guard missingFrames == 0, realFramesSinceCompaction >= 5,
+              let expected = expectedSequence,
+              lastGoodSequence.map({ $0 &+ 1 == expected }) == true,
+              let lastGoodPCM, lastGoodPCM.allSatisfy({ $0 == 0 }),
+              frames.count - outputFrames - 1 >= targetFrameCount else { return }
+        for offset in 0..<4 {
+            guard let frame = frames[expected &+ UInt32(offset)],
+                  frame.pcm.allSatisfy({ $0 == 0 }) else { return }
+        }
+        frames.removeValue(forKey: expected)
+        expectedSequence = expected &+ 1
+        silenceCompactedFrames &+= 1
+        realFramesSinceCompaction = 0
+    }
+
     mutating func notePlaybackUnderrun() {
         if isPrimed { rebufferCount &+= 1 }
         targetFrameCount = min(Self.maximumTargetFrames, targetFrameCount + 1)
+        realFramesSinceCompaction = 0
         stableFrames = 0
         isPrimed = false
     }
@@ -1559,6 +1604,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var playbackTimer: DispatchSourceTimer?
     private var uplinkGeneration = UUID()
     private var playout = CloudPCMPlayoutBuffer()
+    private var renderLatency = CloudPCMRenderLatency()
     private var receivedDownlinkPackets: UInt64 = 0
     private var transportDiagnostics = CloudPCMTransportDiagnostics()
     private var lastReceiveCallbackAt: TimeInterval?
@@ -1829,6 +1875,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         player = nil
         encoder = nil
         playout = CloudPCMPlayoutBuffer()
+        renderLatency = CloudPCMRenderLatency()
         receivedDownlinkPackets = 0
         transportDiagnostics = CloudPCMTransportDiagnostics()
         lastReceiveCallbackAt = nil
@@ -1904,6 +1951,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             if uplinkBuffer.count > 2_560 {
                 uplinkBuffer = Data(uplinkBuffer.suffix(320))
             }
+            // A ready frame need not wait for the next timer tick. The sender
+            // still owns pacing, stale-frame expiry and the single in-flight send.
+            pumpUplink()
         }
     }
 
@@ -1926,6 +1976,14 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 "rx_sequence_skip": String(playout.jitter.missingSequenceCount),
                 "rx_rebuffers": String(playout.jitter.rebufferCount),
                 "rx_max_buffered": String(playout.jitter.maximumBufferedFrameCount),
+                "rx_silence_compacted": String(playout.jitter.silenceCompactedFrames),
+                "rx_app_buffer_ms": String((playout.jitter.bufferedFrameCount + playout.window.scheduledPackets) * 20),
+                "rx_render_age_ms": String(Int(renderLatency.latestMS)),
+                "rx_render_age_max_ms": String(Int(renderLatency.maximumMS)),
+                "rx_render_age_samples": String(renderLatency.sampleCount),
+                "audio_input_latency_ms": String(Int(AVAudioSession.sharedInstance().inputLatency * 1_000)),
+                "audio_output_latency_ms": String(Int(AVAudioSession.sharedInstance().outputLatency * 1_000)),
+                "audio_io_buffer_ms": String(Int(AVAudioSession.sharedInstance().ioBufferDuration * 1_000)),
                 "underruns": String(playout.jitter.underrunCount),
                 "concealed": String(playout.jitter.concealedFrameCount),
                 "rx_received": String(receivedDownlinkPackets),
@@ -2029,11 +2087,12 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     }
 
     private func schedulePackets(_ frames: [CloudPCMBufferedFrame], player: AVAudioPlayerNode) {
-        for frame in frames { schedulePacket(frame.pcm, player: player) }
+        for frame in frames { schedulePacket(frame, player: player) }
         if !frames.isEmpty, !player.isPlaying { player.play() }
     }
 
-    private func schedulePacket(_ pcm: Data, player: AVAudioPlayerNode) {
+    private func schedulePacket(_ frame: CloudPCMBufferedFrame, player: AVAudioPlayerNode) {
+        let pcm = frame.pcm
         let frames = pcm.count / 2
         guard
               let format = AVAudioFormat(
@@ -2064,6 +2123,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 guard let self, self.playbackGeneration == generation else { return }
                 self.maximumRenderDispatchMS = max(self.maximumRenderDispatchMS,
                     max(0, ProcessInfo.processInfo.systemUptime - completedAt) * 1_000)
+                self.renderLatency.record(receivedAt: frame.receivedAt, renderedAt: completedAt)
                 let currentPlayer = self.engine?.isRunning == true ? self.player : nil
                 // Release completed reservations even during a temporary engine pause.
                 let ready = self.playout.rendered(canRefill: currentPlayer != nil)

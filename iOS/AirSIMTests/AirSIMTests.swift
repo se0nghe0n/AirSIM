@@ -407,16 +407,23 @@ final class AirSIMTests: XCTestCase {
         var underruns: UInt64
         var maximumBuffered: Int
         var maximumDelayMS: Int
+        var lateMaximumDelayMS: Int
+        var silenceCompacted: UInt64
     }
 
     /// Simulates ordered transport delivery and real 20 ms render completions.
     /// Stall sizes come from logs; individual frame arrivals are synthetic.
-    private func replayCloudDownlink(count: Int, delivery: (Int) -> Int) -> CloudReplayMetrics {
+    private func replayCloudDownlink(
+        count: Int,
+        payload: (Int) -> Data = { _ in Data(repeating: 1, count: 320) },
+        sourceTime: (Int) -> Int = { $0 * 20 },
+        delivery: (Int) -> Int
+    ) -> CloudReplayMetrics {
         var playout = CloudPCMPlayoutBuffer()
         let arrivals = Dictionary(grouping: 0..<count, by: delivery)
         var rendered: [UInt32] = []
         var scheduled: [(time: Int, sequence: UInt32, real: Bool)] = []
-        var maximumBuffered = 0, maximumDelayMS = 0
+        var maximumBuffered = 0, maximumDelayMS = 0, lateMaximumDelayMS = 0
         func schedule(_ frames: [CloudPCMBufferedFrame], at time: Int, synthetic: Bool = false) {
             for frame in frames {
                 let due = max(time, scheduled.last?.time ?? time) + 20
@@ -426,7 +433,7 @@ final class AirSIMTests: XCTestCase {
         let end = max(count * 20, arrivals.keys.max() ?? 0) + 4_000
         for time in 0...end {
             for sequence in arrivals[time] ?? [] {
-                playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 1, count: 320),
+                playout.enqueue(sequence: UInt32(sequence), pcm: payload(sequence),
                                 arrivedAt: Date(timeIntervalSince1970: Double(time) / 1_000))
                 schedule(playout.refill(), at: time)
                 maximumBuffered = max(maximumBuffered, playout.jitter.bufferedFrameCount)
@@ -435,11 +442,15 @@ final class AirSIMTests: XCTestCase {
                 scheduled.removeFirst()
                 if first.real {
                     rendered.append(first.sequence)
-                    maximumDelayMS = max(maximumDelayMS, time - Int(first.sequence) * 20)
+                    let delay = time - sourceTime(Int(first.sequence))
+                    maximumDelayMS = max(maximumDelayMS, delay)
+                    if first.sequence >= UInt32(max(0, count - 50)) {
+                        lateMaximumDelayMS = max(lateMaximumDelayMS, delay)
+                    }
                 }
                 schedule(playout.rendered(), at: time)
             }
-            if time % 20 == 0, rendered.count < count {
+            if time % 20 == 0, rendered.count + Int(playout.jitter.silenceCompactedFrames) < count {
                 let before = playout.jitter.concealedFrameCount
                 let frames = playout.refill(allowConcealment: true)
                 let synthetic = playout.jitter.concealedFrameCount > before
@@ -448,7 +459,159 @@ final class AirSIMTests: XCTestCase {
         }
         return .init(renderedSequences: rendered, dropped: playout.jitter.droppedFrameCount,
                      underruns: playout.jitter.underrunCount, maximumBuffered: maximumBuffered,
-                     maximumDelayMS: maximumDelayMS)
+                     maximumDelayMS: maximumDelayMS, lateMaximumDelayMS: lateMaximumDelayMS,
+                     silenceCompacted: playout.jitter.silenceCompactedFrames)
+    }
+
+    func testCloudSilenceRecoveryLowersExcessLatencyWithoutLosingSpeech() {
+        let silent = 5..<200
+        let result = replayCloudDownlink(count: 500, payload: {
+            Data(repeating: silent.contains($0) ? 0 : 1, count: 320)
+        }, sourceTime: { ($0 - 19) * 20 }) { max(0, ($0 - 19) * 20) }
+        let speech = (0..<500).filter { !silent.contains($0) }.map(UInt32.init)
+        XCTAssertEqual(result.renderedSequences.filter { !silent.contains(Int($0)) }, speech)
+        XCTAssertGreaterThan(result.silenceCompacted, 0)
+        XCTAssertEqual(UInt64(result.renderedSequences.count) + result.silenceCompacted, 500)
+        XCTAssertEqual(result.dropped, 0)
+        XCTAssertEqual(result.underruns, 0)
+        XCTAssertEqual(result.maximumDelayMS, 400)
+        XCTAssertLessThanOrEqual(result.lateMaximumDelayMS, 140)
+    }
+
+    func testCloudSilenceCompactionRetainsProtectionAgainstRepeatedStalls() {
+        for stallMS in [600, 850, 1_052] {
+            let result = replayCloudDownlink(count: 1_000, payload: { sequence in
+                Data(repeating: sequence % 100 < 50 ? 0 : 1, count: 320)
+            }) { sequence in
+                let sourceMS = sequence * 20, phase = sourceMS % 4_000
+                return (2_000..<(2_000 + stallMS)).contains(phase)
+                    ? sourceMS - phase + 2_000 + stallMS : sourceMS
+            }
+            XCTAssertEqual(result.dropped, 0)
+            XCTAssertEqual(result.underruns, 3)
+            XCTAssertEqual(UInt64(result.renderedSequences.count) + result.silenceCompacted, 1_000)
+            XCTAssertEqual(result.renderedSequences.filter { $0 % 100 >= 50 },
+                           (0..<1_000).map(UInt32.init).filter { $0 % 100 >= 50 })
+        }
+    }
+
+    func testCloudCompactionPreservesNonzeroPCMAndSilenceBoundaries() {
+        var buffer = CloudPCMAdaptiveJitterBuffer()
+        let epoch = Date(timeIntervalSince1970: 12)
+        let payloads = (0..<40).map { sequence in
+            Data(repeating: (5..<30).contains(sequence) ? 0 : UInt8(sequence + 1), count: 320)
+        }
+        for sequence in payloads.indices {
+            buffer.enqueue(sequence: UInt32(sequence), pcm: payloads[sequence], arrivedAt: epoch)
+        }
+        var rendered: [CloudPCMBufferedFrame] = []
+        while buffer.bufferedFrameCount > 0 {
+            rendered += buffer.dequeue(maxFrames: 2, concealIfEmpty: false)
+        }
+        let sequences = rendered.map { Int($0.sequence) }
+        XCTAssertEqual(sequences, sequences.sorted())
+        XCTAssertEqual(Set(sequences).count, sequences.count)
+        XCTAssertEqual(sequences.filter { !(5..<30).contains($0) }, Array(0..<5) + Array(30..<40))
+        XCTAssertTrue(sequences.contains(5))
+        XCTAssertTrue(sequences.contains(29))
+        for frame in rendered {
+            XCTAssertEqual(frame.pcm, payloads[Int(frame.sequence)])
+            XCTAssertEqual(frame.receivedAt, 12)
+        }
+        XCTAssertGreaterThan(buffer.silenceCompactedFrames, 0)
+        XCTAssertEqual(UInt64(rendered.count) + buffer.silenceCompactedFrames, 40)
+        XCTAssertEqual(buffer.droppedFrameCount, 0)
+    }
+
+    func testCloudCompactionNeverTreatsQuietSpeechAsDigitalSilence() {
+        for value: UInt8 in [1, 255] {
+            var buffer = CloudPCMAdaptiveJitterBuffer()
+            for sequence in 0..<40 {
+                var pcm = Data(repeating: 0, count: 320)
+                pcm[160] = value // Even a single nonzero sample must survive.
+                buffer.enqueue(sequence: UInt32(sequence), pcm: pcm, arrivedAt: Date())
+            }
+            XCTAssertEqual(buffer.dequeue(maxFrames: 40, concealIfEmpty: false).map(\.sequence),
+                           (0..<40).map(UInt32.init))
+            XCTAssertEqual(buffer.silenceCompactedFrames, 0)
+        }
+    }
+
+    func testCloudCompactionRespectsReserveAndPlayerCapacity() {
+        var playout = CloudPCMPlayoutBuffer()
+        let epoch = Date(timeIntervalSince1970: 0)
+        for sequence in 0..<20 {
+            playout.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 0, count: 320), arrivedAt: epoch)
+        }
+        _ = playout.refill()
+        for _ in 0..<6 { _ = playout.rendered() }
+        let count = playout.jitter.silenceCompactedFrames
+        for _ in 0..<100 { XCTAssertTrue(playout.refill().isEmpty) }
+        XCTAssertEqual(playout.jitter.silenceCompactedFrames, count)
+        XCTAssertEqual(playout.window.scheduledPackets, 2)
+
+        var buffer = CloudPCMAdaptiveJitterBuffer()
+        for sequence in 0..<10 {
+            buffer.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 0, count: 320), arrivedAt: epoch)
+        }
+        _ = buffer.dequeue(maxFrames: 5, concealIfEmpty: false)
+        _ = buffer.dequeue(maxFrames: 1, concealIfEmpty: false)
+        XCTAssertEqual(buffer.silenceCompactedFrames, 0, "Keep all four reserve frames after scheduling")
+    }
+
+    func testCloudCompactionHandlesWrapAndDoesNotCrossMissingFrames() {
+        var buffer = CloudPCMAdaptiveJitterBuffer()
+        let start = UInt32.max - 8
+        let epoch = Date(timeIntervalSince1970: 0)
+        for offset in 0..<40 {
+            buffer.enqueue(sequence: start &+ UInt32(offset), pcm: Data(repeating: 0, count: 320), arrivedAt: epoch)
+        }
+        var sequences: [UInt32] = []
+        while buffer.bufferedFrameCount > 0 {
+            sequences += buffer.dequeue(maxFrames: 1, concealIfEmpty: false).map(\.sequence)
+        }
+        XCTAssertEqual(sequences.first, start)
+        XCTAssertEqual(sequences.last, start &+ 39)
+        XCTAssertGreaterThan(buffer.silenceCompactedFrames, 0)
+        XCTAssertEqual(buffer.missingSequenceCount, 0)
+        buffer.reset()
+        XCTAssertEqual(buffer.silenceCompactedFrames, 0)
+
+        for sequence in Array(0..<5) + Array(6..<30) {
+            buffer.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 0, count: 320), arrivedAt: epoch)
+        }
+        _ = buffer.dequeue(maxFrames: 5, concealIfEmpty: false)
+        XCTAssertEqual(buffer.dequeue(maxFrames: 1, concealIfEmpty: false).first?.sequence, 6)
+        XCTAssertEqual(buffer.silenceCompactedFrames, 0)
+        XCTAssertEqual(buffer.missingSequenceCount, 1)
+    }
+
+    func testCloudCompactionWaitsForRealPlaybackAfterConcealment() {
+        var buffer = CloudPCMAdaptiveJitterBuffer()
+        let epoch = Date(timeIntervalSince1970: 0)
+        for sequence in 0..<5 {
+            buffer.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 0, count: 320), arrivedAt: epoch)
+        }
+        _ = buffer.dequeue(maxFrames: 5)
+        _ = buffer.dequeue(maxFrames: 1)
+        for sequence in 5..<30 {
+            buffer.enqueue(sequence: UInt32(sequence), pcm: Data(repeating: 0, count: 320), arrivedAt: epoch)
+        }
+        XCTAssertEqual(buffer.dequeue(maxFrames: 5, concealIfEmpty: false).map(\.sequence), [5, 6, 7, 8, 9])
+        XCTAssertEqual(buffer.silenceCompactedFrames, 0)
+    }
+
+    func testCloudRenderLatencyMeasuresLocalResidenceOnly() {
+        var latency = CloudPCMRenderLatency()
+        latency.record(receivedAt: 100, renderedAt: 100.08)
+        XCTAssertEqual(latency.latestMS, 80, accuracy: 0.001)
+        latency.record(receivedAt: 200, renderedAt: 200.04)
+        XCTAssertEqual(latency.latestMS, 40, accuracy: 0.001)
+        XCTAssertEqual(latency.maximumMS, 80, accuracy: 0.001)
+        latency.record(receivedAt: nil, renderedAt: 201) // Concealment has no source arrival.
+        latency.record(receivedAt: 202, renderedAt: 201)
+        latency.record(receivedAt: .infinity, renderedAt: 201)
+        XCTAssertEqual(latency.sampleCount, 2)
     }
 
     func testCloudDownlinkStableRecoveryDoesNotDiscardQueuedSpeech() {
