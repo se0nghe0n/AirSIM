@@ -15,6 +15,48 @@ final class CloudWebRTCTests: XCTestCase {
         XCTAssertEqual((json["candidate"] as? [String: Any])?["sdp_mline_index"] as? Int, 0)
         XCTAssertTrue(signal.isValid)
     }
+    @MainActor
+    func testAgentReconnectReplaysAnswerBeforeAllowingNewOffer() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        var events: [String] = []
+        handshake.confirm { events.append("initial_offer") }
+        XCTAssertTrue(handshake.acknowledged)
+
+        // These are the same stop, send, timer and offer callbacks wired into
+        // IPhoneCloudCallSession, driven in actual Relay/agent event order.
+        handshake.agentReconnected(role: "agent", stopMedia: {
+            XCTAssertFalse(handshake.acknowledged)
+            events.append("stop_old_peer")
+        }, replayAnswer: {
+            events.append("answer")
+        }, scheduleConfirmation: {
+            events.append("arm_bounded_confirmation")
+        })
+        XCTAssertEqual(events, ["initial_offer", "stop_old_peer", "answer", "arm_bounded_confirmation"])
+        XCTAssertFalse(handshake.acknowledged)
+        // agent_ready may arrive after peer_connected. Replay is idempotent,
+        // and still must not produce SDP while the agent has no answer ack.
+        handshake.replayIfNeeded { events.append("answer_retry") }
+        XCTAssertFalse(events.contains("replacement_offer"))
+        handshake.confirm(status: "active") { XCTFail("Call activity is not a fresh peer answer acknowledgement") }
+        XCTAssertFalse(handshake.acknowledged)
+        handshake.confirm { events.append("replacement_offer") }
+        XCTAssertEqual(events.suffix(2), ["answer_retry", "replacement_offer"])
+        XCTAssertTrue(handshake.acknowledged)
+        handshake.replayIfNeeded { XCTFail("agent_ready must not create an answer loop after ack") }
+        handshake.confirm { XCTFail("duplicate answer_ok must not renegotiate") }
+    }
+
+    @MainActor
+    func testWatchReconnectPreservesAcknowledgedAnswerAndMedia() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.confirm {}
+        handshake.agentReconnected(role: "watch", stopMedia: { XCTFail("Watch stopped the agent peer") },
+            replayAnswer: { XCTFail("Watch replayed answer") },
+            scheduleConfirmation: { XCTFail("Watch armed answer retry") })
+        XCTAssertTrue(handshake.acknowledged)
+    }
+
     func testWireBoundsMatchRelay() {
         let id = UUID()
         XCTAssertFalse(CloudWebRTCSignal(action: .offer, callUUID: id, generation: 1, sessionID: id,

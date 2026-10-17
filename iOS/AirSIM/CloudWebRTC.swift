@@ -48,6 +48,39 @@ struct CloudWebRTCSignal: Codable, Equatable, Sendable {
     }
 }
 
+/// Owns the answer/offer ordering across agent WebSocket lifetimes. The call
+/// identity survives reconnect, but the agent's native peer and PCM bridge do not.
+@MainActor
+final class CloudWebRTCAnswerHandshake {
+    private(set) var acknowledged = false
+    private var requiresAnswerOK = false
+
+    func invalidate(requiringAnswerOK: Bool = false) {
+        acknowledged = false
+        requiresAnswerOK = requiringAnswerOK
+    }
+
+    func agentReconnected(role: String?, stopMedia: () -> Void,
+                          replayAnswer: () -> Void, scheduleConfirmation: () -> Void) {
+        guard CloudWebRTCReadiness.shouldRenegotiatePeer(role: role) else { return }
+        invalidate(requiringAnswerOK: true)
+        stopMedia()
+        replayIfNeeded(replayAnswer)
+        scheduleConfirmation()
+    }
+
+    func replayIfNeeded(_ sendAnswer: () -> Void) {
+        guard !acknowledged else { return }
+        sendAnswer()
+    }
+
+    func confirm(status: String = "answer_ok", _ startMedia: () -> Void) {
+        guard !acknowledged, status == "answer_ok" || (!requiresAnswerOK && status == "active") else { return }
+        acknowledged = true
+        startMedia()
+    }
+}
+
 /// Readiness belongs to one negotiation, not merely the reusable WebSocket.
 struct CloudWebRTCReadiness: Equatable, Sendable {
     private(set) var sessionID: UUID?

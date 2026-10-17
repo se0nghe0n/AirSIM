@@ -1054,7 +1054,8 @@ final class IPhoneCloudCallSession {
     private var mediaHealthTracker: CloudMediaHealthTracker?
     private var answerRetryTask: Task<Void, Never>?
     private var answerRetryGeneration = 0
-    private var answerAcknowledged = false
+    private let answerHandshake = CloudWebRTCAnswerHandshake()
+    private var answerAcknowledged: Bool { answerHandshake.acknowledged }
     private var webRTCReadiness = CloudWebRTCReadiness()
     private var webRTCStartTask: Task<Void, Never>?
     private var webRTCStartID = UUID()
@@ -1089,7 +1090,7 @@ final class IPhoneCloudCallSession {
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
                 guard session.call != nil, session.media.isCurrentConnection(connection) else { return }
-                session.answerAcknowledged = false
+                session.answerHandshake.invalidate()
                 session.requestMediaRebuild(.connectionLost)
             }
         }
@@ -1116,7 +1117,7 @@ final class IPhoneCloudCallSession {
                 }
                 switch status {
                 case _ where CloudCallAnswerPolicy.isAcknowledged(status: status):
-                    session.confirmAnswer()
+                    session.confirmAnswer(status: status)
                     if status == "active" {
                         session.emitLifecycle(.active, source: .agent, traceID: control.traceID)
                     }
@@ -1201,7 +1202,7 @@ final class IPhoneCloudCallSession {
         call = incoming
         answered = true
         lifecycleState = .connecting
-        answerAcknowledged = false
+        answerHandshake.invalidate()
         if callChanged || mediaHealthTracker == nil {
             mediaHealthTracker = CloudMediaHealthTracker(startedAt: Date(), maximumRebuilds: 3)
             mediaHealthTracker?.recordRoute(media.audioRouteDescription)
@@ -1565,7 +1566,7 @@ final class IPhoneCloudCallSession {
         call = nil
         answered = false
         lifecycleState = .idle
-        answerAcknowledged = false
+        answerHandshake.invalidate()
         audioState = .idle
         mediaHealthTracker = nil
         mediaHealthSnapshot = CloudMediaHealthSnapshot()
@@ -1598,13 +1599,13 @@ final class IPhoneCloudCallSession {
     }
 
     private func replayAnswerIfNeeded() {
-        guard answered, !answerAcknowledged, let call else { return }
-        media.sendControl("answer", call: call)
+        guard answered, let call else { return }
+        answerHandshake.replayIfNeeded { media.sendControl("answer", call: call) }
     }
 
-    private func confirmAnswer() {
-        answerAcknowledged = true
-        startWebRTCIfReady()
+    private func confirmAnswer(status: String) {
+        answerHandshake.confirm(status: status) { startWebRTCIfReady() }
+        guard answerAcknowledged else { return }
         answerRetryGeneration &+= 1
         answerRetryTask?.cancel()
         answerRetryTask = nil
@@ -1626,13 +1627,21 @@ final class IPhoneCloudCallSession {
     }
 
     private func restartWebRTCNegotiation() {
-        guard usesWebRTC else { return }
-        webRTCReadiness.reset()
-        webRTCStartID = UUID()
-        webRTCStartTask?.cancel()
-        webRTCStartTask = nil
-        media.stopWebRTC()
-        startWebRTCIfReady()
+        guard usesWebRTC, answered, let call else { return }
+        answerHandshake.agentReconnected(role: "agent", stopMedia: {
+            webRTCReadiness.reset()
+            webRTCStartID = UUID()
+            webRTCStartTask?.cancel()
+            webRTCStartTask = nil
+            media.stopWebRTC()
+            audioState = .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+        }, replayAnswer: {
+            media.sendControl("answer", call: call)
+        }, scheduleConfirmation: {
+            scheduleAnswerConfirmation(for: call)
+        })
+        // Only a fresh answer_ok can re-open startWebRTCIfReady. The agent must
+        // recreate its native peer/phone audio bridge before we send new SDP.
     }
 
     private func startWebRTCIfReady() {
@@ -1774,7 +1783,7 @@ final class IPhoneCloudCallSession {
                     self.media.stop()
                     try await self.media.connect(to: url)
                 }, connected: {
-                    self.answerAcknowledged = false
+                    self.answerHandshake.invalidate()
                     self.replayAnswerIfNeeded()
                     self.scheduleAnswerConfirmation(for: call)
                     self.startAudioWithRetry()
