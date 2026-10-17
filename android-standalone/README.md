@@ -80,6 +80,12 @@ Release output is `android-standalone/build/android/AirSIM-Android-Standalone-re
 4. Enter your Relay URL, device identifier, and pairing details on Android. If using your own Apple Bundle ID, Relay `ALLOWED_BUNDLE_ID` and APNs topics must match.
 5. First validate VoWLAN with iPhone and Android on the same hotspot/LAN, then validate remote Relay mode.
 
+### Call history on iPhone
+
+Grant Android AirSIM the optional call-log permission to show system call history in the iPhone app's **Recents** tab, including calls made before an app restart. Recents refreshes when opened, when the app returns to the foreground, and shortly after a cloud call ends. Pull down or use the refresh button to retry. History queries wait until the current call ends.
+
+VoWLAN and Cloud mode retrieve the same latest 100 Android records. iPhone retains up to 500 records locally, so existing history stays visible while Android is offline. Deleting a row hides it on that iPhone and keeps it hidden after later refreshes; it does not delete Android's system call log. Denying call-log access does not prevent calls, but remote history reports a permission error.
+
 ### Default calling SIM (dual/multi-SIM)
 
 Under Android AirSIM “Settings → Default Calling SIM,” select “Follow System Default” or an enabled SIM/eSIM. Slots and carriers come from the system; a number is shown only when permission and carrier data are available. The local preference survives restart and in-place upgrades. BLE, VoWLAN, Relay, and Android local dialing all use it, without network access for SIM selection.
@@ -147,3 +153,44 @@ Project-wide results, disconnected devices, and failures are recorded in the [Vo
 - Logs must not contain complete SMS messages, phone numbers, push tokens, pairing keys, or Relay secrets;
 - The APK contains no APNs private keys, Cloudflare tokens, Android release private keys, or Apple signing identities;
 - Use is limited to noncommercial purposes allowed by the [PolyForm Noncommercial License 1.0.0](../LICENSE).
+
+### Native WebRTC cloud audio
+
+The standalone Agent advertises `webrtc` and `legacy_pcm`. Relay selects the
+transport using both endpoints' capabilities and the owning iPhone/Watch;
+Watch and older peers retain the PCM WebSocket path. In WebRTC mode the call
+WebSocket carries authenticated SDP/ICE and lifecycle messages only. The iPhone
+offers and Android answers, using ephemeral ICE servers from the call's
+`/ice?role=agent` endpoint. Existing deployments must configure the Relay's TURN
+service before enabling normal WebRTC selection.
+
+Android uses pinned WebRTC SDK `144.7559.15`. Its microphone is disabled via the
+SDK's external audio buffer API; `WebRtcAudioTrack` is replaced with a small
+JNI-compatible external output adapter. Both directions use the rooted
+`AIRSIMPCM1`/`AIRSIMREADY` TCP bridge on loopback port 7580, at 8 kHz mono PCM16.
+The adapter runs at 10 ms; arbitrary bridge reads, including existing 20 ms
+frames, are split into bounded 10 ms units. Native Opus/NetEq owns network
+jitter, loss concealment and FEC; the legacy PCM jitter/time-scaling pump is not
+used. No physical Android microphone or speaker is opened by the WebRTC layer.
+
+Builds verify the AAR SHA-256, package all four supplied ABIs, align shared
+libraries to 16 KB, and include dependency notices as APK assets. See
+`android/phone-control-app/third_party/webrtc/README.md` for the pinned native
+contract and license provenance. Updating this SDK requires rechecking its JNI
+signatures and exercising native tests.
+
+Run the regular `test.sh` with `ANDROID_SDK_ROOT` pointing to the installed SDK.
+After building, use a dedicated running emulator for native tests:
+
+```sh
+AIRSIM_TEST_SERIAL=emulator-5588 ../android/phone-control-app/test-native.sh
+```
+
+The native test creates two actual peers, sends distinct synthetic 400/1000 Hz
+PCM tones, checks decoded audio in both directions, checks Opus/DTLS/RTP stats,
+and verifies audio threads stop on disposal. To test forced TURN, additionally
+set `AIRSIM_TEST_TURN_CONFIG` to a private JSON file containing `android_url`,
+`username`, and `credential`. The script copies it to private app storage and
+removes it after the run; never commit or log that file. The test refuses a
+physical-device serial. These tests do not exercise a cellular call, the rooted
+Q25 audio route, iPhone audio routing, or production NAT traversal.

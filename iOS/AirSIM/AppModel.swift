@@ -255,6 +255,8 @@ enum ModuleConnectivityPolicy {
 final class AppModel: ObservableObject {
     @Published var activeCall: CallRecord?
     @Published var callHistory: [CallRecord] = []
+    @Published private(set) var isRefreshingCallHistory = false
+    @Published private(set) var callHistoryMessage: String?
     @Published var messages: [SMSMessage] = []
     @Published var numberInput = ""
     @Published var isOnline = false
@@ -298,6 +300,8 @@ final class AppModel: ObservableObject {
 
     private var pollingTask: Task<Void, Never>?
     private var moduleMetadataTask: Task<Void, Never>?
+    private var callHistoryRefreshTask: Task<Void, Never>?
+    private var scheduledCallHistoryRefreshTask: Task<Void, Never>?
     private var activeOperationCount = 0
     private var startingCallAudio = false
     private var currentCallTransport: CallTransport?
@@ -699,6 +703,7 @@ final class AppModel: ObservableObject {
             } else if event.state.isTerminal {
                 self.callPresentationSurface = nil
                 if event.state == .failed { self.errorMessage = event.failure }
+                self.scheduleCallHistoryRefresh(delay: .seconds(2))
             }
         }
         vowlan.onAvailabilityChange = { [weak self] availability in
@@ -894,6 +899,7 @@ final class AppModel: ObservableObject {
         backgroundStandby.setEnabled(storedValue ?? true)
         // 先加载手机副本，再启动轮询，避免模块暂时离线时界面显示为空。
         restoreLocalHistory()
+        scheduleCallHistoryRefresh()
         Task { await contacts.loadIfAuthorized() }
         if IncomingCallPresentationRequest.isPending() { presentCurrentCallInApp() }
         presentManagedCallAfterForegroundTransition()
@@ -926,6 +932,7 @@ final class AppModel: ObservableObject {
         // App 可能在首次解锁前被 PushKit/后台任务唤醒，此时受保护文件会暂时读成空。
         // 回到前台重新做并集合并，不能让早期空读取覆盖手机里的持久化记录。
         restoreLocalHistory()
+        scheduleCallHistoryRefresh()
         Task { await contacts.loadIfAuthorized() }
         if IncomingCallPresentationRequest.isPending() { presentCurrentCallInApp() }
         presentManagedCallAfterForegroundTransition()
@@ -1076,6 +1083,9 @@ final class AppModel: ObservableObject {
     }
 
     func stop() {
+        scheduledCallHistoryRefreshTask?.cancel()
+        scheduledCallHistoryRefreshTask = nil
+        callHistoryRefreshTask?.cancel()
         pollingGeneration &+= 1
         pollingTask?.cancel()
         pollingTask = nil
@@ -1115,7 +1125,7 @@ final class AppModel: ObservableObject {
             let status = result.call
             guard !Task.isCancelled, generation == pollingGeneration else { return }
             let previousCall = activeCall
-            let history = await mergeCallHistory(status.history ?? [])
+            let history = await mergeCallHistory(status.history ?? [], acknowledgingOn: result.api)
             let confirmedEndedCall = previousCall.flatMap { previous in
                 status.history?.first { $0.id == previous.id && $0.endedAt != nil }
             }
@@ -1920,6 +1930,11 @@ final class AppModel: ObservableObject {
 
     func deleteCallHistory(ids: Set<String>) {
         guard !ids.isEmpty else { return }
+        let deletedIDs = historyStore.loadDeletedCallIDs().union(ids)
+        guard historyStore.saveDeletedCallIDs(deletedIDs) else {
+            errorMessage = "Unable to delete local call history. Try again later."
+            return
+        }
         let remaining = callHistory.filter { !ids.contains($0.id) }
         guard historyStore.saveCallHistory(remaining) else {
             errorMessage = "Unable to delete local call history. Try again later."
@@ -1927,6 +1942,68 @@ final class AppModel: ObservableObject {
         }
         callHistory = remaining
         errorMessage = nil
+    }
+
+    func refreshCallHistory() async {
+        restoreLocalHistory()
+        if let task = callHistoryRefreshTask {
+            await task.value
+            return
+        }
+        guard !callLifecycleSnapshot.state.representsCall,
+              !IPhoneCloudCallSession.shared.hasActiveCall else {
+            callHistoryMessage = "Call history will refresh after the call ends."
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.isRefreshingCallHistory = true
+            defer {
+                self.isRefreshingCallHistory = false
+                self.callHistoryRefreshTask = nil
+            }
+            do {
+                let records: [CallRecord]
+                let source: AirSIMAPI?
+                if let local = self.verifiedVoWLANAPI() {
+                    do {
+                        records = try await local.callStatus().history ?? []
+                        source = local
+                    } catch {
+                        guard CloudModePreference.isEnabled() else { throw error }
+                        records = try await VoIPPushController.shared.fetchCloudCallHistory()
+                        source = nil
+                    }
+                } else if CloudModePreference.isEnabled() {
+                    records = try await VoIPPushController.shared.fetchCloudCallHistory()
+                    source = nil
+                } else {
+                    throw CloudCommandError.unavailable
+                }
+                try Task.checkCancellation()
+                self.callHistory = await self.mergeCallHistory(records, acknowledgingOn: source)
+                self.callHistoryMessage = nil
+            } catch is CancellationError {
+                // Keep the durable cache when the view or app stops.
+            } catch {
+                if !Task.isCancelled {
+                    self.callHistoryMessage = "Could not refresh call history. " + error.localizedDescription
+                }
+            }
+        }
+        callHistoryRefreshTask = task
+        await task.value
+    }
+
+    private func scheduleCallHistoryRefresh(delay: Duration = .zero) {
+        scheduledCallHistoryRefreshTask?.cancel()
+        scheduledCallHistoryRefreshTask = Task { @MainActor [weak self] in
+            if delay > .zero {
+                do { try await Task.sleep(for: delay) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            await self?.refreshCallHistory()
+        }
     }
 
     func reloadMessagesFromLocalStore() {
@@ -1958,28 +2035,26 @@ final class AppModel: ObservableObject {
     }
 
     /// 远端列表可能因模块重启、自动清理或离线而变短，因此只做并集，不删除手机副本。
-    private func mergeCallHistory(_ remote: [CallRecord]) async -> [CallRecord] {
-        var byID: [String: CallRecord] = [:]
-        for record in callHistory {
-            if let existing = byID[record.id], existing.updatedAt >= record.updatedAt { continue }
-            byID[record.id] = record
-        }
-        for record in remote {
-            if let local = byID[record.id], local.updatedAt > record.updatedAt {
-                continue
-            }
-            byID[record.id] = record
-        }
-        let merged = normalizedCallHistory(Array(byID.values))
+    private func mergeCallHistory(
+        _ remote: [CallRecord], acknowledgingOn source: AirSIMAPI? = nil
+    ) async -> [CallRecord] {
+        let merged = CallHistoryPolicy.merged(
+            local: callHistory, remote: remote,
+            deletedIDs: historyStore.loadDeletedCallIDs(), limit: maxCallHistoryCount
+        )
         if !remote.isEmpty, historyStore.saveCallHistory(merged) {
             // 只有手机副本写入成功才确认模块，断线时模块仍会保留未交付队列。
             let persistedIDs = Set(merged.map(\.id))
             let acknowledgedIDs = remote.map(\.id).filter { persistedIDs.contains($0) }
-            if let samsungAPI = verifiedVoWLANAPI() {
-                try? await samsungAPI.acknowledgeCallHistory(ids: acknowledgedIDs)
+            if let source, !acknowledgedIDs.isEmpty {
+                try? await source.acknowledgeCallHistory(ids: acknowledgedIDs)
             }
         }
-        return merged
+        // The local poll or a deletion can complete while the acknowledgement is in flight.
+        return CallHistoryPolicy.merged(
+            local: callHistory, remote: merged,
+            deletedIDs: historyStore.loadDeletedCallIDs(), limit: maxCallHistoryCount
+        )
     }
 
     private func mergeMessages(
@@ -2019,9 +2094,10 @@ final class AppModel: ObservableObject {
     }
 
     private func normalizedCallHistory(_ records: [CallRecord]) -> [CallRecord] {
-        Array(records
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(maxCallHistoryCount))
+        CallHistoryPolicy.merged(
+            local: [], remote: records,
+            deletedIDs: historyStore.loadDeletedCallIDs(), limit: maxCallHistoryCount
+        )
     }
 
     private func normalizedMessages(_ records: [SMSMessage]) -> [SMSMessage] {

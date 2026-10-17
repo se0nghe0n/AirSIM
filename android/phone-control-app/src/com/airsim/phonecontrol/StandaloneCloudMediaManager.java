@@ -74,8 +74,10 @@ final class StandaloneCloudMediaManager implements Closeable {
                     .put("number", event.optString("number", "")).put("caller_name", "")
                     .put("issued_at", Instant.now().toString())
                     .put("expires_at", Instant.now().plusSeconds(90).toString())
-                    .put("media_transport", "legacy_pcm");
-            relay.postJSON(registration, "/v1/events/call", payload, 15_000);
+                    .put("media_transport", "webrtc")
+                    .put("agent_media_capabilities", new org.json.JSONArray().put("webrtc").put("legacy_pcm"));
+            JSONObject accepted = relay.postJSON(registration, "/v1/events/call", payload, 15_000);
+            descriptor.mediaTransport = accepted.optString("media_transport", "legacy_pcm");
             start(descriptor);
         } else if (descriptor != null && descriptor.androidID.isEmpty()
                 && "outgoing".equals(direction)) {
@@ -119,13 +121,18 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile StandaloneWebSocket webSocket;
         volatile Socket pcm;
         volatile CloudPCMMediaPump mediaPump;
+        volatile WebRTCCloudPeer webRTC;
+        volatile String mediaTransport;
         volatile String mediaProtocol = "";
         volatile boolean mediaStarted;
         int sequence;
         long previousSendMillis = -1;
         long lastTraceLogMillis = -1;
 
-        CloudSession(Descriptor descriptor) { this.descriptor = descriptor; }
+        CloudSession(Descriptor descriptor) {
+            this.descriptor = descriptor;
+            this.mediaTransport = descriptor.mediaTransport;
+        }
 
         @Override public void run() {
             while (running) {
@@ -152,6 +159,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                             webSocket = null;
                             // The next answer/replay must restart PCM for the new socket.
                             mediaStarted = false;
+                            closeSocket(webRTC); webRTC = null;
                             closeSocket(mediaPump);
                             mediaPump = null;
                             closeSocket(pcm);
@@ -171,13 +179,21 @@ final class StandaloneCloudMediaManager implements Closeable {
                 StandaloneWebSocket.Message message = owner.read();
                 if (message.opcode() == 2) {
                     CloudPCMMediaPump pump = mediaPump;
-                    if (pump != null) pump.receive(decodePCM(message.payload()));
+                    if (!"webrtc".equals(mediaTransport) && pump != null) pump.receive(decodePCM(message.payload()));
                     continue;
                 }
                 JSONObject control = new JSONObject(new String(message.payload(), StandardCharsets.UTF_8));
+                if (control.has("call_uuid") && !descriptor.callUUID.equalsIgnoreCase(control.optString("call_uuid"))) continue;
+                if (control.has("generation") && descriptor.generation != control.optLong("generation", -1)) continue;
                 String action = control.optString("action", "");
+                if (action.startsWith("webrtc_")) {
+                    WebRTCCloudPeer peer = webRTC;
+                    if (peer != null && "webrtc".equals(mediaTransport)) peer.receive(control);
+                    continue;
+                }
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
                 mediaProtocol = control.optString("media_protocol", "");
+                if ("answer".equals(action)) mediaTransport = control.optString("media_transport", descriptor.mediaTransport);
                 JSONObject command = new JSONObject().put("command_id",
                                 control.optString("command_id", UUID.randomUUID().toString()))
                         .put("type", "call_control").put("action", action)
@@ -193,7 +209,16 @@ final class StandaloneCloudMediaManager implements Closeable {
                     owner.writeText(status("answer_ok", ""));
                     if (!mediaStarted) {
                         mediaStarted = true;
-                        sessions.execute(() -> runPCM(owner));
+                        if ("webrtc".equals(mediaTransport)) {
+                            synchronized (this) {
+                                if (!running || webSocket != owner) return;
+                                webRTC = new WebRTCCloudPeer(context, descriptor.callUUID, descriptor.generation,
+                                        descriptor.relayURL, descriptor.secret, signal -> {
+                                    if (running && webSocket == owner) owner.writeText(signal.toString());
+                                }, () -> closeSocket(owner));
+                                webRTC.start();
+                            }
+                        } else sessions.execute(() -> runPCM(owner));
                     }
                 } else {
                     owner.writeText(status("reject".equals(action) ? "rejected" : "ended", ""));
@@ -291,6 +316,7 @@ final class StandaloneCloudMediaManager implements Closeable {
             running = false;
             mediaStarted = false;
             closeSocket(webSocket);
+            closeSocket(webRTC); webRTC = null;
             closeSocket(mediaPump);
             closeSocket(pcm);
         }
@@ -303,6 +329,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         final String secret;
         final String relayURL;
         final String direction;
+        String mediaTransport = "legacy_pcm";
         volatile String androidID;
 
         Descriptor(String callID, String callUUID, long generation, String secret,
@@ -320,6 +347,7 @@ final class StandaloneCloudMediaManager implements Closeable {
             Descriptor result = new Descriptor(call.optString("call_id"), call.optString("call_uuid"),
                     call.optLong("generation", 1), call.optString("call_secret"),
                     call.optString("relay_url"), call.optString("direction", "outgoing"), "");
+            result.mediaTransport = call.optString("media_transport", "legacy_pcm");
             result.validate();
             return result;
         }
@@ -346,7 +374,7 @@ final class StandaloneCloudMediaManager implements Closeable {
             }
         }
 
-        boolean same(Descriptor other) { return other != null && callUUID.equalsIgnoreCase(other.callUUID); }
+        boolean same(Descriptor other) { return other != null && generation == other.generation && callUUID.equalsIgnoreCase(other.callUUID); }
     }
 
     private static JSONObject identity(JSONObject registration) throws Exception {

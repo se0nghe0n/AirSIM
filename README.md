@@ -29,7 +29,8 @@ This fork at [se0nghe0n/AirSIM](https://github.com/se0nghe0n/AirSIM) includes th
 
 - English is the default app language. The existing language preference and Chinese option remain available; caller names, SMS content, and operating-system messages keep their original language.
 - The Q25 Android package is `com.airsim.phonecontrol.q25`. Apple signing and Relay settings in this branch are configured for the fork owner; use your own identities and credentials for a separate installation. A `workers.dev` Relay endpoint can be used without a custom domain.
-- The iPhone receive buffer now adapts to observed delivery stalls and preserves queued speech during recovery. Automated replay and unit tests passed, but the latest buffer change has not been verified in a new live call. It can add playback delay on an unstable connection.
+- Native WebRTC/Opus cloud calls are available for rooted Android Standalone and iPhone, with authenticated signaling and expiring TURN credentials. See the [WebRTC setup and validation guide](docs/webrtc.md). Older clients and Apple Watch retain PCM.
+- The legacy iPhone PCM receive buffer adapts to observed delivery stalls and preserves queued speech during recovery. Native WebRTC uses its own playout and bypasses that PCM buffer. Local tests do not establish real carrier-call quality.
 - Release links below point to upstream binaries. They do not include this fork's additional changes; build this branch to use them.
 
 ## Buy Me A Coffee
@@ -221,6 +222,7 @@ Replacing only the certificate while retaining someone else's Bundle ID does not
 | [AVF installation and non-destructive troubleshooting](docs/AVF_INSTALL_GUIDE.md) | Terminal, control tokens, two-service health checks, and startup-conflict recovery |
 | [iOS and watchOS](iOS/README.md) | Xcode, Bundle IDs, Apple signing, CallKit, PushKit, and device tests |
 | [Cloudflare Relay](push-relay-worker/README.md) | Wrangler, KV, Durable Objects, APNs, Secrets, and custom domains |
+| [Native WebRTC cloud calls](docs/webrtc.md) | Q25/iPhone audio, TURN setup, compatibility, protocol, and validation |
 | [VoWLAN design](docs/2026-09-11-vowlan-design.md) | Local transport design and protocol boundaries |
 | [VoBLE device test matrix](docs/voble-real-device-test-matrix.md) | Bluetooth setup, automation results, device matrix, and outstanding hardware acceptance |
 | [Samsung hotspot pairing protocol](docs/samsung-hotspot-pairing-protocol.md) | Pairing, key derivation, HMAC, and replay protection |

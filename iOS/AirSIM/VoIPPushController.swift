@@ -542,11 +542,12 @@ private struct CloudCommandEnqueueResponse: Decodable {
     }
 }
 
-private struct CloudCommandResultResponse: Decodable {
+struct CloudCommandResultResponse: Decodable {
     struct Result: Decodable {
         let dialing: Bool?
         let sent: Bool?
         let segments: Int?
+        let history: [CallRecord]?
     }
     let commandID: String
     let status: String
@@ -604,9 +605,9 @@ struct AgentPushRegistration: Encodable, Equatable, Sendable {
     let bundleID: String
     let environment: String
     let relayURL: String
-    var mediaTransport: String = CloudMediaTransport.legacyPCM.rawValue
-    var appMediaCapabilities: [String] = [CloudMediaTransport.legacyPCM.rawValue]
-    var forceLegacyPCM: Bool = true
+    var mediaTransport: String = CloudMediaTransport.webRTC.rawValue
+    var appMediaCapabilities: [String] = CloudMediaTransport.allCases.map(\.rawValue)
+    var forceLegacyPCM: Bool = false
     var vowlanSecret: String? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -1345,6 +1346,19 @@ final class VoIPPushController: NSObject {
         return SMSSendResult(sent: true, segments: outcome.result?.segments)
     }
 
+    func fetchCloudCallHistory() async throws -> [CallRecord] {
+        let commandID = UUID()
+        let enqueue = try await enqueueCloudCommand(
+            commandID: commandID, type: "call_history", number: "", message: nil
+        )
+        guard enqueue.accepted else { throw CloudCommandError.invalidResponse }
+        let outcome = try await waitForCloudCommand(commandID: commandID, timeout: 20)
+        guard outcome.status == "completed", let history = outcome.result?.history else {
+            throw CloudCommandError.failed(outcome.error ?? "Could not load call history from the Android phone")
+        }
+        return history
+    }
+
     func sendCloudDTMF(_ digit: String) async throws {
         let commandID = UUID()
         let enqueue = try await enqueueCloudCommand(
@@ -1377,8 +1391,8 @@ final class VoIPPushController: NSObject {
             "device_secret": registration.deviceSecret,
             "command_id": commandID.uuidString.lowercased(),
             "type": type,
-            "number": number,
         ]
+        if type != "call_history" { body["number"] = number }
         if let message { body["message"] = message }
         if let mediaTransport { body["media_transport"] = mediaTransport.rawValue }
         return try await relayRequest(url: url, body: body, as: CloudCommandEnqueueResponse.self)
@@ -1426,7 +1440,7 @@ final class VoIPPushController: NSObject {
             let message = (try? JSONDecoder().decode(RelayErrorResponse.self, from: data).error)
             throw CloudCommandError.failed(message ?? "Relay HTTP \(http.statusCode)")
         }
-        guard let decoded = try? JSONDecoder().decode(type, from: data) else {
+        guard let decoded = try? AirSIMAPI.makeDecoder().decode(type, from: data) else {
             throw CloudCommandError.invalidResponse
         }
         return decoded
@@ -1577,7 +1591,7 @@ final class VoIPPushController: NSObject {
             environment: APNsEnvironment.current,
             relayURL: relayURL,
             mediaTransport: CloudMediaTransportPreference.requested().rawValue,
-            appMediaCapabilities: [CloudMediaTransport.legacyPCM.rawValue],
+            appMediaCapabilities: CloudMediaTransport.allCases.map(\.rawValue),
             forceLegacyPCM: CloudMediaTransportPreference.forceLegacy(),
             vowlanSecret: nil
         )

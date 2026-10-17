@@ -29,7 +29,7 @@ const TOKEN_PATTERN = /^[0-9a-f]{16,512}$/i;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const encoder = new TextEncoder();
 const MEDIA_CLIENT_ROLES = new Set(["watch", "iphone"]);
-const COMMAND_TYPES = new Set(["dial", "send_sms", "dtmf"]);
+const COMMAND_TYPES = new Set(["dial", "send_sms", "dtmf", "call_history"]);
 const MEDIA_TRANSPORTS = new Set(["legacy_pcm", "webrtc"]);
 
 let cachedProviderToken = "";
@@ -74,6 +74,10 @@ export async function handleRequest(request, env) {
   }
   if (request.method === "GET" && url.pathname === "/healthz") {
     return jsonResponse(200, { ok: true, service: "airsim-push-relay", version: "0.2.1" });
+  }
+  const callICE = url.pathname.match(/^\/v1\/calls\/([0-9a-f-]+)\/ice$/i);
+  if (request.method === "GET" && callICE) {
+    return callICEConfiguration(request, env, callICE[1]);
   }
   const callConnect = url.pathname.match(/^\/v1\/calls\/([0-9a-f-]+)\/connect$/i);
   if (request.method === "GET" && callConnect) {
@@ -171,7 +175,7 @@ async function enqueueDeviceCommand(request, env) {
     type: value.type,
     issued_at: new Date().toISOString(),
     expires_at: new Date(Date.now() + (value.type === "send_sms" ? 5 : 2) * 60_000).toISOString(),
-    number: normalizePhoneNumber(value.number),
+    ...(value.type === "call_history" ? { limit: value.limit ?? 100 } : { number: normalizePhoneNumber(value.number) }),
     ...(value.type === "send_sms" ? { message: value.message.trim() } : {}),
   };
   let call = null;
@@ -182,7 +186,7 @@ async function enqueueDeviceCommand(request, env) {
     const origin = new URL(request.url).origin;
     // Watch 当前只支持 PCM；已认证的发起方可要求向后兼容的媒体格式。
     const mediaTransport = assignedMediaTransport(
-      authenticated.device, env, value.media_transport === "legacy_pcm" ? "legacy_pcm" : ""
+      authenticated.device, env, value.media_transport || ""
     );
     command.call = {
       call_id: callID,
@@ -373,8 +377,17 @@ function validateDeviceCommand(value) {
     return "invalid device command";
   }
   if (value.media_transport !== undefined &&
-      (value.type !== "dial" || value.media_transport !== "legacy_pcm")) {
+      (value.type !== "dial" || !MEDIA_TRANSPORTS.has(value.media_transport))) {
     return "invalid media transport";
+  }
+  if (value.type === "call_history") {
+    if (value.number !== undefined || value.message !== undefined || value.call !== undefined || value.action !== undefined) {
+      return "call history does not accept call or message fields";
+    }
+    if (value.limit !== undefined && (!Number.isInteger(value.limit) || value.limit < 1 || value.limit > 100)) {
+      return "invalid call history limit";
+    }
+    return "";
   }
   const number = normalizePhoneNumber(value.number);
   if (!number || number.length > 82) return "invalid phone number";
@@ -386,6 +399,21 @@ function validateDeviceCommand(value) {
         [...value.message].length > 2_000) return "invalid SMS content";
   }
   return "";
+}
+
+// A history response stays below the command websocket's 64 KiB frame ceiling.
+function validCallHistoryCompletion(value, limit = 100) {
+  if (encoder.encode(JSON.stringify(value)).byteLength > 60 * 1024) return false;
+  if (value.status === "failed") return true;
+  const history = value.result?.history;
+  if (!Array.isArray(history) || history.length > Math.min(limit, 100)) return false;
+  return history.every(row => row && typeof row === "object" &&
+    typeof row.id === "string" && row.id.length > 0 && row.id.length <= 128 &&
+    Number.isSafeInteger(row.index) && row.index >= 0 &&
+    ["incoming", "outgoing"].includes(row.direction) && row.state === "ended" &&
+    typeof row.number === "string" && row.number.length <= 82 && typeof row.missed === "boolean" &&
+    [row.started_at, row.updated_at, row.ended_at].every(at =>
+      typeof at === "string" && at.length <= 40 && Number.isFinite(Date.parse(at))));
 }
 
 function normalizePhoneNumber(value) {
@@ -522,6 +550,10 @@ export class DeviceCommandSession {
           !["completed", "failed"].includes(value?.status)) {
         return jsonResponse(400, { error: "invalid command completion" });
       }
+      const record = await this.storage.get(`command:${value.command_id.toLowerCase()}`);
+      if (record?.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) {
+        return jsonResponse(400, { error: "invalid call history result" });
+      }
       const updated = await this.completeCommand(value);
       return updated ? jsonResponse(202, { received: true }) : jsonResponse(404, { error: "command not found" });
     }
@@ -541,6 +573,7 @@ export class DeviceCommandSession {
     const key = `command:${value.command_id.toLowerCase()}`;
     const record = await this.storage.get(key);
     if (!record) return false;
+    if (record.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) return false;
     if (["completed", "failed", "expired"].includes(record.status)) return true;
     record.status = value.status;
     record.completed_at_ms = Date.now();
@@ -715,12 +748,135 @@ export class DeviceCommandSession {
 
 function sameCommandIntent(left, right) {
   if (left?.type !== right?.type) return false;
+  if (left?.type === "call_history") return left.limit === right.limit;
   if (left?.type !== "call_control") return true;
   return left.action === right.action &&
     left.owner === right.owner &&
     stringValue(left.call?.call_id) === stringValue(right.call?.call_id) &&
     stringValue(left.call?.call_uuid).toLowerCase() === stringValue(right.call?.call_uuid).toLowerCase() &&
     (Number(left.call?.generation) || 1) === (Number(right.call?.generation) || 1);
+}
+
+// Both ICE and WebSocket use the same call capability and expiration window.
+async function authenticateCall(callUUID, token, env) {
+  const call = await readRelayRecord(env, `call:${callUUID.toLowerCase()}`);
+  if (!call || !constantTimeEqual(call.secret_hash, await sha256Hex(token))) {
+    return { response: jsonResponse(401, { error: "call authentication failed" }) };
+  }
+  const expiresAt = Date.parse(call.media_expires_at || call.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now() - 5_000) {
+    return { response: jsonResponse(410, { error: "call expired" }) };
+  }
+  return { call, expiresAt };
+}
+
+function iceURLs(raw, kind) {
+  if (!raw) return [];
+  try {
+    const urls = JSON.parse(raw);
+    if (!Array.isArray(urls) || urls.length > 16) return null;
+    const pattern = kind === "turn"
+      ? /^turns?:(?:\[[0-9a-f:.]+\]|[^\s/?#@:\[\]]+)(?::[0-9]{1,5})?(?:\?transport=(?:udp|tcp))?$/i
+      : /^stuns?:(?:\[[0-9a-f:.]+\]|[^\s/?#@:\[\]]+)(?::[0-9]{1,5})?$/i;
+    if (urls.some((url) => {
+      if (typeof url !== "string" || url.length > 512 || !pattern.test(url)) return true;
+      try {
+        const parsed = new URL(url.replace(/^(turns?|stuns?):/i, "https://"));
+        return !parsed.hostname || Boolean(parsed.username || parsed.password || parsed.hash) ||
+          (parsed.port !== "" && Number(parsed.port) === 0);
+      } catch { return true; }
+    })) return null;
+    return [...new Set(urls)];
+  } catch { return null; }
+}
+
+export function turnConfigured(env) {
+  if (env.TURN_PROVIDER === "cloudflare") {
+    return typeof env.CLOUDFLARE_TURN_KEY_ID === "string" &&
+      /^[a-z0-9_-]{1,128}$/i.test(env.CLOUDFLARE_TURN_KEY_ID) &&
+      typeof env.CLOUDFLARE_TURN_API_TOKEN === "string" && env.CLOUDFLARE_TURN_API_TOKEN.trim().length > 0 &&
+      iceURLs(env.STUN_URLS, "stun") !== null;
+  }
+  if (env.TURN_PROVIDER && env.TURN_PROVIDER !== "coturn") return false;
+  const urls = iceURLs(env.TURN_URLS, "turn");
+  return Boolean(urls?.length && typeof env.TURN_SHARED_SECRET === "string" &&
+    env.TURN_SHARED_SECRET.trim().length > 0 && iceURLs(env.STUN_URLS, "stun") !== null);
+}
+
+async function cloudflareICEServers(env, ttl) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${env.CLOUDFLARE_TURN_KEY_ID}/credentials/generate-ice-servers`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.CLOUDFLARE_TURN_API_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ ttl }), signal: controller.signal,
+      });
+    if (response.status !== 201) return null;
+    const raw = await response.text();
+    if (encoder.encode(raw).length > MAX_BODY_BYTES) return null;
+    const value = JSON.parse(raw);
+    if (!Array.isArray(value.iceServers) || value.iceServers.length === 0 || value.iceServers.length > 16) return null;
+    let hasTURN = false;
+    const servers = [];
+    for (const server of value.iceServers) {
+      if (!server || typeof server !== "object") return null;
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      if (urls.length === 0) return null;
+      const turn = urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+      const parsed = iceURLs(JSON.stringify(urls), turn ? "turn" : "stun");
+      if (!parsed?.length) return null;
+      if (turn) {
+        if (typeof server.username !== "string" || !server.username || server.username.length > 4096 ||
+            typeof server.credential !== "string" || !server.credential || server.credential.length > 4096) return null;
+        hasTURN = true;
+        servers.push({ urls: parsed, username: server.username, credential: server.credential });
+      } else servers.push({ urls: parsed });
+    }
+    return hasTURN ? servers : null;
+  } catch {
+    // Provider bodies/errors can contain credentials. Never log or relay them.
+    return null;
+  } finally { clearTimeout(timeout); }
+}
+
+async function callICEConfiguration(request, env, callUUID) {
+  const noStore = (response) => {
+    response.headers.set("cache-control", "no-store");
+    return response;
+  };
+  if (!UUID_PATTERN.test(callUUID)) return noStore(jsonResponse(400, { error: "invalid call UUID" }));
+  const role = new URL(request.url).searchParams.get("role");
+  if (!["iphone", "agent"].includes(role)) return noStore(jsonResponse(400, { error: "invalid media role" }));
+  const token = (request.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  const auth = await authenticateCall(callUUID, token, env);
+  if (auth.response) return noStore(auth.response);
+  if (!turnConfigured(env)) return noStore(jsonResponse(503, { error: "TURN is not configured" }));
+  const stun = iceURLs(env.STUN_URLS, "stun");
+  if (!stun) return noStore(jsonResponse(503, { error: "invalid STUN configuration" }));
+  const requestedTTL = Number(env.TURN_TTL_SECONDS || 3600);
+  const ttl = Math.min(86400, Math.max(60, Number.isFinite(requestedTTL) ? Math.floor(requestedTTL) : 3600),
+    Math.floor((auth.expiresAt - Date.now()) / 1000));
+  if (ttl <= 0) return noStore(jsonResponse(410, { error: "call expired" }));
+  if (env.TURN_PROVIDER === "cloudflare") {
+    const servers = await cloudflareICEServers(env, ttl);
+    if (!servers) return noStore(jsonResponse(503, { error: "TURN credentials temporarily unavailable" }));
+    return noStore(jsonResponse(200, { ice_servers: [
+      ...(stun.length ? [{ urls: stun }] : []), ...servers,
+    ], ttl }));
+  }
+  const username = `${Math.floor(Date.now() / 1000) + ttl}:${callUUID.toLowerCase()}:${role}`;
+  const key = await crypto.subtle.importKey("raw", encoder.encode(env.TURN_SHARED_SECRET),
+    { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(username)));
+  const credential = btoa(String.fromCharCode(...signature));
+  return noStore(jsonResponse(200, {
+    ice_servers: [
+      ...(stun.length ? [{ urls: stun }] : []),
+      { urls: iceURLs(env.TURN_URLS, "turn"), username, credential },
+    ], ttl,
+  }));
 }
 
 async function connectCallMedia(request, env, callUUID) {
@@ -734,14 +890,9 @@ async function connectCallMedia(request, env, callUUID) {
     return jsonResponse(400, { error: "invalid media role" });
   }
   const token = url.searchParams.get("token") || "";
-  const call = await readRelayRecord(env, `call:${callUUID}`);
-  if (!call || !constantTimeEqual(call.secret_hash, await sha256Hex(token))) {
-    return jsonResponse(401, { error: "call authentication failed" });
-  }
-  const expiresAt = Date.parse(call.media_expires_at || call.expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt < Date.now() - 5_000) {
-    return jsonResponse(410, { error: "call expired" });
-  }
+  const auth = await authenticateCall(callUUID, token, env);
+  if (auth.response) return auth.response;
+  const { call } = auth;
   if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
 
   const id = env.MEDIA.idFromName(callUUID.toLowerCase());
@@ -751,6 +902,7 @@ async function connectCallMedia(request, env, callUUID) {
   headers.set("x-airsim-call-id", call.call_id || "");
   headers.set("x-airsim-call-uuid", callUUID.toLowerCase());
   headers.set("x-airsim-generation", String(call.generation || 1));
+  headers.set("x-airsim-media-transport", call.media_transport || "legacy_pcm");
   const forwarded = new Request("https://media.internal/session", { headers });
   return stub.fetch(forwarded);
 }
@@ -760,9 +912,17 @@ export class CallMediaSession {
     this.state = state;
     this.env = env;
     this.pcmTrace = new PCMRelayTrace();
+    this.terminal = null;
+    this.ready = state.blockConcurrencyWhile(async () => {
+      this.terminal = await state.storage.get("terminal") || null;
+    });
   }
 
   async fetch(request) {
+    await this.ready;
+    if (request.method === "POST" && new URL(request.url).pathname === "/terminal") {
+      return this.receiveTerminal(await readJSON(request));
+    }
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "websocket upgrade required" });
     }
@@ -770,6 +930,12 @@ export class CallMediaSession {
     if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
       return jsonResponse(400, { error: "invalid media role" });
     }
+    if (this.terminal && !this.matchesTerminal({
+      callID: request.headers.get("x-airsim-call-id"),
+      callUUID: request.headers.get("x-airsim-call-uuid"),
+      generation: Number(request.headers.get("x-airsim-generation")),
+    })) return jsonResponse(409, { error: "terminal call identity mismatch" });
+    const currentOwner = this.ownerRole();
     let inheritsOwnership = false;
     let inheritedPendingControl = "";
     for (const existing of this.state.getWebSockets(role)) {
@@ -784,6 +950,7 @@ export class CallMediaSession {
     const [client, server] = Object.values(pair);
     server.serializeAttachment({
       role,
+      mediaTransport: role === "watch" ? "legacy_pcm" : request.headers.get("x-airsim-media-transport") || "legacy_pcm",
       pcmTraceKey: crypto.randomUUID(),
       owner: inheritsOwnership,
       pendingControl: inheritedPendingControl,
@@ -791,13 +958,64 @@ export class CallMediaSession {
       callUUID: request.headers.get("x-airsim-call-uuid") || "",
       generation: Number(request.headers.get("x-airsim-generation")) || 1,
     });
+    // Only an endpoint participating in negotiation can invalidate its identity.
+    // A late Watch connection must leave the owning iPhone/agent session intact.
+    if (role === "agent" || role === currentOwner || (!currentOwner && role === "iphone")) {
+      this.clearNegotiation();
+    }
     this.state.acceptWebSocket(server, [role]);
+    if (this.terminal) {
+      this.sendTerminal(server);
+      return new Response(null, { status: 101, webSocket: client });
+    }
     if (role === "agent") this.flushPendingControls(server);
     this.broadcastStatus("peer_connected", role);
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  matchesTerminal(attachment) {
+    return this.terminal && attachment.callID === this.terminal.call_id &&
+      attachment.callUUID === this.terminal.call_uuid &&
+      attachment.generation === this.terminal.generation;
+  }
+
+  sendTerminal(socket) {
+    const attachment = socket.deserializeAttachment() || {};
+    if (MEDIA_CLIENT_ROLES.has(attachment.role) && this.matchesTerminal(attachment)) {
+      socket.send(JSON.stringify(this.terminal));
+    }
+  }
+
+  async receiveTerminal(value) {
+    if (value.status !== "remote_ended" || !nonEmpty(value.call_id) ||
+        !UUID_PATTERN.test(value.call_uuid || "") ||
+        !Number.isSafeInteger(value.generation) || value.generation <= 0) {
+      return jsonResponse(400, { error: "invalid terminal call identity" });
+    }
+    if (this.terminal && !this.matchesTerminal({
+      callID: value.call_id, callUUID: value.call_uuid, generation: value.generation,
+    })) return jsonResponse(409, { error: "terminal call identity mismatch" });
+    const terminal = { status: "remote_ended", call_id: value.call_id,
+      call_uuid: value.call_uuid, generation: value.generation };
+    // Persist before acknowledging, including when no client is currently connected.
+    await this.state.storage.put("terminal", terminal);
+    this.terminal = terminal;
+    this.clearNegotiation();
+    let deliveryFailed = false;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() || {};
+      socket.serializeAttachment({ ...attachment, pendingControl: "" });
+      try { this.sendTerminal(socket); } catch { deliveryFailed = true; }
+    }
+    // Keep the socket open: clients asynchronously trace before handling the status.
+    return jsonResponse(deliveryFailed ? 503 : 202, { delivered: !deliveryFailed });
+  }
+
   webSocketMessage(socket, message) {
+    if (this.terminal) {
+      try { this.sendTerminal(socket); } catch {}
+      return;
+    }
     const receivedAt = Date.now();
     const ingressMono = performance.now();
     const attachment = socket.deserializeAttachment() || {};
@@ -813,6 +1031,22 @@ export class CallMediaSession {
       socket.close(1009, "media frame too large");
       return;
     }
+    let value;
+    if (typeof message === "string") {
+      try { value = JSON.parse(message); } catch { return; }
+      if (typeof value?.action === "string" && value.action.startsWith("webrtc_")) {
+        this.relayWebRTC(socket, value);
+        return;
+      }
+    }
+    const ownerSocket = this.state.getWebSockets(this.ownerRole()).find((peer) =>
+      peer.deserializeAttachment()?.owner === true);
+    const webRTC = attachment.mediaTransport === "webrtc" &&
+      ownerSocket?.deserializeAttachment()?.role !== "watch";
+    if (typeof message !== "string" && webRTC) {
+      socket.close(1008, "PCM is not allowed on WebRTC calls");
+      return;
+    }
     if (role !== "agent" && !this.acceptClientMessage(socket, role, message)) return;
     const trace = typeof message === "string" ? null : inspectPCMTrace(message);
     const stream = trace ? this.pcmTrace.receive(socket, role, trace, ingressMono, attachment.pcmTraceKey) : null;
@@ -820,7 +1054,11 @@ export class CallMediaSession {
       this.pcmTrace.flush(stream, performance.now());
       return;
     }
-    const outbound = role === "agent" ? message : bindMediaOwner(message, role);
+    let outbound = role === "agent" ? message : bindMediaOwner(message, role);
+    if (role !== "agent" && value?.action === "answer") {
+      outbound = JSON.stringify({ ...JSON.parse(outbound),
+        media_transport: role === "watch" ? "legacy_pcm" : attachment.mediaTransport || "legacy_pcm" });
+    }
     const control = role === "agent" ? null : callControlMetadata(outbound);
     if (control) this.logControl("received", role, control);
     const peers = this.mediaPeers(role);
@@ -846,6 +1084,81 @@ export class CallMediaSession {
       this.logControl("forwarded", role, control);
       try { socket.send(callControlReceipt("action_forwarded", control)); } catch {}
     }
+  }
+
+  clearNegotiation() {
+    for (const peer of this.state.getWebSockets()) {
+      const attachment = peer.deserializeAttachment() || {};
+      const { negotiation, ...rest } = attachment;
+      peer.serializeAttachment(rest);
+    }
+  }
+
+  relayWebRTC(socket, value) {
+    if (this.terminal) return;
+    const attachment = socket.deserializeAttachment() || {};
+    const role = attachment.role;
+    // Hibernation may provide a different JS wrapper for the same socket.
+    if (!this.state.getWebSockets(role).some((peer) => peer === socket ||
+      (attachment.pcmTraceKey && peer.deserializeAttachment()?.pcmTraceKey === attachment.pcmTraceKey))) return;
+    const reject = (error) => {
+      try { socket.send(JSON.stringify({ status: "webrtc_failed", error })); } catch {}
+    };
+    if (attachment.mediaTransport !== "webrtc" || this.ownerRole() !== "iphone" ||
+        !["iphone", "agent"].includes(role) || (role === "iphone" && attachment.owner !== true)) {
+      return reject("invalid WebRTC owner or transport");
+    }
+    if (value.call_uuid !== attachment.callUUID || value.generation !== attachment.generation ||
+        !Number.isSafeInteger(value.generation) || !UUID_PATTERN.test(value.session_id || "")) {
+      return reject("invalid signaling identity");
+    }
+    const peers = this.mediaPeers(role);
+    if (peers.length !== 1) return reject("peer unavailable; renegotiate after peer_connected");
+    const peer = peers[0];
+    const peerAttachment = peer.deserializeAttachment() || {};
+    if (peerAttachment.mediaTransport !== "webrtc" || peerAttachment.callUUID !== attachment.callUUID ||
+        peerAttachment.generation !== attachment.generation) return reject("peer identity mismatch");
+    const action = value.action;
+    if (action === "webrtc_offer" || action === "webrtc_answer") {
+      if ((action === "webrtc_offer" && role !== "iphone") ||
+          (action === "webrtc_answer" && role !== "agent") ||
+          typeof value.sdp !== "string" || !value.sdp.trim() || encoder.encode(value.sdp).length > 48 * 1024) {
+        return reject("invalid SDP or signaling role");
+      }
+    } else if (action === "webrtc_ice") {
+      const candidate = value.candidate;
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate) ||
+          typeof candidate.candidate !== "string" || candidate.candidate.length > 4096 ||
+          !Number.isInteger(candidate.sdp_mline_index) || candidate.sdp_mline_index < 0 ||
+          candidate.sdp_mline_index > 65535 ||
+          (candidate.sdp_mid !== undefined && candidate.sdp_mid !== null &&
+            (typeof candidate.sdp_mid !== "string" || candidate.sdp_mid.length > 256))) {
+        return reject("invalid ICE candidate");
+      }
+    } else return reject("invalid signaling action");
+    const sessionID = value.session_id.toLowerCase();
+    if (action === "webrtc_offer") {
+      // Store only routing identity in hibernation attachments, never SDP/ICE.
+      const usedSessions = [...new Set([...(attachment.usedSessions || []), ...(peerAttachment.usedSessions || [])])];
+      if (usedSessions.includes(sessionID)) return reject("stale signaling session");
+      if (usedSessions.length >= 24) return reject("negotiation limit reached; reconnect both peers");
+      usedSessions.push(sessionID);
+      const negotiation = { sessionID, answered: false };
+      socket.serializeAttachment({ ...attachment, negotiation, usedSessions });
+      peer.serializeAttachment({ ...peerAttachment, negotiation, usedSessions });
+    } else if (attachment.negotiation?.sessionID !== sessionID ||
+               peerAttachment.negotiation?.sessionID !== sessionID) {
+      return reject("stale signaling session");
+    } else if (action === "webrtc_answer") {
+      if (attachment.negotiation.answered) return reject("session already answered");
+      socket.serializeAttachment({ ...attachment, negotiation: { sessionID, answered: true } });
+      peer.serializeAttachment({ ...peerAttachment, negotiation: { sessionID, answered: true } });
+    }
+    const outbound = { action, call_uuid: attachment.callUUID, generation: attachment.generation,
+      session_id: sessionID,
+      ...(action === "webrtc_ice" ? { candidate: value.candidate } : { sdp: value.sdp }) };
+    try { peer.send(JSON.stringify(outbound)); }
+    catch { this.clearNegotiation(); reject("peer unavailable; renegotiate after peer_connected"); }
   }
 
   acceptClientMessage(socket, role, message) {
@@ -887,6 +1200,7 @@ export class CallMediaSession {
   }
 
   flushPendingControls(agentSocket) {
+    if (this.terminal) return;
     for (const role of MEDIA_CLIENT_ROLES) {
       for (const client of this.state.getWebSockets(role)) {
         const attachment = client.deserializeAttachment() || {};
@@ -922,6 +1236,10 @@ export class CallMediaSession {
   webSocketClose(socket, code, reason) {
     const role = socket.deserializeAttachment()?.role || "unknown";
     try { socket.close(code, reason); } catch {}
+    if (this.terminal) return;
+    const sessionID = socket.deserializeAttachment()?.negotiation?.sessionID;
+    if (sessionID && this.state.getWebSockets().some((peer) =>
+      peer.deserializeAttachment()?.negotiation?.sessionID === sessionID)) this.clearNegotiation();
     this.broadcastStatus("peer_disconnected", role);
   }
 
@@ -937,6 +1255,10 @@ export class CallMediaSession {
   webSocketError(socket) {
     const role = socket.deserializeAttachment()?.role || "unknown";
     try { socket.close(1011, "media relay error"); } catch {}
+    if (this.terminal) return;
+    const sessionID = socket.deserializeAttachment()?.negotiation?.sessionID;
+    if (sessionID && this.state.getWebSockets().some((peer) =>
+      peer.deserializeAttachment()?.negotiation?.sessionID === sessionID)) this.clearNegotiation();
     this.broadcastStatus("peer_disconnected", role);
   }
 
@@ -1011,17 +1333,23 @@ async function registerDevice(request, env) {
     agent_media_capabilities: normalizedMediaCapabilities(
       device.agent_media_capabilities ?? existing?.agent_media_capabilities,
     ),
-    force_legacy_pcm: device.force_legacy_pcm === true,
+    force_legacy_pcm: device.force_legacy_pcm === undefined
+      ? existing?.force_legacy_pcm === true : device.force_legacy_pcm === true,
   };
+  if (device.registration_source === "agent" && existing) {
+    // Agent registration can carry an older copy of the paired app settings.
+    record.media_transport_requested = existing.media_transport_requested || "legacy_pcm";
+    record.app_media_capabilities = normalizedMediaCapabilities(existing.app_media_capabilities);
+    record.force_legacy_pcm = existing.force_legacy_pcm === true;
+  }
   record.media_transport = assignedMediaTransport(record, env);
   await writeDeviceRecord(env, record.device_id, record);
   await recordDashboardEvent(env, {
     type: "registration", device_id: record.device_id, status: "delivered",
     channel: "relay", environment: record.environment,
   });
-  // Keep the public response shape stable for older App/Agent builds. The
-  // negotiated transport lives in the device record and each call descriptor.
-  return jsonResponse(200, { registered: true });
+  // Additive field: standalone agents use the server's negotiated transport.
+  return jsonResponse(200, { registered: true, media_transport: record.media_transport });
 }
 
 async function registerLiveActivity(request, env) {
@@ -1063,7 +1391,8 @@ async function receiveCall(request, env) {
   const generation = Number.isSafeInteger(call.generation) && call.generation > 0
     ? call.generation
     : 1;
-  const mediaTransport = assignedMediaTransport(authenticated.device, env, call.media_transport);
+  const mediaTransport = assignedMediaTransport(authenticated.device, env,
+    call.media_transport === "legacy_pcm" ? "legacy_pcm" : "");
   if (call.event !== "incoming_call" || !nonEmpty(call.call_id) ||
       !UUID_PATTERN.test(call.call_uuid || "") || !Number.isFinite(expiresAt) ||
       (callSecretSupplied && !mediaReady) ||
@@ -1156,7 +1485,7 @@ async function receiveCall(request, env) {
         priority: "10",
         expiration: Math.floor(expiresAt / 1000),
         collapseID: call.call_uuid,
-        payload: voipPayload,
+        payload: { ...voipPayload, media_transport: "legacy_pcm" },
       });
       await writeRelayState(env, watchDedupeKey, "1", 180);
     }
@@ -1223,7 +1552,7 @@ async function receiveCall(request, env) {
     }
 
     if (voipDuplicate && watchDuplicate && alertDuplicate && activityDuplicate) {
-      return jsonResponse(202, { duplicate: true });
+      return jsonResponse(202, { duplicate: true, media_transport: mediaTransport });
     }
     await recordDashboardEvent(env, {
       type: "call", device_id: authenticated.device.device_id, status: "delivered",
@@ -1232,6 +1561,7 @@ async function receiveCall(request, env) {
     });
     return jsonResponse(202, {
       pushed: true,
+      media_transport: mediaTransport,
       voip_pushed: !voipDuplicate,
       watch_pushed: !watchDuplicate,
       alert_pushed: !alertDuplicate,
@@ -1336,6 +1666,8 @@ async function receiveAgentHeartbeat(request, env) {
     ...(nonEmpty(heartbeat.model) ? { model: heartbeat.model.trim() } : {}),
     ...(nonEmpty(heartbeat.phone_number) ? { phone_number: heartbeat.phone_number.trim() } : {}),
     agent_version: stringValue(heartbeat.agent_version),
+    // An old agent with no advertisement must clear stale native capability.
+    agent_media_capabilities: normalizedMediaCapabilities(heartbeat.agent_media_capabilities),
     at_ok: heartbeat.at_ok,
     cellular_state: heartbeat.cellular_state,
     cellular_registration: stringValue(heartbeat.cellular_registration),
@@ -1348,6 +1680,11 @@ async function receiveAgentHeartbeat(request, env) {
   const authenticated = await authenticate(heartbeat, env);
   if (authenticated.response) return authenticated.response;
   await writeAgentHeartbeat(env, authenticated.device.device_id, agentID, record);
+  if (JSON.stringify(authenticated.device.agent_media_capabilities) !== JSON.stringify(record.agent_media_capabilities)) {
+    await writeDeviceRecord(env, authenticated.device.device_id, {
+      ...authenticated.device, agent_media_capabilities: record.agent_media_capabilities,
+    });
+  }
   return jsonResponse(202, { received: true });
 }
 
@@ -1469,6 +1806,16 @@ async function receiveCallState(request, env) {
       !Number.isFinite(Date.parse(timestamp))) {
     return jsonResponse(400, { error: "invalid call state event" });
   }
+  const terminal = ["ended", "failed"].includes(event.phase);
+  if (terminal) {
+    const call = await readRelayRecord(env, `call:${event.call_uuid.toLowerCase()}`);
+    if (!call || call.device_id !== authenticated.device.device_id ||
+        call.call_id !== event.call_id.trim() ||
+        call.call_uuid?.toLowerCase() !== event.call_uuid.toLowerCase() ||
+        Number(call.generation || 1) !== generation) {
+      return jsonResponse(409, { accepted: false, reason: "call_identity_mismatch" });
+    }
+  }
   const lifecycleKey = `call-lifecycle:${authenticated.device.device_id}`;
   const currentLifecycle = await readRelayRecord(env, lifecycleKey);
   const transition = applyCallLifecycle(currentLifecycle, {
@@ -1481,10 +1828,32 @@ async function receiveCallState(request, env) {
     trace_id: nonEmpty(event.trace_id) ? event.trace_id : null,
     failure: nonEmpty(event.failure) ? event.failure : null,
   });
-  if (!transition.accepted) {
+  if (!transition.accepted && !terminal) {
     return jsonResponse(409, { accepted: false, reason: transition.reason, lifecycle: transition.snapshot });
   }
-  await writeRelayState(env, lifecycleKey, JSON.stringify(transition.snapshot), 5 * 60 * 60);
+  if (transition.accepted) {
+    await writeRelayState(env, lifecycleKey, JSON.stringify(transition.snapshot), 5 * 60 * 60);
+  }
+  if (terminal) {
+    if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
+    try {
+      const session = env.MEDIA.get(env.MEDIA.idFromName(event.call_uuid.toLowerCase()));
+      const delivery = await session.fetch("https://media.internal/terminal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status: "remote_ended", call_id: event.call_id.trim(),
+          call_uuid: event.call_uuid.toLowerCase(), generation }),
+      });
+      if (!delivery.ok) return jsonResponse(503, { error: "media terminal delivery failed" });
+    } catch {
+      return jsonResponse(503, { error: "media terminal delivery failed" });
+    }
+  }
+  // An old call can still have a queued terminal event after another call starts.
+  // Its validated UUID session must end without changing the current call/activity.
+  if (!transition.accepted) {
+    return jsonResponse(202, { accepted: true, obsolete: true, lifecycle: transition.snapshot });
+  }
   const dedupeKey = `dedupe:call-state:${authenticated.device.device_id}:${event.call_uuid}:${generation}:${event.phase}`;
   if (await readRelayState(env, dedupeKey)) return jsonResponse(202, { duplicate: true });
   const currentActivity = await readRelayRecord(
@@ -1605,7 +1974,7 @@ export function selectMediaTransport({
 }
 
 function assignedMediaTransport(device, env, requestedOverride = "") {
-  const relayCapabilities = env.WEBRTC_TRANSPORT_READY === "true"
+  const relayCapabilities = env.WEBRTC_TRANSPORT_READY === "true" && turnConfigured(env)
     ? ["legacy_pcm", "webrtc"]
     : ["legacy_pcm"];
   return selectMediaTransport({

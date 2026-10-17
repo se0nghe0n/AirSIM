@@ -579,10 +579,13 @@ struct RecentsView: View {
             NavigationStack {
                 Group {
                     if model.callHistory.isEmpty {
-                        EmptyStateView(
-                            title: L10n.t("暂无通话记录"),
-                            systemImage: "phone.arrow.up.right"
-                        )
+                        ScrollView {
+                            EmptyStateView(
+                                title: L10n.t("暂无通话记录"),
+                                systemImage: "phone.arrow.up.right"
+                            )
+                            .frame(maxWidth: .infinity, minHeight: 300)
+                        }
                     } else {
                         List(model.callHistory) { call in
                             let contact = call.number.flatMap { contacts.contact(for: $0) }
@@ -651,6 +654,31 @@ struct RecentsView: View {
                 }
                 .background(PhoneBackdrop())
                 .navigationTitle(L10n.t("最近通话"))
+                .refreshable { await model.refreshCallHistory() }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        if model.isRefreshingCallHistory {
+                            ProgressView().accessibilityLabel("Refreshing call history")
+                        } else {
+                            Button {
+                                Task { await model.refreshCallHistory() }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                            }
+                            .accessibilityLabel("Refresh call history")
+                        }
+                    }
+                }
+                .safeAreaInset(edge: .bottom) {
+                    if let message = model.callHistoryMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(.regularMaterial)
+                    }
+                }
             }
             .allowsHitTesting(selectedCall == nil)
 
@@ -667,6 +695,7 @@ struct RecentsView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: selectedCall?.id)
+        .task { await model.refreshCallHistory() }
     }
 
     private func callDetailsCard(call: CallRecord, number: String) -> some View {

@@ -140,6 +140,7 @@ mkdir -p "$OUT"
   "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java \
   "$ROOT"/src/com/airsim/phonecontrol/RelayRetryPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CommandPollingPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CommandRegistrationPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/RecoveryPolicy.java \
 	"$ROOT"/src/com/airsim/phonecontrol/RecoveryLaunchPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallEventDeduplicator.java \
@@ -232,3 +233,28 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/src/com/airsim/phonecontrol/StandaloneWebSocket.java \
   "$ROOT"/test/com/airsim/phonecontrol/StandaloneWebSocketTests.java
 "$JAVA" -cp "$OUT:$ANDROID_JAR" com.airsim.phonecontrol.StandaloneWebSocketTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCOpusSDP.java \
+  "$ROOT"/test/com/airsim/phonecontrol/WebRTCMediaTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCMediaTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCReadiness.java \
+  "$ROOT"/test/com/airsim/phonecontrol/WebRTCReadinessTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCReadinessTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCStatistics.java \
+  "$ROOT"/test/com/airsim/phonecontrol/WebRTCStatisticsTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCStatisticsTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/test/com/airsim/phonecontrol/CommandRegistrationPolicyTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.CommandRegistrationPolicyTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/NativeCallHistoryRecord.java \
+  "$ROOT"/test/com/airsim/phonecontrol/NativeCallHistoryTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.NativeCallHistoryTests

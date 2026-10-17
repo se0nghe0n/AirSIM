@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync, webcrypto } from "node:crypto";
+import { createHash, createHmac, generateKeyPairSync, webcrypto } from "node:crypto";
 import test from "node:test";
 import worker, {
   bindMediaOwner,
@@ -9,6 +9,7 @@ import worker, {
   createProviderToken,
   DeviceCommandSession,
   selectMediaTransport,
+  turnConfigured,
   validateRegistration,
 } from "../src/index.mjs";
 import { AgentStatusRegistry } from "../src/status-store.mjs";
@@ -95,9 +96,33 @@ class MemoryMediaSocket {
 }
 
 class MemoryMediaState {
-  constructor(sockets = []) { this.sockets = sockets; }
+  constructor(sockets = [], storage = new MemoryDurableStorage()) {
+    this.sockets = sockets;
+    this.storage = storage;
+  }
+  blockConcurrencyWhile(callback) { return callback(); }
+  acceptWebSocket(socket) { this.sockets.push(socket); }
   getWebSockets(role) {
     return this.sockets.filter((socket) => !socket.closed && (!role || socket.attachment.role === role));
+  }
+}
+
+class MemoryMediaNamespace {
+  constructor() { this.sessions = new Map(); }
+  idFromName(name) { return name; }
+  get(id) {
+    if (!this.sessions.has(id)) {
+      const state = new MemoryMediaState();
+      this.sessions.set(id, { state, session: new CallMediaSession(state, {}) });
+    }
+    return { fetch: (request, options) => this.sessions.get(id).session.fetch(new Request(request, options)) };
+  }
+  entry(id) { this.get(id); return this.sessions.get(id); }
+  recreate(id) {
+    const { state } = this.entry(id);
+    const recreated = new MemoryMediaState(state.sockets, state.storage);
+    this.sessions.set(id, { state: recreated, session: new CallMediaSession(recreated, {}) });
+    return this.entry(id);
   }
 }
 
@@ -167,7 +192,7 @@ test("health and registration persist without returning credentials", async () =
   assert.equal((await health.json()).version, "0.2.1");
   const response = await worker.fetch(post("/v1/devices/register", registration), env);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { registered: true });
+  assert.deepEqual(await response.json(), { registered: true, media_transport: "legacy_pcm" });
   const stored = JSON.parse(await env.DEVICES.get("device:iphone-air"));
   assert.equal(stored.device_secret, undefined);
   assert.equal(stored.secret_hash.length, 64);
@@ -181,7 +206,7 @@ test("device registration remains available when KV daily writes are exhausted",
   const response = await worker.fetch(post("/v1/devices/register", registration), env);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { registered: true });
+  assert.deepEqual(await response.json(), { registered: true, media_transport: "legacy_pcm" });
   const stored = await env.STATUS.storage.get("device:iphone-air");
   assert.equal(stored.device_secret, undefined);
   assert.equal(stored.secret_hash.length, 64);
@@ -470,7 +495,7 @@ test("Watch dial can request legacy PCM during a WebRTC rollout", async () => {
   }), env);
   assert.equal(dial.status, 202);
   assert.equal((await dial.json()).call.media_transport, "legacy_pcm");
-  const invalid = await worker.fetch(post("/v1/commands/enqueue", {
+  const webRTC = await worker.fetch(post("/v1/commands/enqueue", {
     device_id: registration.device_id,
     device_secret: registration.device_secret,
     command_id: crypto.randomUUID(),
@@ -478,7 +503,8 @@ test("Watch dial can request legacy PCM during a WebRTC rollout", async () => {
     number: "10086",
     media_transport: "webrtc",
   }), env);
-  assert.equal(invalid.status, 400);
+  assert.equal(webRTC.status, 202);
+  assert.equal((await webRTC.json()).call.media_transport, "legacy_pcm");
 });
 
 test("call control is durable, idempotent, and delivered after the Agent reconnects", async () => {
@@ -984,7 +1010,7 @@ test("incoming call retries deduplicate VoIP and Watch alert by call UUID", asyn
     const second = await worker.fetch(post("/v1/events/call", payload), env);
     assert.equal(first.status, 202);
     assert.equal(second.status, 202);
-    assert.deepEqual(await second.json(), { duplicate: true });
+    assert.deepEqual(await second.json(), { duplicate: true, media_transport: "legacy_pcm" });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1309,6 +1335,7 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     device_id: registration.device_id,
     device_secret: registration.device_secret,
     agent_version: "0.3.35",
+    agent_media_capabilities: ["legacy_pcm"],
     at_ok: true,
     cellular_state: "searching",
     cellular_registration: "搜索中",
@@ -1326,6 +1353,7 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     cloud_online: true,
     agent_id: "legacy",
     agent_version: "0.3.35",
+    agent_media_capabilities: ["legacy_pcm"],
     at_ok: true,
     cellular_state: "searching",
     cellular_registration: "搜索中",
@@ -1335,6 +1363,7 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     agents: [{
       agent_id: "legacy",
       agent_version: "0.3.35",
+      agent_media_capabilities: ["legacy_pcm"],
       at_ok: true,
       cellular_state: "searching",
       cellular_registration: "搜索中",
@@ -1464,6 +1493,11 @@ test("Agent call-state end returns the current Live Activity to cloud standby", 
     device_id: registration.device_id, device_secret: registration.device_secret,
     activity_id: "activity-state", call_id: "call-state", update_token: "f".repeat(64),
   }), env);
+  env.MEDIA = new MemoryMediaNamespace();
+  await env.DEVICES.put("call:d9b59660-05bb-4ea8-9aeb-4505b35c93f9", JSON.stringify({
+    device_id: registration.device_id, call_id: "call-state",
+    call_uuid: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9", generation: 1,
+  }));
   const captured = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
@@ -1523,4 +1557,749 @@ test("expired ActivityKit token never turns a delivered VoIP call into a relay f
     assert.equal(response.status, 202);
     assert.equal((await response.json()).pushed, true);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+const webRTCCallUUID = "d9b59660-05bb-4ea8-9aeb-4505b35c93f9";
+const turnTestConfig = {
+  TURN_URLS: '["turn:relay.example:3478?transport=udp","turns:relay.example:5349?transport=tcp"]',
+  TURN_SHARED_SECRET: "test-only-turn-rest-secret",
+  STUN_URLS: '["stun:relay.example:3478"]',
+};
+
+async function iceTestEnvironment(overrides = {}) {
+  const env = { ...testEnvironment(), ...turnTestConfig, ...overrides };
+  await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify({
+    call_uuid: webRTCCallUUID, call_id: "ice-call", generation: 3,
+    media_transport: "webrtc", secret_hash: createHash("sha256").update("call-secret").digest("hex"),
+    media_expires_at: new Date(Date.now() + 7200_000).toISOString(),
+  }));
+  return env;
+}
+
+function iceRequest(role = "iphone", token = "call-secret") {
+  return new Request(`https://push.airsim.example/v1/calls/${webRTCCallUUID}/ice?role=${role}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+}
+
+test("ICE endpoint generates coturn REST HMAC-SHA1 credentials without caching", async () => {
+  const env = await iceTestEnvironment();
+  for (const role of ["iphone", "agent"]) {
+    const response = await worker.fetch(iceRequest(role), env);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    const body = await response.json();
+    assert.equal(body.ttl, 3600);
+    assert.deepEqual(body.ice_servers[0], { urls: ["stun:relay.example:3478"] });
+    const turn = body.ice_servers[1];
+    assert.deepEqual(turn.urls, JSON.parse(env.TURN_URLS));
+    assert.ok(Math.abs(Number(turn.username.split(":")[0]) - Date.now() / 1000 - 3600) < 2);
+    assert.ok(turn.username.endsWith(`:${webRTCCallUUID}:${role}`));
+    assert.equal(turn.credential, createHmac("sha1", env.TURN_SHARED_SECRET).update(turn.username).digest("base64"));
+    assert.equal(JSON.stringify(body).includes(env.TURN_SHARED_SECRET), false);
+  }
+  const record = JSON.parse(await env.DEVICES.get(`call:${webRTCCallUUID}`));
+  assert.equal(record.credential, undefined);
+});
+
+test("ICE rejects unauthenticated, expired, invalid role, and missing TURN requests", async () => {
+  const env = await iceTestEnvironment();
+  assert.equal((await worker.fetch(iceRequest("iphone", "wrong"), env)).status, 401);
+  assert.equal((await worker.fetch(iceRequest("watch"), env)).status, 400);
+  assert.equal((await worker.fetch(iceRequest("iphone"), { ...env, TURN_SHARED_SECRET: "" })).status, 503);
+  assert.equal((await worker.fetch(iceRequest("iphone"), { ...env, STUN_URLS: '["https://bad"]' })).status, 503);
+  await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify({
+    secret_hash: createHash("sha256").update("call-secret").digest("hex"),
+    expires_at: new Date(Date.now() - 6000).toISOString(),
+  }));
+  const response = await worker.fetch(iceRequest(), env);
+  assert.equal(response.status, 410);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+});
+
+test("TURN URL validation and credential TTL are bounded by configuration and call expiry", async () => {
+  for (const TURN_URLS of ['["https://relay.example"]', '["turn:user:secret@relay.example"]',
+    '["turn:relay.example?transport=http"]', '["turn:relay.example/path"]', '["turn:relay.example:99999"]', '["turn:relay.example:0"]', 'null', '{}', '[]', 'invalid']) {
+    assert.equal(turnConfigured({ ...turnTestConfig, TURN_URLS }), false, TURN_URLS);
+  }
+  assert.equal(turnConfigured(turnTestConfig), true);
+  assert.equal(turnConfigured({ ...turnTestConfig, TURN_URLS: '["turn:[::1]:3478?transport=udp"]' }), true);
+  for (const [configured, expected] of [["1", 60], ["invalid", 3600], ["999999", 86400]]) {
+    const env = await iceTestEnvironment({ TURN_TTL_SECONDS: configured });
+    const call = JSON.parse(await env.DEVICES.get(`call:${webRTCCallUUID}`));
+    call.media_expires_at = new Date(Date.now() + 172800_000).toISOString();
+    await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify(call));
+    const body = await (await worker.fetch(iceRequest(), env)).json();
+    assert.equal(body.ttl, expected);
+  }
+  const env = await iceTestEnvironment();
+  const call = JSON.parse(await env.DEVICES.get(`call:${webRTCCallUUID}`));
+  call.media_expires_at = new Date(Date.now() + 30_000).toISOString();
+  await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify(call));
+  const body = await (await worker.fetch(iceRequest(), env)).json();
+  assert.ok(body.ttl > 0 && body.ttl <= 30);
+  assert.ok(Number(body.ice_servers[1].username.split(":")[0]) * 1000 <= Date.parse(call.media_expires_at));
+});
+
+test("server rollout requires TURN and returns the negotiated registration and dial transport", async () => {
+  const env = { ...testEnvironment(), WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+  env.COMMANDS = new MemoryCommandNamespace();
+  const capable = { ...registration, media_transport: "webrtc",
+    app_media_capabilities: ["webrtc"], agent_media_capabilities: ["webrtc"] };
+  let response = await worker.fetch(post("/v1/devices/register", capable), env);
+  assert.equal((await response.json()).media_transport, "legacy_pcm");
+  Object.assign(env, turnTestConfig);
+  response = await worker.fetch(post("/v1/devices/register", capable), env);
+  assert.equal((await response.json()).media_transport, "webrtc");
+  env.COMMANDS.addAgent(registration.device_id);
+  for (const transport of ["webrtc", "legacy_pcm"]) {
+    const dial = await worker.fetch(post("/v1/commands/enqueue", { device_id: registration.device_id,
+      device_secret: registration.device_secret, command_id: crypto.randomUUID(), type: "dial",
+      number: "10086", media_transport: transport }), env);
+    assert.equal(dial.status, 202);
+    assert.equal((await dial.json()).call.media_transport, transport);
+  }
+  const legacy = { ...capable, agent_media_capabilities: ["legacy_pcm"] };
+  assert.equal((await (await worker.fetch(post("/v1/devices/register", legacy), env)).json()).media_transport, "legacy_pcm");
+});
+
+function webRTCSession() {
+  const iphone = new MemoryMediaSocket("iphone");
+  const agent = new MemoryMediaSocket("agent");
+  const watch = new MemoryMediaSocket("watch");
+  for (const socket of [iphone, agent, watch]) Object.assign(socket.attachment, {
+    callUUID: webRTCCallUUID, generation: 3,
+    mediaTransport: socket === watch ? "legacy_pcm" : "webrtc",
+  });
+  const state = new MemoryMediaState([iphone, agent, watch]);
+  const relay = new CallMediaSession(state, {});
+  relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  for (const socket of [iphone, agent, watch]) socket.sent = [];
+  return { relay, state, iphone, agent, watch };
+}
+
+function signaling(action, sessionID = "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145", extras = {}) {
+  return JSON.stringify({ action, call_uuid: webRTCCallUUID, generation: 3, session_id: sessionID,
+    ...(action === "webrtc_ice" ? { candidate: { candidate: "candidate:1 1 UDP 1 127.0.0.1 9000 typ host", sdp_mid: "0", sdp_mline_index: 0 } } : { sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" }), ...extras });
+}
+
+test("WebRTC relays bounded offer, answer and early ICE only between owning iPhone and agent", () => {
+  const { relay, iphone, agent, watch } = webRTCSession();
+  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  relay.webSocketMessage(iphone, signaling("webrtc_ice"));
+  relay.webSocketMessage(agent, signaling("webrtc_ice"));
+  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  assert.equal(agent.sent.length, 2);
+  assert.equal(iphone.sent.length, 2);
+  assert.equal(watch.sent.length, 0);
+  assert.equal(JSON.stringify(agent.attachment).includes("v=0"), false);
+  assert.equal(JSON.stringify(agent.attachment).includes("candidate:"), false);
+  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  assert.match(agent.sent.at(-1), /session already answered/);
+});
+
+test("WebRTC rejects wrong roles, identity, stale sessions and oversized payloads", () => {
+  const { relay, iphone, agent, watch } = webRTCSession();
+  for (const [sender, message] of [
+    [agent, signaling("webrtc_offer")], [iphone, signaling("webrtc_answer")],
+    [iphone, signaling("webrtc_offer", undefined, { generation: 2 })],
+    [iphone, signaling("webrtc_offer", undefined, { call_uuid: crypto.randomUUID() })],
+    [iphone, signaling("webrtc_offer", "not-a-uuid")],
+    [iphone, signaling("webrtc_offer", undefined, { sdp: "x".repeat(49 * 1024) })],
+    [agent, signaling("webrtc_ice")],
+  ]) {
+    relay.webSocketMessage(sender, message);
+    assert.match(sender.sent.at(-1), /webrtc_failed/);
+  }
+  agent.sent = []; iphone.sent = [];
+  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  const sessionID = crypto.randomUUID();
+  relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
+  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  assert.match(agent.sent.at(-1), /stale signaling session/);
+  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  assert.match(iphone.sent.at(-1), /stale signaling session/);
+  for (const candidate of [{ candidate: "x".repeat(4097), sdp_mline_index: 0 },
+    { candidate: "x", sdp_mline_index: -1 }, { candidate: "x", sdp_mline_index: 0.5 },
+    { candidate: "x", sdp_mid: "x".repeat(257), sdp_mline_index: 0 }]) {
+    relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID, { candidate }));
+    assert.match(agent.sent.at(-1), /invalid ICE candidate/);
+  }
+});
+
+test("WebRTC refuses binary PCM; Watch answer stays explicit legacy", () => {
+  const { relay, iphone, agent } = webRTCSession();
+  relay.webSocketMessage(iphone, new Uint8Array([1]));
+  relay.webSocketMessage(agent, new Uint8Array([1]));
+  assert.equal(iphone.closed, true); assert.equal(agent.closed, true);
+  const watch = new MemoryMediaSocket("watch");
+  const agent2 = new MemoryMediaSocket("agent");
+  agent2.attachment.mediaTransport = "webrtc";
+  const relay2 = new CallMediaSession(new MemoryMediaState([watch, agent2]), {});
+  relay2.webSocketMessage(watch, JSON.stringify({ action: "answer", media_transport: "webrtc" }));
+  assert.equal(JSON.parse(agent2.sent.at(-1)).media_transport, "legacy_pcm");
+  relay2.webSocketMessage(agent2, new Uint8Array([2]));
+  assert.equal(agent2.closed, false);
+  assert.deepEqual(watch.sent.at(-1), new Uint8Array([2]));
+});
+
+test("missing peers never queue SDP, and reconnect requires a fresh negotiation", async (t) => {
+  const { relay, state, iphone, agent } = webRTCSession();
+  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  relay.webSocketClose(agent, 1000, "disconnected");
+  assert.equal(iphone.attachment.negotiation, undefined);
+  relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
+  assert.match(iphone.sent.at(-1), /peer unavailable/);
+  assert.equal(iphone.attachment.pendingControl, "");
+  const NativeResponse = globalThis.Response;
+  t.mock.method(globalThis, "Response", function(body, init) {
+    return init?.status === 101 ? { status: 101, webSocket: init.webSocket } : new NativeResponse(body, init);
+  });
+  globalThis.WebSocketPair = class {
+    constructor() { this[0] = new MemoryMediaSocket("agent"); this[1] = new MemoryMediaSocket("agent"); }
+  };
+  t.after(() => { delete globalThis.WebSocketPair; });
+  state.acceptWebSocket = (socket) => state.sockets.push(socket);
+  const response = await relay.fetch(new Request("https://media.internal/session", { headers: {
+    upgrade: "websocket", "x-airsim-role": "agent", "x-airsim-media-transport": "webrtc",
+    "x-airsim-call-uuid": webRTCCallUUID, "x-airsim-generation": "3",
+  } }));
+  assert.equal(response.status, 101);
+  const reconnected = state.getWebSockets("agent")[0];
+  relay.webSocketMessage(reconnected, signaling("webrtc_answer"));
+  assert.match(reconnected.sent.at(-1), /stale signaling session/);
+  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  assert.equal(agent.sent.filter((message) => typeof message === "string" && message.includes("webrtc_answer")).length, 0);
+  const newSession = crypto.randomUUID();
+  relay.webSocketMessage(iphone, signaling("webrtc_offer", newSession));
+  relay.webSocketClose(agent, 1000, "late close callback");
+  assert.equal(iphone.attachment.negotiation.sessionID, newSession);
+  relay.webSocketMessage(reconnected, signaling("webrtc_answer", newSession));
+  assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_answer");
+});
+
+test("incoming transport is server negotiated and Watch payload always remains legacy", async (t) => {
+  const env = { ...testEnvironment(), ...turnTestConfig,
+    WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+  const captured = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    captured.push(JSON.parse(options.body));
+    return new Response("", { status: 200 });
+  });
+  await worker.fetch(post("/v1/devices/register", { ...registration, media_transport: "webrtc",
+    app_media_capabilities: ["webrtc"], agent_media_capabilities: ["webrtc"] }), env);
+  const event = { event: "incoming_call", device_id: registration.device_id,
+    device_secret: registration.device_secret, call_id: "negotiated-call",
+    call_uuid: crypto.randomUUID(), call_secret: "call-secret-for-negotiation",
+    number: "10010", issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 45000).toISOString(), media_transport: "webrtc" };
+  const response = await worker.fetch(post("/v1/events/call", event), env);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).media_transport, "webrtc");
+  assert.equal(captured[0].media_transport, "webrtc");
+  assert.equal(captured[1].media_transport, "legacy_pcm");
+  await worker.fetch(post("/v1/devices/register", { ...registration,
+    media_transport: "legacy_pcm", app_media_capabilities: ["legacy_pcm"],
+    agent_media_capabilities: ["legacy_pcm"] }), env);
+  await env.DEVICES.delete(`call-lifecycle:${registration.device_id}`);
+  const legacy = await worker.fetch(post("/v1/events/call", { ...event,
+    call_uuid: crypto.randomUUID(), call_id: "legacy-call", generation: 2 }), env);
+  assert.equal(legacy.status, 202);
+  assert.equal((await legacy.json()).media_transport, "legacy_pcm");
+});
+
+test("call connect authenticates and forwards authoritative transport and identity", async () => {
+  const env = await iceTestEnvironment();
+  let forwarded;
+  env.MEDIA = { idFromName: (name) => name, get: () => ({ fetch: async (request) => {
+    forwarded = request;
+    return new Response("ok");
+  } }) };
+  const connect = (token, role = "iphone") => new Request(
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}&token=${token}`,
+    { headers: { upgrade: "websocket", "x-airsim-media-transport": "legacy_pcm" } });
+  assert.equal((await worker.fetch(connect("wrong"), env)).status, 401);
+  assert.equal((await worker.fetch(connect("call-secret", "other"), env)).status, 400);
+  assert.equal((await worker.fetch(connect("call-secret"), env)).status, 200);
+  assert.equal(forwarded.headers.get("x-airsim-media-transport"), "webrtc");
+  assert.equal(forwarded.headers.get("x-airsim-call-uuid"), webRTCCallUUID);
+  assert.equal(forwarded.headers.get("x-airsim-generation"), "3");
+  const call = JSON.parse(await env.DEVICES.get(`call:${webRTCCallUUID}`));
+  call.media_expires_at = new Date(Date.now() - 6000).toISOString();
+  await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify(call));
+  assert.equal((await worker.fetch(connect("call-secret"), env)).status, 410);
+});
+
+test("legacy and nonowner connections cannot send WebRTC and queued answer retains transport", () => {
+  const iphone = new MemoryMediaSocket("iphone");
+  iphone.attachment.mediaTransport = "webrtc";
+  const state = new MemoryMediaState([iphone]);
+  const relay = new CallMediaSession(state, {});
+  relay.webSocketMessage(iphone, JSON.stringify({ action: "answer", media_transport: "legacy_pcm" }));
+  assert.equal(JSON.parse(iphone.attachment.pendingControl).media_transport, "webrtc");
+  const agent = new MemoryMediaSocket("agent");
+  state.sockets.push(agent);
+  relay.flushPendingControls(agent);
+  assert.equal(JSON.parse(agent.sent.at(-1)).media_transport, "webrtc");
+  agent.sent = [];
+  relay.webSocketMessage(agent, signaling("webrtc_offer"));
+  assert.match(agent.sent.at(-1), /invalid WebRTC owner or transport/);
+  const intruder = new MemoryMediaSocket("iphone");
+  intruder.attachment = { ...iphone.attachment, owner: false, pcmTraceKey: "intruder" };
+  relay.webSocketMessage(intruder, signaling("webrtc_offer"));
+  assert.equal(intruder.sent.length, 0);
+});
+
+test("heartbeat refreshes native capabilities on registry fast path and KV fallback without losing app capabilities", async () => {
+  for (const useRegistry of [false, true]) {
+    const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+    if (useRegistry) env.STATUS = new MemoryStatusNamespace();
+    await worker.fetch(post("/v1/devices/register", { ...registration, media_transport: "webrtc",
+      app_media_capabilities: ["legacy_pcm", "webrtc"] }), env);
+    const heartbeat = { event: "agent_heartbeat", device_id: registration.device_id,
+      device_secret: registration.device_secret, agent_id: "q25", at_ok: true,
+      cellular_state: "registered", agent_media_capabilities: ["legacy_pcm", "webrtc"] };
+    assert.equal((await worker.fetch(post("/v1/events/heartbeat", heartbeat), env)).status, 202);
+    let registrationResponse = await worker.fetch(post("/v1/devices/register", registration), env);
+    assert.equal((await registrationResponse.json()).media_transport, "webrtc");
+    const oldAgent = { ...heartbeat };
+    delete oldAgent.agent_media_capabilities;
+    assert.equal((await worker.fetch(post("/v1/events/heartbeat", oldAgent), env)).status, 202);
+    registrationResponse = await worker.fetch(post("/v1/devices/register", registration), env);
+    assert.equal((await registrationResponse.json()).media_transport, "legacy_pcm");
+    const stored = useRegistry
+      ? await env.STATUS.storage.get(`device:${registration.device_id}`)
+      : JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+    assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
+    assert.deepEqual(stored.agent_media_capabilities, ["legacy_pcm"]);
+    assert.equal((await worker.fetch(post("/v1/events/heartbeat", {
+      ...heartbeat, device_secret: "wrong",
+    }), env)).status, 401);
+  }
+});
+
+test("partial registrations preserve capabilities and explicit legacy override regardless registration order", async () => {
+  for (const appFirst of [false, true]) {
+    const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+    const app = { ...registration, media_transport: "webrtc", app_media_capabilities: ["webrtc"] };
+    const agent = { ...registration, agent_media_capabilities: ["webrtc"] };
+    await worker.fetch(post("/v1/devices/register", appFirst ? app : agent), env);
+    const second = await worker.fetch(post("/v1/devices/register", appFirst ? agent : app), env);
+    assert.equal((await second.json()).media_transport, "webrtc");
+    await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
+    const partial = await worker.fetch(post("/v1/devices/register", registration), env);
+    assert.equal((await partial.json()).media_transport, "legacy_pcm");
+  }
+});
+
+
+test("signaling history fits hibernation attachments and cannot grow without bound", () => {
+  const { relay, iphone, agent, state } = webRTCSession();
+  const intruder = new MemoryMediaSocket("iphone");
+  intruder.attachment = { ...iphone.attachment, owner: false };
+  state.sockets.push(intruder);
+  relay.webSocketMessage(intruder, signaling("webrtc_offer"));
+  assert.match(intruder.sent.at(-1), /invalid WebRTC owner/);
+  state.sockets.pop();
+  for (let count = 0; count < 24; count++) relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
+  assert.ok(new TextEncoder().encode(JSON.stringify(iphone.attachment)).length < 2048);
+  relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
+  assert.match(iphone.sent.at(-1), /negotiation limit/);
+  assert.equal(agent.attachment.usedSessions.length, 24);
+});
+
+const managedTURNConfig = {
+  TURN_PROVIDER: "cloudflare", CLOUDFLARE_TURN_KEY_ID: "test-key-id",
+  CLOUDFLARE_TURN_API_TOKEN: "test-only-managed-token",
+};
+
+test("managed Cloudflare TURN validates configuration and returns sanitized credentials", async (t) => {
+  const env = await iceTestEnvironment(managedTURNConfig);
+  assert.equal(turnConfigured(env), true);
+  assert.equal(turnConfigured({ ...env, CLOUDFLARE_TURN_API_TOKEN: "" }), false);
+  assert.equal(turnConfigured({ ...env, CLOUDFLARE_TURN_KEY_ID: "../another/key" }), false);
+  assert.equal(turnConfigured({ ...env, TURN_PROVIDER: "unknown" }), false);
+  let requested;
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    requested = { url, options };
+    return new Response(JSON.stringify({ iceServers: [
+      { urls: "stun:managed.example:3478", ignored: "discard" },
+      { urls: ["turn:managed.example:3478?transport=udp"], username: "temporary-user", credential: "temporary-password", ignored: "discard" },
+    ] }), { status: 201 });
+  });
+  const response = await worker.fetch(iceRequest(), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  const body = await response.json();
+  assert.equal(body.ttl, 3600);
+  assert.equal(requested.url, "https://rtc.live.cloudflare.com/v1/turn/keys/test-key-id/credentials/generate-ice-servers");
+  assert.equal(requested.options.headers.authorization, `Bearer ${managedTURNConfig.CLOUDFLARE_TURN_API_TOKEN}`);
+  assert.deepEqual(JSON.parse(requested.options.body), { ttl: 3600 });
+  assert.equal(JSON.stringify(body).includes("ignored"), false);
+  assert.equal(body.ice_servers.at(-1).credential, "temporary-password");
+  assert.equal(JSON.stringify(body).includes(managedTURNConfig.CLOUDFLARE_TURN_API_TOKEN), false);
+});
+
+test("managed TURN failures, malformed responses and timeout fail closed without exposing provider secrets", async (t) => {
+  const env = await iceTestEnvironment(managedTURNConfig);
+  const invalidBodies = [ {}, { iceServers: [] },
+    { iceServers: [{ urls: "stun:only-stun.example" }] },
+    { iceServers: [{ urls: "turn:managed.example", username: "u" }] },
+    { iceServers: [{ urls: "https://bad.example", username: "u", credential: "secret" }] },
+    { iceServers: [{ urls: "turn:managed.example", username: "u", credential: "x".repeat(4097) }] },
+  ];
+  for (const body of invalidBodies) {
+    const mock = t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify(body), { status: 201 }));
+    const response = await worker.fetch(iceRequest(), env);
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.text()).includes("secret"), false);
+    mock.mock.restore();
+  }
+  let mock = t.mock.method(globalThis, "fetch", async () => new Response("provider secret", { status: 401 }));
+  assert.equal((await worker.fetch(iceRequest(), env)).status, 503);
+  mock.mock.restore();
+  const nativeSetTimeout = globalThis.setTimeout;
+  let requestedTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback, duration) => {
+    requestedTimeout = duration;
+    return nativeSetTimeout(callback, 1);
+  });
+  mock = t.mock.method(globalThis, "fetch", async (url, options) => new Promise((resolve, reject) => {
+    options.signal.addEventListener("abort", () => reject(new Error("provider secret aborted")));
+  }));
+  const response = await worker.fetch(iceRequest(), env);
+  assert.equal(requestedTimeout, 5000);
+  assert.equal(response.status, 503);
+  assert.equal((await response.text()).includes("provider secret"), false);
+});
+
+test("late Watch connections and replacements preserve the owning iPhone WebRTC session", async (t) => {
+  const { relay, state, iphone, agent } = webRTCSession();
+  const sessionID = crypto.randomUUID();
+  relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
+  relay.webSocketMessage(agent, signaling("webrtc_answer", sessionID));
+  const NativeResponse = globalThis.Response;
+  t.mock.method(globalThis, "Response", function(body, init) {
+    return init?.status === 101 ? { status: 101, webSocket: init.webSocket } : new NativeResponse(body, init);
+  });
+  globalThis.WebSocketPair = class {
+    constructor() { this[0] = new MemoryMediaSocket("watch"); this[1] = new MemoryMediaSocket("watch"); }
+  };
+  t.after(() => { delete globalThis.WebSocketPair; });
+  state.acceptWebSocket = (socket) => state.sockets.push(socket);
+  for (let reconnect = 0; reconnect < 2; reconnect++) {
+    const response = await relay.fetch(new Request("https://media.internal/session", { headers: {
+      upgrade: "websocket", "x-airsim-role": "watch", "x-airsim-media-transport": "webrtc",
+      "x-airsim-call-uuid": webRTCCallUUID, "x-airsim-generation": "3",
+    } }));
+    assert.equal(response.status, 101);
+    assert.equal(iphone.attachment.negotiation.sessionID, sessionID);
+    assert.equal(agent.attachment.negotiation.sessionID, sessionID);
+    relay.webSocketMessage(iphone, signaling("webrtc_ice", sessionID));
+    assert.equal(JSON.parse(agent.sent.at(-1)).action, "webrtc_ice");
+    relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID));
+    assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_ice");
+    assert.equal(state.getWebSockets("watch")[0].attachment.mediaTransport, "legacy_pcm");
+  }
+});
+
+test("agent registration bootstraps app settings but cannot overwrite existing app transport policy", async () => {
+  const env = { ...testEnvironment(), ...turnTestConfig,
+    WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+  const bootstrap = { ...registration, registration_source: "agent", media_transport: "webrtc",
+    app_media_capabilities: ["legacy_pcm", "webrtc"], agent_media_capabilities: ["legacy_pcm", "webrtc"] };
+  const initial = await worker.fetch(post("/v1/devices/register", bootstrap), env);
+  assert.equal((await initial.json()).media_transport, "webrtc");
+  const stale = { ...bootstrap, media_transport: "legacy_pcm",
+    app_media_capabilities: ["legacy_pcm"], force_legacy_pcm: true };
+  const updated = await worker.fetch(post("/v1/devices/register", stale), env);
+  assert.equal((await updated.json()).media_transport, "webrtc");
+  let stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+  assert.equal(stored.media_transport_requested, "webrtc");
+  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
+  assert.equal(stored.force_legacy_pcm, false);
+
+  // A normal app registration still owns the policy and may enforce legacy.
+  await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
+  await worker.fetch(post("/v1/devices/register", { ...stale, force_legacy_pcm: false,
+    agent_media_capabilities: ["legacy_pcm"] }), env);
+  stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+  assert.equal(stored.force_legacy_pcm, true);
+  assert.equal(stored.media_transport_requested, "webrtc");
+  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
+  assert.deepEqual(stored.agent_media_capabilities, ["legacy_pcm"]);
+  assert.equal(stored.media_transport, "legacy_pcm");
+
+  // Existing clients without a source keep their previous update semantics.
+  const noSource = { ...stale, force_legacy_pcm: false };
+  delete noSource.registration_source;
+  await worker.fetch(post("/v1/devices/register", noSource), env);
+  stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
+  assert.equal(stored.media_transport_requested, "legacy_pcm");
+  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm"]);
+  assert.equal(stored.force_legacy_pcm, false);
+});
+
+async function terminalEnvironment() {
+  const env = { ...testEnvironment(), MEDIA: new MemoryMediaNamespace() };
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify({
+    device_id: registration.device_id, call_id: "terminal-call", call_uuid: webRTCCallUUID,
+    generation: 3, media_transport: "webrtc",
+    secret_hash: createHash("sha256").update("call-secret").digest("hex"),
+    media_expires_at: new Date(Date.now() + 7200_000).toISOString(),
+  }));
+  const event = { event: "call_state", device_id: registration.device_id,
+    device_secret: registration.device_secret, call_id: "terminal-call", call_uuid: webRTCCallUUID,
+    generation: 3, phase: "ended", timestamp: "2026-10-17T12:00:00Z" };
+  return { env, event, ...env.MEDIA.entry(webRTCCallUUID) };
+}
+
+function terminalSocket(role, overrides = {}) {
+  const socket = new MemoryMediaSocket(role);
+  Object.assign(socket.attachment, { callID: "terminal-call", callUUID: webRTCCallUUID,
+    generation: 3, mediaTransport: "webrtc", ...overrides });
+  return socket;
+}
+
+function mockMediaUpgrade(t) {
+  const NativeResponse = globalThis.Response;
+  t.mock.method(globalThis, "Response", function(body, init) {
+    return init?.status === 101 ? { status: 101, webSocket: init.webSocket } : new NativeResponse(body, init);
+  });
+  globalThis.WebSocketPair = class {
+    constructor() { this[0] = new MemoryMediaSocket("iphone"); this[1] = new MemoryMediaSocket("iphone"); }
+  };
+  t.after(() => { delete globalThis.WebSocketPair; });
+}
+
+function terminalConnect(role = "iphone") {
+  return new Request(`https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}&token=call-secret`, {
+    headers: { upgrade: "websocket" },
+  });
+}
+
+test("HTTP terminal lifecycle reaches matching WebRTC clients without ownership or socket closure", async () => {
+  const { env, event, state } = await terminalEnvironment();
+  const iphone = terminalSocket("iphone");
+  const watch = terminalSocket("watch");
+  const unrelated = terminalSocket("iphone", { generation: 2 });
+  state.sockets.push(iphone, watch, unrelated, terminalSocket("agent"));
+  const response = await worker.fetch(post("/v1/events/call-state", event), env);
+  assert.equal(response.status, 202);
+  const expected = { status: "remote_ended", call_id: event.call_id,
+    call_uuid: event.call_uuid, generation: 3 };
+  assert.deepEqual(iphone.sent.map(JSON.parse), [expected]);
+  assert.deepEqual(watch.sent.map(JSON.parse), [expected]);
+  assert.deepEqual(unrelated.sent, []);
+  assert.equal(iphone.closed, false);
+  const { session } = env.MEDIA.entry(webRTCCallUUID);
+  session.webSocketClose(state.getWebSockets("agent")[0], 1000, "remote ended");
+  assert.deepEqual(iphone.sent.map(JSON.parse), [expected]);
+  assert.deepEqual(await state.storage.get("terminal"), expected);
+});
+
+test("terminal survives DO recreation and replays before reconnect can flush answers or negotiate", async (t) => {
+  mockMediaUpgrade(t);
+  const { env, event, state } = await terminalEnvironment();
+  const iphone = terminalSocket("iphone", { owner: true, pendingControl: JSON.stringify({ action: "answer" }) });
+  state.sockets.push(iphone);
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 202);
+  assert.equal(iphone.attachment.pendingControl, "");
+  iphone.closed = true;
+  const { session, state: recreated } = env.MEDIA.recreate(webRTCCallUUID);
+  assert.equal((await worker.fetch(terminalConnect(), env)).status, 101);
+  const reconnected = recreated.getWebSockets("iphone")[0];
+  assert.deepEqual(reconnected.sent.map(JSON.parse).map((message) => message.status), ["remote_ended"]);
+  assert.equal(reconnected.closed, false);
+  assert.equal((await worker.fetch(terminalConnect("agent"), env)).status, 101);
+  const agent = recreated.getWebSockets("agent")[0];
+  assert.deepEqual(agent.sent, []);
+  for (const message of [JSON.stringify({ action: "answer" }), signaling("webrtc_offer"),
+    signaling("webrtc_ice"), new Uint8Array([1, 2])]) session.webSocketMessage(reconnected, message);
+  session.webSocketMessage(agent, signaling("webrtc_answer"));
+  session.webSocketMessage(agent, new Uint8Array([3, 4]));
+  session.flushPendingControls(agent);
+  assert.deepEqual(agent.sent, []);
+  assert.ok(reconnected.sent.every((message) => JSON.parse(message).status === "remote_ended"));
+  assert.equal(reconnected.attachment.owner, false);
+});
+
+test("terminal rejects wrong stored owner, call ID, UUID and both stale and future generations before mutation", async () => {
+  for (const change of [{ device_id: "other-device" }, { call_id: "other-call" },
+    { call_uuid: crypto.randomUUID() }, { generation: 2 }, { generation: 4 }]) {
+    const { env, event, state } = await terminalEnvironment();
+    const iphone = terminalSocket("iphone");
+    state.sockets.push(iphone);
+    const key = `call:${webRTCCallUUID}`;
+    await env.DEVICES.put(key, JSON.stringify({ ...JSON.parse(await env.DEVICES.get(key)), ...change }));
+    const lifecycleKey = `call-lifecycle:${registration.device_id}`;
+    const before = JSON.stringify({ ...event, source: "agent", phase: "active", timestamp: "2026-10-17T11:00:00Z" });
+    await env.DEVICES.put(lifecycleKey, before);
+    const response = await worker.fetch(post("/v1/events/call-state", event), env);
+    assert.equal(response.status, 409, JSON.stringify(change));
+    assert.equal(await env.DEVICES.get(lifecycleKey), before);
+    assert.deepEqual(iphone.sent, []);
+    assert.equal(await state.storage.get("terminal"), undefined);
+  }
+});
+
+test("terminal retries remain deliverable across APNs failure, duplicate and media failure", async (t) => {
+  const { env, event, state } = await terminalEnvironment();
+  const iphone = terminalSocket("iphone");
+  state.sockets.push(iphone);
+  await worker.fetch(post("/v1/live-activities/register", {
+    device_id: registration.device_id, device_secret: registration.device_secret,
+    activity_id: "terminal-activity", call_id: event.call_id, update_token: "f".repeat(64),
+  }), env);
+  let attempts = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    attempts += 1;
+    return new Response(attempts === 1 ? '{"reason":"InternalServerError"}' : "", { status: attempts === 1 ? 500 : 200 });
+  });
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 502);
+  assert.equal(iphone.sent.length, 1);
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 202);
+  const duplicate = await worker.fetch(post("/v1/events/call-state", event), env);
+  assert.equal((await duplicate.json()).duplicate, true);
+  assert.equal(iphone.sent.length, 3);
+  assert.equal(attempts, 2);
+  const send = iphone.send;
+  iphone.send = () => { throw new Error("socket unavailable"); };
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 503);
+  iphone.send = send;
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 202);
+  assert.equal(iphone.sent.length, 4);
+});
+
+test("terminal storage failure leaves HTTP event retryable", async () => {
+  const { env, event, state } = await terminalEnvironment();
+  const put = state.storage.put;
+  state.storage.put = async () => { throw new Error("storage unavailable"); };
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 503);
+  assert.equal(await env.DEVICES.get(`dedupe:call-state:${registration.device_id}:${webRTCCallUUID}:3:ended`), null);
+  state.storage.put = put;
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 202);
+  assert.equal((await state.storage.get("terminal")).status, "remote_ended");
+});
+
+test("failed lifecycle while all clients are offline is replayed from durable storage", async (t) => {
+  mockMediaUpgrade(t);
+  const { env, event, state } = await terminalEnvironment();
+  assert.equal(state.getWebSockets().length, 0);
+  assert.equal((await worker.fetch(post("/v1/events/call-state", { ...event, phase: "failed" }), env)).status, 202);
+  const { state: recreated } = env.MEDIA.recreate(webRTCCallUUID);
+  assert.equal((await worker.fetch(terminalConnect(), env)).status, 101);
+  const messages = recreated.getWebSockets("iphone")[0].sent.map(JSON.parse);
+  assert.deepEqual(messages, [{ status: "remote_ended", call_id: event.call_id,
+    call_uuid: event.call_uuid, generation: 3 }]);
+});
+
+test("old terminal retry after APNs failure drains without changing a newer call or its activity", async (t) => {
+  mockMediaUpgrade(t);
+  const { env, event, state } = await terminalEnvironment();
+  const iphone = terminalSocket("iphone");
+  state.sockets.push(iphone);
+  await worker.fetch(post("/v1/live-activities/register", {
+    device_id: registration.device_id, device_secret: registration.device_secret,
+    activity_id: "old-activity", call_id: event.call_id, update_token: "f".repeat(64),
+  }), env);
+  let attempts = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    attempts += 1;
+    return new Response('{"reason":"InternalServerError"}', { status: 500 });
+  });
+  assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 502);
+  assert.equal(iphone.sent.length, 1);
+  const lifecycleKey = `call-lifecycle:${registration.device_id}`;
+  const newer = JSON.stringify({ ...event, call_id: "new-call", call_uuid: crypto.randomUUID(),
+    generation: 1, phase: "active", timestamp: "2026-10-17T12:01:00Z" });
+  await env.DEVICES.put(lifecycleKey, newer);
+  await worker.fetch(post("/v1/live-activities/register", {
+    device_id: registration.device_id, device_secret: registration.device_secret,
+    activity_id: "new-activity", call_id: "new-call", update_token: "e".repeat(64),
+  }), env);
+  const activityKey = `liveactivity:current:${registration.device_id}`;
+  const activity = await env.DEVICES.get(activityKey);
+  const retry = await worker.fetch(post("/v1/events/call-state", event), env);
+  assert.equal(retry.status, 202);
+  assert.equal((await retry.json()).obsolete, true);
+  assert.equal(iphone.sent.length, 2);
+  assert.equal(await env.DEVICES.get(lifecycleKey), newer);
+  assert.equal(await env.DEVICES.get(activityKey), activity);
+  assert.equal(attempts, 1);
+  iphone.closed = true;
+  const { state: recreated } = env.MEDIA.recreate(webRTCCallUUID);
+  assert.equal((await worker.fetch(terminalConnect(), env)).status, 101);
+  assert.deepEqual(recreated.getWebSockets("iphone")[0].sent.map(JSON.parse), [{
+    status: "remote_ended", call_id: event.call_id, call_uuid: event.call_uuid, generation: 3,
+  }]);
+});
+
+test("call history is authenticated, read-only, bounded, and device scoped", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace();
+  const second = { ...registration, device_id: "second", device_secret: "t".repeat(32) };
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  await worker.fetch(post("/v1/devices/register", second), env);
+  const agent = env.COMMANDS.addAgent(registration.device_id);
+  const commandID = crypto.randomUUID();
+  const input = { device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: commandID, type: "call_history" };
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", { ...input, device_secret: second.device_secret }), env)).status, 401);
+  for (const fields of [{ limit: 0 }, { limit: 101 }, { limit: 1.2 }, { number: "123" },
+    { message: "text" }, { call: {} }, { action: "dial" }, { media_transport: "webrtc" }]) {
+    assert.equal((await worker.fetch(post("/v1/commands/enqueue", { ...input, ...fields }), env)).status, 400);
+  }
+  const response = await worker.fetch(post("/v1/commands/enqueue", input), env);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).call, undefined);
+  const command = JSON.parse(agent.sent[0]);
+  assert.equal(command.limit, 100);
+  assert.equal(command.number, undefined);
+  assert.equal(command.call, undefined);
+  assert.equal([...env.DEVICES.values.keys()].some(key => key.startsWith("call:")), false);
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", { ...input, limit: 1 }), env)).status, 409);
+  const row = { id: "calllog-android-test-1", index: 1, direction: "outgoing", state: "ended",
+    number: "123", started_at: "2026-10-16T01:00:00Z", updated_at: "2026-10-16T01:01:00Z",
+    ended_at: "2026-10-16T01:01:00Z", missed: false };
+  const completion = { ...input, status: "completed", result: { history: Array.from({ length: 100 }, () => row) } };
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion, device_secret: "x".repeat(32) }), env)).status, 401);
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion,
+    result: { history: Array.from({ length: 101 }, () => row) } }), env)).status, 400);
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion,
+    result: { history: [row], extra: "x".repeat(61 * 1024) } }), env)).status, 400);
+  for (const fields of [{ number: "x".repeat(83) }, { missed: "false" }, { started_at: "invalid" }, { state: "active" }]) {
+    assert.equal((await worker.fetch(post("/v1/commands/complete", { ...completion,
+      result: { history: [{ ...row, ...fields }] } }), env)).status, 400);
+  }
+  await env.COMMANDS.session(registration.device_id).webSocketMessage(agent, JSON.stringify({ ...completion,
+    result: { history: Array.from({ length: 101 }, () => row) } }));
+  const pending = await worker.fetch(post("/v1/commands/result", input), env);
+  assert.notEqual((await pending.json()).status, "completed");
+  assert.equal((await worker.fetch(post("/v1/commands/complete", completion), env)).status, 202);
+  const result = await worker.fetch(post("/v1/commands/result", input), env);
+  assert.equal((await result.json()).result.history.length, 100);
+  assert.equal((await worker.fetch(post("/v1/commands/result", { ...input,
+    device_id: second.device_id, device_secret: second.device_secret }), env)).status, 404);
+});
+
+test("history respects requested bounds and preserves explicit permission failures", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace();
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  const input = { device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: crypto.randomUUID(), type: "call_history", limit: 1 };
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", input), env)).status, 202);
+  const row = { id: "native-1", index: 1, direction: "incoming", state: "ended", number: "",
+    started_at: "2026-10-16T01:00:00Z", updated_at: "2026-10-16T01:00:00Z",
+    ended_at: "2026-10-16T01:00:00Z", missed: true };
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...input, status: "completed",
+    result: { history: [row, row] } }), env)).status, 400);
+  assert.equal((await worker.fetch(post("/v1/commands/complete", { ...input, status: "failed",
+    error: "Call history permission is not granted" }), env)).status, 202);
+  const result = await (await worker.fetch(post("/v1/commands/result", input), env)).json();
+  assert.equal(result.status, "failed");
+  assert.equal(result.error, "Call history permission is not granted");
 });

@@ -89,6 +89,121 @@ private struct AgentSMSInboxProbe: AgentSMSInboxServicing {
     func messages() async throws -> [SMSMessage] { inbox }
 }
 
+final class CloudCallHistoryTests: XCTestCase {
+    private func record(_ id: String, start: TimeInterval, updated: TimeInterval) -> CallRecord {
+        CallRecord(
+            id: id, index: 0, direction: "outgoing", state: "ended", number: "test",
+            startedAt: Date(timeIntervalSince1970: start),
+            updatedAt: Date(timeIntervalSince1970: updated),
+            endedAt: Date(timeIntervalSince1970: updated), missed: false
+        )
+    }
+
+    func testCloudResultDecodesNativeHistoryDates() throws {
+        let json = #"{"command_id":"test","status":"completed","result":{"history":[{"id":"calllog-agent-42","index":42,"direction":"incoming","state":"ended","number":null,"started_at":"2026-10-17T01:00:00.000Z","updated_at":"2026-10-17T01:01:00Z","ended_at":"2026-10-17T01:01:00Z","missed":false}]}}"#
+        let result = try AirSIMAPI.makeDecoder().decode(
+            CloudCommandResultResponse.self, from: Data(json.utf8)
+        )
+        let history = try XCTUnwrap(result.result?.history)
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history[0].id, "calllog-agent-42")
+        XCTAssertEqual(history[0].endedAt?.timeIntervalSince(history[0].startedAt), 60)
+        XCTAssertFalse(history[0].missed)
+    }
+
+    func testEmptyRemotePreservesCacheAndNewerRecordWins() {
+        let old = record("one", start: 10, updated: 20)
+        let new = record("one", start: 10, updated: 30)
+        XCTAssertEqual(CallHistoryPolicy.merged(
+            local: [new], remote: [], deletedIDs: [], limit: 100
+        ), [new])
+        XCTAssertEqual(CallHistoryPolicy.merged(
+            local: [new], remote: [old], deletedIDs: [], limit: 100
+        ), [new])
+    }
+
+    func testMergeUsesStableIDsSortsByCallTimeAndBoundsRows() {
+        let first = record("first", start: 10, updated: 100)
+        let second = record("second", start: 20, updated: 30)
+        XCTAssertEqual(CallHistoryPolicy.merged(
+            local: [first], remote: [first, second], deletedIDs: [], limit: 1
+        ).map(\.id), ["second"])
+    }
+
+    func testDeletedRowsStayHiddenAfterRelaunchAndRemoteRefresh() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalHistoryStore(directoryURL: directory)
+        let deleted = record("deleted", start: 10, updated: 20)
+        let kept = record("kept", start: 30, updated: 40)
+        XCTAssertTrue(store.saveCallHistory([deleted, kept]))
+        XCTAssertTrue(store.saveDeletedCallIDs(["deleted"]))
+        let reopened = LocalHistoryStore(directoryURL: directory)
+        XCTAssertEqual(CallHistoryPolicy.merged(
+            local: reopened.loadCallHistory(), remote: [deleted],
+            deletedIDs: reopened.loadDeletedCallIDs(), limit: 100
+        ).map(\.id), ["kept"])
+    }
+}
+
+final class CloudCallControlReceiptTests: XCTestCase {
+    private func receipt(
+        status: String = "completed",
+        result: [String: Bool],
+        rescueCommandID: String? = nil
+    ) throws -> CloudCallControlReceipt {
+        var payload: [String: Any] = [
+            "command_id": "test-command",
+            "status": status,
+            "result": result,
+        ]
+        if let rescueCommandID { payload["rescue_command_id"] = rescueCommandID }
+        return try JSONDecoder().decode(
+            CloudCallControlReceipt.self,
+            from: JSONSerialization.data(withJSONObject: payload)
+        )
+    }
+
+    func testAndroidTelecomConfirmedEndIsAccepted() throws {
+        let value = try receipt(result: ["ended": true, "android_confirmed": true])
+        XCTAssertTrue(value.cellularEndConfirmed)
+        XCTAssertEqual(value.confirmationPhase, "android_confirmed")
+    }
+
+    func testAndroidConfirmationRequiresCompletedEnd() throws {
+        for result in [
+            ["ended": true],
+            ["android_confirmed": true],
+            ["ended": false, "android_confirmed": true],
+            ["ended": true, "android_confirmed": false],
+        ] {
+            XCTAssertFalse(try receipt(result: result).cellularEndConfirmed)
+        }
+        for status in ["delivered", "failed", "expired"] {
+            XCTAssertFalse(try receipt(
+                status: status,
+                result: ["ended": true, "android_confirmed": true]
+            ).cellularEndConfirmed)
+        }
+    }
+
+    func testLegacyModemConfirmationRemainsSupported() throws {
+        let value = try receipt(result: ["modem_confirmed": true])
+        XCTAssertTrue(value.cellularEndConfirmed)
+        XCTAssertEqual(value.confirmationPhase, "modem_confirmed")
+        XCTAssertFalse(try receipt(status: "failed", result: ["modem_confirmed": true]).cellularEndConfirmed)
+    }
+
+    func testRescueConfirmationRetainsItsSource() throws {
+        XCTAssertEqual(try receipt(
+            result: ["ended": true, "android_confirmed": true], rescueCommandID: "rescue"
+        ).confirmationPhase, "rescue_android_confirmed")
+        XCTAssertEqual(try receipt(
+            result: ["modem_confirmed": true], rescueCommandID: "rescue"
+        ).confirmationPhase, "rescue_modem_confirmed")
+    }
+}
+
 final class AirSIMTests: XCTestCase {
 
     private func traceFrame(sequence: UInt32 = 1, source: UInt64 = 1_000,

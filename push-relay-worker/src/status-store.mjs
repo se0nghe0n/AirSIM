@@ -25,6 +25,12 @@ export class AgentStatusRegistry {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const normalizedDeviceID = deviceID.trim();
+      const deviceKey = `${DEVICE_PREFIX}${normalizedDeviceID}`;
+      const device = await this.storage.get(deviceKey);
+      if (Array.isArray(record.agent_media_capabilities) &&
+          JSON.stringify(device.agent_media_capabilities) !== JSON.stringify(record.agent_media_capabilities)) {
+        await this.storage.put(deviceKey, { ...device, agent_media_capabilities: record.agent_media_capabilities });
+      }
       await this.storage.put(`${HEARTBEAT_PREFIX}${normalizedDeviceID}:agent:${agentID}`, record);
       await this.storage.put(`${HEARTBEAT_PREFIX}${normalizedDeviceID}`, record);
       return Response.json({ received: true }, { status: 202 });
