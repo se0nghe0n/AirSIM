@@ -24,7 +24,10 @@ final class WebRTCCloudPeer implements Closeable {
     private final String secret;
     private final Signals signals;
     private final Runnable failed;
-    private final ExecutorService signaling = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService signaling = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> statisticsTask;
+    private final WebRTCStatistics statistics = new WebRTCStatistics();
+    private boolean statisticsPending;
     private final ExecutorService io = Executors.newFixedThreadPool(2);
     private final AtomicBoolean closed = new AtomicBoolean();
     private final WebRTCPcmBuffer capture = new WebRTCPcmBuffer();
@@ -137,6 +140,7 @@ final class WebRTCCloudPeer implements Closeable {
                 if (peer == null) throw new IOException("Peer creation failed");
                 peer.addTrack(track, Collections.singletonList("airsim"));
                 PeerConnection owner = peer;
+                startStatistics(owner, id);
                 owner.setRemoteDescription(new DescriptionObserver(id) {
                     @Override public void onSetSuccess() { submit(() -> {
                         if (!owns(owner, id)) return;
@@ -185,6 +189,31 @@ final class WebRTCCloudPeer implements Closeable {
     }
 
     private boolean owns(PeerConnection owner, String id) { return !closed.get() && peer == owner && sessionID.equals(id); }
+
+    // Telemetry has a separate failure boundary: SDK/report failures must never end audio.
+    private void startStatistics(PeerConnection owner, String id) {
+        statisticsTask = signaling.scheduleWithFixedDelay(() -> {
+            if (!owns(owner, id) || statisticsPending) return;
+            statisticsPending = true;
+            try {
+                owner.getStats(report -> {
+                    try { signaling.execute(() -> {
+                        if (!owns(owner, id)) return;
+                        statisticsPending = false;
+                        try {
+                            Map<String, WebRTCStatistics.Entry> entries = new HashMap<>();
+                            for (RTCStats stat : report.getStatsMap().values()) {
+                                entries.put(stat.getId(), new WebRTCStatistics.Entry(stat.getId(), stat.getType(), stat.getMembers()));
+                            }
+                            for (Map<String, Object> fields : statistics.sample(entries)) {
+                                BridgeLog.info("standalone_webrtc_stats session_id=" + id + " " + fields);
+                            }
+                        } catch (Exception | LinkageError ignored) { /* Optional telemetry only. */ }
+                    }); } catch (RejectedExecutionException ignored) { /* Peer is closing. */ }
+                });
+            } catch (Exception | LinkageError ignored) { statisticsPending = false; }
+        }, 5, 5, TimeUnit.SECONDS);
+    }
 
     private PeerConnection.Observer observer(String id) {
         return new PeerConnection.Observer() {
@@ -335,6 +364,8 @@ final class WebRTCCloudPeer implements Closeable {
     }
 
     private void disposePeer() {
+        if (statisticsTask != null) statisticsTask.cancel(false);
+        statisticsTask = null; statisticsPending = false; statistics.reset();
         if (peer != null) { peer.close(); peer.dispose(); peer = null; }
     }
 
