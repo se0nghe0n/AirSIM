@@ -157,7 +157,7 @@ APNS_KEY_ID = "YOUR_APNS_KEY_ID"
 ALLOWED_BUNDLE_ID = "org.example.airsim"
 WEBRTC_TRANSPORT_READY = "false"
 WEBRTC_ROLLOUT_PERCENT = "0"
-WEBRTC_HEADER_AUTH_REQUIRED = "true"
+WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "false"
 NEW_DEVICE_ENROLLMENT_ENABLED = "false"
 
 [[kv_namespaces]]
@@ -443,9 +443,10 @@ On the authenticated call WebSocket, the owning iPhone sends `webrtc_offer`, the
 agent sends `webrtc_answer`, and both may send `webrtc_ice` after an offer. Every
 WebRTC client authenticates the upgrade with `Authorization: Bearer <call_secret>`;
 the URL contains only the media role. Query-string secrets are rejected for
-WebRTC calls. During a coordinated upgrade only, an operator may set
-`WEBRTC_HEADER_AUTH_REQUIRED = "false"`, deploy the Relay, install updated clients,
-and then restore `"true"`. Older legacy PCM calls retain query-token compatibility
+WebRTC calls. During a coordinated Q25 upgrade only, an operator may set
+`WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "true"`; this permits URL tokens for the
+`agent` role only while updated iPhone and Watch clients use headers. After
+updating Q25, restore `"false"`. Older legacy PCM calls retain query-token compatibility
 until their clients are upgraded. Disable automatic Worker invocation logs while
 that compatibility remains, because they include request URLs; explicit
 structured application logs can remain enabled. Every message includes `call_uuid`, integer

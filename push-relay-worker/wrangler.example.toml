@@ -23,7 +23,8 @@ APNS_KEY_ID = "REPLACE_WITH_APNS_KEY_ID"
 ALLOWED_BUNDLE_ID = "com.example.airsim"
 WEBRTC_TRANSPORT_READY = "false"
 WEBRTC_ROLLOUT_PERCENT = "0"
-WEBRTC_HEADER_AUTH_REQUIRED = "true"
+# Temporary Q25-only migration switch; keep false after updating the agent.
+WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "false"
 # Closed by default. Open only while enrolling a new paired device, then close.
 NEW_DEVICE_ENROLLMENT_ENABLED = "false"
 # TURN is required before enabling WebRTC. Choose coturn (default) or cloudflare.

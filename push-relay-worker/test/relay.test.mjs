@@ -1867,6 +1867,14 @@ test("call connect authenticates and forwards authoritative transport and identi
   assert.equal((await worker.fetch(new Request(
     `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone&token=call-secret`,
     { headers: { upgrade: "websocket" } }), env)).status, 401);
+  env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "true";
+  assert.equal((await worker.fetch(new Request(
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone&token=call-secret`,
+    { headers: { upgrade: "websocket" } }), env)).status, 401);
+  assert.equal((await worker.fetch(new Request(
+    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=agent&token=call-secret`,
+    { headers: { upgrade: "websocket" } }), env)).status, 200);
+  delete env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED;
   assert.equal((await worker.fetch(connect("call-secret"), env)).status, 200);
   assert.equal(forwarded.headers.get("x-airsim-media-transport"), "webrtc");
   assert.equal(forwarded.headers.get("x-airsim-call-uuid"), webRTCCallUUID);

@@ -912,8 +912,11 @@ async function connectCallMedia(request, env, callUUID) {
   const auth = await authenticateCall(callUUID, token, env);
   if (auth.response) return auth.response;
   const { call } = auth;
-  if (call.media_transport === "webrtc" && env.WEBRTC_HEADER_AUTH_REQUIRED !== "false" &&
-      (!headerToken || url.searchParams.has("token"))) {
+  const legacyAgentQuery = role === "agent" &&
+    env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED === "true" &&
+    !headerToken && url.searchParams.has("token");
+  if (call.media_transport === "webrtc" &&
+      (!headerToken || url.searchParams.has("token")) && !legacyAgentQuery) {
     return jsonResponse(401, { error: "media authorization header required" });
   }
   if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
