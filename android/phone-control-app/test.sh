@@ -232,3 +232,9 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/src/com/airsim/phonecontrol/StandaloneWebSocket.java \
   "$ROOT"/test/com/airsim/phonecontrol/StandaloneWebSocketTests.java
 "$JAVA" -cp "$OUT:$ANDROID_JAR" com.airsim.phonecontrol.StandaloneWebSocketTests
+
+"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCOpusSDP.java \
+  "$ROOT"/test/com/airsim/phonecontrol/WebRTCMediaTests.java
+"$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCMediaTests

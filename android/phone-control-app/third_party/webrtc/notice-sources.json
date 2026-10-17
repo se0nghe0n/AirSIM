@@ -1,0 +1,247 @@
+[
+  {
+    "name": "abseil-cpp",
+    "path": "third_party/abseil-cpp/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/abseil-cpp/LICENSE?format=TEXT",
+    "sha256": "c79a7fea0e3cac04cd43f20e7b648e5a0ff8fa5344e644b0ee09ca1162b62747",
+    "bytes": 11361
+  },
+  {
+    "name": "boringssl",
+    "path": "third_party/boringssl/src/LICENSE",
+    "url": "https://boringssl.googlesource.com/boringssl.git/+/b94d71f87ff943a617d77f3ff029f9a01a1ec6bc/LICENSE?format=TEXT",
+    "sha256": "827c8d8fc207c2392794eef9e00fe246f9f61fdcc132556c275be3dd8c3cd97f",
+    "bytes": 13115
+  },
+  {
+    "name": "crc32c",
+    "path": "third_party/crc32c/src/LICENSE",
+    "url": "https://chromium.googlesource.com/external/github.com/google/crc32c.git/+/d3d60ac6e0f16780bcfcc825385e1d338801a558/LICENSE?format=TEXT",
+    "sha256": "a1f30b77c01e0995fa32a00119e00749e8731ee8a3c4c3549bce74083c72b0b6",
+    "bytes": 1460
+  },
+  {
+    "name": "compiler-rt",
+    "path": "third_party/compiler-rt/src/LICENSE.TXT",
+    "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/compiler-rt.git/+/f28e701c2714aa2a28479511d8f76e903a4d2e4c/LICENSE.TXT?format=TEXT",
+    "sha256": "1a8f1058753f1ba890de984e48f0242a3a5c29a6a8f2ed9fd813f36985387e8d",
+    "bytes": 16708
+  },
+  {
+    "name": "cpu_features",
+    "path": "third_party/cpu_features/src/LICENSE",
+    "url": "https://chromium.googlesource.com/external/github.com/google/cpu_features.git/+/936b9ab5515dead115606559502e3864958f7f6e/LICENSE?format=TEXT",
+    "sha256": "af272c1b4dd08dd61d43e001d3134119d03ca7a2b057a64f7355fdf27fbea3dd",
+    "bytes": 12876
+  },
+  {
+    "name": "dav1d",
+    "path": "third_party/dav1d/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/dav1d/LICENSE?format=TEXT",
+    "sha256": "2da4494d2a8b5c742afbb905b10621e40129284c977ac138e3081ed0d9d83aed",
+    "bytes": 1312
+  },
+  {
+    "name": "ffmpeg",
+    "path": "third_party/ffmpeg/LICENSE.md",
+    "url": "https://chromium.googlesource.com/chromium/third_party/ffmpeg.git/+/583a135878d38065ef1e3d08cd80b7fbe76e0a7b/LICENSE.md?format=TEXT",
+    "sha256": "2e1d16c72fd74e12063776371da757322f8b77589386532f4fd8634bde7de1af",
+    "bytes": 4346
+  },
+  {
+    "name": "fiat",
+    "path": "third_party/boringssl/src/third_party/fiat/LICENSE",
+    "url": "https://boringssl.googlesource.com/boringssl.git/+/b94d71f87ff943a617d77f3ff029f9a01a1ec6bc/third_party/fiat/LICENSE?format=TEXT",
+    "sha256": "9eacbcb81be660840c714a560a9d65ba07913db98dd4baf969f78dd499fdd60f",
+    "bytes": 638
+  },
+  {
+    "name": "jsoncpp",
+    "path": "third_party/jsoncpp/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/jsoncpp/LICENSE?format=TEXT",
+    "sha256": "76c45ece83a26117f86f4e349e7df118708e061e87225328fb478ce1e8b3eb86",
+    "bytes": 2665
+  },
+  {
+    "name": "libaom",
+    "path": "third_party/libaom/source/libaom/LICENSE",
+    "url": "https://aomedia.googlesource.com/aom.git/+/5d80673d723a5e2e268b124d81d425053823d875/LICENSE?format=TEXT",
+    "sha256": "4764a286d8b2faeaf42f4418e7d7a28d58fc8fd4d00a3d0a7f44b0a4099de7f2",
+    "bytes": 1316
+  },
+  {
+    "name": "libc++",
+    "path": "third_party/libc++/src/LICENSE.TXT",
+    "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxx.git/+/fa224989fd9c52f68042d7fd6824302c33cb68c0/LICENSE.TXT?format=TEXT",
+    "sha256": "539dd7aed86e8a4f12cbdd0e6c50c189c7d74847e4fecc64ce2c6ee3a01da38b",
+    "bytes": 16703
+  },
+  {
+    "name": "libc++abi",
+    "path": "third_party/libc++abi/src/LICENSE.TXT",
+    "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libcxxabi.git/+/83a852080747b9a362e8f9e361366b7a601f302c/LICENSE.TXT?format=TEXT",
+    "sha256": "e2b35be49f7284a45b7baca8fc7b3ab7440e7902392b2528a457816b5bb2a15c",
+    "bytes": 16706
+  },
+  {
+    "name": "libjpeg_turbo",
+    "path": "third_party/libjpeg_turbo/LICENSE.md",
+    "url": "https://chromium.googlesource.com/chromium/deps/libjpeg_turbo.git/+/6383cf609c1f63c18af0f59b2738caa0c6c7e379/LICENSE.md?format=TEXT",
+    "sha256": "96f5b328adbb78eeaaec6980d73fd558cb1e4d62560ed615646bc3cf5e532430",
+    "bytes": 5620
+  },
+  {
+    "name": "libsrtp",
+    "path": "third_party/libsrtp/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/deps/libsrtp.git/+/a52756acb1c5e133089c798736dd171567df11f5/LICENSE?format=TEXT",
+    "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae",
+    "bytes": 1614
+  },
+  {
+    "name": "libunwind",
+    "path": "third_party/libunwind/src/LICENSE.TXT",
+    "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libunwind.git/+/7ff36f1e358ffb63e25f27a1b5e8e0c52e15c49c/LICENSE.TXT?format=TEXT",
+    "sha256": "b5efebcaca80879234098e52d1725e6d9eb8fb96a19fce625d39184b705f7b6d",
+    "bytes": 16706
+  },
+  {
+    "name": "libvpx",
+    "path": "third_party/libvpx/source/libvpx/LICENSE",
+    "url": "https://chromium.googlesource.com/webm/libvpx.git/+/9a7674e1a83d1261a49776c8794b87c9bccc85d7/LICENSE?format=TEXT",
+    "sha256": "8267348d5af1262c11d1a08de2f5afc77457755f1ac658627dd9acf71011d615",
+    "bytes": 1537
+  },
+  {
+    "name": "libyuv",
+    "path": "third_party/libyuv/LICENSE",
+    "url": "https://chromium.googlesource.com/libyuv/libyuv.git/+/4825d9b29eea4dac24607245db7ec7d4c41c1964/LICENSE?format=TEXT",
+    "sha256": "2b2cc1180c7e6988328ad2033b04b80117419db9c4c584918bbb3cfec7e9364f",
+    "bytes": 1506
+  },
+  {
+    "name": "llvm-libc",
+    "path": "third_party/llvm-libc/src/LICENSE.TXT",
+    "url": "https://chromium.googlesource.com/external/github.com/llvm/llvm-project/libc.git/+/f950018bf8a84246c899b9ac360a271064577d42/LICENSE.TXT?format=TEXT",
+    "sha256": "ebcd9bbf783a73d05c53ba4d586b8d5813dcdf3bbec50265860ccc885e606f47",
+    "bytes": 15140
+  },
+  {
+    "name": "openh264",
+    "path": "third_party/openh264/src/LICENSE",
+    "url": "https://chromium.googlesource.com/external/github.com/cisco/openh264/+/652bdb7719f30b52b08e506645a7322ff1b2cc6f/LICENSE?format=TEXT",
+    "sha256": "dd5c1c9668512530fa5a96e4c29ac4033d70a7eeb0eed7a42fddb6dd794ebdbb",
+    "bytes": 1295
+  },
+  {
+    "name": "opus",
+    "path": "third_party/opus/src/COPYING",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/opus/src/COPYING?format=TEXT",
+    "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551",
+    "bytes": 1945
+  },
+  {
+    "name": "pffft",
+    "path": "third_party/pffft/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/pffft/LICENSE?format=TEXT",
+    "sha256": "a46200592eb193853527250da098e6bb0c75424e7a2c7db8da526c4f301c3d88",
+    "bytes": 1919
+  },
+  {
+    "name": "protobuf",
+    "path": "third_party/protobuf/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/protobuf/LICENSE?format=TEXT",
+    "sha256": "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7a83130fea7d",
+    "bytes": 1732
+  },
+  {
+    "name": "rnnoise",
+    "path": "third_party/rnnoise/COPYING",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/rnnoise/COPYING?format=TEXT",
+    "sha256": "e2f59ff41d9d03adc3dcf3deff170f8c8cf4a6eb4a9b174762a7656d23200ffa",
+    "bytes": 1581
+  },
+  {
+    "name": "zlib",
+    "path": "third_party/zlib/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/zlib/LICENSE?format=TEXT",
+    "sha256": "e1cfcc55c325b3f78cf55df9664abaa066e2271dffe8213347d9fccdfbac8f2c",
+    "bytes": 910
+  },
+  {
+    "name": "sigslot",
+    "path": "rtc_base/third_party/sigslot/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/rtc_base/third_party/sigslot/LICENSE",
+    "sha256": "905bc5ab1c66eea2669aee6cb5185488508264df6492f71ae1a6595180ff8c2b",
+    "bytes": 262
+  },
+  {
+    "name": "portaudio",
+    "path": "modules/third_party/portaudio/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/modules/third_party/portaudio/LICENSE",
+    "sha256": "641007ea2810c4cfc10a5d1a44db33983ec1409305e953c7119cc2457ec5c536",
+    "bytes": 4057
+  },
+  {
+    "name": "fft",
+    "path": "modules/third_party/fft/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/modules/third_party/fft/LICENSE",
+    "sha256": "6fdbabd2c95c5efc6f1e46175278239afb9343120a3022ed0e0cb04267a6aeb3",
+    "bytes": 1125
+  },
+  {
+    "name": "g711",
+    "path": "modules/third_party/g711/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/modules/third_party/g711/LICENSE",
+    "sha256": "b29c8f13f91feb2dab7d6655444369fa9f29c0d7121a52dab90ff97e40343a85",
+    "bytes": 429
+  },
+  {
+    "name": "g722",
+    "path": "modules/third_party/g722/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/modules/third_party/g722/LICENSE",
+    "sha256": "61862327fd00d6a4deb2c1276577782c2500f4fe103e072018fc369d8e37e876",
+    "bytes": 611
+  },
+  {
+    "name": "ooura",
+    "path": "common_audio/third_party/ooura/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/common_audio/third_party/ooura/LICENSE",
+    "sha256": "25b7731b70c77ecd5f3bb19303fbaa99be18860f81d44f71da670fdcd04829db",
+    "bytes": 272
+  },
+  {
+    "name": "spl_sqrt_floor",
+    "path": "common_audio/third_party/spl_sqrt_floor/LICENSE",
+    "url": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/30d5e63ae91da483e06577b5c35ee91cc5e5c3db/common_audio/third_party/spl_sqrt_floor/LICENSE",
+    "sha256": "41d791701e3e1c1073470403de7e342442d1e6a2af72681023b13a2f45f2125c",
+    "bytes": 915
+  },
+  {
+    "name": "kotlin_stdlib",
+    "path": "third_party/kotlin_stdlib/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/kotlin_stdlib/LICENSE?format=TEXT",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "bytes": 11358
+  },
+  {
+    "name": "jni_zero",
+    "path": "third_party/jni_zero/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/jni_zero/LICENSE?format=TEXT",
+    "sha256": "57faf03e216d5628169a779df31a842347e55c8e6567e1107b6cb8fb90175b59",
+    "bytes": 1458
+  },
+  {
+    "name": "protobuf-javascript",
+    "path": "third_party/protobuf-javascript/LICENSE",
+    "url": "https://chromium.googlesource.com/chromium/src/third_party/+/a3b630c291f1cf3b711687b1c4be322d3015512e/protobuf-javascript/LICENSE?format=TEXT",
+    "sha256": "103441a2584cb720426c60320bcba53807024aab3080b00e0da841c305757a34",
+    "bytes": 1519
+  },
+  {
+    "name": "perfetto",
+    "path": "third_party/perfetto/LICENSE",
+    "url": "https://chromium.googlesource.com/external/github.com/google/perfetto.git/+/a8060b7bea06166ac541ce97670053882375e309/LICENSE?format=TEXT",
+    "sha256": "df3384bec476fac3525c723d0c10da9ac9820ef56cbb065ec035d32e9b55bd7a",
+    "bytes": 14169
+  }
+]

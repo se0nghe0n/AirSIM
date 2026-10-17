@@ -26,7 +26,8 @@ final class StandaloneAgentStore {
     synchronized JSONObject registration() {
         String encoded = preferences.getString(REGISTRATION, "");
         if (encoded == null || encoded.isBlank()) return null;
-        try { return new JSONObject(encoded); }
+        try { return new JSONObject(encoded)
+                .put("agent_media_capabilities", new JSONArray().put("webrtc").put("legacy_pcm")); }
         catch (Exception error) {
             BridgeLog.error("standalone_registration_corrupt", error);
             return null;
@@ -150,10 +151,8 @@ final class StandaloneAgentStore {
         if (!watchToken.isEmpty() && !(bundleID + ".watchkitapp").equals(value.optString("watch_bundle_id", ""))) {
             throw new IllegalArgumentException("watch_bundle_id does not match the main app");
         }
-        JSONArray capabilities = value.optJSONArray("agent_media_capabilities");
-        if (capabilities == null) {
-            value.put("agent_media_capabilities", new JSONArray().put("legacy_pcm"));
-        }
+        // Capabilities describe this installed Agent, not the older pairing payload.
+        value.put("agent_media_capabilities", new JSONArray().put("webrtc").put("legacy_pcm"));
     }
 
     private static String trimTrailingSlash(String value) {

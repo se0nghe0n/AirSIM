@@ -15,6 +15,7 @@ CLASSES="$OUT/classes"
 DEX="$OUT/dex"
 DEPS="$ROOT/build/dependencies"
 SHIZUKU_VERSION=13.1.5
+WEBRTC_VERSION=144.7559.15
 BUILD_VARIANT=${AIRSIM_ANDROID_BUILD_VARIANT:-debug}
 
 case "$BUILD_VARIANT" in
@@ -49,7 +50,12 @@ download_verified "https://repo1.maven.org/maven2/dev/rikka/shizuku/provider/$SH
 download_verified "https://dl.google.com/dl/android/maven2/androidx/annotation/annotation/1.3.0/annotation-1.3.0.jar" \
   "$DEPS/androidx-annotation.jar" 97dc45afefe3a1e421da42b8b6e9f90491477c45fc6178203e3a5e8a05ee8553
 
-SHIZUKU_JARS=()
+download_verified "https://repo.maven.apache.org/maven2/io/github/webrtc-sdk/android/$WEBRTC_VERSION/android-$WEBRTC_VERSION.aar" \
+  "$DEPS/webrtc-$WEBRTC_VERSION.aar" fc7c8d027eb33860ccbb7847988f7f942d44a92d1f575348bba6c0250cde4071
+# Keep the native JNI class name but substitute our external PCM output adapter.
+python3 "$ROOT/prepare-webrtc.py" "$DEPS/webrtc-$WEBRTC_VERSION.aar" "$DEPS/webrtc.jar" "$OUT/native"
+
+SHIZUKU_JARS=("$DEPS/webrtc.jar")
 for artifact in api aidl shared provider; do
   jar_path="$DEPS/shizuku-$artifact.jar"
   unzip -p "$DEPS/shizuku-$artifact.aar" classes.jar > "$jar_path"
@@ -79,8 +85,11 @@ else
 fi
 "$BUILD_TOOLS/aapt2" link -o "$OUT/unsigned.apk" -I "$ANDROID_JAR" \
   --manifest "$MANIFEST" "$COMPILED_RES"
-(cd "$DEX" && zip -q -j "$OUT/unsigned.apk" classes.dex)
-"$BUILD_TOOLS/zipalign" -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
+(cd "$DEX" && zip -q -j "$OUT/unsigned.apk" classes*.dex)
+mkdir -p "$OUT/native/assets/webrtc"
+cp "$ROOT/third_party/webrtc/"* "$OUT/native/assets/webrtc/"
+(cd "$OUT/native" && zip -q -0 -r "$OUT/unsigned.apk" lib assets)
+"$BUILD_TOOLS/zipalign" -P 16 -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
 if [ "$BUILD_VARIANT" = debug ]; then
   KEYSTORE="$ROOT/build/debug.keystore"

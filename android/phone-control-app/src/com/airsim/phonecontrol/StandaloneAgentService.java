@@ -102,7 +102,7 @@ public final class StandaloneAgentService extends Service {
     private void syncRegistration(JSONObject registration) throws Exception {
         int hash = registration.toString().hashCode();
         if (hash == syncedRegistrationHash) return;
-        relay.postJSON(registration, "/v1/devices/register", new JSONObject(registration.toString()), 15_000);
+        relay.postJSON(registration, "/v1/devices/register", new JSONObject(registration.toString()).put("registration_source", "agent"), 15_000);
         syncedRegistrationHash = hash;
         store.recordSuccess();
         BridgeLog.info("standalone_relay_registration_synced");
@@ -113,6 +113,7 @@ public final class StandaloneAgentService extends Service {
                 .put("event", "agent_heartbeat").put("agent_version", "standalone-0.1.0")
                 .put("agent_id", registration.optString("android_agent_id", AndroidAgentIdentity.agentID(this)))
                 .put("agent_kind", "standalone")
+                .put("agent_media_capabilities", new JSONArray().put("webrtc").put("legacy_pcm"))
                 .put("device_name", AndroidAgentIdentity.deviceName())
                 .put("manufacturer", registration.optString("android_manufacturer", android.os.Build.MANUFACTURER))
                 .put("model", registration.optString("android_model", android.os.Build.MODEL))
