@@ -64,8 +64,6 @@
 		<string>_airsim-pair._tcp</string>
 		<string>_airsim-vowlan._tcp</string>
 	</array>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Connect to your Android phone for call control and encrypted audio over Bluetooth.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Find and securely pair with your Android AirSIM phone on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>

@@ -28,15 +28,6 @@ final class CloudMediaCredentialTests: XCTestCase {
     }
 }
 
-// Simulator test runner is unsigned and has no Keychain entitlement (-34018).
-// Keep the real controller; replace only the OS credential persistence boundary.
-private final class InMemoryVoBLEPairingStore: VoBLEPairingStoring, @unchecked Sendable {
-    private var values: [String: VoBLEStoredPeer] = [:]
-    func save(_ peer: VoBLEStoredPeer) throws { values[peer.identity] = peer }
-    func load(identity: String) throws -> VoBLEStoredPeer? { values[identity] }
-    func revoke(identity: String) throws { values.removeValue(forKey: identity) }
-}
-
 private actor OutgoingCallServiceProbe: OutgoingCallServicing {
     private let dialError: Error?
     private var actions: [String] = []
@@ -55,22 +46,6 @@ private actor OutgoingCallServiceProbe: OutgoingCallServicing {
     func recordedActions() -> [String] { actions }
 }
 
-@MainActor
-private final class VoBLEWriterProbe: VoBLEMediaWriting {
-    var canSend: Bool
-    let maximumLength: Int
-    private(set) var writes: [Data] = []
-
-    init(canSend: Bool, maximumLength: Int) {
-        self.canSend = canSend
-        self.maximumLength = maximumLength
-    }
-
-    var canSendWriteWithoutResponse: Bool { canSend }
-    var maximumWriteLength: Int { maximumLength }
-    func writeWithoutResponse(_ data: Data) { writes.append(data) }
-}
-
 private struct LegacyAgentSMSProbe: LegacyAgentPolling {
     let pending: Int?
     let smsStatusAvailable: Bool
@@ -83,26 +58,6 @@ private struct LegacyAgentSMSProbe: LegacyAgentPolling {
     func smsStatus() async throws -> SMSStatus {
         if !smsStatusAvailable { throw URLError(.badServerResponse) }
         return SMSStatus(autoCleanupME: true, count: pending, lastPollError: nil)
-    }
-}
-
-@MainActor
-private final class VoBLECallControlProbe: VoBLECallControlling {
-    var state: VoBLEConnectionState = .ready
-    var onEvent: ((VoBLEAndroidEvent) -> Void)?
-    var onAudioDownlinkFragment: ((Data) -> Void)?
-    var onReadyToSendAudio: (() -> Void)?
-    var onDisconnected: (() -> Void)?
-    var onReady: (() -> Void)?
-    var sendOperation: (String, String, UInt64) async throws -> VoBLEControlResponse = { _, _, generation in
-        .init(requestID: "test-response", generation: generation, success: true, code: "ok", detail: "accepted")
-    }
-    func send(command: String, callID: String, generation: UInt64,
-              number: String) async throws -> VoBLEControlResponse {
-        try await sendOperation(command, callID, generation)
-    }
-    func mediaKey(callID: String, generation: UInt64) throws -> Data {
-        Data(repeating: 1, count: 32)
     }
 }
 
@@ -669,93 +624,9 @@ final class AirSIMTests: XCTestCase {
     }
 
 
-    @MainActor
-    func testVoBLEHangupReplyCannotResurrectAnEndedCall() async throws {
-        let central = VoBLECallControlProbe()
-        let media = VoBLEGATTMediaTransport(writer: VoBLEWriterProbe(canSend: true, maximumLength: 247))
-        let coordinator = VoBLECallCoordinator(central: central, media: media,
-                                               audio: VoBLEAudioEngine(transport: media))
-        var states: [CallLifecycleState] = []
-        var ended = 0
-        coordinator.onState = { _, state in states.append(state) }
-        coordinator.onEnded = { _ in ended += 1 }
-        central.onEvent?(.init(callID: "call-1", generation: 1, direction: "outgoing",
-                              state: "dialing", number: ""))
-        states.removeAll()
-        central.sendOperation = { command, id, generation in
-            XCTAssertEqual(command, "end")
-            central.onEvent?(.init(callID: id, generation: generation, direction: "outgoing",
-                                  state: "ended", number: ""))
-            return .init(requestID: "end-1", generation: generation,
-                         success: true, code: "ok", detail: "accepted")
-        }
-        try await coordinator.end(rejectIfRinging: false)
-        XCTAssertNil(coordinator.currentIdentity)
-        XCTAssertEqual(ended, 1)
-        XCTAssertTrue(states.isEmpty, "An acknowledged terminal event must not become ending again")
-    }
 
-    @MainActor
-    func testVoBLELateHangupMismatchIsIgnoredOnlyForAcknowledgedEndedIdentity() async throws {
-        let central = VoBLECallControlProbe()
-        let media = VoBLEGATTMediaTransport(writer: VoBLEWriterProbe(canSend: true, maximumLength: 247))
-        let coordinator = VoBLECallCoordinator(central: central, media: media,
-                                               audio: VoBLEAudioEngine(transport: media))
-        central.onEvent?(.init(callID: "call-1", generation: 1, direction: "outgoing",
-                              state: "dialing", number: ""))
-        central.sendOperation = { _, id, generation in
-            central.onEvent?(.init(callID: id, generation: generation, direction: "outgoing",
-                                  state: "ended", number: ""))
-            central.onEvent?(.init(callID: "next-call", generation: 2, direction: "outgoing",
-                                  state: "dialing", number: ""))
-            return .init(requestID: "late-end", generation: generation,
-                         success: false, code: "call_mismatch", detail: "")
-        }
-        try await coordinator.end(rejectIfRinging: false)
-        XCTAssertEqual(coordinator.currentIdentity?.callID, "next-call")
-        central.sendOperation = { _, _, generation in
-            .init(requestID: "real-error", generation: generation,
-                  success: false, code: "call_mismatch", detail: "")
-        }
-        do {
-            try await coordinator.end(rejectIfRinging: false)
-            XCTFail("A mismatch on a still-current call must remain an error")
-        } catch {
-            XCTAssertEqual(error as? VoBLECentralError, .bluetooth("call_mismatch"))
-        }
-        XCTAssertEqual(coordinator.currentIdentity?.callID, "next-call")
-    }
 
-    func testVoBLELiveActivityActionURLRoutesBackToHostApp() throws {
-        let url = try XCTUnwrap(URL(
-            string: "airsim://call/hangup?call_id=android-call-7"
-        ))
-        XCTAssertEqual(
-            SystemCommunicationURL.destination(for: url),
-            .liveActivity(.hangup, callID: "android-call-7")
-        )
-        XCTAssertEqual(
-            AirSIMLiveActivityActionURL.make(
-                action: .hangup, callID: "android-call-7"
-            ),
-            url
-        )
-    }
 
-    func testBluetoothPoweredOnDoesNotDemoteReadyConnection() {
-        var reducer = VoBLEConnectionReducer()
-        let peripheralID = UUID()
-        reducer.apply(.discovered(peripheralID))
-        reducer.apply(.connected)
-        reducer.apply(.characteristicsReady)
-        reducer.apply(.controlSubscription(true))
-        reducer.apply(.authenticated(identity: "samsung-agent"))
-        XCTAssertEqual(reducer.state, .ready)
-
-        reducer.apply(.bluetoothPoweredOn)
-
-        XCTAssertEqual(reducer.state, .ready)
-    }
 
     @MainActor
     func testRejectIsNotSilentlyDroppedWhileAnotherActionIsBusy() async {
@@ -1171,7 +1042,6 @@ final class AirSIMTests: XCTestCase {
             vowlanOnline: true,
             moduleLocalReachable: false,
             cloudOnline: true,
-            bluetoothReady: true
         )
         XCTAssertEqual(route?.transport, .vowlan)
     }
@@ -1180,51 +1050,20 @@ final class AirSIMTests: XCTestCase {
         XCTAssertEqual(DialRouteSelector.preferred(
             mode: .automatic,
             vowlanReady: true,
-            bluetoothReady: true,
             cloudReady: true
         ), .vowlan)
         XCTAssertEqual(DialRouteSelector.preferred(
             mode: .automatic,
             vowlanReady: false,
-            bluetoothReady: true,
             cloudReady: true
         ), .cloud)
         XCTAssertEqual(DialRouteSelector.preferred(
             mode: .automatic,
             vowlanReady: false,
-            bluetoothReady: false,
             cloudReady: true
         ), .cloud)
     }
 
-    func testBluetoothModeIsUnavailable() {
-        XCTAssertNil(DialRouteSelector.preferred(
-            mode: .bluetooth,
-            vowlanReady: true,
-            bluetoothReady: true,
-            cloudReady: true
-        ))
-        XCTAssertNil(DialRouteSelector.preferred(
-            mode: .automatic,
-            vowlanReady: false,
-            bluetoothReady: true,
-            cloudReady: false
-        ))
-        XCTAssertFalse(OutgoingCommandAvailability.isAvailable(
-            mode: .bluetooth,
-            localControlReachable: false,
-            bluetoothReady: true,
-            cloudModeEnabled: false,
-            cloudHeartbeatFresh: false
-        ))
-        XCTAssertNil(DialPadTransportPresentation.make(
-            mode: .bluetooth,
-            vowlanOnline: false,
-            moduleLocalReachable: false,
-            cloudOnline: false,
-            bluetoothReady: true
-        ))
-    }
 
     func testAndroidAgentBindingPersistsAndRejectsOtherRoutes() {
         let suite = "AirSIMTests.agent-binding.\(UUID().uuidString)"
@@ -1297,19 +1136,6 @@ final class AirSIMTests: XCTestCase {
         XCTAssertTrue(PairedAndroidDeviceStore.permitsPeripheral("peripheral-samsung", defaults: defaults))
     }
 
-    @MainActor
-    func testOfflineBluetoothDeviceDeletionRevokesOnlyThatKeychainCredential() async throws {
-        let store = InMemoryVoBLEPairingStore()
-        let one = VoBLEStoredPeer(identity: "samsung", pairingKey: Data(repeating: 1, count: 32), createdAt: Date())
-        let two = VoBLEStoredPeer(identity: "vivo", pairingKey: Data(repeating: 2, count: 32), createdAt: Date())
-        defer { try? store.revoke(identity: "samsung"); try? store.revoke(identity: "vivo") }
-        try store.save(one); try store.save(two)
-        let controller = VoBLECentralController(pairingStore: store)
-        try await controller.forgetDevice("samsung")
-        XCTAssertNil(try store.load(identity: "samsung"))
-        XCTAssertEqual(try store.load(identity: "vivo"), two)
-        XCTAssertEqual(controller.state, .stopped)
-    }
 
     func testCloudStatusDecodesMultipleAndroidAgentsAndCurrentRoute() throws {
         let data = Data(#"""
@@ -1356,217 +1182,18 @@ final class AirSIMTests: XCTestCase {
         ))
     }
 
-    func testExplicitBluetoothModeDisablesUnrelatedLifecycles() {
-        let policy = ConnectionModeRuntimePolicy(mode: .bluetooth)
 
-        XCTAssertTrue(policy.startsBluetooth)
-        XCTAssertFalse(policy.startsVoWLAN)
-        XCTAssertFalse(policy.startsCloud)
-        XCTAssertFalse(policy.allowsCrossModeFallback)
-        XCTAssertTrue(policy.usesCallKit)
-    }
 
-    func testOnlyAutomaticAllowsCrossModeSelection() {
-        XCTAssertTrue(ConnectionModeRuntimePolicy(mode: .automatic).allowsCrossModeFallback)
-        for mode in [AirSIMConnectionMode.vowlan, .bluetooth, .cloud] {
-            XCTAssertFalse(ConnectionModeRuntimePolicy(mode: mode).allowsCrossModeFallback)
-        }
-    }
 
-    func testVoBLEAudioVectorUsesBigEndianHeaderAndRoundTripsAtCommonMTUs() throws {
-        let packet = VoBLEAudioPacket(
-            flags: [], codec: .g711MuLaw, streamID: 7,
-            sequence: 0x01020304, sampleTimestamp: 0x05060708,
-            payload: Data([0x00, 0x7f, 0x80, 0xff]),
-            authenticationTag: Data(repeating: 0xa5, count: 16)
-        )
 
-        for maximumPacketLength in [23, 185, 247] {
-            let fragments = try packet.encodedFragments(maximumPacketLength: maximumPacketLength)
-            XCTAssertTrue(fragments.allSatisfy { $0.count <= maximumPacketLength })
-            XCTAssertEqual(Array(fragments[0][7..<11]), [0x01, 0x02, 0x03, 0x04])
-            XCTAssertEqual(Array(fragments[0][11..<15]), [0x05, 0x06, 0x07, 0x08])
 
-            var reassembler = VoBLEAudioReassembler()
-            var decoded: VoBLEAudioPacket?
-            for fragment in fragments {
-                decoded = try reassembler.append(fragment, now: Date(timeIntervalSince1970: 10)) ?? decoded
-            }
-            XCTAssertEqual(decoded, packet)
-        }
-        XCTAssertEqual(
-            try packet.encodedFragments(maximumPacketLength: 247)[0],
-            Data([
-                0xa5, 0x5a, 0x01, 0x01, 0x00, 0x01, 0x07,
-                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-                0x00, 0x01, 0x14, 0x00, 0x7f, 0x80, 0xff,
-            ] + Array(repeating: 0xa5, count: 16))
-        )
-    }
 
-    func testVoBLEReassemblyExpiryMarksNextFrameDiscontinuous() throws {
-        let first = VoBLEAudioPacket(
-            flags: [], codec: .g711MuLaw, streamID: 1, sequence: 1,
-            sampleTimestamp: 0, payload: Data(repeating: 1, count: 160),
-            authenticationTag: Data(repeating: 2, count: 16)
-        )
-        let second = VoBLEAudioPacket(
-            flags: [], codec: .g711MuLaw, streamID: 1, sequence: 2,
-            sampleTimestamp: 160, payload: Data([3]),
-            authenticationTag: Data(repeating: 4, count: 16)
-        )
-        var reassembler = VoBLEAudioReassembler()
-        let incomplete = try first.encodedFragments(maximumPacketLength: 23)
-        _ = try reassembler.append(incomplete[0], now: Date(timeIntervalSince1970: 1))
-        let complete = try second.encodedFragments(maximumPacketLength: 247)
-        let decoded = try reassembler.append(complete[0], now: Date(timeIntervalSince1970: 1.201))
 
-        XCTAssertTrue(decoded?.flags.contains(.discontinuity) == true)
-    }
 
-    @MainActor
-    func testVoBLEStreamingReplenishesBeforeDevicePresentationFinishes() async throws {
-        let engine = AVAudioEngine()
-        let player = AVAudioPlayerNode()
-        let format = try XCTUnwrap(AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 8_000, channels: 1, interleaved: false))
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
-        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 160)
-        try engine.start()
-        defer { player.stop(); engine.stop() }
-        let consumed = expectation(description: "streaming buffer can be replenished without a device sink")
-        consumed.expectedFulfillmentCount = 3
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160))
-        buffer.frameLength = 160
-        for _ in 0..<3 {
-            VoBLEPlaybackScheduling.schedule(buffer, on: player) { consumed.fulfill() }
-        }
-        player.play()
-        let output = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160))
-        for _ in 0..<8 { _ = try engine.renderOffline(160, to: output) }
-        await fulfillment(of: [consumed], timeout: 1)
-    }
 
-    func testBluetoothAudioStatusIgnoresInactiveWiFiAndStaleCloudState() {
-        for cloud in [CloudCallAudioState.idle, .failed("old relay failure")] {
-            XCTAssertEqual(CallAudioStatusPresentation.text(
-                transport: .bluetooth, bluetoothRunning: true, bluetoothError: nil,
-                localAudioActive: false, cloudState: cloud), "Bluetooth Audio Connected")
-        }
-        XCTAssertEqual(CallAudioStatusPresentation.text(
-            transport: .bluetooth, bluetoothRunning: false, bluetoothError: "音频启动失败",
-            localAudioActive: true, cloudState: .connected), "音频启动失败")
-    }
 
-    func testVoBLEReconnectWaitsForOldDisconnectionAndIgnoresUnrelatedCallback() {
-        let old = UUID(), other = UUID()
-        var barrier = VoBLEReconnectBarrier()
-        barrier.begin(old)
-        XCTAssertFalse(barrier.permitsConnection)
-        XCTAssertFalse(barrier.finish(other))
-        XCTAssertFalse(barrier.permitsConnection)
-        XCTAssertEqual(barrier.disconnectingID, old)
-        XCTAssertTrue(barrier.finish(old))
-        XCTAssertTrue(barrier.permitsConnection)
-        XCTAssertFalse(barrier.finish(old))
-    }
 
-    func testVoBLECancellationCanRecoverFromMissingCallbackOnlyAfterActualDisconnection() {
-        let old = UUID(), other = UUID()
-        var barrier = VoBLEReconnectBarrier()
-        barrier.begin(old)
-        XCTAssertFalse(barrier.finishIfDisconnected(other, state: .disconnected))
-        for state: CBPeripheralState in [.connecting, .connected, .disconnecting] {
-            XCTAssertFalse(barrier.finishIfDisconnected(old, state: state))
-            XCTAssertFalse(barrier.permitsConnection)
-        }
-        XCTAssertTrue(barrier.finishIfDisconnected(old, state: .disconnected))
-        XCTAssertTrue(barrier.permitsConnection)
-        XCTAssertFalse(barrier.finishIfDisconnected(old, state: .disconnected))
-    }
 
-    @MainActor
-    func testVoBLETransportDoesNotWriteGattAudio() async throws {
-        let writer = VoBLEWriterProbe(canSend: true, maximumLength: 185)
-        let transport = VoBLEGATTMediaTransport(writer: writer)
-        try transport.start(identity: .init(callID: "call-a", generation: 4),
-                            mediaKey: Data(repeating: 7, count: 32))
-        for _ in 0..<10 { transport.enqueueCapturedPCM(Data(repeating: 1, count: 320)) }
-        transport.peripheralIsReadyToSend()
-        XCTAssertEqual(transport.queuedFrameCount, 0)
-        XCTAssertTrue(writer.writes.isEmpty)
-        XCTAssertNil(transport.dequeuePlayback())
-        transport.stop(identity: .init(callID: "other", generation: 4))
-        XCTAssertTrue(transport.isRunning)
-        transport.stop(identity: .init(callID: "call-a", generation: 4))
-        XCTAssertFalse(transport.isRunning)
-    }
-
-    func testVoBLEAudioGateRequiresMediaAndCallKit() {
-        var gate = VoBLEAudioStartGate()
-        gate.mediaReady = true
-        XCTAssertFalse(gate.canStart)
-        gate.callKitAudioActive = true
-        XCTAssertTrue(gate.canStart)
-        gate.mediaReady = false
-        XCTAssertFalse(gate.canStart)
-    }
-
-    func testVoBLEAppManagedAudioDoesNotWaitForCallKit() {
-        var gate = VoBLEAudioStartGate()
-        gate.mediaReady = true
-        XCTAssertFalse(gate.canStart)
-        gate.appAudioSessionActive = true
-        XCTAssertTrue(gate.canStart)
-        gate.mediaReady = false
-        XCTAssertFalse(gate.canStart)
-        gate.mediaReady = true
-        gate.appAudioSessionActive = false
-        XCTAssertFalse(gate.canStart)
-    }
-
-    func testVoBLEOutgoingAdoptsAndroidCallIDAndStartsMediaOnce() {
-        var lifecycle = VoBLECallLifecycleReducer()
-        let pending = lifecycle.beginOutgoing(
-            callID: "pending", generation: 4, number: "10086")
-        XCTAssertEqual(pending.direction, "outgoing")
-        XCTAssertTrue(pending.isProvisional)
-
-        let event = VoBLEAndroidEvent(
-            callID: "android-call", generation: 4, direction: "outgoing",
-            state: "active", number: "10086")
-        guard case let .active(active, startMedia) = lifecycle.apply(event) else {
-            return XCTFail("expected active")
-        }
-        XCTAssertEqual(active.callID, "android-call")
-        XCTAssertEqual(active.uuid, pending.uuid)
-        XCTAssertFalse(active.isProvisional)
-        XCTAssertTrue(startMedia)
-        guard case let .active(repeated, repeatedStart) = lifecycle.apply(event) else {
-            return XCTFail("expected repeated active")
-        }
-        XCTAssertEqual(repeated, active)
-        XCTAssertFalse(repeatedStart)
-    }
-
-    func testVoBLEMatchingEndCleansUpOnceAndStaleEndIsIgnored() {
-        var lifecycle = VoBLECallLifecycleReducer()
-        _ = lifecycle.apply(VoBLEAndroidEvent(
-            callID: "call-7", generation: 7, direction: "incoming",
-            state: "incoming", number: "123"))
-        XCTAssertEqual(lifecycle.current?.callID, "call-7")
-
-        XCTAssertEqual(lifecycle.apply(VoBLEAndroidEvent(
-            callID: "old", generation: 6, direction: "incoming",
-            state: "ended", number: "")), .ignored)
-        let end = VoBLEAndroidEvent(
-            callID: "call-7", generation: 7, direction: "incoming",
-            state: "ended", number: "")
-        guard case .ended = lifecycle.apply(end) else { return XCTFail("expected ended") }
-        XCTAssertNil(lifecycle.current)
-        XCTAssertEqual(lifecycle.apply(end), .ignored)
-    }
 
     func testWatchPayloadCarriesBluetoothTransport() {
         let payload = WatchCallPayload(
@@ -1644,242 +1271,18 @@ final class AirSIMTests: XCTestCase {
         XCTAssertFalse(message.keys.contains("pcm_secret"))
     }
 
-    func testVoBLEDiagnosticsRedactsSecretsAndMedia() {
-        let sanitized = VoBLEDiagnosticsSnapshot.sanitize([
-            "pcm_ready": "true",
-            "phone_number": "+8613800000000",
-            "media_key": "secret",
-            "nonce": "secret",
-            "authentication_tag": "secret",
-            "audio_payload": "secret",
-        ])
-        XCTAssertEqual(sanitized, ["pcm_ready": "true"])
-    }
 
-    func testVoBLERecoveryAcceptsOnlySameGenerationWithinThreeSeconds() {
-        let start = Date(timeIntervalSince1970: 100)
-        let identity = VoBLEMediaSessionIdentity(callID: "call-4", generation: 4)
-        let recovery = VoBLERecoveryPolicy(identity: identity, disconnectedAt: start)
-        XCTAssertTrue(recovery.accepts(identity, at: start.addingTimeInterval(2.9)))
-        XCTAssertFalse(recovery.accepts(
-            .init(callID: "call-4", generation: 5), at: start.addingTimeInterval(1)))
-        XCTAssertFalse(recovery.accepts(identity, at: start.addingTimeInterval(3.1)))
-    }
 
-    func testDialPadDoesNotPresentBluetooth() {
-        let route = DialPadTransportPresentation.make(
-            mode: .bluetooth,
-            vowlanOnline: false, moduleLocalReachable: false,
-            cloudOnline: false, bluetoothReady: true)
-        XCTAssertNil(route)
-    }
 
-    func testVoBLEControlEnvelopeRoundTripsAndRejectsBadMagic() throws {
-        let envelope = VoBLEControlEnvelope(
-            command: "answer", callID: "call-7", generation: 0x0102030405060708,
-            sessionID: Data([1, 2, 3, 4]), nonce: Data(repeating: 5, count: 12),
-            ciphertext: Data([6, 7, 8]), authenticationTag: Data(repeating: 9, count: 16)
-        )
-        let encoded = try envelope.encoded()
-        XCTAssertEqual(Array(encoded[4..<12]), [1, 2, 3, 4, 5, 6, 7, 8])
-        XCTAssertEqual(try VoBLEControlEnvelope.decode(encoded), envelope)
 
-        var corrupted = encoded
-        corrupted[0] = 0
-        XCTAssertThrowsError(try VoBLEControlEnvelope.decode(corrupted))
 
-        for maximumPacketLength in [23, 185, 247] {
-            let fragments = try VoBLEMessageFragmenter.encode(
-                encoded, type: .control, messageID: 0x1234,
-                maximumPacketLength: maximumPacketLength)
-            XCTAssertTrue(fragments.allSatisfy { $0.count <= maximumPacketLength })
-            var reassembler = VoBLEMessageReassembler()
-            var message: VoBLEMessage?
-            for fragment in fragments {
-                message = try reassembler.append(
-                    fragment, now: Date(timeIntervalSince1970: 10)) ?? message
-            }
-            XCTAssertEqual(message?.messageID, 0x1234)
-            XCTAssertEqual(message?.payload, encoded)
-        }
-    }
 
-    func testVoBLEPairingTranscriptAndSessionKeysAreDeterministic() throws {
-        let androidPrivate = Data((1...32).map(UInt8.init))
-        let iphonePrivate = Data((33...64).map(UInt8.init))
-        let androidPublic = try Curve25519.KeyAgreement.PrivateKey(
-            rawRepresentation: androidPrivate).publicKey.rawRepresentation
-        let iphonePublic = try Curve25519.KeyAgreement.PrivateKey(
-            rawRepresentation: iphonePrivate).publicKey.rawRepresentation
-        let transcript = VoBLEPairingTranscript(
-            androidIdentity: "samsung-test", androidPublicKey: androidPublic,
-            iphonePublicKey: iphonePublic,
-            androidNonce: Data(repeating: 0x11, count: 32),
-            iphoneNonce: Data(repeating: 0x22, count: 32)
-        )
-        let android = try VoBLESessionAuthenticator.derivePairing(
-            privateKey: androidPrivate, peerPublicKey: iphonePublic, transcript: transcript)
-        let iphone = try VoBLESessionAuthenticator.derivePairing(
-            privateKey: iphonePrivate, peerPublicKey: androidPublic, transcript: transcript)
-        XCTAssertEqual(android, iphone)
-        XCTAssertEqual(android.pairingKey.map { String(format: "%02x", $0) }.joined(),
-                       "41cef6294f3575441997664149bd8a014c8db026ad3a5312410be90f7d76c48a")
-        XCTAssertEqual(android.sas, "922247")
 
-        let modified = VoBLEPairingTranscript(
-            androidIdentity: "samsung-modified", androidPublicKey: androidPublic,
-            iphonePublicKey: iphonePublic,
-            androidNonce: Data(repeating: 0x11, count: 32),
-            iphoneNonce: Data(repeating: 0x22, count: 32)
-        )
-        let modifiedMaterial = try VoBLESessionAuthenticator.derivePairing(
-            privateKey: androidPrivate, peerPublicKey: iphonePublic, transcript: modified)
-        XCTAssertNotEqual(modifiedMaterial.pairingKey, android.pairingKey)
 
-        let first = try VoBLESessionAuthenticator.deriveSessionKeys(
-            pairingKey: android.pairingKey, sessionID: Data(repeating: 3, count: 16),
-            callID: "call-1", generation: 1)
-        let reconnect = try VoBLESessionAuthenticator.deriveSessionKeys(
-            pairingKey: android.pairingKey, sessionID: Data(repeating: 4, count: 16),
-            callID: "call-1", generation: 1)
-        XCTAssertNotEqual(first.control, first.media)
-        XCTAssertNotEqual(first.media, first.reconnect)
-        XCTAssertNotEqual(first, reconnect)
-        XCTAssertEqual(try VoBLESessionAuthenticator.deriveSessionKeys(
-            pairingKey: android.pairingKey, sessionID: Data(repeating: 5, count: 16),
-            callID: "", generation: 0).control.count, 32)
-        let message = Data("authenticated-control".utf8)
-        let tag = try VoBLESessionAuthenticator.tag(message: message, key: first.control)
-        XCTAssertTrue(VoBLESessionAuthenticator.authenticate(
-            message: message, tag: tag, key: first.control))
-        XCTAssertFalse(VoBLESessionAuthenticator.authenticate(
-            message: message, tag: tag, key: Data(repeating: 0, count: 32)))
-        let reconnectTag = try VoBLESessionAuthenticator.reconnectTag(
-            pairingKey: android.pairingKey, transcript: transcript)
-        XCTAssertEqual(reconnectTag.count, 16)
-        XCTAssertEqual(reconnectTag.map { String(format: "%02x", $0) }.joined(),
-                       "a09d46e2afc3444bffc9013831d265c7")
-        XCTAssertEqual(reconnectTag, try VoBLESessionAuthenticator.reconnectTag(
-            pairingKey: android.pairingKey, transcript: transcript))
-        XCTAssertNotEqual(reconnectTag, try VoBLESessionAuthenticator.reconnectTag(
-            pairingKey: android.pairingKey, transcript: modified))
-        XCTAssertEqual(try VoBLESessionAuthenticator.confirmationTag(
-            pairingKey: android.pairingKey, challengeID: "challenge-1").count, 16)
-    }
 
-    func testVoBLEReplayWindowRejectsDuplicateExpiredAndRevokedPeer() {
-        let now = Date(timeIntervalSince1970: 100)
-        var window = VoBLEReplayWindow(maximumAge: 30, capacity: 4)
-        XCTAssertTrue(window.accept(nonce: Data([1]), timestamp: now, now: now))
-        XCTAssertFalse(window.accept(nonce: Data([1]), timestamp: now, now: now))
-        XCTAssertFalse(window.accept(
-            nonce: Data([2]), timestamp: now.addingTimeInterval(-31), now: now))
-        window.revoke()
-        XCTAssertFalse(window.accept(nonce: Data([3]), timestamp: now, now: now))
-    }
 
-    func testVoBLEConnectionRequiresAuthenticationAndControlSubscription() {
-        var reducer = VoBLEConnectionReducer()
-        reducer.apply(.bluetoothPoweredOn)
-        reducer.apply(.discovered(UUID()))
-        reducer.apply(.connected)
-        reducer.apply(.characteristicsReady)
-        reducer.apply(.controlSubscription(true))
-        XCTAssertNotEqual(reducer.state, .ready)
 
-        reducer.apply(.authenticationFailed("wrong key"))
-        XCTAssertEqual(reducer.state, .failed("wrong key"))
-        reducer.apply(.restored(UUID()))
-        XCTAssertEqual(reducer.state, .connecting)
-        reducer.apply(.characteristicsReady)
-        reducer.apply(.controlSubscription(true))
-        reducer.apply(.authenticated(identity: "samsung-test"))
-        XCTAssertEqual(reducer.state, .ready)
-    }
 
-    func testVoBLEPairingFailureExplainsHowToRecoverStaleCredentials() {
-        XCTAssertEqual(
-            VoBLEPairingRecovery.userMessage(for: "peer is already paired; authenticated reconnect required"),
-            "Android still has old VoBLE credentials. Clear the old pairing in Android AirSIM → Settings → VoBLE Authentication, then pair again."
-        )
-        XCTAssertEqual(
-            VoBLEPairingRecovery.userMessage(for: "reconnect authentication failed"),
-            "VoBLE keys do not match. Clear the old pairing in Android AirSIM → Settings → VoBLE Authentication, then pair again."
-        )
-        XCTAssertEqual(
-            VoBLEPairingRecovery.userMessage(for: "peer is not paired"),
-            "Android no longer has matching VoBLE credentials. Clear local credentials, then verify the security code again."
-        )
-        XCTAssertEqual(VoBLEPairingRecovery.userMessage(for: "蓝牙配对失败"), "蓝牙配对失败")
-    }
-
-    func testVoBLEControlLedgerRejectsStaleResponseAndExpiresDeadline() {
-        var ledger = VoBLEControlRequestLedger()
-        let now = Date(timeIntervalSince1970: 100)
-        ledger.begin(requestID: "request-1", generation: 7, deadline: now.addingTimeInterval(1))
-        XCTAssertEqual(ledger.resolve(requestID: "request-1", generation: 6), .stale)
-        XCTAssertEqual(ledger.resolve(requestID: "missing", generation: 7), .missing)
-        XCTAssertEqual(ledger.expire(now: now.addingTimeInterval(1.001)), ["request-1"])
-    }
-
-    @MainActor
-    func testExplicitBluetoothFailureDoesNotStartVoWLANOrCloud() {
-        final class FakeBluetooth: VoBLECentralControlling {
-            var starts = 0
-            var stops = 0
-            func start() { starts += 1 }
-            func stop() { stops += 1 }
-        }
-        let bluetooth = FakeBluetooth()
-        let controller = VoBLEModeController(bluetooth: bluetooth)
-        let actions = controller.activate(.bluetooth)
-        XCTAssertEqual(bluetooth.starts, 1)
-        XCTAssertFalse(actions.startVoWLAN)
-        XCTAssertFalse(actions.startCloud)
-        XCTAssertFalse(controller.shouldFallbackAfterBluetoothFailure)
-    }
-
-    @MainActor
-    func testRemovingPairingResumesScanningButDoesNotReactivateDisabledMode() {
-        final class BluetoothTransport: VoBLECentralControlling {
-            var operations: [String] = []
-            func start() { operations.append("scan") }
-            func stop() { operations.append("disconnect") }
-        }
-        let bluetooth = BluetoothTransport()
-        VoBLEPairingConnectionReset.perform(on: bluetooth, resumeScanning: true)
-        XCTAssertEqual(bluetooth.operations, ["disconnect", "scan"])
-        bluetooth.operations.removeAll()
-        VoBLEPairingConnectionReset.perform(on: bluetooth, resumeScanning: false)
-        XCTAssertEqual(bluetooth.operations, ["disconnect"])
-    }
-
-    func testVoBLECachedConnectionExpiresWithoutInterruptingAuthenticationOrReadyPeer() {
-        XCTAssertFalse(VoBLEConnectionTimeoutPolicy.shouldExpire(
-            state: .connecting, enabled: true, elapsed: 7.9))
-        XCTAssertTrue(VoBLEConnectionTimeoutPolicy.shouldExpire(
-            state: .connecting, enabled: true, elapsed: 8))
-        XCTAssertFalse(VoBLEConnectionTimeoutPolicy.shouldExpire(
-            state: .connecting, enabled: false, elapsed: 20))
-        for state in [VoBLEConnectionState.authenticating, .ready, .stopped] {
-            XCTAssertFalse(VoBLEConnectionTimeoutPolicy.shouldExpire(
-                state: state, enabled: true, elapsed: 20))
-        }
-    }
-
-    func testConnectionModePreferenceMigratesLegacyLocalModeAndPersistsBluetooth() {
-        let suite = "airsim-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        defaults.set(true, forKey: LocalModePreference.key)
-        XCTAssertEqual(ConnectionModePreference.selected(defaults: defaults), .vowlan)
-
-        ConnectionModePreference.set(.bluetooth, defaults: defaults)
-        XCTAssertEqual(ConnectionModePreference.selected(defaults: defaults), .bluetooth)
-        XCTAssertFalse(LocalModePreference.isEnabled(defaults: defaults))
-        XCTAssertFalse(CloudModePreference.isEnabled(defaults: defaults))
-    }
 
     @MainActor
     func testVoWLANTransportFailureFallsBackOnceToCloud() async throws {
@@ -1988,7 +1391,6 @@ final class AirSIMTests: XCTestCase {
             ConnectionModePresentation.make(
                 selectedMode: .automatic,
                 vowlanOnline: true,
-                bluetoothReady: true,
                 cloudModeEnabled: true,
                 cloudOnline: true
             ).mode,
@@ -1997,7 +1399,6 @@ final class AirSIMTests: XCTestCase {
         let bluetooth = ConnectionModePresentation.make(
             selectedMode: .automatic,
             vowlanOnline: false,
-            bluetoothReady: true,
             cloudModeEnabled: true,
             cloudOnline: true
         )
@@ -2006,7 +1407,6 @@ final class AirSIMTests: XCTestCase {
         let cloud = ConnectionModePresentation.make(
             selectedMode: .automatic,
             vowlanOnline: false,
-            bluetoothReady: false,
             cloudModeEnabled: true,
             cloudOnline: true
         )
@@ -2016,7 +1416,6 @@ final class AirSIMTests: XCTestCase {
         let unreachable = ConnectionModePresentation.make(
             selectedMode: .cloud,
             vowlanOnline: false,
-            bluetoothReady: false,
             cloudModeEnabled: true,
             cloudOnline: false
         )
@@ -2039,35 +1438,6 @@ final class AirSIMTests: XCTestCase {
         XCTAssertFalse(report.allPassed)
     }
 
-    func testLiveActivityIncludesCurrentAndroidAgentIdentity() {
-        let agent = AndroidAgentPresentation(
-            id: "samsung-1",
-            deviceName: "samsung SM-F766U",
-            phoneNumber: "+8615502030017",
-            agentKind: "standalone",
-            cloudOnline: true,
-            vowlanOnline: true,
-            bluetoothOnline: true,
-            isCurrent: true
-        )
-        let state = LiveActivityStateBuilder.make(
-            call: nil,
-            callerName: nil,
-            moduleOnline: true,
-            transport: .vowlan,
-            radio: nil,
-            agent: LiveActivityAgentSnapshot(agent: agent, pairedAgentCount: 2),
-            idleStartedAt: Date(timeIntervalSince1970: 1)
-        )
-
-        XCTAssertEqual(state.agentDeviceName, "samsung SM-F766U")
-        XCTAssertEqual(state.agentPhoneNumber, "+8615502030017")
-        XCTAssertEqual(state.agentKind, "standalone")
-        XCTAssertEqual(state.pairedAgentCount, 2)
-        XCTAssertEqual(state.vowlanOnline, true)
-        XCTAssertEqual(state.bluetoothOnline, true)
-        XCTAssertEqual(state.cloudOnline, true)
-    }
 
     func testHiddenLiveActivityDoesNotRegisterPushToStartToken() {
         let suiteName = "AirSIMTests.live-activity.\(UUID().uuidString)"

@@ -1,6 +1,6 @@
 # AirSIM iOS and watchOS
 
-This directory contains the iPhone app, Apple Watch app, Live Activity, and shared models for a Samsung Android phone endpoint. Clients can connect directly over VoWLAN or VoBLE, or use a separately deployed Cloudflare Relay for remote calls and SMS.
+This directory contains the iPhone app, Apple Watch app, Live Activity, and shared models for a Samsung Android phone endpoint. Clients can connect directly over VoWLAN, or use a separately deployed Cloudflare Relay for remote calls and SMS.
 
 The documented app build is `0.9.7 (81)`, supplied as an unsigned IPA with [Apps v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). The upstream maintainer separately uploads production builds through Xcode to TestFlight; upload, processing, and review must be checked separately. The companion AVF Agent is [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6). The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; changing the Bundle ID requires your own Relay and APNs credentials.
 
@@ -28,11 +28,7 @@ Main targets:
 - Microphone permission is requested first on entering the foreground. Local discovery and notification authorization start only after the microphone permission decision. If the system defers the prompt, it retries on the next foreground entry without requiring re-pairing.
 - Apple Watch dialing, answering, and call media
 - SMS list, sending, notifications, and contact integration
-- VoWLAN, VoBLE, and cloud Relay transport selection. Automatic mode selects only actually available dialing routes, with fixed priority VoWLAN → VoBLE → cloud.
-- VoBLE dialing readiness depends on the authenticated Bluetooth session and media channel, not Relay, VoWLAN health checks, or HTTP 200 responses.
-- The dialer, paired-device list, Lock Screen Live Activity, and Dynamic Island show VoBLE online state and current transport consistently.
-- Answer, reject, and hang-up actions for VoBLE calls in Dynamic Island open AirSIM and execute through its authenticated CoreBluetooth session; they do not incorrectly call a fixed VoWLAN address or Relay.
-- The VoBLE pairing screen supports authenticated unpairing on both ends. If keys are out of sync, it explains how to clear Android credentials and allows clearing old iPhone Keychain credentials before scanning again.
+- VoWLAN and cloud Relay transport selection. Automatic mode selects only actually available dialing routes, with fixed priority VoWLAN, then cloud.
 - Cloud PCM uses bounded adaptive buffering, brief gap concealment, and a 20 ms send/receive cadence. Old states are prevented from reopening the call UI after hang-up. In the recorded device-call round, the user reported no recurrence and steadier audio; see [cloud PCM jitter mitigation](../docs/cloud-pcm-resilience.md) for the strategy and TCP limitations. This is bounded mitigation, not proof that every audio-quality cause is resolved.
 - Settings show current VoWLAN/cloud mode and Agent heartbeat status.
 - Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
@@ -54,15 +50,14 @@ PushKit VoIP push is only for real incoming calls handled by CallKit; it must no
 3. Open the two-minute pairing window on Samsung.
 4. On iPhone, select the pairing method in “Pair Android Phone,” then enter the Android six-digit code. With “Local Mode Pairing” on, pairing writes only VoWLAN keys and does not read or write Relay/push parameters. With it off, pairing writes cloud configuration and reports missing credentials rather than silently falling back. Its initial value follows global local mode, but changing it affects only this pairing and does not change global settings; it cannot be changed during pairing. Pairing waits for in-flight Agent registration writes, and automatic registration recognizes Android's local pairing state. Other devices' global Relay-token refresh is not disabled.
 5. Wait for VoWLAN to show Ready.
-6. For VoBLE, choose Bluetooth under “Connection Mode,” grant system Bluetooth permission, and complete AirSIM pairing. Once “VoBLE Online” appears, local dialing works without Relay parameters.
-7. For remote mode, enter a separate Relay URL matching the app's signing identity under “Cloud Relay,” select “Save Relay URL,” and enable “Remote Calls and SMS.” The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; other Bundle IDs require a self-deployed Relay.
-8. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the AVF Agent within 90 seconds. Diagnostics do not dial or send SMS.
+6. For remote mode, enter a separate Relay URL matching the app's signing identity under “Cloud Relay,” select “Save Relay URL,” and enable “Remote Calls and SMS.” The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; other Bundle IDs require a self-deployed Relay.
+7. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the AVF Agent within 90 seconds. Diagnostics do not dial or send SMS.
 
 ### Manage paired Android devices
 
-Below “Settings → Samsung Connection → Pair Android Phone,” the paired-device list shows current device names, numbers, and VoWLAN/VoBLE/cloud status, with individual deletion confirmation. Offline history stores only device ID, name, and Agent type, not phone numbers. If a number cannot be read or is not provided by the SIM, it shows “Number not provided” without filling in a historical number.
+Below “Settings → Samsung Connection → Pair Android Phone,” the paired-device list shows current device names, numbers, and VoWLAN/cloud status, with individual deletion confirmation. Offline history stores only device ID, name, and Agent type, not phone numbers. If a number cannot be read or is not provided by the SIM, it shows “Number not provided” without filling in a historical number.
 
-Deletion removes the local list entry, manual binding, and Bluetooth credentials for that device and retains a marker preventing automatic reconnection. Other devices, call history, and SMS are unaffected. For an online Bluetooth device, it also attempts to revoke Android credentials. Offline deletion does not establish remote authorization revocation; old Android credentials may need clearing under “VoBLE Authentication.” Deleted devices must be explicitly paired again and cannot be restored by advertising or stale cloud status.
+Deletion removes the local list entry and manual binding for that device and retains a marker preventing automatic reconnection. Other devices, call history, and SMS are unaffected. Deleted devices must be explicitly paired again and cannot be restored by advertising or stale cloud status.
 
 Reconnection uses current advertisements and authentication checks rather than a cached peripheral UUID. Newer Android APKs support authenticated BLE `device_info`; older APKs do not substitute historical VoWLAN/Relay numbers. Standalone cloud heartbeats and local health checks read the current calling SIM, not the number saved at initial pairing. Legacy AVF Linux Agent cloud number heartbeats have not migrated to this flow.
 

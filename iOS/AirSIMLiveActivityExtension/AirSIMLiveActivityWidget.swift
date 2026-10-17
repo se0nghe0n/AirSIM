@@ -310,9 +310,6 @@ struct AirSIMLiveActivityWidget: Widget {
             if vowlanIsOnline(state) {
                 connectionBadge("VoWLAN", systemImage: "wifi", color: .green)
             }
-            if bluetoothIsOnline(state) {
-                connectionBadge("VoBLE", systemImage: "wave.3.right", color: .blue)
-            }
             if cloudIsOnline(state) {
                 connectionBadge("Cloud", systemImage: "icloud.fill", color: .cyan)
             }
@@ -346,55 +343,25 @@ struct AirSIMLiveActivityWidget: Widget {
                         .lineLimit(1)
                     Spacer(minLength: 8)
                     HStack(spacing: IslandActionLayout.buttonSpacing) {
-                        if state.transport == .bluetooth,
-                           let url = AirSIMLiveActivityActionURL.make(
-                            action: .reject, callID: state.callID) {
-                            Link(destination: url) {
-                                Image(systemName: "phone.down.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: IslandActionLayout.buttonSide,
-                                           height: IslandActionLayout.buttonSide)
-                            }
-                            .accessibilityLabel("Decline Call")
-                            .modifier(LiveActivityGlassButtonStyle(
-                                prominent: false,
-                                tint: Color.white.opacity(0.17)
-                            ))
-                        } else {
-                            Button(intent: RejectAirSIMCallIntent(callID: state.callID)) {
-                                Image(systemName: "phone.down.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: IslandActionLayout.buttonSide,
-                                           height: IslandActionLayout.buttonSide)
-                            }
-                            .accessibilityLabel("Decline Call")
-                            .modifier(LiveActivityGlassButtonStyle(
-                                prominent: false,
-                                tint: Color.white.opacity(0.17)
-                            ))
+                        Button(intent: RejectAirSIMCallIntent(callID: state.callID)) {
+                            Image(systemName: "phone.down.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: IslandActionLayout.buttonSide,
+                                       height: IslandActionLayout.buttonSide)
                         }
-
-                        if state.transport == .bluetooth,
-                           let url = AirSIMLiveActivityActionURL.make(
-                            action: .answer, callID: state.callID) {
-                            Link(destination: url) {
-                                Image(systemName: "phone.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: IslandActionLayout.buttonSide,
-                                           height: IslandActionLayout.buttonSide)
-                            }
-                            .accessibilityLabel("Answer Call")
-                            .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .green))
-                        } else {
-                            Button(intent: AnswerAirSIMCallIntent(callID: state.callID)) {
-                                Image(systemName: "phone.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .frame(width: IslandActionLayout.buttonSide,
-                                           height: IslandActionLayout.buttonSide)
-                            }
-                            .accessibilityLabel("Answer Call")
-                            .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .green))
+                        .accessibilityLabel("Decline Call")
+                        .modifier(LiveActivityGlassButtonStyle(
+                            prominent: false,
+                            tint: Color.white.opacity(0.17)
+                        ))
+                        Button(intent: AnswerAirSIMCallIntent(callID: state.callID)) {
+                            Image(systemName: "phone.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: IslandActionLayout.buttonSide,
+                                       height: IslandActionLayout.buttonSide)
                         }
+                        .accessibilityLabel("Answer Call")
+                        .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .green))
                     }
                     .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
                            alignment: .trailing)
@@ -407,31 +374,16 @@ struct AirSIMLiveActivityWidget: Widget {
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    if state.transport == .bluetooth,
-                       let url = AirSIMLiveActivityActionURL.make(
-                        action: .hangup, callID: state.callID) {
-                        Link(destination: url) {
-                            Image(systemName: "phone.down.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: IslandActionLayout.buttonSide,
-                                       height: IslandActionLayout.buttonSide)
-                        }
-                        .accessibilityLabel("End Call")
-                        .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .red))
-                        .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
-                               alignment: .trailing)
-                    } else {
-                        Button(intent: HangUpAirSIMCallIntent(callID: state.callID)) {
-                            Image(systemName: "phone.down.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: IslandActionLayout.buttonSide,
-                                       height: IslandActionLayout.buttonSide)
-                        }
-                        .accessibilityLabel("End Call")
-                        .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .red))
-                        .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
-                               alignment: .trailing)
+                    Button(intent: HangUpAirSIMCallIntent(callID: state.callID)) {
+                        Image(systemName: "phone.down.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(width: IslandActionLayout.buttonSide,
+                                   height: IslandActionLayout.buttonSide)
                     }
+                    .accessibilityLabel("End Call")
+                    .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .red))
+                    .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
+                           alignment: .trailing)
                 }
             case .standby, .cloudStandby, .offline:
                 EmptyView()
@@ -544,18 +496,11 @@ struct AirSIMLiveActivityWidget: Widget {
         state.cloudOnline == true || state.transport == .cloud
     }
 
-    private func bluetoothIsOnline(
-        _ state: AirSIMCallActivityAttributes.ContentState
-    ) -> Bool {
-        state.bluetoothOnline == true || state.transport == .bluetooth
-    }
-
     private func connectionStatusLine(
         _ state: AirSIMCallActivityAttributes.ContentState
     ) -> String? {
         var values: [String] = []
         if vowlanIsOnline(state) { values.append("VoWLAN Online") }
-        if bluetoothIsOnline(state) { values.append("VoBLE Online") }
         if cloudIsOnline(state) { values.append("Cloud Online") }
         return values.isEmpty ? nil : values.joined(separator: " · ")
     }
@@ -635,7 +580,7 @@ struct AirSIMLiveActivityWidget: Widget {
     private func compactSymbolName(
         for state: AirSIMCallActivityAttributes.ContentState
     ) -> String {
-        if state.transport == .vowlan || state.transport == .bluetooth,
+        if state.transport == .vowlan,
            state.phase != .offline,
            state.phase != .cloudStandby {
             return state.transport?.systemImage ?? "wifi"

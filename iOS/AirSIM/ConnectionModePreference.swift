@@ -3,7 +3,6 @@ import Foundation
 /// 用户明确选择的连接方式。只有 `automatic` 可以跨传输回退。
 enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case vowlan
-    case bluetooth
     case cloud
     case automatic
 
@@ -12,7 +11,6 @@ enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable
     var title: String {
         switch self {
         case .vowlan: return "VoWLAN"
-        case .bluetooth: return "Bluetooth"
         case .cloud: return "Cloud"
         case .automatic: return "Automatic"
         }
@@ -21,7 +19,6 @@ enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable
     var detail: String {
         switch self {
         case .vowlan: return "Uses only the same Wi-Fi or phone hotspot, without Relay"
-        case .bluetooth: return "Bluetooth is not a call route"
         case .cloud: return "Uses only Relay, PushKit, and CallKit"
         case .automatic: return "Automatically chooses VoWLAN, then cloud based on availability"
         }
@@ -32,9 +29,9 @@ enum ConnectionModePreference {
     static let key = "airsim.connection-mode"
 
     static func selected(defaults: UserDefaults = .standard) -> AirSIMConnectionMode {
-        if let rawValue = defaults.string(forKey: key),
-           let mode = AirSIMConnectionMode(rawValue: rawValue) {
-            return mode
+        if let rawValue = defaults.string(forKey: key) {
+            if rawValue == "bluetooth" { return .automatic }
+            if let mode = AirSIMConnectionMode(rawValue: rawValue) { return mode }
         }
         // 兼容升级前的两个布尔开关；不在读取时改写，避免测试套件和扩展进程副作用。
         if defaults.bool(forKey: LocalModePreference.key) { return .vowlan }
@@ -60,7 +57,7 @@ enum ConnectionModePreference {
 
 /// The user-selected Android agent is a routing constraint, not just UI state.
 /// Keeping it independent from the connection mode lets automatic mode choose
-/// VoWLAN/VoBLE/cloud for one phone without silently jumping to another phone.
+/// VoWLAN or cloud for one phone without silently jumping to another phone.
 enum AndroidAgentBindingPreference {
     static let key = "airsim.bound-android-agent-id"
 
@@ -137,7 +134,6 @@ struct ConnectionModeRuntimePolicy: Equatable, Sendable {
     let mode: AirSIMConnectionMode
 
     var startsVoWLAN: Bool { mode == .vowlan || mode == .automatic }
-    var startsBluetooth: Bool { mode == .bluetooth || mode == .automatic }
     var startsCloud: Bool { mode == .cloud || mode == .automatic }
     var allowsCrossModeFallback: Bool { mode == .automatic }
 
@@ -145,21 +141,17 @@ struct ConnectionModeRuntimePolicy: Equatable, Sendable {
     var usesCallKit: Bool { mode != .vowlan }
 }
 
-/// 统一拨号路由选择。蓝牙不是拨号路由。显式模式绝不借用其他链路；
+/// 统一拨号路由选择。显式模式绝不借用其他链路；
 /// 自动模式只在通话建立前按 VoWLAN、云端顺序选择。
 enum DialRouteSelector {
     static func preferred(
         mode: AirSIMConnectionMode,
         vowlanReady: Bool,
-        bluetoothReady: Bool,
         cloudReady: Bool
     ) -> CallTransport? {
-        _ = bluetoothReady
         switch mode {
         case .vowlan:
             return vowlanReady ? .vowlan : nil
-        case .bluetooth:
-            return nil
         case .cloud:
             return cloudReady ? .cloud : nil
         case .automatic:

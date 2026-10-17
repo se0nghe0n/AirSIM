@@ -4,7 +4,7 @@ import Combine
 import UIKit
 #endif
 
-enum CallRecordingSource: String, Sendable { case cloudWebRTC, cloudPCM, localPCM, bluetooth }
+enum CallRecordingSource: String, Sendable { case cloudWebRTC, cloudPCM, localPCM }
 enum CallRecordingChannel: Sendable { case local, remote }
 
 struct CallRecordingFile: Codable, Identifiable, Sendable {

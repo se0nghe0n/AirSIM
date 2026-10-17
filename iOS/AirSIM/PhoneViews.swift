@@ -47,13 +47,11 @@ struct DialPadTransportPresentation: Equatable {
         mode: AirSIMConnectionMode = .automatic,
         vowlanOnline: Bool,
         moduleLocalReachable: Bool,
-        cloudOnline: Bool,
-        bluetoothReady: Bool = false
+        cloudOnline: Bool
     ) -> DialPadTransportPresentation? {
         let selected = DialRouteSelector.preferred(
             mode: mode,
             vowlanReady: vowlanOnline,
-            bluetoothReady: bluetoothReady,
             cloudReady: cloudOnline
         )
         if selected == .vowlan {
@@ -187,27 +185,6 @@ struct DialPadView: View {
                         ) {
                             pairedAgentListPresentation = PairedAgentListPresentation()
                         }
-                    } else if ConnectionModePreference.selected() == .bluetooth {
-                        HStack(spacing: 10) {
-                            Image(systemName: "wave.3.right")
-                                .foregroundStyle(model.voble.state == .ready ? .green : .orange)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("VoBLE Bluetooth Mode")
-                                    .font(.subheadline.weight(.semibold))
-                                Text(model.voble.state == .ready
-                                     ? "Authenticated · Calls do not use Relay"
-                                     : "Waiting for Android Bluetooth Agent")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(model.voble.state == .ready ? "Online" : "Connecting")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(model.voble.state == .ready ? .green : .orange)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                     } else if !model.pairedAndroidAgents.isEmpty {
                         Button {
                             pairedAgentListPresentation = PairedAgentListPresentation()
@@ -448,7 +425,6 @@ private struct DialPadCurrentAgentCard: View {
 
             HStack(spacing: 8) {
                 AgentTransportPill(title: "VoWLAN", online: agent.vowlanOnline, enabled: true)
-                AgentTransportPill(title: "VoBLE", online: agent.bluetoothOnline, enabled: true)
                 AgentTransportPill(title: "Cloud", online: agent.cloudOnline, enabled: cloudModeEnabled)
                 Spacer(minLength: 0)
                 Text(agent.agentKindTitle)
@@ -514,7 +490,6 @@ private struct PairedAndroidAgentsView: View {
                     }
                     HStack(spacing: 8) {
                         AgentTransportPill(title: "VoWLAN", online: agent.vowlanOnline, enabled: true)
-                        AgentTransportPill(title: "VoBLE", online: agent.bluetoothOnline, enabled: true)
                         AgentTransportPill(title: "Cloud", online: agent.cloudOnline, enabled: cloudModeEnabled)
                         Spacer()
                         Text(agent.agentKindTitle)

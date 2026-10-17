@@ -48,8 +48,7 @@ https://t.me/+TRDazm-qnXlhNGRl
 - **Cross-device calls:** Dial, answer, reject, hang up, mute, and send DTMF on iPhone or Apple Watch, with the Samsung Android phone carrying the cellular call.
 - **Cross-device SMS:** Synchronize SMS state, send messages, and notify Apple clients through APNs.
 - **CallKit and PushKit:** Present the iPhone system incoming-call UI, with VoIP push wake-up and incoming-call reporting.
-- **Direct local VoWLAN:** Use HMAC-authenticated control and PCM links when iPhone and Samsung share a LAN or Samsung hotspot.
-- **Direct VoBLE Bluetooth (VoBLE branch):** Select Bluetooth as an independent connection mode. Authenticated BLE GATT carries call control and bidirectional audio without Wi-Fi, Relay, PushKit, or cloud parameters.
+- **Direct local VoWLAN:** Use HMAC-authenticated control and WebRTC audio when iPhone and Samsung share a LAN or Samsung hotspot.
 - **Single Android APK:** Includes the Agent and Bridge, removing the need for AVF Linux, Terminal, Debian, or an installer.
 - **Cloud Relay:** A separately deployed Cloudflare Worker, KV, and Durable Objects connect the built-in Android Agent and Apple clients.
 - **Visible connection modes and diagnostics:** The Android home screen and iOS settings show VoWLAN/cloud status. iOS can validate push credentials, AirSIM Relay identity, device registration, and an AVF Agent heartbeat within 90 seconds.
@@ -62,7 +61,7 @@ The recommended Standalone architecture runs the Bridge and Agent in one APK:
 
 ```text
 iPhone / Apple Watch
-        │  VoWLAN, VoBLE, or Cloudflare Relay
+        │  VoWLAN or Cloudflare Relay
         ▼
 Android AirSIM Standalone APK
         ├─ Built-in Agent: identity, heartbeats, commands, and media orchestration
@@ -75,14 +74,6 @@ The legacy AVF architecture remains available for compatibility and fallback, bu
 The upstream maintainer uses `https://airsim-push.remotepilot.site`, allowing only `com.eric3u.airsim`. DJOneHub continues to use `https://push.remotepilot.site`. The domains have separate Workers, KV, Durable Objects, and Dashboard tokens; do not reuse them across services. Other signing identities require their own Relay endpoints, Cloudflare resources, and APNs credentials.
 
 Each call selects VoWLAN or Relay when established and keeps that transport until the call ends, preventing media and control from switching paths mid-call.
-
-### VoBLE Bluetooth mode
-
-VoBLE is a mode alongside VoWLAN and cloud Relay, not a required component of Wi-Fi operation. After selecting “Direct Bluetooth,” the iPhone and Android pair using an ephemeral key confirmed by a one-time short code. Both control messages and G.711 μ-law 8 kHz mono audio use AES-256-GCM authenticated encryption. A call binds to the same `call_id` and generation to prevent reconnection from affecting another call. Brief disconnections may recover only within three seconds, for the same call and generation.
-
-Bluetooth mode carries only AirSIM control and call audio. **It does not share Android cellular internet with iPhone through Bluetooth PAN.** Use an Android hotspot, Wi-Fi, or the iPhone's own cellular connection for internet access. iOS still uses CallKit to present and manage calls, but local Bluetooth needs neither PushKit nor Relay. iOS does not guarantee BLE background wake-up after a user force-quits the app; reopen AirSIM before receiving calls. Apple Watch can mirror iPhone CallKit incoming calls and control state, but actual audio routing is determined by iPhone/watchOS. The Watch does not connect directly to Android BLE.
-
-See the [VoBLE design](docs/superpowers/specs/2026-10-12-voble-bluetooth-call-design.md) and [VoBLE device test matrix](docs/voble-real-device-test-matrix.md) for implementation and acceptance boundaries.
 
 ## Repository layout
 

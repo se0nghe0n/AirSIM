@@ -38,19 +38,6 @@ public final class MainScreenPresentation {
         return digits.substring(0, 3) + " " + digits.substring(3);
     }
 
-    public static String voBLEAuthenticationStatus(
-            boolean credentialStored, boolean authenticated, String pairingCode) {
-        if (authenticated) return "Authenticated and connected";
-        if (!"--- ---".equals(formatPairingCode(pairingCode))) return "Verify security code on both devices";
-        if (credentialStored) return "Credentials saved · Waiting for iPhone";
-        return "Waiting for initial pairing from iPhone";
-    }
-
-    public static String voBLEPairingCode(String pairingCode) {
-        String formatted = formatPairingCode(pairingCode);
-        return "--- ---".equals(formatted) ? "Waiting for pairing from iPhone" : formatted;
-    }
-
     public static String recentLogLines(String log, String filter, int maximum) {
         if (log == null || log.isBlank() || maximum <= 0) return "No debug logs";
         String category = filter == null ? "" : filter.trim();

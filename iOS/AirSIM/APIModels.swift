@@ -147,7 +147,7 @@ struct AndroidAgentMetadata: Decodable, Equatable, Sendable {
     }
     static func decode(_ data: Data, expectedID: String) throws -> Self {
         let value = try JSONDecoder().decode(Self.self, from: data)
-        guard value.agentID == expectedID else { throw VoBLECentralError.invalidResponse }
+        guard value.agentID == expectedID else { throw URLError(.badServerResponse) }
         let number = value.phoneNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         return Self(agentID: value.agentID, deviceName: value.deviceName,
                     phoneNumber: number?.isEmpty == false ? number : nil, agentKind: value.agentKind)

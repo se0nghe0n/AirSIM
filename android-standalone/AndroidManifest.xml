@@ -27,11 +27,6 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <application
@@ -95,11 +90,6 @@
             android:name="com.airsim.phonecontrol.VoWLANGatewayService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging" />
-        <service
-            android:name="com.airsim.phonecontrol.voble.VoBLEGatewayService"
-            android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
-
         <receiver
             android:name="com.airsim.phonecontrol.BootReceiver"
             android:enabled="true"

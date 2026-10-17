@@ -207,7 +207,13 @@ struct RootView: View {
         case let .message(recipient):
             composeMessage(recipient)
         case let .liveActivity(action, callID):
-            Task { await model.performVoBLELiveActivityAction(action, callID: callID) }
+            Task {
+                switch action {
+                case .answer: await model.answer()
+                case .reject: await model.reject()
+                case .hangup: await model.hangup()
+                }
+            }
         case nil:
             break
         }

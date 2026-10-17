@@ -13,6 +13,5 @@ public final class BootReceiver extends BroadcastReceiver {
         boolean configured = AppConfig.configured(context);
         BridgeLog.info("boot_receiver action=" + action + " configured=" + configured);
         if (configured) AgentWatchdogService.start(context);
-        com.airsim.phonecontrol.voble.VoBLEGatewayService.start(context);
     }
 }

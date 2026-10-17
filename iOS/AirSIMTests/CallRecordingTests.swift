@@ -89,7 +89,7 @@ final class CallRecordingTests: XCTestCase {
     func testEmptyWrongSourceAndFailedSessionCannotPolluteNextRecording() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
-        _ = try await recorder.start(callID: "empty", source: .bluetooth, atUptime: 1)
+        _ = try await recorder.start(callID: "empty", source: .cloudWebRTC, atUptime: 1)
         recorder.appendPCM16(pcm([999]), channel: .local, source: .localPCM, atUptime: 1)
         do { _ = try await recorder.stop(); XCTFail("Empty recording must fail") }
         catch { XCTAssertTrue(error is CallRecordingError) }

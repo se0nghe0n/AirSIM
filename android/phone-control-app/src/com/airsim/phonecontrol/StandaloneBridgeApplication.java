@@ -11,6 +11,5 @@ public final class StandaloneBridgeApplication extends Application {
         BridgeLog.info("standalone_application_started sdk=" + android.os.Build.VERSION.SDK_INT);
         ShizukuBridgeManager.initialize(this);
         StandaloneAgentService.start(this);
-        com.airsim.phonecontrol.voble.VoBLEGatewayService.start(this);
     }
 }

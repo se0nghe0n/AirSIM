@@ -95,11 +95,6 @@ public final class MainActivity extends Activity {
     private TextView pairingStatus;
     private TextView pairingCodeView;
     private TextView pairingCountdownView;
-    private TextView voBLEAuthenticationStatusView;
-    private TextView voBLEPairingCodeView;
-    private TextView voBLEDiagnosticsView;
-    private TextView voBLEClearCredentialButton;
-    private boolean voBLEAuthenticationVisible;
     private LinearLayout debugRows;
     private String lastRenderedDebugLog;
     private String lastRenderedDebugFilter;
@@ -141,14 +136,6 @@ public final class MainActivity extends Activity {
             }
         }
     };
-    private final Runnable voBLEAuthenticationRefresh = new Runnable() {
-        @Override public void run() {
-            if (!voBLEAuthenticationVisible) return;
-            renderVoBLEAuthenticationStatus();
-            handler.postDelayed(this, 500);
-        }
-    };
-
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         shizukuStartupPolicy = new ShizukuStartupPolicy(
@@ -183,10 +170,6 @@ public final class MainActivity extends Activity {
 				checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED,
 				checkSelfPermission(Manifest.permission.READ_PHONE_NUMBERS) == PackageManager.PERMISSION_GRANTED,
 				Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
-						== PackageManager.PERMISSION_GRANTED,
-				Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
-						== PackageManager.PERMISSION_GRANTED,
-				Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE)
 						== PackageManager.PERMISSION_GRANTED);
 		if (missingPermissions.length > 0) {
             requestPermissions(missingPermissions, 101);
@@ -199,9 +182,6 @@ public final class MainActivity extends Activity {
 			int requestCode, String[] permissions, int[] grantResults) {
 		super.onRequestPermissionsResult(requestCode, permissions, grantResults);
 		if (requestCode == 101) requestOptionalSMSPermission();
-		if (requestCode == 101 && hasVoBLEPermissions()) {
-			com.airsim.phonecontrol.voble.VoBLEGatewayService.start(this);
-		}
 		if (requestCode == OPTIONAL_SMS_REQUEST) {
 			startSMSInboxBaselineIfAuthorized();
 			requestOptionalCallHistoryPermission();
@@ -237,12 +217,6 @@ public final class MainActivity extends Activity {
         getPreferences(MODE_PRIVATE).edit().putBoolean(key, true).apply();
         requestPermissions(missing, OPTIONAL_CALL_HISTORY_REQUEST);
     }
-
-	private boolean hasVoBLEPermissions() {
-		return Build.VERSION.SDK_INT < 31
-				|| (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-				&& checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED);
-	}
 
 	private void startSMSInboxBaselineIfAuthorized() {
 		if (checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
@@ -311,12 +285,6 @@ public final class MainActivity extends Activity {
 
     private void showPage(Page page) {
         if (pcmStatusPoller != null) pcmStatusPoller.stop();
-        voBLEAuthenticationVisible = false;
-        handler.removeCallbacks(voBLEAuthenticationRefresh);
-        voBLEAuthenticationStatusView = null;
-        voBLEPairingCodeView = null;
-        voBLEDiagnosticsView = null;
-        voBLEClearCredentialButton = null;
         pcmHealthTile = null;
         currentPage = page;
         handler.removeCallbacks(debugRefresh);
@@ -387,15 +355,6 @@ public final class MainActivity extends Activity {
         connectionCard.addView(connectionTitle, matchWithTop(5));
         connectionCard.addView(label(connectionDetail, 13, MUTED, Gravity.START), matchWithTop(5));
         root.addView(connectionCard, matchWithTop(12));
-
-        LinearLayout bluetoothCard = card(SURFACE, 18);
-        bluetoothCard.setOrientation(LinearLayout.VERTICAL);
-        bluetoothCard.setPadding(dp(16), dp(14), dp(16), dp(14));
-        bluetoothCard.addView(overline("Bluetooth calls (redacted diagnostics)"));
-        bluetoothCard.addView(label(
-                com.airsim.phonecontrol.voble.VoBLEGatewayService.diagnosticsSummary(),
-                14, MUTED, Gravity.START), matchWithTop(5));
-        root.addView(bluetoothCard, matchWithTop(10));
 
         LinearLayout firstHealthRow = row();
         HealthTile agentTile = healthTile(
@@ -608,7 +567,7 @@ public final class MainActivity extends Activity {
                 .anyMatch(account -> account.key().equals(accountKey));
         callAccountCard.addView(label(DefaultCallAccount.selectedLabel(this)
                 + (available ? "" : " · Currently unavailable"), 14, available ? TEXT : WARNING, Gravity.START));
-        callAccountCard.addView(description("Used for AirSIM Bluetooth, VoWLAN, and cloud calls. Does not change the system calling or SMS SIM."
+        callAccountCard.addView(description("Used for AirSIM VoWLAN and cloud calls. Does not change the system calling or SMS SIM."
                 + "If the selected SIM is disabled or removed, calling stops until you select another SIM."), matchWithTop(6));
         if (!accounts.error().isEmpty()) {
             callAccountCard.addView(description(accounts.error()), matchWithTop(6));
@@ -626,20 +585,8 @@ public final class MainActivity extends Activity {
         }
         root.addView(callAccountCard, matchWithTop(10));
 
-        root.addView(sectionTitle("VoBLE Bluetooth authentication"), matchWithTop(22));
-        LinearLayout voBLECard = card(SURFACE, 22);
-        voBLECard.setOrientation(LinearLayout.VERTICAL);
-        voBLECard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        boolean voBLEPaired = com.airsim.phonecontrol.voble.VoBLEGatewayService
                 .hasStoredCredential(this);
-        voBLECard.addView(label(voBLEPaired ? "iPhone credentials saved" : "No credentials saved",
-                14, voBLEPaired ? PRIMARY : MUTED, Gravity.START));
-        voBLECard.addView(description("Manage six-digit code verification, credential recovery, and unpairing on both devices."),
                 matchWithTop(6));
-        TextView configureVoBLE = secondaryButton("Open VoBLE authentication settings");
-        configureVoBLE.setOnClickListener(ignored -> openVoBLEAuthenticationPage());
-        voBLECard.addView(configureVoBLE, matchWithTop(10));
-        root.addView(voBLECard, matchWithTop(10));
 
 		root.addView(sectionTitle("SMS inbox fallback"), matchWithTop(22));
 		LinearLayout smsCard = card(SURFACE, 22);
@@ -757,8 +704,6 @@ public final class MainActivity extends Activity {
 
     private void openPairingPage() {
         handler.removeCallbacks(debugRefresh);
-        voBLEAuthenticationVisible = false;
-        handler.removeCallbacks(voBLEAuthenticationRefresh);
         bottomBar.setVisibility(View.GONE);
         contentHost.removeAllViews();
         contentHost.addView(pairingPage(), new FrameLayout.LayoutParams(
@@ -766,126 +711,8 @@ public final class MainActivity extends Activity {
         startPairing();
     }
 
-    private void openVoBLEAuthenticationPage() {
-        handler.removeCallbacks(debugRefresh);
-        handler.removeCallbacks(voBLEAuthenticationRefresh);
-        voBLEAuthenticationVisible = true;
-        bottomBar.setVisibility(View.GONE);
-        contentHost.removeAllViews();
-        contentHost.addView(voBLEAuthenticationPage(), new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        handler.post(voBLEAuthenticationRefresh);
-    }
 
-    private View voBLEAuthenticationPage() {
-        LinearLayout root = pageRoot();
-        TextView back = label("‹", 40, TEXT, Gravity.START);
-        back.setContentDescription("Back to settings");
-        back.setOnClickListener(ignored -> {
-            bottomBar.setVisibility(View.VISIBLE);
-            showPage(Page.SETTINGS);
-        });
-        root.addView(back, new LinearLayout.LayoutParams(dp(56), dp(52)));
 
-        TextView title = label("VoBLE authentication", 30, TEXT, Gravity.START);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title, matchWithTop(8));
-        root.addView(description("Bluetooth is a separate connection mode. Its credentials do not affect VoWLAN or cloud Relay."),
-                matchWithTop(6));
-
-        boolean permissions = hasVoBLEPermissions();
-        boolean paired = com.airsim.phonecontrol.voble.VoBLEGatewayService
-                .hasStoredCredential(this);
-        LinearLayout statusCard = card(SURFACE, 22);
-        statusCard.setOrientation(LinearLayout.VERTICAL);
-        statusCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        statusCard.addView(overline("Authentication status"));
-        voBLEAuthenticationStatusView = label(
-                MainScreenPresentation.voBLEAuthenticationStatus(
-                        paired,
-                        com.airsim.phonecontrol.voble.VoBLEGatewayService.isAuthenticated(),
-                        com.airsim.phonecontrol.voble.VoBLEGatewayService.pendingPairingCode()),
-                19, paired ? PRIMARY : WARNING, Gravity.START);
-        statusCard.addView(voBLEAuthenticationStatusView, matchWithTop(7));
-        statusCard.addView(label(permissions ? "Bluetooth permission: granted" : "Bluetooth permission: required",
-                13, permissions ? MUTED : WARNING, Gravity.START), matchWithTop(7));
-        voBLEDiagnosticsView = label(
-                com.airsim.phonecontrol.voble.VoBLEGatewayService.diagnosticsSummary(),
-                13, MUTED, Gravity.START);
-        statusCard.addView(voBLEDiagnosticsView, matchWithTop(7));
-        statusCard.addView(overline("Six-digit security code"), matchWithTop(18));
-        voBLEPairingCodeView = label(
-                MainScreenPresentation.voBLEPairingCode(
-                        com.airsim.phonecontrol.voble.VoBLEGatewayService.pendingPairingCode()),
-                28, MUTED, Gravity.CENTER);
-        voBLEPairingCodeView.setTypeface(Typeface.create(Typeface.MONOSPACE, Typeface.BOLD));
-        statusCard.addView(voBLEPairingCodeView, matchWithTop(8));
-        root.addView(statusCard, matchWithTop(18));
-
-        LinearLayout flowCard = card(SURFACE, 22);
-        flowCard.setOrientation(LinearLayout.VERTICAL);
-        flowCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        flowCard.addView(overline("Authentication steps"));
-        flowCard.addView(label("1. Scan and connect to this Android Agent from iPhone\n"
-                        + "2. Check that both devices show the same six-digit code\n"
-                        + "3. Confirm to save the app key and enable calls and PCM audio",
-                14, TEXT, Gravity.START), matchWithTop(8));
-        flowCard.addView(description("If iPhone shows already paired or authentication fails, the devices' saved keys do not match."
-                + "Clear the old credentials here, then pair again from iPhone."), matchWithTop(10));
-        root.addView(flowCard, matchWithTop(12));
-
-        TextView restart = secondaryButton("Restart VoBLE service");
-        restart.setOnClickListener(ignored -> {
-            com.airsim.phonecontrol.voble.VoBLEGatewayService.start(this);
-            toast("VoBLE service started");
-            openVoBLEAuthenticationPage();
-        });
-        root.addView(restart, matchWithTop(16));
-
-        voBLEClearCredentialButton = secondaryButton("Clear VoBLE pairing credentials");
-        voBLEClearCredentialButton.setTextColor(paired ? DANGER : MUTED);
-        voBLEClearCredentialButton.setEnabled(paired);
-        voBLEClearCredentialButton.setOnClickListener(ignored -> new AlertDialog.Builder(this)
-                .setTitle("Clear old VoBLE pairing?")
-                .setMessage("Deletes Bluetooth authentication keys and ends the current VoBLE session. VoWLAN, Relay, and call history are kept.")
-                .setPositiveButton("Clear and pair again", (dialog, which) -> {
-                    com.airsim.phonecontrol.voble.VoBLEGatewayService.clearStoredCredential(this);
-                    handler.postDelayed(() -> {
-                        toast("Old VoBLE credentials cleared");
-                        openVoBLEAuthenticationPage();
-                    }, 150);
-                })
-                .setNegativeButton("Cancel", null)
-                .show());
-        root.addView(voBLEClearCredentialButton, matchWithTop(10));
-        return scroll(root);
-    }
-
-    private void renderVoBLEAuthenticationStatus() {
-        boolean stored = com.airsim.phonecontrol.voble.VoBLEGatewayService
-                .hasStoredCredential(this);
-        boolean authenticated = com.airsim.phonecontrol.voble.VoBLEGatewayService.isAuthenticated();
-        String pairingCode = com.airsim.phonecontrol.voble.VoBLEGatewayService.pendingPairingCode();
-        if (voBLEAuthenticationStatusView != null) {
-            voBLEAuthenticationStatusView.setText(MainScreenPresentation.voBLEAuthenticationStatus(
-                    stored, authenticated, pairingCode));
-            voBLEAuthenticationStatusView.setTextColor(
-                    authenticated || stored ? PRIMARY : WARNING);
-        }
-        if (voBLEPairingCodeView != null) {
-            String formatted = MainScreenPresentation.formatPairingCode(pairingCode);
-            voBLEPairingCodeView.setText(MainScreenPresentation.voBLEPairingCode(pairingCode));
-            voBLEPairingCodeView.setTextColor("--- ---".equals(formatted) ? MUTED : PRIMARY);
-        }
-        if (voBLEDiagnosticsView != null) {
-            voBLEDiagnosticsView.setText(
-                    com.airsim.phonecontrol.voble.VoBLEGatewayService.diagnosticsSummary());
-        }
-        if (voBLEClearCredentialButton != null) {
-            voBLEClearCredentialButton.setEnabled(stored);
-            voBLEClearCredentialButton.setTextColor(stored ? DANGER : MUTED);
-        }
-    }
 
     private View pairingPage() {
         LinearLayout root = pageRoot();
@@ -2109,13 +1936,8 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         resumed = true;
-        if (hasVoBLEPermissions()) {
-            com.airsim.phonecontrol.voble.VoBLEGatewayService.start(this);
-        }
         if (startupSetupPending) scheduleStartupSetup();
-        if (currentPage == Page.SETTINGS && !voBLEAuthenticationVisible) showPage(Page.SETTINGS);
         if (currentPage == Page.STATUS && pcmStatusPoller != null) pcmStatusPoller.start();
-        if (voBLEAuthenticationVisible) handler.post(voBLEAuthenticationRefresh);
         refreshShizukuStatus();
 		startSMSInboxBaselineIfAuthorized();
         if (startupSetupCompleted && !startupSetupPending && !startupSetupInFlight) {
@@ -2126,7 +1948,6 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         resumed = false;
         if (pcmStatusPoller != null) pcmStatusPoller.stop();
-        handler.removeCallbacks(voBLEAuthenticationRefresh);
         super.onPause();
     }
 
@@ -2151,7 +1972,6 @@ public final class MainActivity extends Activity {
         }
         if (pcmStatusPoller != null) pcmStatusPoller.stop();
         handler.removeCallbacks(debugRefresh);
-        handler.removeCallbacks(voBLEAuthenticationRefresh);
         stopPairingServer();
         super.onDestroy();
     }

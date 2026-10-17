@@ -163,17 +163,6 @@ mkdir -p "$OUT"
 	"$ROOT"/src/com/airsim/phonecontrol/PCMBridgeStatus.java \
 	"$ROOT"/src/com/airsim/phonecontrol/MuteRequestRetrier.java \
 	"$ROOT"/src/com/airsim/phonecontrol/NotificationUpdateGate.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEProtocol.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEAudioQueue.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEPairingManager.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLECredentialStore.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEReplayWindow.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEControlChannel.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLECallController.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEPCMBackendResolver.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEDiagnostics.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEPCMBridgeSession.java \
-	"$ROOT"/src/com/airsim/phonecontrol/voble/VoBLEMediaSession.java \
 	"$ROOT"/test/com/airsim/phonecontrol/CoreTests.java \
   "$ROOT"/test/com/airsim/phonecontrol/NotificationUpdateGateTests.java \
   "$ROOT"/test/com/airsim/phonecontrol/CallRepositoryTests.java \

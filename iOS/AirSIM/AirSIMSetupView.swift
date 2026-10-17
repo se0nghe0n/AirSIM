@@ -21,13 +21,13 @@ struct AirSIMFirstConnectionView: View {
                         Text("Connect Android Phone")
                             .font(.largeTitle.bold())
                             .fixedSize(horizontal: false, vertical: true)
-                        Text("AirSIM connects to your Android phone over VoWLAN, Bluetooth, or a cloud Relay.")
+                        Text("AirSIM connects to your Android phone over VoWLAN or a cloud Relay.")
                             .foregroundStyle(.secondary)
                     }
 
                     VStack(alignment: .leading, spacing: 18) {
                         Label("Start AirSIM and the audio bridge on Android", systemImage: "1.circle.fill")
-                        Label(selectedMode == .bluetooth ? "Turn on Bluetooth on both devices" : "Set up the network or Bluetooth for your selected mode", systemImage: "2.circle.fill")
+                        Label("Set up the same Wi-Fi or Android hotspot, or configure cloud Relay", systemImage: "2.circle.fill")
                         Label("Verify the security code and finish pairing", systemImage: "3.circle.fill")
                     }
                     .font(.body.weight(.medium))
@@ -76,16 +76,10 @@ struct AirSIMFirstConnectionView: View {
             .navigationTitle("AirSIM")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showingPairing, onDismiss: {
-                if model.vowlan.availability.isOnlineForDisplay || model.voble.state == .ready { completed = true }
+                if model.vowlan.availability.isOnlineForDisplay { completed = true }
             }) {
                 NavigationStack {
-                    Group {
-                        if selectedMode == .bluetooth {
-                            VoBLEPairingView()
-                        } else {
-                            SamsungPairingView()
-                        }
-                    }
+                    SamsungPairingView()
                         .environmentObject(model)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
@@ -153,7 +147,6 @@ private struct PairedAndroidDeviceRows: View {
 
     private func connectionText(_ device: AndroidAgentPresentation) -> String {
         let routes = [device.vowlanOnline ? "VoWLAN Online" : nil,
-                      device.bluetoothOnline ? "VoBLE Online" : nil,
                       device.cloudOnline ? "Cloud Online" : nil].compactMap { $0 }
         return routes.isEmpty ? "Offline · Refreshes on reconnection" : routes.joined(separator: " · ")
     }
@@ -236,36 +229,6 @@ struct AirSIMSettingsView: View {
                     Button("Discover Again", systemImage: "arrow.clockwise") {
                         model.vowlan.restartBrowsing()
                         Task { await model.vowlan.probeNow() }
-                    }
-                }
-
-                Section("Bluetooth Connection") {
-                    LabeledContent("VoBLE", value: voBLEStatus)
-                    NavigationLink {
-                        VoBLEPairingView()
-                    } label: {
-                        Label("Pair Bluetooth Agent", systemImage: "wave.3.right")
-                    }
-                    Button("Scan for Bluetooth Agents Again", systemImage: "arrow.clockwise") {
-                        model.voble.stop()
-                        model.voble.start()
-                    }
-                    .disabled(!runtimePolicy.startsBluetooth)
-                }
-
-                if runtimePolicy.startsBluetooth {
-                    Section("Bluetooth Diagnostics (Redacted)") {
-                        let diagnostics = model.vobleDiagnostics
-                        LabeledContent("Authentication", value: diagnostics.peerAuthenticated ? "Passed" : "Incomplete")
-                        LabeledContent("PCM", value: diagnostics.pcmReady ? "Running" : "Not Started")
-                        LabeledContent("Codec", value: diagnostics.codec)
-                        LabeledContent("Send Queue", value: "\(diagnostics.queuedFrames) / 8 frames")
-                        LabeledContent("Dropped Frames", value: "\(diagnostics.droppedFrames)")
-                        LabeledContent("Jitter Buffer", value: "\(diagnostics.jitterFrames) frames")
-                        LabeledContent("Last Error", value: diagnostics.lastError.rawValue)
-                        Text("Diagnostics exclude phone numbers, keys, nonces, authentication tags, and audio content.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -411,22 +374,9 @@ struct AirSIMSettingsView: View {
         ConnectionModeRuntimePolicy(mode: selectedMode)
     }
 
-    private var voBLEStatus: String {
-        switch model.voble.state {
-        case .stopped: return runtimePolicy.startsBluetooth ? "Not Started" : "Disabled in current mode"
-        case .bluetoothUnavailable: return "Bluetooth Unavailable"
-        case .scanning: return "Discovering"
-        case .connecting, .connected: return "Connecting"
-        case .authenticating: return "Authenticating"
-        case .ready: return "Authenticated"
-        case .failed(let message): return "Failed: \(message)"
-        }
-    }
-
     private func modeIcon(_ mode: AirSIMConnectionMode) -> String {
         switch mode {
         case .vowlan: return "wifi"
-        case .bluetooth: return "wave.3.right"
         case .cloud: return "cloud"
         case .automatic: return "arrow.triangle.branch"
         }

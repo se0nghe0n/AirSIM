@@ -199,7 +199,6 @@ struct IncomingVoIPCall: Equatable, Sendable {
 
 enum CallTransport: Equatable, Sendable {
     case vowlan
-    case bluetooth
     case moduleLocal
     case cloud
 }
@@ -288,7 +287,6 @@ enum RelayHealthValidation {
 
 enum ConnectionPresentationMode: Equatable, Sendable {
     case vowlan
-    case bluetooth
     case cloud
     case offline
 }
@@ -302,14 +300,12 @@ struct ConnectionModePresentation: Equatable, Sendable {
     static func make(
         selectedMode: AirSIMConnectionMode = .automatic,
         vowlanOnline: Bool,
-        bluetoothReady: Bool = false,
         cloudModeEnabled: Bool,
         cloudOnline: Bool
     ) -> ConnectionModePresentation {
         let selected = DialRouteSelector.preferred(
             mode: selectedMode,
             vowlanReady: vowlanOnline,
-            bluetoothReady: bluetoothReady,
             cloudReady: cloudModeEnabled && cloudOnline
         )
         if selected == .vowlan {
@@ -317,17 +313,9 @@ struct ConnectionModePresentation: Equatable, Sendable {
                 mode: .vowlan,
                 title: "VoWLAN",
                 status: "Connected",
-                detail: bluetoothReady || cloudOnline
+                detail: cloudOnline
                     ? "Automatic mode prefers the same Wi-Fi / Android hotspot"
                     : "Same Wi-Fi / Android hotspot"
-            )
-        }
-        if selected == .bluetooth {
-            return ConnectionModePresentation(
-                mode: .bluetooth,
-                title: "VoBLE",
-                status: "Connected",
-                detail: "Bluetooth call control and audio are authenticated, without Relay"
             )
         }
         if selected == .cloud {
@@ -342,9 +330,6 @@ struct ConnectionModePresentation: Equatable, Sendable {
         case .vowlan:
             return .init(mode: .vowlan, title: "VoWLAN", status: "Unreachable",
                          detail: "No paired and authenticated VoWLAN Agent found")
-        case .bluetooth:
-            return .init(mode: .bluetooth, title: "VoBLE", status: "Unreachable",
-                         detail: "Bluetooth Agent has not connected and authenticated")
         case .cloud:
             return .init(mode: .cloud, title: "Cloud", status: "Unreachable",
                          detail: "Run the cloud self-test to diagnose the issue")
