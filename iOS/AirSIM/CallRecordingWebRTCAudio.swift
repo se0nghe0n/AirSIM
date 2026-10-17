@@ -9,8 +9,13 @@ final class CloudWebRTCRecordingAudio {
 
     init() {
         module = RTCDefaultAudioProcessingModule(
-            config: nil, capturePostProcessingDelegate: capture,
-            renderPreProcessingDelegate: render)
+            config: nil, capturePostProcessingDelegate: nil,
+            renderPreProcessingDelegate: nil)
+        // SDK 144.7559.15's adapter initializer ignores its delegate argument.
+        // The property setters actually bind the weak native callbacks. Keep
+        // both observers strongly owned here for the shared factory's lifetime.
+        module.capturePostProcessingDelegate = capture
+        module.renderPreProcessingDelegate = render
     }
 }
 
