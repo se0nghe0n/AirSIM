@@ -37,8 +37,8 @@ final class CloudPCMMediaPump implements Closeable {
     void start() {
         if (!running.get() || !started.compareAndSet(false, true)) return;
         executor.execute(this::capture);
-        executor.execute(() -> paced(true));
-        executor.execute(() -> paced(false));
+        executor.execute(this::sendCaptured);
+        executor.execute(this::playIncoming);
         executor.execute(this::watchdog);
     }
     void receive(byte[] pcm) {
@@ -61,33 +61,69 @@ final class CloudPCMMediaPump implements Closeable {
                     long capturedAt = nowMillis();
                     if (previousCapture >= 0) maxCaptureGap.accumulateAndGet(capturedAt - previousCapture, Math::max);
                     previousCapture = capturedAt;
-                    outgoing.offer(frame, capturedAt);
+                    synchronized (outgoing) {
+                        if (!running.get()) break;
+                        outgoing.offer(frame, capturedAt);
+                        outgoing.notifyAll();
+                    }
                     offset = 0;
                 }
             }
         } catch (Exception error) { fail(error); }
     }
-    private void paced(boolean network) {
-        long tick = System.nanoTime();
+    private void sendCaptured() {
+        long nextSend = System.nanoTime();
         long previousSend = -1;
         try {
             while (running.get() && !Thread.currentThread().isInterrupted()) {
-                CloudPCMAudioQueue.Frame captured = network ? outgoing.pollCapturedFrame(nowMillis()) : null;
-                byte[] frame = network ? (captured == null ? null : captured.pcm) : incoming.poll(nowMillis());
-                if (frame != null && running.get()) {
-                    if (network) {
-                        sendingSince = System.nanoTime();
-                        long sendAt = nowMillis();
-                        maxQueueAge.accumulateAndGet(Math.max(0, sendAt - captured.capturedAt), Math::max);
-                        if (previousSend >= 0) maxSendGap.accumulateAndGet(sendAt - previousSend, Math::max);
-                        previousSend = sendAt;
-                        try {
-                            maxLocalWrite.accumulateAndGet(sender.send(frame, captured.capturedAt), Math::max);
-                        } finally { sendingSince = 0; }
-                    } else {
-                        playingSince = System.nanoTime();
-                        try { playback.write(frame); } finally { playingSince = 0; }
+                CloudPCMAudioQueue.Frame captured;
+                synchronized (outgoing) {
+                    // Check queue and deadline under the same monitor used by capture/close.
+                    // Arrivals wake an idle sender without losing notifications at wait entry.
+                    while (true) {
+                        if (!running.get() || Thread.currentThread().isInterrupted()) return;
+                        if (outgoing.size() == 0) {
+                            outgoing.wait();
+                            continue;
+                        }
+                        long remaining = nextSend - System.nanoTime();
+                        if (remaining > 0) {
+                            outgoing.wait(remaining / 1_000_000L, (int) (remaining % 1_000_000L));
+                            continue;
+                        }
+                        captured = outgoing.pollCapturedFrame(nowMillis());
+                        if (captured != null) break;
                     }
+                }
+                if (!running.get()) return;
+                long sendStarted = System.nanoTime();
+                sendingSince = sendStarted;
+                long sendAt = nowMillis();
+                maxQueueAge.accumulateAndGet(Math.max(0, sendAt - captured.capturedAt), Math::max);
+                if (previousSend >= 0) maxSendGap.accumulateAndGet(sendAt - previousSend, Math::max);
+                previousSend = sendAt;
+                try {
+                    maxLocalWrite.accumulateAndGet(sender.send(captured.pcm, captured.capturedAt), Math::max);
+                } finally { sendingSince = 0; }
+                nextSend = nextSendNanos(sendStarted, System.nanoTime());
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            if (running.get()) fail(interrupted);
+        } catch (Exception error) { fail(error); }
+    }
+    // A stalled write starts a fresh interval; queued frames must never catch up in a burst.
+    static long nextSendNanos(long started, long completed) {
+        return CloudPCMAudioQueue.nextTickNanos(started, completed);
+    }
+    private void playIncoming() {
+        long tick = System.nanoTime();
+        try {
+            while (running.get() && !Thread.currentThread().isInterrupted()) {
+                byte[] frame = incoming.poll(nowMillis());
+                if (frame != null && running.get()) {
+                    playingSince = System.nanoTime();
+                    try { playback.write(frame); } finally { playingSince = 0; }
                 }
                 tick = CloudPCMAudioQueue.nextTickNanos(tick, System.nanoTime());
                 LockSupport.parkNanos(Math.max(0, tick - System.nanoTime()));
@@ -130,8 +166,12 @@ final class CloudPCMMediaPump implements Closeable {
         if (running.getAndSet(false)) closeIO();
     }
     private void closeIO() {
+        synchronized (outgoing) {
+            outgoing.clear();
+            outgoing.notifyAll();
+        }
         try { capture.close(); } catch (Exception ignored) {}
         try { playback.close(); } catch (Exception ignored) {}
-        outgoing.clear(); incoming.clear();
+        incoming.clear();
     }
 }
