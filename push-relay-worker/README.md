@@ -398,3 +398,64 @@ Adjacent `codex.md`, `claude.md`, and `LLM.txt` provide repository facts, safety
 
 - Apple: [Communicate with APNs using authentication tokens](https://developer.apple.com/help/account/capabilities/communicate-with-apns-using-authentication-tokens), [Register your app with APNs](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns), [Respond to PushKit VoIP notifications](https://developer.apple.com/documentation/pushkit/responding-to-voip-notifications-from-pushkit), [Make and receive VoIP calls with CallKit](https://developer.apple.com/documentation/callkit/making-and-receiving-voip-calls).
 - Cloudflare: [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/), [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/), [Worker Secrets](https://developers.cloudflare.com/workers/configuration/secrets/), [Create a KV namespace](https://developers.cloudflare.com/kv/get-started/), [Durable Object migrations](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/).
+
+### Native WebRTC calls
+
+`WEBRTC_TRANSPORT_READY=true` and a nonzero `WEBRTC_ROLLOUT_PERCENT` only select
+WebRTC when both `app_media_capabilities` and `agent_media_capabilities` contain
+`webrtc`, the device requests `media_transport: "webrtc"`, and valid TURN
+configuration is present. Old agents remain `legacy_pcm`. Registration and
+incoming-call responses include the server-selected `media_transport`; Android
+must consume this value. Heartbeats update only agent capabilities, preserving
+app capabilities; missing capability fields on an old agent heartbeat clear
+stale WebRTC support. An incoming event cannot promote a legacy device by
+claiming WebRTC. Dial requests may explicitly request either transport, subject
+to the same capability/rollout gates. Watch must explicitly request `legacy_pcm`.
+Watch pushes and forwarded Watch answer controls always select `legacy_pcm`;
+iPhone answer controls carry the negotiated transport. The agent uses this
+answer value when the Watch wins ownership.
+
+Configure `TURN_URLS` as a JSON array of `turn:`/`turns:` URLs (optional
+`?transport=udp|tcp`), and store coturn's shared REST secret as the Worker secret
+`TURN_SHARED_SECRET`. Optional `STUN_URLS` is a JSON array of `stun:`/`stuns:` URLs.
+No public STUN/TURN service is hardcoded. Set `TURN_TTL_SECONDS` to a lifetime in
+seconds (default 3600, clamped to 60–86400 and shortened to the call's expiry).
+The TURN service must independently enable its matching REST authentication
+secret. This repository does not provision, deploy, or validate reachability of
+a TURN service.
+
+`GET /v1/calls/:uuid/ice?role=iphone|agent` requires `Authorization: Bearer
+<call_secret>`. It returns `ice_servers` and `ttl`, with `Cache-Control: no-store`
+on successes and failures. TURN credentials use the standard coturn REST
+`expiry:call_uuid:role` username and base64 HMAC-SHA1 password. No TURN secret,
+credential, or SDP is logged or saved in Relay records. Missing TURN produces a
+503 response and prevents rollout selection; a readiness flag alone is not
+sufficient.
+
+On the authenticated call WebSocket, the owning iPhone sends `webrtc_offer`, the
+agent sends `webrtc_answer`, and both may send `webrtc_ice` after an offer. Every
+message includes `call_uuid`, integer `generation`, and UUID `session_id`. SDP is
+limited to 48 KiB, ICE candidate strings to 4096 characters, and frames to 64 KiB.
+Only negotiation identities are kept in hibernation attachments. Relay never
+queues SDP or candidates: clients queue at most 128 ICE candidates until remote
+SDP is installed. After `peer_connected`, start a fresh negotiation; old
+connection callbacks and mismatched session IDs are rejected. Repeated offers
+cannot reuse a session ID. At most 24 negotiations are retained per connected
+pair to fit Durable Object attachment limits; both peers must reconnect after
+that limit. Binary PCM is rejected for WebRTC owners; Watch and legacy calls
+retain the existing PCM path and durable answer/end receipts.
+
+Local validation: `npm run check && npm test`. The tests cover credential HMAC,
+authentication/expiry, configuration gates, signaling identity/roles/bounds,
+reconnect, owner isolation, and legacy PCM/Watch behavior. They do not establish
+TURN reachability, native device audio quality, or production readiness.
+
+For managed Cloudflare TURN, use `TURN_PROVIDER=cloudflare`,
+`CLOUDFLARE_TURN_KEY_ID`, and Worker secret `CLOUDFLARE_TURN_API_TOKEN` instead
+of coturn's URL/shared secret. Relay requests short-lived ICE servers from
+Cloudflare's TURN credential endpoint with a five-second timeout, validates
+that the response contains authenticated TURN servers, and returns the same
+client `ice_servers`/`ttl` format. Optional `STUN_URLS` can supplement either
+provider. Provider failures return a generic 503 without exposing response
+bodies or credentials. Local tests mock this provider; no TURN key creation,
+external credential request, deployment, or reachability test is performed.

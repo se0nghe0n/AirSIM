@@ -18,6 +18,18 @@ APNS_KEY_ID = "REPLACE_WITH_APNS_KEY_ID"
 ALLOWED_BUNDLE_ID = "com.example.airsim"
 WEBRTC_TRANSPORT_READY = "false"
 WEBRTC_ROLLOUT_PERCENT = "0"
+# TURN is required before enabling WebRTC. Choose coturn (default) or cloudflare.
+TURN_PROVIDER = "coturn"
+# coturn: replace with your own service.
+TURN_URLS = '[]'
+STUN_URLS = '[]'
+TURN_TTL_SECONDS = "3600"
+# TURN_SHARED_SECRET is an optional Worker secret until WebRTC rollout is enabled.
+# It must match coturn's REST authentication secret. Never place its value here.
+# Optional managed Cloudflare TURN alternative:
+# TURN_PROVIDER = "cloudflare"
+# CLOUDFLARE_TURN_KEY_ID = "REPLACE_WITH_TURN_KEY_ID"
+# Set CLOUDFLARE_TURN_API_TOKEN as a Worker secret, never in this file.
 
 # REQUIRED WORKER SECRETS
 #
