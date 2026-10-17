@@ -1,0 +1,9 @@
+{
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "defaultProvider": "CMP",
+  "defaultModel": "dsv4s",
+  "defaultThinkingLevel": "high",
+  "subagents": {
+    "defaultModel": "CMP/dsv4s"
+  }
+}
