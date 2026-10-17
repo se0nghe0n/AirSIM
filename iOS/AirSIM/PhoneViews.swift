@@ -656,6 +656,13 @@ struct RecentsView: View {
                 .navigationTitle(L10n.t("最近通话"))
                 .refreshable { await model.refreshCallHistory() }
                 .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        NavigationLink {
+                            CallRecordingsView(store: model.recordings)
+                        } label: {
+                            Label("Recordings", systemImage: "waveform")
+                        }
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         if model.isRefreshingCallHistory {
                             ProgressView().accessibilityLabel("Refreshing call history")
@@ -1847,12 +1854,19 @@ struct ActiveCallView: View {
                 Button {
                     Task { await model.toggleRecording() }
                 } label: {
-                    Image(systemName: model.isRecording ? "record.circle.fill" : "record.circle")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(model.isRecording ? .red : .white)
-                        .frame(width: 44, height: 44)
+                    Group {
+                        if model.isRecordingBusy {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: model.isRecording ? "record.circle.fill" : "record.circle")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(model.isRecording ? .red : .white)
+                        }
+                    }
+                    .frame(width: 44, height: 44)
                 }
                 .callControlGlass(tint: model.isRecording ? .red.opacity(0.16) : nil)
+                .disabled(model.isRecordingBusy || (!model.isRecording && call.state != "active"))
                 .accessibilityLabel(model.isRecording ? L10n.t("停止录音") : L10n.t("录音"))
             }
         }

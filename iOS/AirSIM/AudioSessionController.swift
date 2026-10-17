@@ -215,7 +215,10 @@ final class AudioSessionController: ObservableObject {
             input.installTap(onBus: 0, bufferSize: 960, format: inputFormat) {
                 buffer, _ in
                 let pcm = encoder.encode(buffer)
-                if !pcm.isEmpty { transport.sendPCM(pcm) }
+                if !pcm.isEmpty {
+                    CallAudioRecorder.shared.appendPCM16(pcm, channel: .local, source: .localPCM)
+                    transport.sendPCM(pcm)
+                }
             }
 
             engine.prepare()
@@ -252,6 +255,7 @@ final class AudioSessionController: ObservableObject {
     }
 
     func setMuted(_ muted: Bool) {
+        CallAudioRecorder.shared.setMuted(muted)
         self.muted = muted
         encoder?.setMuted(muted)
     }
@@ -550,6 +554,7 @@ final class AudioSessionController: ObservableObject {
                 output[frame] = Float(Int16(bitPattern: bits)) / 32_768
             }
         }
+        CallAudioRecorder.shared.appendPCM16(pcm, channel: .remote, source: .localPCM)
         player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) {
             [weak self] _ in
             Task { @MainActor [weak self] in

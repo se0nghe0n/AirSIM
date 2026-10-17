@@ -36,7 +36,7 @@
 
 1. AVF Agent、installerd 和 PCM 只能监听内部私网或 loopback。
 2. VoWLAN 必须保留时间戳、nonce、HMAC、路由白名单和大小限制。
-3. 通话 PCM 不落盘，日志不能包含 PCM、完整短信、Push token 或 Secret。
+3. 通话 PCM 默认不落盘；仅用户主动开启的 iPhone 录音可写入受保护、排除备份的本地文件，不得上传。日志不能包含 PCM、完整短信、Push token 或 Secret。
 4. Agent 不得自行更新；更新、修复和回滚只能由独立 installerd 执行。
 5. installerd 不得执行任意 shell，也不得接受错误包名、非 `arm64` 或未签名包。
 6. 紧急呼叫交给系统电话能力，不得宣称 AirSIM 可承担紧急通信。

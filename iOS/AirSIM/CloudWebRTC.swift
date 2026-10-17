@@ -265,10 +265,14 @@ struct CloudWebRTCStatistics {
 /// All peer operations and callbacks run on the owning transport's serial queue.
 /// Native WebRTC owns capture, Opus, AEC, jitter buffering, PLC and playout.
 final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sendable {
+    private static let recordingAudio = CloudWebRTCRecordingAudio()
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         RTCSetMinDebugLogLevel(.none)
-        return RTCPeerConnectionFactory()
+        return RTCPeerConnectionFactory(
+            audioDeviceModuleType: .platformDefault, bypassVoiceProcessing: false,
+            encoderFactory: RTCVideoEncoderFactoryH264(), decoderFactory: RTCVideoDecoderFactoryH264(),
+            audioProcessingModule: recordingAudio.module)
     }()
     let sessionID: UUID
     private let callUUID: UUID
@@ -328,7 +332,10 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         }
     }
 
-    func setMuted(_ muted: Bool) { track?.isEnabled = !muted }
+    func setMuted(_ muted: Bool) {
+        CallAudioRecorder.shared.setMuted(muted)
+        track?.isEnabled = !muted
+    }
     func close() {
         timer?.cancel()
         timer = nil

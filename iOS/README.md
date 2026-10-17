@@ -113,7 +113,7 @@ The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is an arm64 build for re-
 - Store the VoWLAN secret in Keychain, never UserDefaults or logs.
 - Pairing uses X25519, HKDF-SHA256, and AES-256-GCM.
 - Control requests use HMAC-SHA256, time windows, and nonces for replay protection.
-- Process call PCM only in memory and network streams; do not write it to disk.
+- Keep call PCM in memory and network streams unless the user explicitly starts an iPhone recording. Protect saved files, exclude them from backups, and never upload them or include audio in diagnostics.
 - Logs and error screens must not expose device secrets, HMAC, push tokens, or complete media URLs.
 
 ## Current status

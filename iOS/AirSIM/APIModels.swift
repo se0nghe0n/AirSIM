@@ -289,7 +289,6 @@ struct SMSSendResult: Codable, Sendable {
 }
 
 struct RelayErrorResponse: Decodable, Sendable { let error: String }
-struct CallRecordingResponse: Codable, Sendable { let recording: Bool; let path: String? }
 struct SIMIdentity: Codable, Sendable {
     let phoneNumber: String
     enum CodingKeys: String, CodingKey { case phoneNumber = "phone_number" }
