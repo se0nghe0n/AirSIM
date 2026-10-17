@@ -12,7 +12,7 @@ The documented release is [`v0.9.7.1`](https://github.com/kai-wu-cortex/AirSIM/r
 - Execute Agent commands for dialing, answering, rejecting, hanging up, and SMS.
 - Provide a limited-time pairing window and six-digit confirmation code.
 - Publish authenticated VoWLAN control and PCM services on the Samsung hotspot interface.
-- Prefer VoWLAN ports `7592/7593`; if occupied, choose available ports and advertise them through service discovery, avoiding DJOneHub's `7590/7591`.
+- Prefer VoWLAN control port `7592`. Audio is host-ICE WebRTC on that HMAC control link. Port `7593` is not a PCM listener. If `7592` is occupied, advertise the assigned control port through service discovery, avoiding DJOneHub's `7590/7591`.
 - Maintain the foreground service, Shizuku state, and diagnostics.
 - Check, install, and roll back signed Debian packages through the separate AVF installerd.
 - Detect AVF, AOSP Linux Terminal, and AVF private-network readiness on startup, and provide a copyable one-command installer.

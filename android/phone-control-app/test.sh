@@ -6,6 +6,7 @@ OUT="$ROOT/build/jvm-test"
 JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home}
 JAVAC="$JAVA_HOME/bin/javac"
 JAVA="$JAVA_HOME/bin/java"
+ANDROID_JAR="${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}/platforms/android-35/android.jar"
 
 assert_contains() {
   file=$1
@@ -132,7 +133,8 @@ mkdir -p "$OUT"
   "$ROOT"/src/com/airsim/phonecontrol/CallRepository.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudAnswerReplayPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/DefaultCallAccount.java \
-  "$ROOT"/src/com/airsim/phonecontrol/CloudCallTarget.java \
+	"$ROOT"/src/com/airsim/phonecontrol/CloudCallTarget.java \
+	"$ROOT"/src/com/airsim/phonecontrol/CloudCallMedia.java \
   "$ROOT"/src/com/airsim/phonecontrol/AgentCommandDispatcher.java \
   "$ROOT"/src/com/airsim/phonecontrol/SMSPayloadPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/SMSConfirmation.java \
@@ -152,7 +154,7 @@ mkdir -p "$OUT"
 	"$ROOT"/src/com/airsim/phonecontrol/VoWLANAcceptLoop.java \
 	"$ROOT"/src/com/airsim/phonecontrol/VoWLANPeerLifecycle.java \
   "$ROOT"/src/com/airsim/phonecontrol/VoWLANReplayCache.java \
-  "$ROOT"/src/com/airsim/phonecontrol/VoWLANPCMProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/VoWLANWebRTCControl.java \
   "$ROOT"/src/com/airsim/phonecontrol/VoWLANPortBinder.java \
 	"$ROOT"/src/com/airsim/phonecontrol/VoWLANNetworkPolicy.java \
 	"$ROOT"/src/com/airsim/phonecontrol/StandaloneLongPoll.java \
@@ -204,7 +206,6 @@ sh "$ROOT/verify-io-api.sh" "$DIAGNOSTICS_OUT"
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.LocalOutputMuteControllerTests
 
 # Compile the actual executor against Android; replace only the telephony boundary at runtime.
-ANDROID_JAR="${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}/platforms/android-35/android.jar"
 SMS_OUT="$OUT/sms-compat"
 mkdir -p "$SMS_OUT"
 "$JAVAC" --release 17 -cp "$ANDROID_JAR:$DIAGNOSTICS_OUT:$OUT" -d "$SMS_OUT" \
@@ -213,21 +214,6 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/test/compat/android/telephony/SmsManager.java \
   "$ROOT"/test/com/airsim/phonecontrol/SMSCompatibilityTests.java
 "$JAVA" -cp "$SMS_OUT:$OUT:$ANDROID_JAR" com.airsim.phonecontrol.SMSCompatibilityTests
-
-"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
-  "$ROOT"/src/com/airsim/phonecontrol/CloudPCMAudioQueue.java \
-  "$ROOT"/test/com/airsim/phonecontrol/CloudPCMAudioQueueTests.java
-"$JAVA" -cp "$OUT" com.airsim.phonecontrol.CloudPCMAudioQueueTests
-
-"$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
-  "$ROOT"/src/com/airsim/phonecontrol/CloudPCMTraceFrame.java \
-  "$ROOT"/test/com/airsim/phonecontrol/CloudPCMTraceFrameTests.java
-"$JAVA" -cp "$OUT" com.airsim.phonecontrol.CloudPCMTraceFrameTests
-
-"$JAVAC" --release 17 -cp "$DIAGNOSTICS_OUT:$OUT" -d "$OUT" \
-  "$ROOT"/src/com/airsim/phonecontrol/CloudPCMMediaPump.java \
-  "$ROOT"/test/com/airsim/phonecontrol/CloudPCMMediaPumpTests.java
-"$JAVA" -cp "$DIAGNOSTICS_OUT:$OUT" com.airsim.phonecontrol.CloudPCMMediaPumpTests
 
 "$JAVAC" --release 17 -cp "$ANDROID_JAR:$OUT" -d "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/StandaloneWebSocket.java \

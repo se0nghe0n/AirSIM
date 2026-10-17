@@ -21,9 +21,9 @@ enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable
     var detail: String {
         switch self {
         case .vowlan: return "Uses only the same Wi-Fi or phone hotspot, without Relay"
-        case .bluetooth: return "Uses Bluetooth for call control and audio, without Wi-Fi or Relay"
+        case .bluetooth: return "Bluetooth is not a call route"
         case .cloud: return "Uses only Relay, PushKit, and CallKit"
-        case .automatic: return "Automatically chooses VoWLAN, Bluetooth, then cloud based on availability"
+        case .automatic: return "Automatically chooses VoWLAN, then cloud based on availability"
         }
     }
 }
@@ -145,8 +145,8 @@ struct ConnectionModeRuntimePolicy: Equatable, Sendable {
     var usesCallKit: Bool { mode != .vowlan }
 }
 
-/// 统一拨号路由选择。显式模式绝不借用其他链路；自动模式只在通话建立前
-/// 按 VoWLAN、VoBLE、云端顺序选择，建立后仍由 LockedCallTransport 固定。
+/// 统一拨号路由选择。蓝牙不是拨号路由。显式模式绝不借用其他链路；
+/// 自动模式只在通话建立前按 VoWLAN、云端顺序选择。
 enum DialRouteSelector {
     static func preferred(
         mode: AirSIMConnectionMode,
@@ -154,16 +154,16 @@ enum DialRouteSelector {
         bluetoothReady: Bool,
         cloudReady: Bool
     ) -> CallTransport? {
+        _ = bluetoothReady
         switch mode {
         case .vowlan:
             return vowlanReady ? .vowlan : nil
         case .bluetooth:
-            return bluetoothReady ? .bluetooth : nil
+            return nil
         case .cloud:
             return cloudReady ? .cloud : nil
         case .automatic:
             if vowlanReady { return .vowlan }
-            if bluetoothReady { return .bluetooth }
             if cloudReady { return .cloud }
             return nil
         }

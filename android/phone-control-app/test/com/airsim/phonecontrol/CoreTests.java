@@ -2,6 +2,7 @@ package com.airsim.phonecontrol;
 
 public final class CoreTests {
     public static void main(String[] args) throws Exception {
+		testCloudCallDoesNotStartPCMPump();
 		assertCrashReportIsSanitizedBoundedAndPersisted();
 		assertCrashSharePayloadRequiresAReportAndSanitizesRecentLogs();
 		assertVoBLEAudioVectorAndBounds();
@@ -18,6 +19,7 @@ public final class CoreTests {
 		assertPCMBridgeRunningUsesPrivilegedProcessStatus();
 		assertPrivilegedBridgeStatusRefreshTracksProcessExit();
 		assertMuteResultDoesNotHideRunningPCMBridge();
+		testVoWLANControlCarriesOfferNotPCM();
 		assertVoWLANFailedRejectPreservesCallOwnership();
 		assertVoWLANClosedSocketStopsAcceptLoop();
 		assertVoWLANIOExceptionStopsAcceptLoop();
@@ -456,24 +458,7 @@ public final class CoreTests {
 		assertTrue(replayCache.accept("nonce-1", 1_000L));
 		assertTrue(!replayCache.accept("nonce-1", 1_001L));
 		assertTrue(replayCache.accept("nonce-1", 1_031L));
-		VoWLANPCMProtocol.Preface pcmPreface = VoWLANPCMProtocol.parse(
-				"AIRSIMVWL1 1789090000 nonce-1 xyJYZyGVDVSARzo3dd9vM_luQBhKeneDd6vk2VWmIkE\n");
-		assertEquals(1789090000L, pcmPreface.timestamp());
-		assertEquals("nonce-1", pcmPreface.nonce());
-		assertEquals("xyJYZyGVDVSARzo3dd9vM_luQBhKeneDd6vk2VWmIkE", pcmPreface.signature());
-		assertEquals("PCM\n/v1/pcm\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n1789090000\nnonce-1",
-				VoWLANPCMProtocol.canonical(pcmPreface));
-		assertTrue(invokePCMReadyHandshake(new java.io.ByteArrayInputStream(
-				"AIRSIMREADY".getBytes(java.nio.charset.StandardCharsets.US_ASCII))));
-		assertTrue(!invokePCMReadyHandshake(new java.io.ByteArrayInputStream(
-				"AIRSIMFAIL!".getBytes(java.nio.charset.StandardCharsets.US_ASCII))));
-		VoWLANPCMProtocol.SessionGate pcmGate = new VoWLANPCMProtocol.SessionGate();
-		assertTrue(pcmGate.tryAcquire("paired-peer"));
-		assertTrue(!pcmGate.tryAcquire("second-peer"));
-		pcmGate.release("second-peer");
-		assertTrue(!pcmGate.tryAcquire("second-peer"));
-		pcmGate.release("paired-peer");
-		assertTrue(pcmGate.tryAcquire("second-peer"));
+		assertTrue(VoWLANControlPolicy.allowed("POST", VoWLANWebRTCControl.PATH));
 		assertTrue(VoWLANNetworkPolicy.isHotspotInterface("swlan0", "10.172.46.225"));
 		assertTrue(VoWLANNetworkPolicy.isHotspotInterface("ap0", "192.168.43.1"));
 		assertTrue(!VoWLANNetworkPolicy.isHotspotInterface("wlan0", "192.168.2.86"));
@@ -629,7 +614,7 @@ public final class CoreTests {
 		java.util.Arrays.fill(tag, (byte) 0xa5);
 		com.airsim.phonecontrol.voble.VoBLEProtocol.AudioPacket packet =
 				new com.airsim.phonecontrol.voble.VoBLEProtocol.AudioPacket(
-						0, com.airsim.phonecontrol.voble.VoBLEProtocol.CODEC_G711_MULAW, 7,
+						0, 1, 7,
 						0x01020304L, 0x05060708L,
 						new byte[]{0x00, 0x7f, (byte) 0x80, (byte) 0xff}, tag);
 		for (int maximumPacketLength : new int[]{23, 185, 247}) {
@@ -969,97 +954,14 @@ public final class CoreTests {
 			throw new AssertionError("AIRSIMREADY is required");
 		} catch (java.io.IOException expected) {}
 
-		byte[] pcm = new byte[320];
-		for (int index = 0; index < 160; index++) {
-			short sample = (short) ((index - 80) * 300);
-			pcm[index * 2] = (byte) sample;
-			pcm[index * 2 + 1] = (byte) (sample >>> 8);
-		}
-		byte[] ulaw = com.airsim.phonecontrol.voble.VoBLEMediaSession.encodeMuLaw(pcm);
-		assertEquals(160, ulaw.length);
-		assertEquals(320, com.airsim.phonecontrol.voble.VoBLEMediaSession.decodeMuLaw(ulaw).length);
-		byte[] key = filledBytes(32, 7);
-		var encrypted = com.airsim.phonecontrol.voble.VoBLEMediaSession.encrypt(
-				ulaw, key, true, 3, 9, 1_440);
-		assertTrue(java.util.Arrays.equals(ulaw,
-				com.airsim.phonecontrol.voble.VoBLEMediaSession.decrypt(
-						encrypted, key, true, 3, 9, 1_440)));
+		var refused = new com.airsim.phonecontrol.voble.VoBLEMediaSession(
+				standalone,
+				endpoint -> { throw new AssertionError("call media must not open the PCM bridge"); },
+				packet -> { throw new AssertionError("call media must not notify audio"); });
 		try {
-			com.airsim.phonecontrol.voble.VoBLEMediaSession.decrypt(
-					encrypted, filledBytes(32, 8), true, 3, 9, 1_440);
-			throw new AssertionError("wrong media key must fail");
-		} catch (java.security.GeneralSecurityException expected) {}
-
-		class BlockingDuplex implements com.airsim.phonecontrol.voble.VoBLEPCMBridgeSession.Duplex {
-			final byte[] ready = "AIRSIMREADY".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
-			final java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
-			int offset;
-			boolean closed;
-			final java.io.InputStream input = new java.io.InputStream() {
-				@Override public synchronized int read() throws java.io.IOException {
-					if (offset < ready.length) return ready[offset++] & 0xff;
-					while (!closed) try { wait(); }
-					catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new java.io.IOException(error); }
-					return -1;
-				}
-			};
-			@Override public java.io.InputStream input() { return input; }
-			@Override public java.io.OutputStream output() { return output; }
-			@Override public void close() {
-				closed = true;
-				synchronized (input) { input.notifyAll(); }
-			}
-		}
-		BlockingDuplex duplex = new BlockingDuplex();
-		var identity = new com.airsim.phonecontrol.voble.VoBLEMediaSession.Identity("call-media", 3);
-		var media = new com.airsim.phonecontrol.voble.VoBLEMediaSession(
-				standalone,
-				endpoint -> com.airsim.phonecontrol.voble.VoBLEPCMBridgeSession.open(endpoint, ignored -> duplex),
-				packet -> true);
-		assertTrue(!media.onUplinkFragment(identity, new byte[]{1}));
-		media.start(identity, key);
-		assertTrue(media.ready());
-		var uplinkEncrypted = com.airsim.phonecontrol.voble.VoBLEMediaSession.encrypt(
-				ulaw, key, true, 3, 10, 1_600);
-		var uplinkPacket = new com.airsim.phonecontrol.voble.VoBLEProtocol.AudioPacket(
-				0, com.airsim.phonecontrol.voble.VoBLEProtocol.CODEC_G711_MULAW,
-				3, 10, 1_600, uplinkEncrypted.payload(), uplinkEncrypted.authenticationTag());
-		for (byte[] fragment : com.airsim.phonecontrol.voble.VoBLEProtocol.encodeAudioFragments(
-				uplinkPacket, 247)) assertTrue(media.onUplinkFragment(identity, fragment));
-		boolean duplicateAccepted = true;
-		for (byte[] fragment : com.airsim.phonecontrol.voble.VoBLEProtocol.encodeAudioFragments(
-				uplinkPacket, 247)) duplicateAccepted = media.onUplinkFragment(identity, fragment);
-		assertTrue(!duplicateAccepted);
-		long deadline = System.currentTimeMillis() + 1_000;
-		while (duplex.output.size() < "AIRSIMPCM1\n".length() + 320
-				&& System.currentTimeMillis() < deadline) Thread.sleep(5);
-		assertTrue(duplex.output.size() >= "AIRSIMPCM1\n".length() + 320);
-		media.stop();
-		assertTrue(duplex.closed);
-		assertTrue(!media.ready());
-
-		byte[] readyAndPCM = new byte["AIRSIMREADY".length() + 320];
-		System.arraycopy("AIRSIMREADY".getBytes(java.nio.charset.StandardCharsets.US_ASCII),
-				0, readyAndPCM, 0, "AIRSIMREADY".length());
-		java.util.concurrent.atomic.AtomicInteger notificationAttempts =
-				new java.util.concurrent.atomic.AtomicInteger();
-		var retryMedia = new com.airsim.phonecontrol.voble.VoBLEMediaSession(
-				standalone,
-				endpoint -> com.airsim.phonecontrol.voble.VoBLEPCMBridgeSession.open(endpoint, ignored ->
-						new com.airsim.phonecontrol.voble.VoBLEPCMBridgeSession.Duplex() {
-							@Override public java.io.InputStream input() { return new java.io.ByteArrayInputStream(readyAndPCM); }
-							@Override public java.io.OutputStream output() { return java.io.OutputStream.nullOutputStream(); }
-							@Override public void close() {}
-						}),
-				packet -> { notificationAttempts.incrementAndGet(); return false; });
-		retryMedia.start(new com.airsim.phonecontrol.voble.VoBLEMediaSession.Identity("call-retry", 4), key);
-		deadline = System.currentTimeMillis() + 1_000;
-		while (retryMedia.stats().droppedFrames() == 0 && System.currentTimeMillis() < deadline) {
-			Thread.sleep(5);
-		}
-		assertTrue(notificationAttempts.get() > 1);
-		assertTrue(retryMedia.stats().droppedFrames() >= 1);
-		retryMedia.stop();
+			refused.start(new com.airsim.phonecontrol.voble.VoBLEMediaSession.Identity("retired", 1), new byte[32]);
+			throw new AssertionError("bluetooth call audio must be unavailable");
+		} catch (java.io.IOException expected) {}
 	}
 
 	private static byte[] filledBytes(int count, int value) {
@@ -1124,7 +1026,52 @@ public final class CoreTests {
 		assertEquals("muted", results.get(results.size() - 1));
 	}
 
-    private static void assertContains(String value, String expected) {
+	private static void testCloudCallDoesNotStartPCMPump() throws Exception {
+		boolean[] started = {false};
+		CloudCallMedia.start("legacy_pcm", () -> started[0] = true);
+		assertTrue(!started[0]);
+		CloudCallMedia.start("", () -> started[0] = true);
+		assertTrue(!started[0]);
+		CloudCallMedia.start("webrtc", () -> started[0] = true);
+		assertTrue(started[0]);
+		assertEquals("webrtc", CloudCallMedia.WEBRTC);
+
+		String manager = java.nio.file.Files.readString(phoneControlSource("StandaloneCloudMediaManager.java"));
+		assertTrue(!manager.contains("CloudPCM"));
+		assertTrue(!manager.contains("runPCM"));
+		assertTrue(!manager.contains("legacy_pcm"));
+		assertTrue(!manager.contains("7580"));
+		assertTrue(!manager.contains("new Socket"));
+		assertTrue(manager.contains("if (message.opcode() == 2) continue;"));
+		assertTrue(manager.contains("startCloudCallMedia"));
+		String storeSource = java.nio.file.Files.readString(phoneControlSource("StandaloneAgentStore.java"));
+		String serviceSource = java.nio.file.Files.readString(phoneControlSource("StandaloneAgentService.java"));
+		assertTrue(!storeSource.contains("legacy_pcm"));
+		assertTrue(storeSource.contains("CloudCallMedia.start(mediaTransport, startWebRTC)"));
+		assertTrue(storeSource.contains("new JSONArray().put(CloudCallMedia.WEBRTC)"));
+		assertTrue(!serviceSource.contains("legacy_pcm"));
+		assertTrue(serviceSource.contains("StandaloneAgentStore.mediaCapabilities()"));
+		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
+		assertTrue(peer.contains("connectPCM"));
+		assertTrue(peer.contains("127.0.0.1"));
+		assertTrue(peer.contains("7580"));
+		assertTrue(peer.contains("AIRSIMPCM1"));
+		assertTrue(peer.contains("pcmConnected"));
+	}
+
+	private static java.nio.file.Path phoneControlSource(String name) {
+		java.nio.file.Path cursor = java.nio.file.Path.of("").toAbsolutePath();
+		for (int depth = 0; depth < 6 && cursor != null; depth++) {
+			java.nio.file.Path nested = cursor.resolve("android/phone-control-app/src/com/airsim/phonecontrol").resolve(name);
+			if (java.nio.file.Files.isRegularFile(nested)) return nested;
+			java.nio.file.Path direct = cursor.resolve("src/com/airsim/phonecontrol").resolve(name);
+			if (java.nio.file.Files.isRegularFile(direct)) return direct;
+			cursor = cursor.getParent();
+		}
+		throw new AssertionError("missing " + name);
+	}
+
+	private static void assertContains(String value, String expected) {
         if (!value.contains(expected)) throw new AssertionError(value + " missing " + expected);
     }
 
@@ -1153,14 +1100,28 @@ public final class CoreTests {
 		}
 	}
 
-	private static boolean invokePCMReadyHandshake(java.io.InputStream input) throws Exception {
-		try {
-			return (boolean) VoWLANPCMProtocol.class
-					.getDeclaredMethod("acceptReady", java.io.InputStream.class)
-					.invoke(null, input);
-		} catch (NoSuchMethodException error) {
-			throw new AssertionError("PCM relay does not read the complete AIRSIMREADY frame", error);
+	private static void testVoWLANControlCarriesOfferNotPCM() throws Exception {
+		String gateway = java.nio.file.Files.readString(phoneControlSource("VoWLANGatewayService.java"));
+		if (gateway.contains("VoWLANPCMRelay") || gateway.contains("PCM_PORT") || gateway.contains("7593")) {
+			throw new AssertionError("VoWLAN gateway still listens for PCM");
 		}
+		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
+		if (!peer.contains("AIRSIMPCM1") || !peer.contains("127.0.0.1") || !peer.contains("7580")) {
+			throw new AssertionError("telephony samples must still handshake AIRSIMPCM1 on 127.0.0.1:7580");
+		}
+		assertTrue(VoWLANWebRTCControl.CONTROL_PORT == 7592);
+		assertTrue(!VoWLANWebRTCControl.LISTENS_ON_PCM_PORT);
+		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc"));
+		String offer = "{\"action\":\"webrtc_offer\",\"call_uuid\":\"11111111-1111-1111-1111-111111111111\",\"generation\":1,\"session_id\":\"22222222-2222-2222-2222-222222222222\",\"sdp\":\"v=0\"}";
+		VoWLANWebRTCControl.Message message = VoWLANWebRTCControl.parse(offer);
+		assertEquals("webrtc_offer", message.action());
+		String answer = VoWLANWebRTCControl.answer(message, "v=0");
+		if (!answer.contains("webrtc_answer") || answer.contains("AIRSIMVWL1") || offer.contains("AIRSIMVWL1")) {
+			throw new AssertionError("control link carried a PCM preface");
+		}
+		VoWLANWebRTCControl.Sessions sessions = new VoWLANWebRTCControl.Sessions();
+		assertTrue(sessions.acceptOffer(message.sessionID()));
+		assertTrue(!sessions.acceptOffer("33333333-3333-3333-3333-333333333333"));
 	}
 
 	private static String[] invokeMissingRuntimePermissions(

@@ -30,12 +30,10 @@ do {
         "media_url": "wss://relay.example/v1/calls/test/connect",
         "call_secret": cloudSecret,
     ])
-    if case let .cloud(url, bearer) = cloud.media {
-        check(bearer == cloudSecret, "Watch bearer secret was lost")
-        check(!url.absoluteString.contains(cloudSecret), "Watch bearer must not be in the URL")
-    } else {
-        fatalError("Expected cloud Watch media")
-    }
+    check(cloud.media == .iphoneWebRTC, "Cloud audio stays on the iPhone")
+    check(cloud.authenticatedMediaURL == nil, "Watch cloud payload must not carry a PCM socket")
+    check(!cloud.opensBinaryPCMWebSocket, "Watch cloud payload must not open a PCM WebSocket")
+    check(cloudSecret.count >= 24, "Fixture secret must stay a realistic bearer length")
     check(WatchLocalPCMEndpoint(dictionary: [
         "pcm_host": "8.8.8.8", "pcm_port": 7591, "pcm_secret": secret,
     ]) == nil, "Public PCM host must be rejected")

@@ -521,6 +521,51 @@ final class CloudWebRTCTests: XCTestCase {
         XCTAssertGreaterThan(outputB.receivedAudibleFrames, 0, "Real Opus decode must deliver audible PCM to peer B")
         queue.sync { offerer.close(); answerer.close() }
     }
+
+    func testCloudCallRejectsLegacyPCM() throws {
+        let supported: Set<CloudMediaTransport> = [.legacyPCM, .webRTC]
+        let legacy = CloudMediaTransportNegotiator.resolve(
+            requested: .legacyPCM,
+            appSupported: supported,
+            agentSupported: supported,
+            forceLegacy: true
+        )
+        XCTAssertEqual(legacy, .failure(.unsupported))
+
+        let forced = CloudMediaTransportNegotiator.resolve(
+            requested: .webRTC,
+            appSupported: [.webRTC],
+            agentSupported: [.webRTC],
+            forceLegacy: true
+        )
+        XCTAssertEqual(try forced.get(), .webRTC)
+
+        let suite = "airsim.iphone-cloud-pcm-test"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defaults.set(CloudMediaTransport.legacyPCM.rawValue, forKey: CloudMediaTransportPreference.requestedKey)
+        defaults.set(true, forKey: CloudMediaTransportPreference.forceLegacyKey)
+        XCTAssertEqual(CloudMediaTransportPreference.requested(defaults: defaults), .webRTC)
+        XCTAssertFalse(CloudMediaTransportPreference.forceLegacy(defaults: defaults))
+
+        var scheduled = 0
+        CloudCallBinaryFrame.deliver(Data(repeating: 0x11, count: 320)) { _ in scheduled += 1 }
+        var envelope = Data([65, 83, 80, 77, 1, 0, 0, 20])
+        envelope.append(Data(repeating: 2, count: 320))
+        CloudCallBinaryFrame.deliver(envelope) { _ in scheduled += 1 }
+        XCTAssertEqual(scheduled, 0)
+        XCTAssertFalse(CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine())
+
+        let call = try IncomingVoIPCall(
+            outgoingCallID: "legacy",
+            uuid: UUID(),
+            number: "1",
+            secret: String(repeating: "s", count: 32),
+            mediaURL: URL(string: "wss://relay.test/connect")!,
+            mediaTransport: .legacyPCM
+        )
+        XCTAssertEqual(call.requestedMediaTransport, .webRTC)
+    }
 }
 
 /// Deterministic native ADM boundary: 440 Hz PCM goes into the real Opus encoder,

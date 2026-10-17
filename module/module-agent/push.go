@@ -121,22 +121,23 @@ type agentHeartbeatSnapshot struct {
 }
 
 type agentHeartbeatEvent struct {
-	Event                string `json:"event"`
-	DeviceID             string `json:"device_id"`
-	DeviceSecret         string `json:"device_secret"`
-	AgentVersion         string `json:"agent_version"`
-	AgentID              string `json:"agent_id,omitempty"`
-	AgentKind            string `json:"agent_kind,omitempty"`
-	DeviceName           string `json:"device_name,omitempty"`
-	Manufacturer         string `json:"manufacturer,omitempty"`
-	Model                string `json:"model,omitempty"`
-	PhoneNumber          string `json:"phone_number,omitempty"`
-	ATOK                 bool   `json:"at_ok"`
-	CellularState        string `json:"cellular_state"`
-	CellularRegistration string `json:"cellular_registration,omitempty"`
-	CellularRecovery     string `json:"cellular_recovery,omitempty"`
-	ECMCarrier           string `json:"ecm_carrier,omitempty"`
-	SignalDBM            *int   `json:"signal_dbm,omitempty"`
+	Event                  string   `json:"event"`
+	DeviceID               string   `json:"device_id"`
+	DeviceSecret           string   `json:"device_secret"`
+	AgentVersion           string   `json:"agent_version"`
+	AgentID                string   `json:"agent_id,omitempty"`
+	AgentKind              string   `json:"agent_kind,omitempty"`
+	DeviceName             string   `json:"device_name,omitempty"`
+	Manufacturer           string   `json:"manufacturer,omitempty"`
+	Model                  string   `json:"model,omitempty"`
+	PhoneNumber            string   `json:"phone_number,omitempty"`
+	ATOK                   bool     `json:"at_ok"`
+	CellularState          string   `json:"cellular_state"`
+	CellularRegistration   string   `json:"cellular_registration,omitempty"`
+	CellularRecovery       string   `json:"cellular_recovery,omitempty"`
+	ECMCarrier             string   `json:"ecm_carrier,omitempty"`
+	SignalDBM              *int     `json:"signal_dbm,omitempty"`
+	AgentMediaCapabilities []string `json:"agent_media_capabilities,omitempty"`
 }
 
 type pushManager struct {
@@ -469,9 +470,7 @@ func (p *pushManager) sendRegistration() error {
 	if registration.RelayURL == "" {
 		return errors.New("Cloud push relay not configured")
 	}
-	// This Agent build intentionally advertises only the transport it can
-	// actually execute. Relay rollout therefore cannot select WebRTC early.
-	registration.AgentMediaCapabilities = []string{cloudMediaTransportLegacyPCM}
+	registration.AgentMediaCapabilities = []string{cloudMediaTransportWebRTC}
 	registration.MediaTransport = resolveCloudMediaTransport(
 		registration.MediaTransport,
 		registration.AgentMediaCapabilities,
@@ -535,7 +534,7 @@ func (p *pushManager) sendIncoming(call callRecord, now time.Time) (bool, error)
 		ExpiresAt: now.Add(45 * time.Second).UTC().Format(time.RFC3339Nano),
 		MediaTransport: resolveCloudMediaTransport(
 			registration.MediaTransport,
-			[]string{cloudMediaTransportLegacyPCM},
+			[]string{cloudMediaTransportWebRTC},
 			registration.ForceLegacyPCM,
 		),
 	}
@@ -685,7 +684,8 @@ func (p *pushManager) sendHeartbeat(snapshot agentHeartbeatSnapshot) error {
 		ATOK: snapshot.ATOK, CellularState: snapshot.CellularState,
 		CellularRegistration: snapshot.CellularRegistration,
 		CellularRecovery:     snapshot.CellularRecovery, ECMCarrier: snapshot.ECMCarrier,
-		SignalDBM: snapshot.SignalDBM,
+		SignalDBM:              snapshot.SignalDBM,
+		AgentMediaCapabilities: []string{cloudMediaTransportWebRTC},
 	})
 }
 

@@ -75,9 +75,10 @@ struct IncomingVoIPCall: Equatable, Sendable {
         }
         authenticatedMediaURL = Self.authenticatedMediaURL(from: userInfo)
         mediaSecret = authenticatedMediaURL != nil ? Self.nonEmpty(userInfo["call_secret"] as? String) : nil
-        requestedMediaTransport = CloudMediaTransport(
+        let advertised = CloudMediaTransport(
             rawValue: Self.nonEmpty(userInfo["media_transport"] as? String) ?? ""
-        ) ?? .legacyPCM
+        ) ?? .webRTC
+        requestedMediaTransport = Self.cloudMediaTransport(advertised)
     }
 
     init(
@@ -87,7 +88,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
         secret: String,
         mediaURL: URL,
         generation: UInt64 = 1,
-        mediaTransport: CloudMediaTransport = .legacyPCM
+        mediaTransport: CloudMediaTransport = .webRTC
     ) throws {
         guard !outgoingCallID.isEmpty, secret.count >= 24,
               var components = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
@@ -112,7 +113,23 @@ struct IncomingVoIPCall: Equatable, Sendable {
         ttsText = nil
         authenticatedMediaURL = authenticatedURL
         mediaSecret = secret
-        requestedMediaTransport = mediaTransport
+        requestedMediaTransport = Self.cloudMediaTransport(mediaTransport)
+    }
+
+    /// New cloud calls stay on WebRTC. A `legacy_pcm` advertisement or the
+    /// force-legacy preference does not select the PCM engine.
+    private static func cloudMediaTransport(_ requested: CloudMediaTransport) -> CloudMediaTransport {
+        switch CloudMediaTransportNegotiator.resolve(
+            requested: requested,
+            appSupported: [.webRTC],
+            agentSupported: [.webRTC],
+            forceLegacy: requested != .webRTC || CloudMediaTransportPreference.forceLegacy()
+        ) {
+        case .success(let transport):
+            return transport
+        case .failure:
+            return .webRTC
+        }
     }
 
     init(
@@ -333,7 +350,7 @@ struct ConnectionModePresentation: Equatable, Sendable {
                          detail: "Run the cloud self-test to diagnose the issue")
         case .automatic:
             return .init(mode: .offline, title: "Automatic", status: "No Available Route",
-                         detail: "Checking VoWLAN, VoBLE, then cloud for a call route")
+                         detail: "Checking VoWLAN, then cloud for a call route")
         }
     }
 }
@@ -611,7 +628,7 @@ struct AgentPushRegistration: Encodable, Equatable, Sendable {
     let environment: String
     let relayURL: String
     var mediaTransport: String = CloudMediaTransport.webRTC.rawValue
-    var appMediaCapabilities: [String] = CloudMediaTransport.allCases.map(\.rawValue)
+    var appMediaCapabilities: [String] = [CloudMediaTransport.webRTC.rawValue]
     var forceLegacyPCM: Bool = false
     var vowlanSecret: String? = nil
 
@@ -1331,7 +1348,7 @@ final class VoIPPushController: NSObject {
             secret: call.callSecret,
             mediaURL: mediaURL,
             generation: call.generation ?? 1,
-            mediaTransport: call.mediaTransport ?? .legacyPCM
+            mediaTransport: call.mediaTransport ?? .webRTC
         )
     }
 
@@ -1595,7 +1612,7 @@ final class VoIPPushController: NSObject {
             environment: APNsEnvironment.current,
             relayURL: relayURL,
             mediaTransport: CloudMediaTransportPreference.requested().rawValue,
-            appMediaCapabilities: CloudMediaTransport.allCases.map(\.rawValue),
+            appMediaCapabilities: [CloudMediaTransport.webRTC.rawValue],
             forceLegacyPCM: CloudMediaTransportPreference.forceLegacy(),
             vowlanSecret: nil
         )

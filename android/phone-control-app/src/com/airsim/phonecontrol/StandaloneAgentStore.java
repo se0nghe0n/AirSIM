@@ -27,7 +27,7 @@ final class StandaloneAgentStore {
         String encoded = preferences.getString(REGISTRATION, "");
         if (encoded == null || encoded.isBlank()) return null;
         try { return new JSONObject(encoded)
-                .put("agent_media_capabilities", new JSONArray().put("webrtc").put("legacy_pcm")); }
+                .put("agent_media_capabilities", mediaCapabilities()); }
         catch (Exception error) {
             BridgeLog.error("standalone_registration_corrupt", error);
             return null;
@@ -152,7 +152,16 @@ final class StandaloneAgentStore {
             throw new IllegalArgumentException("watch_bundle_id does not match the main app");
         }
         // Capabilities describe this installed Agent, not the older pairing payload.
-        value.put("agent_media_capabilities", new JSONArray().put("webrtc").put("legacy_pcm"));
+        value.put("agent_media_capabilities", mediaCapabilities());
+    }
+
+    static JSONArray mediaCapabilities() {
+        return new JSONArray().put(CloudCallMedia.WEBRTC);
+    }
+
+    /** Answered cloud audio is WebRTC. The retired PCM pump is never started. */
+    static void startCloudCallMedia(String mediaTransport, Runnable startWebRTC) {
+        CloudCallMedia.start(mediaTransport, startWebRTC);
     }
 
     private static String trimTrailingSlash(String value) {

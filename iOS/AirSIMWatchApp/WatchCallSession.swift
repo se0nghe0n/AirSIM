@@ -1,13 +1,12 @@
 import AVFoundation
 import CallKit
-import CryptoKit
 import Foundation
-import Network
 import PushKit
 import WatchConnectivity
 
-/// Apple Watch 自己注册 VoIP Push、上报 CallKit 并承载网络 PCM。
-/// WatchConnectivity 仅用于 token/所有权同步，不再是接听或音频的必经链路。
+/// Apple Watch 注册 VoIP Push 并上报 CallKit。拨号和接听控制走 WCSession。
+/// 云端音频留在 iPhone 的 WebRTC peer；手表不打开 PCM WebSocket，也不发送 PCM 上行。
+/// 本地 VoWLAN 音频由 iPhone 的 WebRTC peer 承载。
 final class WatchCallSession: NSObject, ObservableObject {
     @Published private(set) var call = WatchCallPayload(
         callID: "", callUUID: nil, phase: .idle, number: nil,
@@ -358,6 +357,42 @@ final class WatchCallSession: NSObject, ObservableObject {
         ])
     }
 
+    private func answerOnIPhone(_ call: WatchVoIPCall, action: CXAnswerCallAction) {
+        guard let connectivity, connectivity.isReachable else {
+            answering = false
+            errorMessage = "Open AirSIM on your nearby paired iPhone first"
+            action.fail()
+            return
+        }
+        connectivity.sendMessage(
+            WatchCloudAudioPlan.companionControl(
+                action: "answer", callID: call.callID, callUUID: call.uuid
+            ),
+            replyHandler: { [weak self] reply in
+                DispatchQueue.main.async {
+                    guard let self, self.voIPCall?.uuid == call.uuid else { return }
+                    if reply["ok"] as? Bool == true {
+                        self.answered = true
+                        self.answering = false
+                        action.fulfill()
+                    } else {
+                        self.answering = false
+                        self.errorMessage = reply["error"] as? String ?? "iPhone could not answer"
+                        action.fail()
+                    }
+                }
+            },
+            errorHandler: { [weak self] error in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.answering = false
+                    self.errorMessage = "iPhone could not answer: \(error.localizedDescription)"
+                    action.fail()
+                }
+            }
+        )
+    }
+
 	private func requestMicrophonePermissionIfNeeded() {
 		switch AVAudioApplication.shared.recordPermission {
 		case .granted:
@@ -441,6 +476,14 @@ extension WatchCallSession: CXProviderDelegate {
     func providerDidReset(_ provider: CXProvider) {
         if let voIPCall { recordEnded(voIPCall.callID) }
         if let voIPCall, case .local = voIPCall.media { requestLocalEnd(voIPCall) }
+        if let voIPCall, case .iphoneWebRTC = voIPCall.media {
+            notifyCompanion(
+                event: "watch_call_control",
+                extra: WatchCloudAudioPlan.companionControl(
+                    action: "end", callID: voIPCall.callID, callUUID: voIPCall.uuid
+                )
+            )
+        }
         if voIPCall != nil { publishLocalPhase(.ended) }
         if let activeDialRequestID { abortCompanionDial(activeDialRequestID) }
         media.stop(); voIPCall = nil; answered = false; answering = false
@@ -454,6 +497,11 @@ extension WatchCallSession: CXProviderDelegate {
         do {
             try media.prepareForCallKit()
             provider.reportOutgoingCall(with: voIPCall.uuid, startedConnectingAt: Date())
+            if case .iphoneWebRTC = voIPCall.media {
+                answered = true
+                action.fulfill()
+                return
+            }
             media.connect(to: voIPCall.media) { [weak self] error in
                 DispatchQueue.main.async {
                     guard let self else { action.fail(); return }
@@ -468,9 +516,6 @@ extension WatchCallSession: CXProviderDelegate {
                         self.activeDialRequestID = nil
                     } else {
                         self.answered = true
-                        if case .cloud = voIPCall.media {
-                            self.media.sendControl("answer", callID: voIPCall.callID)
-                        }
                         action.fulfill()
                     }
                 }
@@ -506,16 +551,13 @@ extension WatchCallSession: CXProviderDelegate {
                     } else {
                         self.answered = true
                         self.answering = false
-                        if case .cloud = selectedMedia {
-                            self.media.sendControl("answer", callID: voIPCall.callID)
-                        }
                         action.fulfill()
                     }
                 }
                 }
             }
-            // Prefer the verified local gateway. A cloud push may contain a usable fallback,
-            // but the Watch remains the audio endpoint in both cases.
+            // Prefer the verified local gateway. Cloud audio stays on the iPhone WebRTC peer,
+            // so a cloud answer is only a WCSession control message.
             if let connectivity, connectivity.isReachable {
                 connectivity.sendMessage([
                     "action": "watch_local_answer", "call_id": voIPCall.callID,
@@ -527,11 +569,12 @@ extension WatchCallSession: CXProviderDelegate {
                             UserDefaults.standard.set(allowed, forKey: self.cloudMediaPreferenceKey)
                         }
                         if reply["ok"] as? Bool == true,
-                           let endpoint = WatchLocalPCMEndpoint(dictionary: reply) {
-                            self.voIPCall = voIPCall.usingLocalMedia(endpoint)
-                            connect(.local(endpoint))
-                        } else if case .cloud = voIPCall.media, self.cloudMediaAllowed {
-                            connect(voIPCall.media)
+                           WatchLocalPCMEndpoint(dictionary: reply) != nil
+                            || WatchCloudAudioPlan.accepts(transport: reply["media_transport"] as? String) {
+                            self.voIPCall = voIPCall.usingIPhoneVoWLANAudio()
+                            connect(.iphoneWebRTC)
+                        } else if case .iphoneWebRTC = voIPCall.media, self.cloudMediaAllowed {
+                            self.answerOnIPhone(voIPCall, action: action)
                         } else {
                             self.answering = false
                             self.errorMessage = reply["error"] as? String ?? "VoWLAN is unavailable on iPhone"
@@ -541,8 +584,8 @@ extension WatchCallSession: CXProviderDelegate {
                 }, errorHandler: { [weak self] error in
                     DispatchQueue.main.async {
                         guard let self, self.voIPCall?.uuid == voIPCall.uuid else { return }
-                        if case .cloud = voIPCall.media, self.cloudMediaAllowed {
-                            connect(voIPCall.media)
+                        if case .iphoneWebRTC = voIPCall.media, self.cloudMediaAllowed {
+                            self.answerOnIPhone(voIPCall, action: action)
                         } else {
                             self.answering = false
                             self.errorMessage = "Unable to get a local audio route: \(error.localizedDescription)"
@@ -550,8 +593,8 @@ extension WatchCallSession: CXProviderDelegate {
                         }
                     }
                 })
-            } else if case .cloud = voIPCall.media, cloudMediaAllowed {
-                connect(voIPCall.media)
+            } else if case .iphoneWebRTC = voIPCall.media, cloudMediaAllowed {
+                answerOnIPhone(voIPCall, action: action)
             } else {
                 answering = false
                 errorMessage = "Connect your watch to its paired iPhone first"
@@ -567,7 +610,9 @@ extension WatchCallSession: CXProviderDelegate {
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         if let voIPCall {
             recordEnded(voIPCall.callID)
-            if case .local = voIPCall.media {
+            if voIPCall.endsOnVoWLAN {
+                requestLocalEnd(voIPCall)
+            } else if case .local = voIPCall.media {
                 requestLocalEnd(voIPCall)
             } else if case .pendingLocal = voIPCall.media, !answered {
                 notifyCompanion(event: "watch_local_reject", extra: [
@@ -577,7 +622,13 @@ extension WatchCallSession: CXProviderDelegate {
             } else if voIPCall.isOutgoing && !answered, let activeDialRequestID {
                 abortCompanionDial(activeDialRequestID)
             } else {
-                media.sendControl(answered || voIPCall.isOutgoing ? "end" : "reject", callID: voIPCall.callID)
+                let control = answered || voIPCall.isOutgoing ? "end" : "reject"
+                notifyCompanion(
+                    event: "watch_call_control",
+                    extra: WatchCloudAudioPlan.companionControl(
+                        action: control, callID: voIPCall.callID, callUUID: voIPCall.uuid
+                    )
+                )
             }
             publishLocalPhase(.ended)
         }
@@ -593,7 +644,13 @@ extension WatchCallSession: CXProviderDelegate {
 
     func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         do {
-            // The Watch owns both ends of the audio session; watchOS selects its output route.
+            if case .iphoneWebRTC = voIPCall?.media {
+                return
+            }
+            if voIPCall?.endsOnVoWLAN == true {
+                return
+            }
+            // The Watch owns both ends of a local VoWLAN audio session.
             try media.startAudio()
             if voIPCall?.isOutgoing != true,
                voIPCall?.media != .pendingLocal,
@@ -667,8 +724,6 @@ private final class WatchCallMediaBridge: @unchecked Sendable {
     var onStatus: ((String) -> Void)?
 
     private let queue = DispatchQueue(label: "com.example.airsim.watch-media")
-    private var webSocket: URLSessionWebSocketTask?
-    private var localTransport: WatchLocalPCMTransport?
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
     private var encoder: WatchVoicePCMEncoder?
@@ -686,40 +741,15 @@ private final class WatchCallMediaBridge: @unchecked Sendable {
             guard let self else { return }
             stopped = false
             switch media {
-            case let .cloud(url, secret):
-                var request = URLRequest(url: url)
-                request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-                let socket = URLSession(configuration: .ephemeral).webSocketTask(with: request)
-                webSocket = socket
-                socket.resume()
-                receiveNext(socket)
-                socket.sendPing { error in completion(error) }
-            case let .local(endpoint):
-                let transport = WatchLocalPCMTransport(
-                    endpoint: endpoint,
-                    onPCM: { [weak self] data in
-                        DispatchQueue.main.async { self?.schedulePlayback(data) }
-                    },
-                    onReady: { [weak self] in self?.onStatus?("active") },
-                    onFailure: { [weak self] message in
-                        self?.onStatus?("local_failed")
-                        self?.onRemoteEnded?()
-                        NSLog("[AirSIM Watch PCM] %@", message)
-                    }
-                )
-                localTransport = transport
-                transport.start()
+            case .iphoneWebRTC:
+                completion(nil)
+            case .local:
+                // VoWLAN audio is the iPhone host-ICE peer. The watch does not open a PCM socket.
                 completion(nil)
             case .pendingLocal:
                 completion(WatchMediaError.localRouteUnavailable)
             }
         }
-    }
-
-    func sendControl(_ action: String, callID: String) {
-        guard let data = try? JSONSerialization.data(withJSONObject: ["action": action, "call_id": callID]),
-              let text = String(data: data, encoding: .utf8) else { return }
-        queue.async { [weak self] in self?.webSocket?.send(.string(text)) { _ in } }
     }
 
     func setMuted(_ muted: Bool) {
@@ -769,39 +799,9 @@ private final class WatchCallMediaBridge: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             stopped = true
-            webSocket?.cancel(with: .normalClosure, reason: nil)
-            webSocket = nil
-            localTransport?.stop()
-            localTransport = nil
             uplinkBuffer.removeAll(keepingCapacity: false)
         }
         DispatchQueue.main.async { [weak self] in self?.stopAudio() }
-    }
-
-    private func receiveNext(_ socket: URLSessionWebSocketTask) {
-        socket.receive { [weak self, weak socket] result in
-            guard let self, let socket else { return }
-            queue.async {
-                guard !self.stopped, self.webSocket === socket else { return }
-                switch result {
-                case let .success(.data(data)):
-                    DispatchQueue.main.async { self.schedulePlayback(data) }
-                    self.receiveNext(socket)
-                case let .success(.string(text)):
-                    self.consumeControl(text); self.receiveNext(socket)
-                case .success:
-                    self.receiveNext(socket)
-                case .failure:
-                    self.onRemoteEnded?()
-                }
-            }
-        }
-    }
-
-    private func consumeControl(_ text: String) {
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        if let status = object["status"] as? String ?? object["event"] as? String { onStatus?(status) }
     }
 
     private func enqueueUplink(_ data: Data) {
@@ -809,10 +809,7 @@ private final class WatchCallMediaBridge: @unchecked Sendable {
             guard let self, !stopped else { return }
             uplinkBuffer.append(data)
             while uplinkBuffer.count >= 320 {
-                let frame = Data(uplinkBuffer.prefix(320))
                 uplinkBuffer.removeFirst(320)
-                if let localTransport { localTransport.send(frame) }
-                else { webSocket?.send(.data(frame)) { _ in } }
             }
             if uplinkBuffer.count > 2_560 { uplinkBuffer = Data(uplinkBuffer.suffix(320)) }
         }
@@ -895,174 +892,3 @@ private enum WatchMediaError: LocalizedError {
     }
 }
 
-/// Watch directly authenticates to the paired VoWLAN PCM gateway. WCSession is never used for
-/// audio frames; it is only the control channel to the iPhone.
-private final class WatchLocalPCMTransport: @unchecked Sendable {
-    private let endpoint: WatchLocalPCMEndpoint
-    private let onPCM: (Data) -> Void
-    private let onReady: () -> Void
-    private let onFailure: (String) -> Void
-    private let queue = DispatchQueue(label: "com.example.airsim.watch-local-pcm")
-    private var connection: NWConnection?
-    private var generation = 0
-    private var stopped = false
-    private var ready = false
-    private var deadline = DispatchTime.now()
-    private var pending = Data()
-
-    init(
-        endpoint: WatchLocalPCMEndpoint,
-        onPCM: @escaping (Data) -> Void,
-        onReady: @escaping () -> Void,
-        onFailure: @escaping (String) -> Void
-    ) {
-        self.endpoint = endpoint
-        self.onPCM = onPCM
-        self.onReady = onReady
-        self.onFailure = onFailure
-    }
-
-    func start() {
-        queue.async { [self] in
-            stopped = false
-            deadline = .now() + 45
-            attempt()
-        }
-    }
-
-    func stop() {
-        queue.async { [self] in
-            stopped = true
-            generation += 1
-            ready = false
-            connection?.cancel()
-            connection = nil
-            pending.removeAll(keepingCapacity: false)
-        }
-    }
-
-    func send(_ frame: Data) {
-        queue.async { [self] in
-            guard ready, let connection else { return }
-            connection.send(content: frame, completion: .contentProcessed { _ in })
-        }
-    }
-
-    private func attempt() {
-        guard !stopped else { return }
-        generation += 1
-        let attemptID = generation
-        ready = false
-        pending.removeAll(keepingCapacity: true)
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        tcp.enableKeepalive = true
-        let connection = NWConnection(
-            host: NWEndpoint.Host(endpoint.host),
-            port: NWEndpoint.Port(rawValue: endpoint.port)!,
-            using: NWParameters(tls: nil, tcp: tcp)
-        )
-        self.connection = connection
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
-            self.queue.async {
-                guard !self.stopped, self.generation == attemptID else { return }
-                switch state {
-                case .ready: self.handshake(connection, attemptID: attemptID)
-                case let .failed(error): self.retry(error.localizedDescription, attemptID: attemptID)
-                default: break
-                }
-            }
-        }
-        connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 6) { [weak self] in
-            guard let self, self.generation == attemptID, !self.ready else { return }
-            self.retry("VoWLAN PCM handshake timed out", attemptID: attemptID)
-        }
-    }
-
-    private func handshake(_ connection: NWConnection, attemptID: Int) {
-        let timestamp = Int64(Date().timeIntervalSince1970)
-        let nonce = UUID().uuidString.lowercased()
-        let digest = SHA256.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
-        let canonical = "PCM\n/v1/pcm\n\(digest)\n\(timestamp)\n\(nonce)"
-        let mac = HMAC<SHA256>.authenticationCode(
-            for: Data(canonical.utf8), using: SymmetricKey(data: endpoint.secret)
-        )
-        let signature = Data(mac).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        let preface = Data("AIRSIMVWL1 \(timestamp) \(nonce) \(signature)\n".utf8)
-        connection.send(content: preface, completion: .contentProcessed { [weak self] error in
-            guard let self else { return }
-            self.queue.async {
-                guard self.generation == attemptID, !self.stopped else { return }
-                if let error { self.retry(error.localizedDescription, attemptID: attemptID) }
-                else { self.receiveAcknowledgement(connection, attemptID: attemptID) }
-            }
-        })
-    }
-
-    private func receiveAcknowledgement(_ connection: NWConnection, attemptID: Int) {
-        let acknowledgement = Data("AIRSIMREADY".utf8)
-        connection.receive(minimumIncompleteLength: acknowledgement.count, maximumLength: 4_096) {
-            [weak self] data, _, complete, error in
-            guard let self else { return }
-            self.queue.async {
-                guard self.generation == attemptID, !self.stopped else { return }
-                guard error == nil, !complete, let data,
-                      data.count >= acknowledgement.count,
-                      data.prefix(acknowledgement.count) == acknowledgement else {
-                    self.retry("VoWLAN PCM authentication or audio host is not ready", attemptID: attemptID)
-                    return
-                }
-                self.ready = true
-                self.deadline = .now() + 45
-                self.onReady()
-                self.consume(Data(data.dropFirst(acknowledgement.count)))
-                self.receiveLoop(connection, attemptID: attemptID)
-            }
-        }
-    }
-
-    private func receiveLoop(_ connection: NWConnection, attemptID: Int) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) {
-            [weak self] data, _, complete, error in
-            guard let self else { return }
-            self.queue.async {
-                guard self.generation == attemptID, !self.stopped else { return }
-                if let data { self.consume(data) }
-                if let error { self.retry(error.localizedDescription, attemptID: attemptID) }
-                else if complete { self.retry("VoWLAN PCM disconnected", attemptID: attemptID) }
-                else { self.receiveLoop(connection, attemptID: attemptID) }
-            }
-        }
-    }
-
-    private func consume(_ data: Data) {
-        pending.append(data)
-        let complete = pending.count / 320 * 320
-        if complete > 0 {
-            onPCM(Data(pending.prefix(complete)))
-            pending.removeFirst(complete)
-        }
-    }
-
-    private func retry(_ reason: String, attemptID: Int) {
-        guard !stopped, generation == attemptID else { return }
-        connection?.cancel()
-        connection = nil
-        ready = false
-        if DispatchTime.now() >= deadline {
-            stopped = true
-            generation += 1
-            onFailure(reason)
-            return
-        }
-        queue.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, !self.stopped, self.generation == attemptID else { return }
-            self.attempt()
-        }
-    }
-}

@@ -122,11 +122,10 @@ Simulator builds and tests cover the main protocol and transport-selection logic
 
 ## Native cloud WebRTC audio
 
-The iPhone advertises `legacy_pcm` and `webrtc` and requests WebRTC by default.
-Relay selects the call's `media_transport` only when both endpoints and its TURN
-configuration are ready; missing/old endpoint capabilities and Watch retain PCM.
-`airsim.cloud-media-force-legacy-pcm` remains an explicit compatibility override.
-Once a call is assigned WebRTC, negotiation failures never silently downgrade it.
+The iPhone advertises and requests only `webrtc`. `legacy_pcm` is not an iPhone
+cloud carrier, and `airsim.cloud-media-force-legacy-pcm` does not select PCM.
+A failed WebRTC negotiation does not open a PCM engine. Binary frames on the
+call WebSocket are ignored; SDP and call control stay on that socket.
 
 The iPhone offers only after its WebSocket answer is acknowledged and the existing
 CallKit audio startup policy permits capture. `CloudWebRTCSignal` implements the

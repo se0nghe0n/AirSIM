@@ -6,21 +6,18 @@ import (
 	"time"
 )
 
-const (
-	cloudMediaTransportLegacyPCM = "legacy_pcm"
-	cloudMediaTransportWebRTC    = "webrtc"
-)
+const cloudMediaTransportWebRTC = "webrtc"
 
 func resolveCloudMediaTransport(requested string, supported []string, forceLegacy bool) string {
 	if forceLegacy || strings.ToLower(strings.TrimSpace(requested)) != cloudMediaTransportWebRTC {
-		return cloudMediaTransportLegacyPCM
+		return ""
 	}
 	for _, transport := range supported {
 		if strings.ToLower(strings.TrimSpace(transport)) == cloudMediaTransportWebRTC {
 			return cloudMediaTransportWebRTC
 		}
 	}
-	return cloudMediaTransportLegacyPCM
+	return ""
 }
 
 type cloudMediaHealthDecision string

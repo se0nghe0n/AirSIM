@@ -14,7 +14,6 @@ import android.os.Build;
 import android.os.IBinder;
 
 import com.airsim.phonecontrol.AndroidAgentIdentity;
-import com.airsim.phonecontrol.AppConfig;
 import com.airsim.phonecontrol.BridgeLog;
 import com.airsim.phonecontrol.CallRepository;
 import com.airsim.phonecontrol.RuntimeMode;
@@ -23,8 +22,6 @@ import com.airsim.phonecontrol.RemoteAudioSessionRegistry;
 import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
-import java.net.InetSocketAddress;
-import java.net.URI;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Base64;
@@ -202,7 +199,7 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
                 if (!channel.authenticate(deviceId)) throw new SecurityException("another central owns VoBLE");
                 peerIdentities.put(deviceId, identity);
                 diagnostics = new VoBLEDiagnostics.Snapshot(
-                        RuntimeMode.agentLabel(this), true, false, "G.711-mu/8000/mono",
+                        RuntimeMode.agentLabel(this), true, false, "unavailable",
                         0, 0, 0, "");
                 publishDiagnostics();
                 response.put("ready", true).put("sas", material.sas())
@@ -257,9 +254,8 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
                         .put("device_name", AndroidAgentIdentity.deviceName())
                         .put("agent_kind", RuntimeMode.isStandalone(this) ? "standalone" : "avf")
                         .put("phone_number", AndroidAgentIdentity.phoneNumber(this)).toString());
-            } else if ("start_media".equals(action)) {
-                result = calls.executeOnce(request, true,
-                        ignored -> startMedia(deviceId, identity, envelope));
+            } else if ("start_media".equals(action) || "dial".equals(action) || "answer".equals(action)) {
+                result = VoBLECallController.Result.failure("bluetooth_unavailable");
             } else if ("stop_media".equals(action)) {
                 result = calls.executeOnce(request, true, ignored -> {
                     if (!calls.ownsCall(envelope.callId(), envelope.generation())) {
@@ -345,51 +341,6 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
         if (terminal) stopMedia(callId, generation);
     }
 
-    private VoBLECallController.Result startMedia(
-            String deviceId, String peerIdentity, VoBLEProtocol.ControlEnvelope envelope) {
-        if (!calls.ownsCall(envelope.callId(), envelope.generation())) {
-            return VoBLECallController.Result.failure("call_mismatch");
-        }
-        try {
-            InetSocketAddress endpoint;
-            if (RuntimeMode.isStandalone(this)) {
-                endpoint = VoBLEPCMBackendResolver.resolve(
-                        VoBLEPCMBackendResolver.Runtime.STANDALONE, "");
-            } else {
-                String host = URI.create(AppConfig.endpoint(this)).getHost();
-                endpoint = VoBLEPCMBackendResolver.resolve(
-                        VoBLEPCMBackendResolver.Runtime.AVF, host);
-            }
-            VoBLEPairingManager.SessionKeys keys = pairingManager.storedSessionKeys(
-                    peerIdentity, envelope.sessionId(), envelope.callId(), envelope.generation());
-            byte[] mediaKey = keys.media();
-            try {
-                stopMedia("", 0);
-                VoBLEMediaSession next = new VoBLEMediaSession(
-                        endpoint,
-                        address -> VoBLEPCMBridgeSession.open(
-                                address, VoBLEPCMBridgeSession.socketConnector()),
-                        packet -> gatt.notifyAudioPacket(deviceId, packet));
-                VoBLEMediaSession.Identity identity = new VoBLEMediaSession.Identity(
-                        envelope.callId(), envelope.generation());
-                next.start(identity, mediaKey);
-                media = next;
-                mediaIdentity = identity;
-                RemoteAudioSessionRegistry.setVoBLE(true);
-                diagnostics = new VoBLEDiagnostics.Snapshot(
-                        RuntimeMode.agentLabel(this), true, true, "G.711-mu/8000/mono",
-                        0, 0, 0, "");
-                publishDiagnostics();
-                return VoBLECallController.Result.success("media_ready");
-            } finally {
-                Arrays.fill(mediaKey, (byte) 0);
-            }
-        } catch (Exception error) {
-            BridgeLog.error("voble_media_start_failed", error);
-            return VoBLECallController.Result.failure("pcm_unavailable", error.getClass().getSimpleName());
-        }
-    }
-
     private void stopMedia(String callId, long generation) {
         VoBLEMediaSession.Identity identity = mediaIdentity;
         if (identity != null && callId != null && !callId.isEmpty()
@@ -402,7 +353,7 @@ public final class VoBLEGatewayService extends Service implements VoBLEGattServe
             VoBLEMediaSession.Stats stats = active.stats();
             diagnostics = new VoBLEDiagnostics.Snapshot(
                     RuntimeMode.agentLabel(this), session != null, false,
-                    "G.711-mu/8000/mono", stats.downlinkFrames(), stats.uplinkFrames(),
+                    "unavailable", stats.downlinkFrames(), stats.uplinkFrames(),
                     stats.droppedFrames(), "");
             publishDiagnostics();
             active.close();

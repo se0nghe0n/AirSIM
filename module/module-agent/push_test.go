@@ -324,21 +324,6 @@ func TestExpiredCloudCommandIsRejectedAndDeduplicatedBeforeAT(t *testing.T) {
 	}
 }
 
-func TestCloudPCMFramerPreservesTCPBoundaries(t *testing.T) {
-	framer := cloudPCMFramer{}
-	first := framer.append(make([]byte, 321))
-	if len(first) != 1 || len(first[0]) != cloudPCMFrameBytes {
-		t.Fatalf("首批帧=%d 长度=%v", len(first), frameLengths(first))
-	}
-	second := framer.append(make([]byte, 319))
-	if len(second) != 1 || len(second[0]) != cloudPCMFrameBytes {
-		t.Fatalf("跨 TCP read 的余数必须组成完整帧，帧=%d 长度=%v", len(second), frameLengths(second))
-	}
-	if framer.buffered() != 0 {
-		t.Fatalf("完整两帧后不应剩余字节，实际=%d", framer.buffered())
-	}
-}
-
 func TestCloudPCMReadTimeoutTriggersVoiceRouteRecovery(t *testing.T) {
 	if !shouldRecoverCloudPCM(&net.OpError{Op: "read", Err: timeoutError{}}, 0) {
 		t.Fatal("PCM 连接已建立但持续没有下行字节时必须重启语音桥")
@@ -353,14 +338,6 @@ type timeoutError struct{}
 func (timeoutError) Error() string   { return "timeout" }
 func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
-
-func frameLengths(frames [][]byte) []int {
-	result := make([]int, len(frames))
-	for index, frame := range frames {
-		result[index] = len(frame)
-	}
-	return result
-}
 
 func TestCallOwnershipPreservesAuthenticatedIPhoneOwner(t *testing.T) {
 	var received callOwnerPushEvent
@@ -475,6 +452,39 @@ func TestAgentHeartbeatReportsCellularStateWithoutSecrets(t *testing.T) {
 	if received.Event != "agent_heartbeat" || received.CellularState != "searching" ||
 		received.DeviceSecret == "" || received.SignalDBM == nil || *received.SignalDBM != -91 {
 		t.Fatalf("心跳载荷错误: %#v", received)
+	}
+	if len(received.AgentMediaCapabilities) != 1 || received.AgentMediaCapabilities[0] != "webrtc" {
+		t.Fatalf("心跳媒体能力=%v，期望 [webrtc]", received.AgentMediaCapabilities)
+	}
+}
+
+func TestSendRegistrationAdvertisesOnlyWebRTC(t *testing.T) {
+	var received pushRegistration
+	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/devices/register" {
+			t.Fatalf("请求路径=%q", request.URL.Path)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	manager := newPushManager(filepath.Join(t.TempDir(), "push.json"))
+	manager.client = server.Client()
+	registration := testPushRegistration(server.URL)
+	registration.MediaTransport = "webrtc"
+	if err := manager.store(registration); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.sendRegistration(); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.AgentMediaCapabilities) != 1 || received.AgentMediaCapabilities[0] != "webrtc" {
+		t.Fatalf("注册媒体能力=%v，期望 [webrtc]", received.AgentMediaCapabilities)
+	}
+	if received.MediaTransport != "webrtc" {
+		t.Fatalf("注册传输=%q，期望 webrtc", received.MediaTransport)
 	}
 }
 

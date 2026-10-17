@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
@@ -115,7 +114,7 @@ func cloudCallTraceFields(descriptor cloudCallDescriptor, action cloudCallAction
 		"generation": fmt.Sprintf("%d", generation),
 		"media_transport": resolveCloudMediaTransport(
 			descriptor.MediaTransport,
-			[]string{cloudMediaTransportLegacyPCM},
+			[]string{cloudMediaTransportWebRTC},
 			false,
 		),
 	}
@@ -212,7 +211,7 @@ func (a *agent) retireCloudCallDescriptor(descriptor cloudCallDescriptor) {
 func (a *agent) runCloudCall(ctx context.Context, descriptor cloudCallDescriptor) {
 	descriptor.MediaTransport = resolveCloudMediaTransport(
 		descriptor.MediaTransport,
-		[]string{cloudMediaTransportLegacyPCM},
+		[]string{cloudMediaTransportWebRTC},
 		false,
 	)
 	endpoint, err := cloudMediaURL(descriptor.RelayURL, descriptor.CallUUID, descriptor.CallSecret)
@@ -281,133 +280,10 @@ func waitCloudRetry(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func establishCloudPCMConnection(
-	ctx context.Context,
-	ensureListening func() error,
-	dial func(context.Context) (net.Conn, error),
-) (net.Conn, error) {
-	if err := ensureListening(); err != nil {
-		return nil, err
-	}
-	return dial(ctx)
-}
-
 func (a *agent) cloudCallStillExists(callID string) bool {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.calls.Active != nil && a.calls.Active.ID == callID
-}
-
-type cloudPCMBridge struct {
-	mu               sync.Mutex
-	conn             net.Conn
-	health           *cloudMediaHealthTracker
-	mediaProtocol    string
-	downlinkSequence uint32
-	uplinkBuffer     cloudPCMSpeechBuffer
-	uplinkFramer     cloudPCMFramer
-}
-
-func (bridge *cloudPCMBridge) write(data []byte) error {
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
-	if bridge.conn == nil {
-		return errors.New("Module PCM has not started")
-	}
-	frame, _, decodeErr := decodeCloudPCMFrame(data)
-	if decodeErr != nil {
-		return decodeErr
-	}
-	previousDrops := bridge.uplinkBuffer.dropped
-	for _, pcm := range bridge.uplinkFramer.append(frame.Payload) {
-		bridge.uplinkBuffer.enqueue(pcm, time.Now())
-	}
-	bridge.health.addDroppedFrames(bridge.uplinkBuffer.dropped - previousDrops)
-	bridge.health.observeUplinkBuffer(len(bridge.uplinkBuffer.frames), bridge.uplinkBuffer.target, bridge.uplinkBuffer.underruns)
-	return nil
-}
-
-func (bridge *cloudPCMBridge) playUplink(ctx context.Context) {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			bridge.mu.Lock()
-			if bridge.conn != nil {
-				frame := bridge.uplinkBuffer.pop()
-				if len(frame) > 0 {
-					// Bounded local write: this worker never blocks WebSocket control reads.
-					_ = bridge.conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
-					remaining := frame
-					for len(remaining) > 0 {
-						n, err := bridge.conn.Write(remaining)
-						remaining = remaining[n:]
-						if err != nil || n == 0 {
-							bridge.health.addDroppedFrames(1)
-							_ = bridge.conn.Close()
-							break
-						}
-					}
-					if len(remaining) == 0 {
-						bridge.health.observeUplink(frame, time.Now())
-					}
-				}
-				bridge.health.observeUplinkBuffer(len(bridge.uplinkBuffer.frames), bridge.uplinkBuffer.target, bridge.uplinkBuffer.underruns)
-			}
-			bridge.mu.Unlock()
-		}
-	}
-}
-
-func (bridge *cloudPCMBridge) setMediaProtocol(value string) {
-	bridge.mu.Lock()
-	bridge.mediaProtocol = normalizedCloudPCMProtocol(value)
-	protocol := bridge.mediaProtocol
-	bridge.mu.Unlock()
-	bridge.health.setMediaProtocol(protocol)
-}
-
-func (bridge *cloudPCMBridge) frameDownlink(payload []byte, timestamp time.Time) []byte {
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
-	if bridge.mediaProtocol != cloudPCMProtocolFramedV1 {
-		return payload
-	}
-	sequence := bridge.downlinkSequence
-	bridge.downlinkSequence++
-	return encodeCloudPCMFrame(payload, sequence, uint64(timestamp.UnixMilli()))
-}
-
-func (bridge *cloudPCMBridge) set(connection net.Conn) {
-	bridge.mu.Lock()
-	if bridge.conn != nil {
-		_ = bridge.conn.Close()
-	}
-	bridge.conn = connection
-	bridge.uplinkBuffer = cloudPCMSpeechBuffer{}
-	bridge.uplinkFramer = cloudPCMFramer{}
-	bridge.mu.Unlock()
-}
-
-func (bridge *cloudPCMBridge) close() {
-	bridge.mu.Lock()
-	if bridge.conn != nil {
-		_ = bridge.conn.Close()
-	}
-	bridge.conn = nil
-	bridge.mu.Unlock()
-}
-
-func (bridge *cloudPCMBridge) clear(connection net.Conn) {
-	bridge.mu.Lock()
-	if bridge.conn == connection {
-		_ = bridge.conn.Close()
-		bridge.conn = nil
-	}
-	bridge.mu.Unlock()
 }
 
 func (a *agent) serveCloudCall(
@@ -416,12 +292,7 @@ func (a *agent) serveCloudCall(
 	descriptor cloudCallDescriptor,
 	health *cloudMediaHealthTracker,
 ) bool {
-	bridge := &cloudPCMBridge{health: health}
-	defer bridge.close()
-	playbackContext, stopPlayback := context.WithCancel(ctx)
-	defer stopPlayback()
-	go bridge.playUplink(playbackContext)
-	mediaStarted := false
+	answered := false
 	_ = socket.WriteText(cloudStatusForAction("agent_ready", "", descriptor, cloudCallAction{}))
 
 	watchEnded := make(chan struct{})
@@ -469,9 +340,7 @@ func (a *agent) serveCloudCall(
 		}
 		switch opcode {
 		case cloudOpcodeBinary:
-			if mediaStarted {
-				_ = bridge.write(payload)
-			}
+			a.debug.add("cloud-call", "rejected", "Cloud PCM frames are closed", "", cloudCallTraceFields(descriptor, cloudCallAction{}))
 		case cloudOpcodeText:
 			control, err := decodeCloudCallActionForDescriptor(payload, descriptor)
 			if err != nil {
@@ -483,34 +352,21 @@ func (a *agent) serveCloudCall(
 			a.debug.add("cloud-call-control", "received", "Cloud call control received", "", fields)
 			switch control.Action {
 			case "answer":
-				startMedia := false
-				if !mediaStarted {
-					bridge.setMediaProtocol(control.MediaProtocol)
-					mediaStarted = true
-					startMedia = true
+				if !answered {
+					answered = true
 					if descriptor.Direction != "outgoing" {
 						a.debug.add("cloud-call-control", "modem_executing", "Executing answer command", a.callControlBackendDescription(), fields)
 						if err := a.executeIncomingCloudCallAction(control, "answer"); err != nil {
-							mediaStarted = false
+							answered = false
 							_ = socket.WriteText(cloudStatusForAction("action_error", err.Error(), descriptor, control))
 							a.debug.add("cloud-call-control", "failed", "Cloud answer failed", err.Error(), fields)
 							continue
 						}
-						a.voice.mu.Lock()
-						a.voice.hostEnabled = true
-						a.voice.mu.Unlock()
 					}
 				}
 				health.markAnswerAcknowledged(time.Now())
 				_ = socket.WriteText(cloudStatusForAction(cloudPCMMilestoneAnswerOK, "", descriptor, control))
 				a.debug.add("cloud-call-control", "completed", "Cloud answer command executed", "", fields)
-				if startMedia {
-					if descriptor.Direction == "outgoing" {
-						go a.startOutgoingCloudPCM(ctx, socket, bridge, descriptor, health)
-					} else {
-						go a.connectCloudPCM(ctx, socket, bridge, descriptor, health)
-					}
-				}
 				if descriptor.Direction != "outgoing" {
 					go func() {
 						if err := a.push.sendCallOwner(descriptor.CallID, descriptor.CallUUID, control.Owner, "active"); err != nil {
@@ -752,244 +608,10 @@ func cloudPCMRecoveryTouchesUSB(action cloudPCMRecoveryAction) bool {
 	}
 }
 
-func (a *agent) connectCloudPCM(
-	ctx context.Context,
-	socket *cloudWebSocket,
-	bridge *cloudPCMBridge,
-	descriptor cloudCallDescriptor,
-	health *cloudMediaHealthTracker,
-) {
-	pcmEndpoint, endpointErr := a.voicePCMEndpoint()
-	if endpointErr != nil {
-		_ = socket.WriteText(cloudStatus("action_error", "Invalid PCM backend configuration"))
-		a.debug.add("cloud-call", "failed", "Invalid PCM backend configuration", endpointErr.Error(),
-			cloudCallTraceFields(descriptor, cloudCallAction{}))
-		return
-	}
-	initialDeadline := time.Now().Add(45 * time.Second)
-	everConnected := false
-	consecutiveDialFailures := 0
-	consecutiveReadTimeouts := 0
-	for ctx.Err() == nil && a.cloudCallDescriptorAlive(descriptor) {
-		if !everConnected && time.Now().After(initialDeadline) {
-			_ = socket.WriteText(cloudStatus("action_error", "Module PCM startup timed out"))
-			return
-		}
-		// 只等待 7580 开始监听，随后立即建立客户端连接。完整 ready 状态必须
-		// 在 AIRSIMPCM1/AIRSIMREADY 握手和双向线程启动后才成立。
-		connection, err := establishCloudPCMConnection(
-			ctx,
-			a.ensureVoiceRouteListening,
-			func(ctx context.Context) (net.Conn, error) {
-				dialer := net.Dialer{Timeout: 2 * time.Second}
-				return dialer.DialContext(ctx, "tcp", pcmEndpoint)
-			},
-		)
-		if err != nil {
-			consecutiveDialFailures++
-			a.debug.add("voice-backend", "connect_failed", "Failed to connect to Samsung PCM backend", err.Error(), map[string]string{
-				"backend": string(a.voiceBackend.kind),
-				"attempt": fmt.Sprintf("%d", consecutiveDialFailures),
-			})
-			// helper 曾经 ready 但监听端口已经消失时，旧实现会一直拨一个
-			// 不存在的 7580。连续失败后只重建 D4/D5/D6，不重置 USB/ECM。
-			if consecutiveDialFailures >= 3 {
-				if !health.beginRebuild(cloudMediaRebuildConnectionLost, time.Now()) {
-					_ = socket.WriteText(cloudPCMStatus(
-						"action_error", "PCM reached the limit of three rebuilds per call",
-						cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-					return
-				}
-				a.voice.mu.Lock()
-				staleReady := a.voice.ready
-				a.voice.mu.Unlock()
-				if staleReady {
-					_ = socket.WriteText(cloudPCMStatus(
-						"pcm_recovering", "PCM listener unavailable; rebuilding voice route",
-						cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-					a.stopVoiceRoute()
-				}
-				consecutiveDialFailures = 0
-			}
-			if !waitCloudRetry(ctx, time.Second) {
-				return
-			}
-			continue
-		}
-		health.markListening(time.Now())
-		_ = socket.WriteText(cloudPCMStatus(
-			cloudPCMMilestoneListening, "",
-			cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-		))
-		if err := cloudPCMHandshake(connection); err != nil {
-			a.debug.add("voice-backend", "handshake_failed", "Samsung PCM handshake failed", err.Error(), map[string]string{
-				"backend": string(a.voiceBackend.kind),
-			})
-			_ = connection.Close()
-			if !waitCloudRetry(ctx, time.Second) {
-				return
-			}
-			continue
-		}
-		a.markVoiceBackendHandshakeReady()
-		a.debug.add("voice-backend", "ready", "Samsung PCM media session established", "", map[string]string{
-			"backend": string(a.voiceBackend.kind),
-		})
-		consecutiveDialFailures = 0
-		everConnected = true
-		bridge.set(connection)
-		health.beginMedia(time.Now())
-		_ = socket.WriteText(cloudStatus(cloudPCMMilestoneActive, ""))
-		_ = socket.WriteText(cloudPCMStatus(cloudPCMMilestoneReady, "", cloudPCMTransmissionStatsFromHealth(health.snapshot())))
-		buffer := make([]byte, 4096)
-		framer := cloudPCMFramer{}
-		lastStatsAt := time.Time{}
-		firstDownlinkReported := false
-		_ = connection.SetReadDeadline(time.Now().Add(cloudMediaStartupInterval))
-		for {
-			count, readErr := connection.Read(buffer)
-			if count > 0 {
-				consecutiveReadTimeouts = 0
-				_ = connection.SetReadDeadline(time.Now().Add(cloudMediaStallInterval))
-				for _, frame := range framer.append(buffer[:count]) {
-					outbound := bridge.frameDownlink(frame, time.Now())
-					if err := socket.WriteBinary(outbound); err != nil {
-						bridge.clear(connection)
-						return
-					}
-					health.observeDownlink(frame, time.Now(), maxInt(0, framer.buffered()/cloudPCMFrameBytes))
-					if !firstDownlinkReported {
-						firstDownlinkReported = true
-						snapshot := health.snapshot()
-						_ = socket.WriteText(cloudPCMStatus(
-							cloudPCMMilestoneFirstFrame, "",
-							cloudPCMTransmissionStatsFromHealth(snapshot),
-						))
-						fields := cloudCallTraceFields(descriptor, cloudCallAction{})
-						for key, value := range cloudPCMMilestoneFields(snapshot) {
-							fields[key] = value
-						}
-						a.debug.add("cloud-call", cloudPCMMilestoneFirstFrame, "First downlink PCM for cloud call forwarded", "", fields)
-					}
-				}
-				decision := health.evaluate(time.Now())
-				if decision != cloudMediaHealthy && cloudPCMRecoveryForHealth(decision) != cloudPCMKeepVoiceRoute {
-					bridge.clear(connection)
-					if !health.beginRebuild(decision, time.Now()) {
-						_ = socket.WriteText(cloudPCMStatus(
-							"action_error", "PCM reached the limit of three rebuilds per call",
-							cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-						))
-						return
-					}
-					_ = socket.WriteText(cloudPCMStatus(
-						"pcm_recovering", string(decision),
-						cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-					a.stopVoiceRoute()
-					if !waitCloudRetry(ctx, 500*time.Millisecond) {
-						return
-					}
-					break
-				}
-				if lastStatsAt.IsZero() || time.Since(lastStatsAt) >= time.Second {
-					_ = socket.WriteText(cloudPCMStatus(
-						"pcm_stats", "", cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-					lastStatsAt = time.Now()
-				}
-			}
-			if readErr != nil {
-				decision := cloudMediaRebuildConnectionLost
-				message := "PCM disconnected; reconnecting"
-				if shouldRecoverCloudPCM(readErr, health.snapshot().DownlinkBytes) {
-					decision = cloudMediaRebuildDownlinkStalled
-					consecutiveReadTimeouts++
-					if cloudPCMRecoveryForTimeout(consecutiveReadTimeouts) == cloudPCMReconnectOnly {
-						_ = socket.WriteText(cloudPCMStatus(
-							"pcm_waiting", "Brief downlink PCM pause; retaining voice route while waiting for recovery",
-							cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-						))
-						_ = connection.SetReadDeadline(time.Now().Add(time.Second))
-						continue
-					}
-					message = "Repeated downlink PCM timeouts; rebuilding voice route"
-				}
-				bridge.clear(connection)
-				if !health.beginRebuild(decision, time.Now()) {
-					_ = socket.WriteText(cloudPCMStatus(
-						"action_error", "PCM reached the limit of three rebuilds per call",
-						cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-					return
-				}
-				if decision == cloudMediaRebuildDownlinkStalled {
-					_ = socket.WriteText(cloudPCMStatus(
-						"pcm_recovering", message,
-						cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-					a.stopVoiceRoute()
-				} else {
-					_ = socket.WriteText(cloudPCMStatus(
-						"pcm_recovering", message,
-						cloudPCMTransmissionStatsFromHealth(health.snapshot()),
-					))
-				}
-				if !waitCloudRetry(ctx, 500*time.Millisecond) {
-					return
-				}
-				break
-			}
-		}
-	}
-}
-
-func (a *agent) startOutgoingCloudPCM(
-	ctx context.Context,
-	socket *cloudWebSocket,
-	bridge *cloudPCMBridge,
-	descriptor cloudCallDescriptor,
-	health *cloudMediaHealthTracker,
-) {
-	deadline := time.Now().Add(3 * time.Minute)
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-	for ctx.Err() == nil && time.Now().Before(deadline) {
-		a.mu.RLock()
-		active := a.calls.Active != nil && a.calls.Active.Direction == "outgoing" &&
-			(a.calls.Active.State == "active" || a.calls.Active.State == "held")
-		a.mu.RUnlock()
-		if active {
-			a.voice.mu.Lock()
-			a.voice.hostEnabled = true
-			a.voice.mu.Unlock()
-			a.connectCloudPCM(ctx, socket, bridge, descriptor, health)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 const (
 	cloudPCMFrameBytes       = 320 // 20 ms, 8 kHz, mono PCM16LE
 	cloudPCMProtocolFramedV1 = "airsim-pcm-v1"
-	cloudPCMFrameHeaderBytes = 20
-	cloudPCMFrameVersion     = byte(1)
 )
-
-var cloudPCMFrameMagic = [4]byte{'A', 'S', 'P', 'M'}
-
-type cloudPCMFrame struct {
-	Sequence              uint32
-	TimestampMilliseconds uint64
-	Payload               []byte
-}
 
 func normalizedCloudPCMProtocol(value string) string {
 	if strings.EqualFold(strings.TrimSpace(value), cloudPCMProtocolFramedV1) {
@@ -997,64 +619,6 @@ func normalizedCloudPCMProtocol(value string) string {
 	}
 	return ""
 }
-
-func encodeCloudPCMFrame(payload []byte, sequence uint32, timestampMilliseconds uint64) []byte {
-	wire := make([]byte, cloudPCMFrameHeaderBytes+len(payload))
-	copy(wire[:4], cloudPCMFrameMagic[:])
-	wire[4] = cloudPCMFrameVersion
-	wire[5] = 0
-	binary.BigEndian.PutUint16(wire[6:8], cloudPCMFrameHeaderBytes)
-	binary.BigEndian.PutUint32(wire[8:12], sequence)
-	binary.BigEndian.PutUint64(wire[12:20], timestampMilliseconds)
-	copy(wire[cloudPCMFrameHeaderBytes:], payload)
-	return wire
-}
-
-func decodeCloudPCMFrame(wire []byte) (cloudPCMFrame, bool, error) {
-	if len(wire) < len(cloudPCMFrameMagic) || !bytes.Equal(wire[:4], cloudPCMFrameMagic[:]) {
-		return cloudPCMFrame{Payload: wire}, false, nil
-	}
-	if len(wire) < cloudPCMFrameHeaderBytes {
-		return cloudPCMFrame{}, true, errors.New("Incomplete AirSIM PCM frame header")
-	}
-	headerBytes := int(binary.BigEndian.Uint16(wire[6:8]))
-	if wire[4] != cloudPCMFrameVersion || headerBytes != cloudPCMFrameHeaderBytes {
-		return cloudPCMFrame{}, true, errors.New("Invalid AirSIM PCM frame version")
-	}
-	payload := wire[headerBytes:]
-	if len(payload) != cloudPCMFrameBytes {
-		return cloudPCMFrame{}, true, fmt.Errorf("AirSIM PCM payload length=%d; expected %d", len(payload), cloudPCMFrameBytes)
-	}
-	return cloudPCMFrame{
-		Sequence:              binary.BigEndian.Uint32(wire[8:12]),
-		TimestampMilliseconds: binary.BigEndian.Uint64(wire[12:20]),
-		Payload:               payload,
-	}, true, nil
-}
-
-// TCP 不保留应用层帧边界；缓存跨 read 的尾部，避免奇数字节读取截断一个 PCM16 样本。
-type cloudPCMFramer struct {
-	pending []byte
-}
-
-func (framer *cloudPCMFramer) append(chunk []byte) [][]byte {
-	framer.pending = append(framer.pending, chunk...)
-	frames := make([][]byte, 0, len(framer.pending)/cloudPCMFrameBytes)
-	for len(framer.pending) >= cloudPCMFrameBytes {
-		frame := make([]byte, cloudPCMFrameBytes)
-		copy(frame, framer.pending[:cloudPCMFrameBytes])
-		frames = append(frames, frame)
-		framer.pending = framer.pending[cloudPCMFrameBytes:]
-	}
-	if len(framer.pending) == 0 {
-		framer.pending = nil
-	} else {
-		framer.pending = append([]byte(nil), framer.pending...)
-	}
-	return frames
-}
-
-func (framer *cloudPCMFramer) buffered() int { return len(framer.pending) }
 
 func cloudPCMHandshake(connection net.Conn) error {
 	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))

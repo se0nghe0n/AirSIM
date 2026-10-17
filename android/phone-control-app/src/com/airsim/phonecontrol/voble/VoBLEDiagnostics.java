@@ -26,7 +26,7 @@ public final class VoBLEDiagnostics {
     private VoBLEDiagnostics() {}
 
     public static Snapshot idle(String runtime) {
-        return new Snapshot(runtime, false, false, "G.711-mu/8000/mono", 0, 0, 0, "");
+        return new Snapshot(runtime, false, false, "unavailable", 0, 0, 0, "");
     }
 
     public static String summary(Snapshot value) {

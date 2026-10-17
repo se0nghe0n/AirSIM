@@ -189,6 +189,11 @@ struct AirSIMAPI: Sendable {
     func warmAudioHost() async throws {
         try await post("api/calls/audio/host/warmup", EmptyBody())
     }
+
+    func exchangeVoWLANWebRTC(_ signal: CloudWebRTCSignal) async throws -> CloudWebRTCSignal {
+        let data = try await raw(method: "POST", path: "api/calls/webrtc", body: signal, timeout: 20)
+        return try Self.decode(CloudWebRTCSignal.self, from: data)
+    }
     func audioHostConfig() async throws -> MaVoAudioHostConfig { try await get("api/calls/audio/host/config") }
 
     func sendSMS(to phone: String, message: String) async throws -> SMSSendResult {

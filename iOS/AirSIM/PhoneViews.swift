@@ -64,14 +64,6 @@ struct DialPadTransportPresentation: Equatable {
                 transport: .vowlan
             )
         }
-        if selected == .bluetooth {
-            return DialPadTransportPresentation(
-                title: "Bluetooth",
-                detail: "Calls and audio use VoBLE, without Relay",
-                systemImage: "wave.3.right",
-                transport: .bluetooth
-            )
-        }
         if selected == .cloud {
             return DialPadTransportPresentation(
                 title: "Cloud",

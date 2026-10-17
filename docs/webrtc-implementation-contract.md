@@ -1,6 +1,6 @@
 # WebRTC implementation contract (protocol v1)
 
-The cloud call identity, CallKit lifecycle, durable commands, pairing, and SMS remain unchanged. `media_transport: webrtc` means native audio-only WebRTC/Opus; `legacy_pcm` remains a negotiated compatibility path for old endpoints and Watch. iPhone offers; Android answers. The authenticated call WebSocket carries control and signaling only in WebRTC mode, never PCM. WebRTC audio uses ICE/DTLS-SRTP, directly or via configured TURN.
+The cloud call identity, CallKit lifecycle, durable commands, pairing, and SMS remain unchanged. VoWLAN keeps HMAC control on hotspot port 7592 and carries `webrtc_offer` / `webrtc_answer` there. Those peers use host ICE only. Telephony samples still use `AIRSIMPCM1` on `127.0.0.1:7580`. Port 7593 is not a PCM listener. `media_transport: webrtc` means native audio-only WebRTC/Opus. iPhone cloud calls succeed only for `webrtc`; `legacy_pcm` is not an iPhone carrier and a failed negotiation does not open a PCM engine. iPhone offers; Android answers. The authenticated call WebSocket carries control and signaling, never scheduled PCM. WebRTC audio uses ICE/DTLS-SRTP, directly or via configured TURN.
 
 ## Signaling
 

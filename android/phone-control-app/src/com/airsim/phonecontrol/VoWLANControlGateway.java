@@ -24,7 +24,9 @@ import java.util.concurrent.Executors;
 public final class VoWLANControlGateway implements Closeable {
     private static final int MAX_HEADERS = 8_192;
     private static final int MAX_BODY = 32_768;
+    private static final int MAX_SIGNALING_BODY = 131_072;
     private final Context context;
+    private final VoWLANWebRTCBridge webrtc;
     private final VoWLANReplayCache replayCache = new VoWLANReplayCache(30);
     private final ExecutorService acceptor = Executors.newSingleThreadExecutor();
     private final ExecutorService clients = Executors.newCachedThreadPool();
@@ -33,6 +35,7 @@ public final class VoWLANControlGateway implements Closeable {
 
     public VoWLANControlGateway(Context context) {
         this.context = context.getApplicationContext();
+        this.webrtc = new VoWLANWebRTCBridge(this.context);
     }
 
     public synchronized int start(Inet4Address address, int port) throws IOException {
@@ -85,6 +88,16 @@ public final class VoWLANControlGateway implements Closeable {
             } finally {
                 Arrays.fill(secret, (byte) 0);
             }
+            if ("POST".equals(request.method) && VoWLANWebRTCControl.PATH.equals(pathOnly(request.path))) {
+                try {
+                    String output = webrtc.handle(new String(request.body, StandardCharsets.UTF_8));
+                    respond(peer, 200, output);
+                } catch (IllegalStateException busy) {
+                    respond(peer, 409, "{\"error\":\"session_busy\"}");
+                }
+                BridgeLog.info("vowlan_webrtc_signaled path=" + VoWLANWebRTCControl.PATH);
+                return;
+            }
             int responseStatus = 200;
             String output;
             if ("/v1/health".equals(request.path)) {
@@ -104,8 +117,10 @@ public final class VoWLANControlGateway implements Closeable {
                 responseStatus = forwarded.status();
                 output = forwarded.payload();
                 if (output.isEmpty()) output = "{}";
-                ownsCall = VoWLANControlPolicy.ownsCallAfterResponse(
+                boolean nextOwnsCall = VoWLANControlPolicy.ownsCallAfterResponse(
                         request.path, responseStatus, ownsCall);
+                if (ownsCall && !nextOwnsCall) webrtc.close();
+                ownsCall = nextOwnsCall;
             }
             respond(peer, responseStatus, output);
             BridgeLog.info("vowlan_control_forwarded method=" + request.method + " path=" + safePath(request.path));
@@ -146,7 +161,8 @@ public final class VoWLANControlGateway implements Closeable {
         int length;
         try { length = Integer.parseInt(headers.getOrDefault("content-length", "0")); }
         catch (NumberFormatException error) { throw new IOException("invalid content length", error); }
-        if (length < 0 || length > MAX_BODY) throw new IOException("body too large");
+        int bodyLimit = VoWLANWebRTCControl.PATH.equals(pathOnly(first[1])) ? MAX_SIGNALING_BODY : MAX_BODY;
+        if (length < 0 || length > bodyLimit) throw new IOException("body too large");
         byte[] body = new byte[length];
         new DataInputStream(input).readFully(body);
         return new Request(first[0].toUpperCase(Locale.ROOT), first[1], headers, body);
@@ -164,6 +180,12 @@ public final class VoWLANControlGateway implements Closeable {
         output.flush();
     }
 
+    private static String pathOnly(String path) {
+        if (path == null) return "";
+        int query = path.indexOf('?');
+        return query < 0 ? path : path.substring(0, query);
+    }
+
     private static String safePath(String path) {
         if (path == null) return "unknown";
         int query = path.indexOf('?');
@@ -174,11 +196,12 @@ public final class VoWLANControlGateway implements Closeable {
         ServerSocket active = server;
         server = null;
         if (active != null) active.close();
+        webrtc.close();
         acceptor.shutdownNow();
         clients.shutdownNow();
     }
 
-    public boolean ownsCall() { return ownsCall; }
+    public boolean ownsCall() { return ownsCall || webrtc.hasSession(); }
 
     private record Request(String method, String path, Map<String, String> headers, byte[] body) {}
 }

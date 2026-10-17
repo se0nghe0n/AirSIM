@@ -342,7 +342,7 @@ curl --fail-with-body \
     "live_activity_push_to_start_token":"",
     "bundle_id":"org.example.airsim",
     "environment":"sandbox",
-    "media_transport":"legacy_pcm"
+    "media_transport":"webrtc"
   }' \
   https://airsim-push.remotepilot.site/v1/devices/register
 ```
@@ -360,7 +360,7 @@ Run these separately with a Debug device build and a Release/TestFlight build:
 5. Answer, reject, hang-up, and timeout events reach the Agent; duplicates do not create another call.
 6. Validate ordinary notifications, Watch incoming calls, and Live Activity topics individually.
 7. Agent disconnection, incorrect Secrets, expired commands, and failed media authentication are rejected.
-8. Keep `legacy_pcm` when `WEBRTC_TRANSPORT_READY=false`; adjust rollout separately when ready for a staged release.
+8. Cloud media is WebRTC when TURN is configured, both sides advertise `webrtc`, the device requests it, and the rollout percent includes the device. Otherwise registration returns no media transport. Binary PCM frames are closed.
 
 ## 9. Troubleshooting
 
@@ -405,19 +405,17 @@ Adjacent `codex.md`, `claude.md`, and `LLM.txt` provide repository facts, safety
 
 ### Native WebRTC calls
 
-`WEBRTC_TRANSPORT_READY=true` and a nonzero `WEBRTC_ROLLOUT_PERCENT` only select
+`WEBRTC_TRANSPORT_READY=true` and a nonzero `WEBRTC_ROLLOUT_PERCENT` select
 WebRTC when both `app_media_capabilities` and `agent_media_capabilities` contain
 `webrtc`, the device requests `media_transport: "webrtc"`, and valid TURN
-configuration is present. Old agents remain `legacy_pcm`. Registration and
-incoming-call responses include the server-selected `media_transport`; Android
-must consume this value. Heartbeats update only agent capabilities, preserving
-app capabilities; missing capability fields on an old agent heartbeat clear
-stale WebRTC support. An incoming event cannot promote a legacy device by
-claiming WebRTC. Dial requests may explicitly request either transport, subject
-to the same capability/rollout gates. Watch must explicitly request `legacy_pcm`.
-Watch pushes and forwarded Watch answer controls always select `legacy_pcm`;
-iPhone answer controls carry the negotiated transport. The agent uses this
-answer value when the Watch wins ownership.
+configuration is present. Any other combination is a rejection: `selectMediaTransport`
+returns `webrtc` or nothing. Registration and incoming-call responses include that
+result. Heartbeats may add `webrtc` and must not clear a stored `webrtc` capability.
+An incoming event that names another transport is rejected. Dial accepts only
+`webrtc`. Binary frames close the media socket for every role, including Watch.
+JSON answer, reject, and end controls still forward, and a Watch answer does not
+force another transport. The agent uses the forwarded answer when the Watch wins
+ownership.
 
 Configure `TURN_URLS` as a JSON array of `turn:`/`turns:` URLs (optional
 `?transport=udp|tcp`), and store coturn's shared REST secret as the Worker secret

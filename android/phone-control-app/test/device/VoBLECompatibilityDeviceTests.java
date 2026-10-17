@@ -31,11 +31,12 @@ public final class VoBLECompatibilityDeviceTests {
         if (request.after() != 7 || request.timeoutMillis() != 100) {
             throw new AssertionError("encoded local event queries must decode on Android 10+");
         }
-        var inputMethod = VoWLANPCMRelay.class.getDeclaredMethod("activeInternalInput", java.net.Socket.class);
-        inputMethod.setAccessible(true);
-        try (var socket = new java.net.Socket();
-             var input = (java.io.InputStream) inputMethod.invoke(null, socket)) {
-            if (input.read() != -1) throw new AssertionError("failed PCM socket must end cleanly");
+        try (var server = new java.net.ServerSocket(0); var client = new java.net.Socket()) {
+            client.connect(server.getLocalSocketAddress(), 1_000);
+            try (var accepted = server.accept()) { accepted.close(); }
+            if (client.getInputStream().read() != -1) {
+                throw new AssertionError("failed PCM socket must end cleanly");
+            }
         }
         var service = new ShizukuBridgeUserService();
         var command = ShizukuBridgeUserService.class.getDeclaredMethod("runCommand", String[].class);

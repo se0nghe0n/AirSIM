@@ -47,18 +47,34 @@ final class WebRTCCloudPeer implements Closeable {
     private boolean remoteSet;
     private List<PeerConnection.IceServer> iceServers;
     private long captureDeadline;
+    private final boolean hostOnly;
+    private boolean hostAnswerReady;
+    private boolean hostGatheringComplete;
+    private PeerConnection hostAnswerOwner;
+    private String hostAnswerSession = "";
 
     WebRTCCloudPeer(Context context, String callUUID, long generation, String relayURL,
                     String secret, Signals signals, Runnable failed) {
+        this(context, callUUID, generation, relayURL, secret, signals, failed, false);
+    }
+
+    /** Hotspot calls gather host candidates only. TURN stays on the Relay peer. */
+    static WebRTCCloudPeer host(Context context, String callUUID, long generation,
+                                 Signals signals, Runnable failed) {
+        return new WebRTCCloudPeer(context, callUUID, generation, "", "", signals, failed, true);
+    }
+
+    private WebRTCCloudPeer(Context context, String callUUID, long generation, String relayURL,
+                             String secret, Signals signals, Runnable failed, boolean hostOnly) {
         this.context = context.getApplicationContext(); this.callUUID = callUUID;
         this.generation = generation; this.relayURL = relayURL; this.secret = secret;
-        this.signals = signals; this.failed = failed;
+        this.signals = signals; this.failed = failed; this.hostOnly = hostOnly;
     }
 
     void start() {
         submit(() -> {
             initialize(context);
-            iceServers = fetchICE();
+            iceServers = hostOnly ? List.of() : fetchICE();
             if (closed.get()) return;
             adm = JavaAudioDeviceModule.builder(context).setSampleRate(8000)
                     .setUseStereoInput(false).setUseStereoOutput(false)
@@ -133,9 +149,13 @@ final class WebRTCCloudPeer implements Closeable {
                 previousSessions.add(id);
                 disposePeer();
                 sessionID = id; readiness.beginSession(id); remoteSet = false; pendingICE.clear();
+                hostAnswerReady = false; hostGatheringComplete = false; hostAnswerOwner = null; hostAnswerSession = "";
+                if (hostOnly && iceServers == null) iceServers = List.of();
                 PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(iceServers);
                 config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-                config.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
+                config.continualGatheringPolicy = hostOnly
+                        ? PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+                        : PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY;
                 peer = factory.createPeerConnection(config, observer(id));
                 if (peer == null) throw new IOException("Peer creation failed");
                 peer.addTrack(track, Collections.singletonList("airsim"));
@@ -161,7 +181,15 @@ final class WebRTCCloudPeer implements Closeable {
                                 SessionDescription tuned = new SessionDescription(answer.type, WebRTCOpusSDP.configure(answer.description));
                                 owner.setLocalDescription(new DescriptionObserver(id) {
                                     @Override public void onSetSuccess() { submit(() -> {
-                                        if (owns(owner, id)) signals.send(identity("webrtc_answer", id).put("sdp", tuned.description));
+                                        if (!owns(owner, id)) return;
+                                        if (!hostOnly) {
+                                            signals.send(identity("webrtc_answer", id).put("sdp", tuned.description));
+                                            return;
+                                        }
+                                        hostAnswerOwner = owner;
+                                        hostAnswerSession = id;
+                                        hostAnswerReady = true;
+                                        maybeSendHostAnswer();
                                     }); }
                                 }, tuned);
                             }); }
@@ -189,6 +217,15 @@ final class WebRTCCloudPeer implements Closeable {
     }
 
     private boolean owns(PeerConnection owner, String id) { return !closed.get() && peer == owner && sessionID.equals(id); }
+
+    private void maybeSendHostAnswer() throws Exception {
+        if (!hostOnly || !hostAnswerReady || !hostGatheringComplete || hostAnswerOwner == null) return;
+        if (!owns(hostAnswerOwner, hostAnswerSession)) return;
+        SessionDescription local = hostAnswerOwner.getLocalDescription();
+        if (local == null || local.description == null || local.description.isEmpty()) return;
+        hostAnswerReady = false;
+        signals.send(identity("webrtc_answer", hostAnswerSession).put("sdp", local.description));
+    }
 
     // Telemetry has a separate failure boundary: SDK/report failures must never end audio.
     private void startStatistics(PeerConnection owner, String id) {
@@ -230,9 +267,16 @@ final class WebRTCCloudPeer implements Closeable {
                 });
             }
             public void onIceConnectionReceivingChange(boolean receiving) {}
-            public void onIceGatheringChange(PeerConnection.IceGatheringState state) {}
+            public void onIceGatheringChange(PeerConnection.IceGatheringState state) {
+                if (!hostOnly || state != PeerConnection.IceGatheringState.COMPLETE) return;
+                submit(() -> {
+                    if (!id.equals(sessionID)) return;
+                    hostGatheringComplete = true;
+                    maybeSendHostAnswer();
+                });
+            }
             public void onIceCandidate(IceCandidate candidate) { submit(() -> {
-                if (!id.equals(sessionID)) return;
+                if (hostOnly || !id.equals(sessionID)) return;
                 signals.send(identity("webrtc_ice", id).put("candidate", new JSONObject()
                         .put("candidate", candidate.sdp).put("sdp_mid", candidate.sdpMid)
                         .put("sdp_mline_index", candidate.sdpMLineIndex)));

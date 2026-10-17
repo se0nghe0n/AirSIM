@@ -20,10 +20,9 @@ import {
   writeAgentHeartbeat,
   writeDeviceRecord,
   writeRelayState,
+  retainStoredWebRTCCapability,
 } from "./status-store.mjs";
 export { AgentStatusRegistry } from "./status-store.mjs";
-
-import { inspectPCMTrace, stampPCMTrace, PCMRelayTrace } from "./pcm-trace.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_APNS_PAYLOAD_BYTES = 4096;
@@ -32,7 +31,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const encoder = new TextEncoder();
 const MEDIA_CLIENT_ROLES = new Set(["watch", "iphone"]);
 const COMMAND_TYPES = new Set(["dial", "send_sms", "dtmf", "call_history"]);
-const MEDIA_TRANSPORTS = new Set(["legacy_pcm", "webrtc"]);
+const MEDIA_TRANSPORTS = new Set(["webrtc"]);
 
 let cachedProviderToken = "";
 let cachedProviderTokenAt = 0;
@@ -186,7 +185,6 @@ async function enqueueDeviceCommand(request, env) {
     const callSecret = randomToken(32);
     const callID = `outgoing-${command.command_id}`;
     const origin = new URL(request.url).origin;
-    // Watch 当前只支持 PCM；已认证的发起方可要求向后兼容的媒体格式。
     const mediaTransport = assignedMediaTransport(
       authenticated.device, env, value.media_transport || ""
     );
@@ -930,7 +928,7 @@ async function connectCallMedia(request, env, callUUID) {
   headers.set("x-airsim-call-id", call.call_id || "");
   headers.set("x-airsim-call-uuid", callUUID.toLowerCase());
   headers.set("x-airsim-generation", String(call.generation || 1));
-  headers.set("x-airsim-media-transport", call.media_transport || "legacy_pcm");
+  headers.set("x-airsim-media-transport", call.media_transport === "webrtc" ? "webrtc" : "");
   const forwarded = new Request("https://media.internal/session", { headers });
   return stub.fetch(forwarded);
 }
@@ -939,7 +937,6 @@ export class CallMediaSession {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.pcmTrace = new PCMRelayTrace();
     this.terminal = null;
     this.ready = state.blockConcurrencyWhile(async () => {
       this.terminal = await state.storage.get("terminal") || null;
@@ -978,7 +975,7 @@ export class CallMediaSession {
     const [client, server] = Object.values(pair);
     server.serializeAttachment({
       role,
-      mediaTransport: role === "watch" ? "legacy_pcm" : request.headers.get("x-airsim-media-transport") || "legacy_pcm",
+      mediaTransport: request.headers.get("x-airsim-media-transport") === "webrtc" ? "webrtc" : "",
       pcmTraceKey: crypto.randomUUID(),
       owner: inheritsOwnership,
       pendingControl: inheritedPendingControl,
@@ -1044,8 +1041,6 @@ export class CallMediaSession {
       try { this.sendTerminal(socket); } catch {}
       return;
     }
-    const receivedAt = Date.now();
-    const ingressMono = performance.now();
     const attachment = socket.deserializeAttachment() || {};
     const role = attachment.role;
     if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
@@ -1059,33 +1054,23 @@ export class CallMediaSession {
       socket.close(1009, "media frame too large");
       return;
     }
-    let value;
-    if (typeof message === "string") {
-      try { value = JSON.parse(message); } catch { return; }
-      if (typeof value?.action === "string" && value.action.startsWith("webrtc_")) {
-        this.relayWebRTC(socket, value);
-        return;
-      }
-    }
-    const ownerSocket = this.state.getWebSockets(this.ownerRole()).find((peer) =>
-      peer.deserializeAttachment()?.owner === true);
-    const webRTC = attachment.mediaTransport === "webrtc" &&
-      ownerSocket?.deserializeAttachment()?.role !== "watch";
-    if (typeof message !== "string" && webRTC) {
+    if (typeof message !== "string") {
       socket.close(1008, "PCM is not allowed on WebRTC calls");
       return;
     }
-    if (role !== "agent" && !this.acceptClientMessage(socket, role, message)) return;
-    const trace = typeof message === "string" ? null : inspectPCMTrace(message);
-    const stream = trace ? this.pcmTrace.receive(socket, role, trace, ingressMono, attachment.pcmTraceKey) : null;
-    if (trace?.kind === "invalid_v2") {
-      this.pcmTrace.flush(stream, performance.now());
+    let value;
+    try { value = JSON.parse(message); } catch { return; }
+    if (typeof value?.action === "string" && value.action.startsWith("webrtc_")) {
+      this.relayWebRTC(socket, value);
       return;
     }
+    if (role !== "agent" && !this.acceptClientMessage(socket, role, message)) return;
     let outbound = role === "agent" ? message : bindMediaOwner(message, role);
     if (role !== "agent" && value?.action === "answer") {
-      outbound = JSON.stringify({ ...JSON.parse(outbound),
-        media_transport: role === "watch" ? "legacy_pcm" : attachment.mediaTransport || "legacy_pcm" });
+      const parsed = JSON.parse(outbound);
+      if (attachment.mediaTransport === "webrtc") parsed.media_transport = "webrtc";
+      else delete parsed.media_transport;
+      outbound = JSON.stringify(parsed);
     }
     const control = role === "agent" ? null : callControlMetadata(outbound);
     if (control) this.logControl("received", role, control);
@@ -1098,14 +1083,8 @@ export class CallMediaSession {
       return;
     }
     for (const peer of peers) {
-      try {
-        peer.send(trace?.kind === "v2" ? stampPCMTrace(trace, receivedAt, Date.now()) : outbound);
-        if (stream) this.pcmTrace.forwarded(stream, performance.now());
-      } catch {
-        if (stream) this.pcmTrace.sendFailed(stream, performance.now());
-      }
+      try { peer.send(outbound); } catch {}
     }
-    if (stream) this.pcmTrace.flush(stream, performance.now());
     if (role !== "agent" && peers.length > 0 && this.isControlMessage(outbound)) {
       const current = socket.deserializeAttachment() || {};
       socket.serializeAttachment({ ...current, role, pendingControl: "" });
@@ -1361,8 +1340,9 @@ async function registerDevice(request, env) {
     bundle_id: device.bundle_id,
     environment: device.environment,
     registered_at: new Date().toISOString(),
-    media_transport_requested: MEDIA_TRANSPORTS.has(device.media_transport)
-      ? device.media_transport : (existing?.media_transport_requested || "legacy_pcm"),
+    media_transport_requested: device.media_transport === "webrtc"
+      ? "webrtc"
+      : (existing?.media_transport_requested === "webrtc" ? "webrtc" : ""),
     app_media_capabilities: normalizedMediaCapabilities(
       device.app_media_capabilities ?? existing?.app_media_capabilities,
     ),
@@ -1374,7 +1354,7 @@ async function registerDevice(request, env) {
   };
   if (device.registration_source === "agent" && existing) {
     // Agent registration can carry an older copy of the paired app settings.
-    record.media_transport_requested = existing.media_transport_requested || "legacy_pcm";
+    record.media_transport_requested = existing.media_transport_requested === "webrtc" ? "webrtc" : "";
     record.app_media_capabilities = normalizedMediaCapabilities(existing.app_media_capabilities);
     record.force_legacy_pcm = existing.force_legacy_pcm === true;
   }
@@ -1428,8 +1408,9 @@ async function receiveCall(request, env) {
   const generation = Number.isSafeInteger(call.generation) && call.generation > 0
     ? call.generation
     : 1;
-  const mediaTransport = assignedMediaTransport(authenticated.device, env,
-    call.media_transport === "legacy_pcm" ? "legacy_pcm" : "");
+  const mediaTransport = call.media_transport && call.media_transport !== "webrtc"
+    ? null
+    : assignedMediaTransport(authenticated.device, env, "");
   if (call.event !== "incoming_call" || !nonEmpty(call.call_id) ||
       !UUID_PATTERN.test(call.call_uuid || "") || !Number.isFinite(expiresAt) ||
       (callSecretSupplied && !mediaReady) ||
@@ -1522,7 +1503,7 @@ async function receiveCall(request, env) {
         priority: "10",
         expiration: Math.floor(expiresAt / 1000),
         collapseID: call.call_uuid,
-        payload: { ...voipPayload, media_transport: "legacy_pcm" },
+        payload: voipPayload,
       });
       await writeRelayState(env, watchDedupeKey, "1", 180);
     }
@@ -1703,7 +1684,6 @@ async function receiveAgentHeartbeat(request, env) {
     ...(nonEmpty(heartbeat.model) ? { model: heartbeat.model.trim() } : {}),
     ...(nonEmpty(heartbeat.phone_number) ? { phone_number: heartbeat.phone_number.trim() } : {}),
     agent_version: stringValue(heartbeat.agent_version),
-    // An old agent with no advertisement must clear stale native capability.
     agent_media_capabilities: normalizedMediaCapabilities(heartbeat.agent_media_capabilities),
     at_ok: heartbeat.at_ok,
     cellular_state: heartbeat.cellular_state,
@@ -1717,9 +1697,12 @@ async function receiveAgentHeartbeat(request, env) {
   const authenticated = await authenticate(heartbeat, env);
   if (authenticated.response) return authenticated.response;
   await writeAgentHeartbeat(env, authenticated.device.device_id, agentID, record);
-  if (JSON.stringify(authenticated.device.agent_media_capabilities) !== JSON.stringify(record.agent_media_capabilities)) {
+  const mergedCapabilities = retainStoredWebRTCCapability(
+    authenticated.device.agent_media_capabilities, record.agent_media_capabilities,
+  );
+  if (JSON.stringify(authenticated.device.agent_media_capabilities) !== JSON.stringify(mergedCapabilities)) {
     await writeDeviceRecord(env, authenticated.device.device_id, {
-      ...authenticated.device, agent_media_capabilities: record.agent_media_capabilities,
+      ...authenticated.device, agent_media_capabilities: mergedCapabilities,
     });
   }
   return jsonResponse(202, { received: true });
@@ -1976,9 +1959,7 @@ export function applyCallLifecycle(current, candidate) {
 }
 
 function normalizedMediaCapabilities(value) {
-  const capabilities = Array.isArray(value) ? value : ["legacy_pcm"];
-  const normalized = [...new Set(capabilities.filter((item) => MEDIA_TRANSPORTS.has(item)))];
-  return normalized.includes("legacy_pcm") ? normalized : ["legacy_pcm", ...normalized];
+  return Array.isArray(value) && value.includes("webrtc") ? ["webrtc"] : [];
 }
 
 function stableMediaRolloutBucket(deviceID) {
@@ -1992,33 +1973,35 @@ function stableMediaRolloutBucket(deviceID) {
 
 export function selectMediaTransport({
   deviceID,
-  requested = "legacy_pcm",
-  appCapabilities = ["legacy_pcm"],
-  agentCapabilities = ["legacy_pcm"],
-  relayCapabilities = ["legacy_pcm", "webrtc"],
+  requested = "",
+  appCapabilities = [],
+  agentCapabilities = [],
+  relayCapabilities = [],
   rolloutPercent = 0,
   forceLegacy = false,
 } = {}) {
-  if (forceLegacy || requested !== "webrtc") return "legacy_pcm";
+  if (forceLegacy || requested !== "webrtc") return null;
   const app = normalizedMediaCapabilities(appCapabilities);
   const agent = normalizedMediaCapabilities(agentCapabilities);
   const relay = normalizedMediaCapabilities(relayCapabilities);
   if (!app.includes("webrtc") || !agent.includes("webrtc") || !relay.includes("webrtc")) {
-    return "legacy_pcm";
+    return null;
   }
   const percentage = Math.max(0, Math.min(100, Number(rolloutPercent) || 0));
-  return stableMediaRolloutBucket(deviceID) < percentage ? "webrtc" : "legacy_pcm";
+  if (percentage <= 0) return null;
+  return stableMediaRolloutBucket(deviceID) < percentage ? "webrtc" : null;
 }
 
 function assignedMediaTransport(device, env, requestedOverride = "") {
   const relayCapabilities = env.WEBRTC_TRANSPORT_READY === "true" && turnConfigured(env)
-    ? ["legacy_pcm", "webrtc"]
-    : ["legacy_pcm"];
+    ? ["webrtc"]
+    : [];
+  const requested = requestedOverride === "webrtc"
+    ? "webrtc"
+    : (requestedOverride ? "" : (device.media_transport_requested === "webrtc" ? "webrtc" : ""));
   return selectMediaTransport({
     deviceID: device.device_id,
-    requested: MEDIA_TRANSPORTS.has(requestedOverride)
-      ? requestedOverride
-      : device.media_transport_requested,
+    requested,
     appCapabilities: device.app_media_capabilities,
     agentCapabilities: device.agent_media_capabilities,
     relayCapabilities,

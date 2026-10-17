@@ -366,7 +366,7 @@ final class AppModel: ObservableObject {
             peerAuthenticated: voble.authenticatedIdentity != nil,
             agentType: "Android VoBLE Agent",
             pcmReady: vobleMedia.isRunning,
-            codec: "G.711 μ-law / 8 kHz mono",
+            codec: "Unavailable",
             queuedFrames: vobleMedia.queuedFrameCount,
             droppedFrames: vobleMedia.droppedFrameCount,
             jitterFrames: vobleMedia.jitterTargetFrames,
@@ -772,10 +772,6 @@ final class AppModel: ObservableObject {
     }
 
     private func configureVoBLECallCoordinator() {
-        vobleCalls.audioSessionContext = { [weak self] in
-            guard let self else { return (true, false) }
-            return (self.callKit.managesCurrentCall, self.callKit.audioSessionIsActive)
-        }
         vobleCalls.onIncoming = { [weak self] call in
             guard let self else { return }
             self.currentCallTransport = .bluetooth
@@ -2186,11 +2182,17 @@ final class AppModel: ObservableObject {
                 return
             }
             let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
-            // 先完成麦克风授权和 AVAudioEngine 启动，再让 Agent 开始等待 PCM
-            // 客户端。否则首次授权停留超过 Agent 的等待窗口时，helper 会被提前杀死。
+            let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
+            let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
+            // 先完成麦克风授权和 WebRTC 启动，再登记音频主机。
             let outcome = try await LocalCallAudioStartupCoordinator.start(
                 activatePhoneAudio: { [audio] in
-                    await audio.activateForCall(route: pcmRoute, sessionAlreadyActive: managedByCallKit)
+                    await audio.activateForCall(
+                        route: pcmRoute,
+                        sessionAlreadyActive: managedByCallKit,
+                        callUUID: vowlanCallUUID,
+                        generation: vowlanGeneration
+                    )
                 },
                 registerAgentAudio: {
                     try await CallAudioRegistrationCoordinator.register(service: localAPI)
@@ -2637,21 +2639,12 @@ extension AppModel: CallKitActionHandling {
         backgroundStandby.suspendForCall()
         do {
             let selectedMode = ConnectionModePreference.selected()
+            if selectedMode == .bluetooth {
+                throw VoBLECentralError.bluetooth("bluetooth_unavailable")
+            }
             let runtimePolicy = ConnectionModeRuntimePolicy(mode: selectedMode)
             let vowlanRoute = runtimePolicy.startsVoWLAN ? await readyVoWLANRoute() : nil
             guard outgoingAttemptID == attempt, !Task.isCancelled else { return }
-            if selectedMode == .bluetooth
-                || (selectedMode == .automatic && vowlanRoute == nil && boundBluetoothReady) {
-                guard boundBluetoothReady else { throw VoBLECentralError.notReady }
-                let identity = try await vobleCalls.startOutgoing(number: number)
-                currentCallTransport = .bluetooth
-                lockedCallTransport = LockedCallTransport(
-                    transport: .bluetooth, generation: identity.generation)
-                pendingOutgoingCall = CallRecord(
-                    id: identity.callID, index: 0, direction: "outgoing", state: "dialing",
-                    number: number, startedAt: Date(), updatedAt: Date(), endedAt: nil, missed: false)
-                return
-            }
             let cloudModeEnabled = CloudModePreference.isEnabled()
             let routeResult = try await OutgoingCallRouteCoordinator.start(
                 number: number,

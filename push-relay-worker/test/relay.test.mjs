@@ -194,7 +194,7 @@ test("health and registration persist without returning credentials", async () =
   assert.equal((await health.json()).version, "0.2.1");
   const response = await worker.fetch(post("/v1/devices/register", registration), env);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { registered: true, media_transport: "legacy_pcm" });
+  assert.deepEqual(await response.json(), { registered: true, media_transport: null });
   const stored = JSON.parse(await env.DEVICES.get("device:iphone-air"));
   assert.equal(stored.device_secret, undefined);
   assert.equal(stored.secret_hash.length, 64);
@@ -246,7 +246,7 @@ test("device registration remains available when KV daily writes are exhausted",
   const response = await worker.fetch(post("/v1/devices/register", registration), env);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { registered: true, media_transport: "legacy_pcm" });
+  assert.deepEqual(await response.json(), { registered: true, media_transport: null });
   const stored = await env.STATUS.storage.get("device:iphone-air");
   assert.equal(stored.device_secret, undefined);
   assert.equal(stored.secret_hash.length, 64);
@@ -512,16 +512,14 @@ test("cloud dial and SMS commands are authenticated, device-scoped, and return A
   assert.equal(forged.status, 401);
 });
 
-test("Watch dial can request legacy PCM during a WebRTC rollout", async () => {
-  const env = testEnvironment();
+test("dial accepts WebRTC and rejects a legacy PCM request", async () => {
+  const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
   env.COMMANDS = new MemoryCommandNamespace();
-  env.WEBRTC_TRANSPORT_READY = "true";
-  env.WEBRTC_ROLLOUT_PERCENT = "100";
   const capable = {
     ...registration,
     media_transport: "webrtc",
-    app_media_capabilities: ["legacy_pcm", "webrtc"],
-    agent_media_capabilities: ["legacy_pcm", "webrtc"],
+    app_media_capabilities: ["webrtc"],
+    agent_media_capabilities: ["webrtc"],
   };
   assert.equal((await worker.fetch(post("/v1/devices/register", capable), env)).status, 200);
   env.COMMANDS.addAgent(registration.device_id);
@@ -533,8 +531,7 @@ test("Watch dial can request legacy PCM during a WebRTC rollout", async () => {
     number: "10086",
     media_transport: "legacy_pcm",
   }), env);
-  assert.equal(dial.status, 202);
-  assert.equal((await dial.json()).call.media_transport, "legacy_pcm");
+  assert.equal(dial.status, 400);
   const webRTC = await worker.fetch(post("/v1/commands/enqueue", {
     device_id: registration.device_id,
     device_secret: registration.device_secret,
@@ -544,7 +541,7 @@ test("Watch dial can request legacy PCM during a WebRTC rollout", async () => {
     media_transport: "webrtc",
   }), env);
   assert.equal(webRTC.status, 202);
-  assert.equal((await webRTC.json()).call.media_transport, "legacy_pcm");
+  assert.equal((await webRTC.json()).call.media_transport, "webrtc");
 });
 
 test("call control is durable, idempotent, and delivered after the Agent reconnects", async () => {
@@ -1050,7 +1047,7 @@ test("incoming call retries deduplicate VoIP and Watch alert by call UUID", asyn
     const second = await worker.fetch(post("/v1/events/call", payload), env);
     assert.equal(first.status, 202);
     assert.equal(second.status, 202);
-    assert.deepEqual(await second.json(), { duplicate: true, media_transport: "legacy_pcm" });
+    assert.deepEqual(await second.json(), { duplicate: true, media_transport: null });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1286,7 +1283,7 @@ test("relay queues answer until the Agent media socket connects", () => {
   assert.ok(iphone.sent.some((message) => message.includes("action_forwarded")));
 });
 
-test("relay forwards binary PCM in both directions only to the claimed iPhone", () => {
+test("binary frames close every media role and are not forwarded", () => {
   const agent = new MemoryMediaSocket("agent");
   const iphone = new MemoryMediaSocket("iphone");
   const watch = new MemoryMediaSocket("watch");
@@ -1298,24 +1295,29 @@ test("relay forwards binary PCM in both directions only to the claimed iPhone", 
   iphone.sent = [];
   watch.sent = [];
 
-  const uplink = new Uint8Array([1, 2, 3, 4]);
-  const downlink = new Uint8Array([5, 6, 7, 8]);
-  session.webSocketMessage(iphone, uplink);
-  session.webSocketMessage(agent, downlink);
+  session.webSocketMessage(iphone, new Uint8Array([1, 2, 3, 4]));
+  session.webSocketMessage(agent, new Uint8Array([5, 6, 7, 8]));
+  session.webSocketMessage(watch, new Uint8Array([9]));
 
-  assert.deepEqual(agent.sent, [uplink]);
-  assert.deepEqual(iphone.sent, [downlink]);
+  assert.equal(iphone.closed, true);
+  assert.equal(agent.closed, true);
+  assert.equal(watch.closed, true);
+  assert.deepEqual(agent.sent, []);
+  assert.deepEqual(iphone.sent, []);
   assert.deepEqual(watch.sent, []);
 });
 
-test("media transport rollout is deterministic and always keeps legacy fallback", () => {
+test("selectMediaTransport returns webrtc or a rejection", () => {
   const capable = {
     deviceID: "device-rollout-a",
     requested: "webrtc",
-    appCapabilities: ["legacy_pcm", "webrtc"],
-    agentCapabilities: ["legacy_pcm", "webrtc"],
+    appCapabilities: ["webrtc"],
+    agentCapabilities: ["webrtc"],
+    relayCapabilities: ["webrtc"],
   };
-  assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 0 }), "legacy_pcm");
+  assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 0 }), null);
+  assert.equal(selectMediaTransport({ ...capable, requested: "", rolloutPercent: 100 }), null);
+  assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 100, forceLegacy: true }), null);
   assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 100 }), "webrtc");
   assert.equal(
     selectMediaTransport({ ...capable, rolloutPercent: 100 }),
@@ -1323,13 +1325,10 @@ test("media transport rollout is deterministic and always keeps legacy fallback"
   );
   assert.equal(selectMediaTransport({
     ...capable, agentCapabilities: ["legacy_pcm"], rolloutPercent: 100,
-  }), "legacy_pcm");
-  assert.equal(selectMediaTransport({
-    ...capable, rolloutPercent: 100, forceLegacy: true,
-  }), "legacy_pcm");
+  }), null);
 });
 
-test("media relay survives 50 answer audio reconnect and hangup cycles without cross-device frames", () => {
+test("media relay survives 50 answer reconnect and hangup cycles without cross-device control", () => {
   for (let round = 0; round < 50; round += 1) {
     const agent = new MemoryMediaSocket("agent");
     const iphone = new MemoryMediaSocket("iphone");
@@ -1339,16 +1338,11 @@ test("media relay survives 50 answer audio reconnect and hangup cycles without c
     const callID = `stress-${round}`;
 
     session.webSocketMessage(iphone, JSON.stringify({ action: "answer", call_id: callID }));
+    assert.ok(agent.sent.some((message) => typeof message === "string" && message.includes('"action":"answer"')));
+    assert.deepEqual(otherPhone.sent.filter((message) => typeof message === "string" && message.includes('"action":"answer"')), [], `round ${round} isolation`);
     agent.sent = [];
     iphone.sent = [];
     otherPhone.sent = [];
-    const uplink = new Uint8Array([round, 1, 2, 3]);
-    const downlink = new Uint8Array([round, 4, 5, 6]);
-    session.webSocketMessage(iphone, uplink);
-    session.webSocketMessage(agent, downlink);
-    assert.deepEqual(agent.sent, [uplink], `round ${round} uplink`);
-    assert.deepEqual(iphone.sent, [downlink], `round ${round} downlink`);
-    assert.deepEqual(otherPhone.sent, [], `round ${round} isolation`);
 
     state.sockets.splice(state.sockets.indexOf(agent), 1);
     const reconnectedAgent = new MemoryMediaSocket("agent");
@@ -1375,7 +1369,7 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     device_id: registration.device_id,
     device_secret: registration.device_secret,
     agent_version: "0.3.35",
-    agent_media_capabilities: ["legacy_pcm"],
+    agent_media_capabilities: ["webrtc"],
     at_ok: true,
     cellular_state: "searching",
     cellular_registration: "搜索中",
@@ -1393,7 +1387,7 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     cloud_online: true,
     agent_id: "legacy",
     agent_version: "0.3.35",
-    agent_media_capabilities: ["legacy_pcm"],
+    agent_media_capabilities: ["webrtc"],
     at_ok: true,
     cellular_state: "searching",
     cellular_registration: "搜索中",
@@ -1403,7 +1397,7 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     agents: [{
       agent_id: "legacy",
       agent_version: "0.3.35",
-      agent_media_capabilities: ["legacy_pcm"],
+      agent_media_capabilities: ["webrtc"],
       at_ok: true,
       cellular_state: "searching",
       cellular_registration: "搜索中",
@@ -1689,20 +1683,22 @@ test("server rollout requires TURN and returns the negotiated registration and d
   const capable = { ...registration, media_transport: "webrtc",
     app_media_capabilities: ["webrtc"], agent_media_capabilities: ["webrtc"] };
   let response = await worker.fetch(post("/v1/devices/register", capable), env);
-  assert.equal((await response.json()).media_transport, "legacy_pcm");
+  assert.equal((await response.json()).media_transport, null);
   Object.assign(env, turnTestConfig);
   response = await worker.fetch(post("/v1/devices/register", capable), env);
   assert.equal((await response.json()).media_transport, "webrtc");
   env.COMMANDS.addAgent(registration.device_id);
-  for (const transport of ["webrtc", "legacy_pcm"]) {
-    const dial = await worker.fetch(post("/v1/commands/enqueue", { device_id: registration.device_id,
-      device_secret: registration.device_secret, command_id: crypto.randomUUID(), type: "dial",
-      number: "10086", media_transport: transport }), env);
-    assert.equal(dial.status, 202);
-    assert.equal((await dial.json()).call.media_transport, transport);
-  }
+  const dial = await worker.fetch(post("/v1/commands/enqueue", { device_id: registration.device_id,
+    device_secret: registration.device_secret, command_id: crypto.randomUUID(), type: "dial",
+    number: "10086", media_transport: "webrtc" }), env);
+  assert.equal(dial.status, 202);
+  assert.equal((await dial.json()).call.media_transport, "webrtc");
+  const rejected = await worker.fetch(post("/v1/commands/enqueue", { device_id: registration.device_id,
+    device_secret: registration.device_secret, command_id: crypto.randomUUID(), type: "dial",
+    number: "10086", media_transport: "legacy_pcm" }), env);
+  assert.equal(rejected.status, 400);
   const legacy = { ...capable, agent_media_capabilities: ["legacy_pcm"] };
-  assert.equal((await (await worker.fetch(post("/v1/devices/register", legacy), env)).json()).media_transport, "legacy_pcm");
+  assert.equal((await (await worker.fetch(post("/v1/devices/register", legacy), env)).json()).media_transport, null);
 });
 
 function webRTCSession() {
@@ -1711,7 +1707,7 @@ function webRTCSession() {
   const watch = new MemoryMediaSocket("watch");
   for (const socket of [iphone, agent, watch]) Object.assign(socket.attachment, {
     callUUID: webRTCCallUUID, generation: 3,
-    mediaTransport: socket === watch ? "legacy_pcm" : "webrtc",
+    mediaTransport: socket === watch ? "" : "webrtc",
   });
   const state = new MemoryMediaState([iphone, agent, watch]);
   const relay = new CallMediaSession(state, {});
@@ -1769,20 +1765,23 @@ test("WebRTC rejects wrong roles, identity, stale sessions and oversized payload
   }
 });
 
-test("WebRTC refuses binary PCM; Watch answer stays explicit legacy", () => {
-  const { relay, iphone, agent } = webRTCSession();
+test("binary frames close Watch sockets and Watch answers do not select legacy PCM", () => {
+  const { relay, iphone, agent, watch } = webRTCSession();
   relay.webSocketMessage(iphone, new Uint8Array([1]));
   relay.webSocketMessage(agent, new Uint8Array([1]));
-  assert.equal(iphone.closed, true); assert.equal(agent.closed, true);
-  const watch = new MemoryMediaSocket("watch");
+  relay.webSocketMessage(watch, new Uint8Array([1]));
+  assert.equal(iphone.closed, true);
+  assert.equal(agent.closed, true);
+  assert.equal(watch.closed, true);
+  const watch2 = new MemoryMediaSocket("watch");
   const agent2 = new MemoryMediaSocket("agent");
   agent2.attachment.mediaTransport = "webrtc";
-  const relay2 = new CallMediaSession(new MemoryMediaState([watch, agent2]), {});
-  relay2.webSocketMessage(watch, JSON.stringify({ action: "answer", media_transport: "webrtc" }));
-  assert.equal(JSON.parse(agent2.sent.at(-1)).media_transport, "legacy_pcm");
+  const relay2 = new CallMediaSession(new MemoryMediaState([watch2, agent2]), {});
+  relay2.webSocketMessage(watch2, JSON.stringify({ action: "answer", media_transport: "webrtc" }));
+  assert.equal(JSON.parse(agent2.sent.at(-1)).media_transport, undefined);
   relay2.webSocketMessage(agent2, new Uint8Array([2]));
-  assert.equal(agent2.closed, false);
-  assert.deepEqual(watch.sent.at(-1), new Uint8Array([2]));
+  assert.equal(agent2.closed, true);
+  assert.equal(watch2.sent.some((message) => message instanceof Uint8Array), false);
 });
 
 test("missing peers never queue SDP, and reconnect requires a fresh negotiation", async (t) => {
@@ -1820,7 +1819,7 @@ test("missing peers never queue SDP, and reconnect requires a fresh negotiation"
   assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_answer");
 });
 
-test("incoming transport is server negotiated and Watch payload always remains legacy", async (t) => {
+test("incoming transport is server negotiated for iPhone and Watch", async (t) => {
   const env = { ...testEnvironment(), ...turnTestConfig,
     WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
   const captured = [];
@@ -1839,7 +1838,7 @@ test("incoming transport is server negotiated and Watch payload always remains l
   assert.equal(response.status, 202);
   assert.equal((await response.json()).media_transport, "webrtc");
   assert.equal(captured[0].media_transport, "webrtc");
-  assert.equal(captured[1].media_transport, "legacy_pcm");
+  assert.equal(captured[1].media_transport, "webrtc");
   await worker.fetch(post("/v1/devices/register", { ...registration,
     media_transport: "legacy_pcm", app_media_capabilities: ["legacy_pcm"],
     agent_media_capabilities: ["legacy_pcm"] }), env);
@@ -1847,7 +1846,7 @@ test("incoming transport is server negotiated and Watch payload always remains l
   const legacy = await worker.fetch(post("/v1/events/call", { ...event,
     call_uuid: crypto.randomUUID(), call_id: "legacy-call", generation: 2 }), env);
   assert.equal(legacy.status, 202);
-  assert.equal((await legacy.json()).media_transport, "legacy_pcm");
+  assert.equal((await legacy.json()).media_transport, null);
 });
 
 test("call connect authenticates and forwards authoritative transport and identity", async () => {
@@ -1923,12 +1922,12 @@ test("heartbeat refreshes native capabilities on registry fast path and KV fallb
     delete oldAgent.agent_media_capabilities;
     assert.equal((await worker.fetch(post("/v1/events/heartbeat", oldAgent), env)).status, 202);
     registrationResponse = await worker.fetch(post("/v1/devices/register", registration), env);
-    assert.equal((await registrationResponse.json()).media_transport, "legacy_pcm");
+    assert.equal((await registrationResponse.json()).media_transport, "webrtc");
     const stored = useRegistry
       ? await env.STATUS.storage.get(`device:${registration.device_id}`)
       : JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
-    assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
-    assert.deepEqual(stored.agent_media_capabilities, ["legacy_pcm"]);
+    assert.deepEqual(stored.app_media_capabilities, ["webrtc"]);
+    assert.deepEqual(stored.agent_media_capabilities, ["webrtc"]);
     assert.equal((await worker.fetch(post("/v1/events/heartbeat", {
       ...heartbeat, device_secret: "wrong",
     }), env)).status, 401);
@@ -1945,7 +1944,7 @@ test("partial registrations preserve capabilities and explicit legacy override r
     assert.equal((await second.json()).media_transport, "webrtc");
     await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
     const partial = await worker.fetch(post("/v1/devices/register", registration), env);
-    assert.equal((await partial.json()).media_transport, "legacy_pcm");
+    assert.equal((await partial.json()).media_transport, null);
   }
 });
 
@@ -2078,7 +2077,7 @@ test("late Watch connections and replacements preserve the owning iPhone WebRTC 
     assert.equal(JSON.parse(agent.sent.at(-1)).action, "webrtc_ice");
     relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID));
     assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_ice");
-    assert.equal(state.getWebSockets("watch")[0].attachment.mediaTransport, "legacy_pcm");
+    assert.equal(state.getWebSockets("watch")[0].attachment.mediaTransport, "webrtc");
   }
 });
 
@@ -2095,27 +2094,27 @@ test("agent registration bootstraps app settings but cannot overwrite existing a
   assert.equal((await updated.json()).media_transport, "webrtc");
   let stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
   assert.equal(stored.media_transport_requested, "webrtc");
-  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
+  assert.deepEqual(stored.app_media_capabilities, ["webrtc"]);
   assert.equal(stored.force_legacy_pcm, false);
 
-  // A normal app registration still owns the policy and may enforce legacy.
+  // A normal app registration still owns the policy and may force a rejection.
   await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
   await worker.fetch(post("/v1/devices/register", { ...stale, force_legacy_pcm: false,
     agent_media_capabilities: ["legacy_pcm"] }), env);
   stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
   assert.equal(stored.force_legacy_pcm, true);
   assert.equal(stored.media_transport_requested, "webrtc");
-  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm", "webrtc"]);
-  assert.deepEqual(stored.agent_media_capabilities, ["legacy_pcm"]);
-  assert.equal(stored.media_transport, "legacy_pcm");
+  assert.deepEqual(stored.app_media_capabilities, ["webrtc"]);
+  assert.deepEqual(stored.agent_media_capabilities, []);
+  assert.equal(stored.media_transport, null);
 
-  // Existing clients without a source keep their previous update semantics.
+  // A registration that still names the removed transport cannot restore it.
   const noSource = { ...stale, force_legacy_pcm: false };
   delete noSource.registration_source;
   await worker.fetch(post("/v1/devices/register", noSource), env);
   stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
-  assert.equal(stored.media_transport_requested, "legacy_pcm");
-  assert.deepEqual(stored.app_media_capabilities, ["legacy_pcm"]);
+  assert.equal(stored.media_transport_requested, "webrtc");
+  assert.deepEqual(stored.app_media_capabilities, []);
   assert.equal(stored.force_legacy_pcm, false);
 });
 

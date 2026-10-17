@@ -19,7 +19,7 @@ import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
-/** One authenticated call-scoped PCM/G.711 BLE media session. */
+/** Call media is retired. This session does not open the PCM bridge. */
 public final class VoBLEMediaSession implements Closeable {
     public record Identity(String callId, long generation) {
         public Identity {
@@ -67,52 +67,11 @@ public final class VoBLEMediaSession implements Closeable {
     }
 
     public synchronized void start(Identity call, byte[] key) throws IOException {
-        if (running && call.equals(identity)) return;
-        stop();
-        if (key == null || key.length != 32) throw new IOException("media key is invalid");
-        VoBLEPCMBridgeSession opened = bridgeFactory.open(endpoint);
-        if (!opened.ready()) {
-            opened.close();
-            throw new IOException("PCM bridge is not ready");
-        }
-        identity = call;
-        mediaKey = key.clone();
-        uplinkReassembler = new VoBLEProtocol.AudioReassembler();
-        uplinkQueue.clear();
-        uplinkSequences.clear();
-        bridge = opened;
-        running = true;
-        pumps = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "airsim-voble-media");
-            thread.setDaemon(true);
-            return thread;
-        });
-        pumps.execute(this::pumpDownlink);
-        pumps.execute(this::pumpUplink);
+        throw new IOException("bluetooth call audio is unavailable");
     }
 
     public synchronized boolean onUplinkFragment(Identity call, byte[] fragment) {
-        if (!running || identity == null || !identity.equals(call)) return false;
-        try {
-            VoBLEProtocol.AudioPacket packet = uplinkReassembler.append(
-                    fragment, System.currentTimeMillis());
-            if (packet == null) return true;
-            Long previous = uplinkSequences.get(packet.streamId());
-            if (previous != null && Long.compareUnsigned(packet.sequence(), previous) <= 0) {
-                droppedFrames.incrementAndGet();
-                return false;
-            }
-            Encrypted encrypted = new Encrypted(packet.payload(), packet.authenticationTag());
-            byte[] encoded = decrypt(encrypted, mediaKey, true, packet.streamId(),
-                    packet.sequence(), packet.sampleTimestamp());
-            byte[] pcm = decodeMuLaw(encoded);
-            uplinkSequences.put(packet.streamId(), packet.sequence());
-            uplinkQueue.offer(packet.sequence(), pcm);
-            return true;
-        } catch (GeneralSecurityException | IllegalArgumentException error) {
-            droppedFrames.incrementAndGet();
-            return false;
-        }
+        return false;
     }
 
     public boolean matches(Identity call) { return running && call != null && call.equals(identity); }
@@ -120,62 +79,6 @@ public final class VoBLEMediaSession implements Closeable {
     public Stats stats() {
         return new Stats(downlinkFrames.get(), uplinkFrames.get(),
                 droppedFrames.get() + uplinkQueue.droppedFrames());
-    }
-
-    private void pumpDownlink() {
-        long sequence = 0;
-        long timestamp = 0;
-        try {
-            while (running) {
-                byte[] pcm = readFrame(bridge.input(), 320);
-                byte[] encoded = encodeMuLaw(pcm);
-                long current = sequence++ & 0xffff_ffffL;
-                byte[] key = keySnapshot();
-                Encrypted encrypted;
-                try {
-                    encrypted = encrypt(encoded, key, false, 1, current, timestamp);
-                } finally {
-                    Arrays.fill(key, (byte) 0);
-                }
-                int flags = downlinkDiscontinuity ? VoBLEProtocol.FLAG_DISCONTINUITY : 0;
-                VoBLEProtocol.AudioPacket packet = new VoBLEProtocol.AudioPacket(
-                        flags, VoBLEProtocol.CODEC_G711_MULAW, 1, current, timestamp,
-                        encrypted.payload(), encrypted.authenticationTag());
-                long deadline = System.nanoTime() + 100_000_000L;
-                boolean accepted = false;
-                while (running && System.nanoTime() < deadline && !(accepted = downlink.offer(packet))) {
-                    Thread.sleep(5);
-                }
-                if (accepted) {
-                    downlinkFrames.incrementAndGet();
-                    downlinkDiscontinuity = false;
-                } else {
-                    droppedFrames.incrementAndGet();
-                    downlinkDiscontinuity = true;
-                }
-                timestamp = (timestamp + 160) & 0xffff_ffffL;
-            }
-        } catch (EOFException ignored) {
-            stopFromPump();
-        } catch (Exception error) {
-            stopFromPump();
-        }
-    }
-
-    private void pumpUplink() {
-        try {
-            while (running) {
-                VoBLEAudioQueue.Frame entry = uplinkQueue.poll();
-                if (entry == null) {
-                    Thread.sleep(2);
-                    continue;
-                }
-                bridge.output().write(entry.payload());
-                uplinkFrames.incrementAndGet();
-            }
-        } catch (Exception error) {
-            stopFromPump();
-        }
     }
 
     private void stopFromPump() {
@@ -239,54 +142,12 @@ public final class VoBLEMediaSession implements Closeable {
         nonce.put((byte) (uplink ? 1 : 2)).put((byte) streamId).putShort((short) 0)
                 .putInt((int) timestamp).putInt((int) sequence);
         ByteBuffer aad = ByteBuffer.allocate(11).order(ByteOrder.BIG_ENDIAN);
-        aad.put((byte) (uplink ? 1 : 2)).put((byte) VoBLEProtocol.CODEC_G711_MULAW)
+        aad.put((byte) (uplink ? 1 : 2)).put((byte) 0)
                 .put((byte) streamId).putInt((int) sequence).putInt((int) timestamp);
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(mode, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce.array()));
         cipher.updateAAD(aad.array());
         return cipher;
-    }
-
-    public static byte[] encodeMuLaw(byte[] pcm) {
-        if (pcm == null || (pcm.length & 1) != 0) throw new IllegalArgumentException("PCM16 LE is required");
-        byte[] output = new byte[pcm.length / 2];
-        for (int index = 0; index < output.length; index++) {
-            int sample = (short) ((pcm[index * 2] & 0xff) | (pcm[index * 2 + 1] << 8));
-            output[index] = linearToMuLaw(sample);
-        }
-        return output;
-    }
-
-    public static byte[] decodeMuLaw(byte[] encoded) {
-        if (encoded == null) throw new IllegalArgumentException("G.711 payload is required");
-        byte[] output = new byte[encoded.length * 2];
-        for (int index = 0; index < encoded.length; index++) {
-            short sample = muLawToLinear(encoded[index]);
-            output[index * 2] = (byte) sample;
-            output[index * 2 + 1] = (byte) (sample >>> 8);
-        }
-        return output;
-    }
-
-    private static byte linearToMuLaw(int sample) {
-        final int bias = 0x84;
-        int sign = (sample >> 8) & 0x80;
-        if (sign != 0) sample = -sample;
-        sample = Math.min(32635, sample) + bias;
-        int exponent = 7;
-        for (int mask = 0x4000; exponent > 0 && (sample & mask) == 0; mask >>= 1) exponent--;
-        int mantissa = (sample >> (exponent + 3)) & 0x0f;
-        return (byte) ~(sign | (exponent << 4) | mantissa);
-    }
-
-    private static short muLawToLinear(byte value) {
-        int mu = ~value & 0xff;
-        int sign = mu & 0x80;
-        int exponent = (mu >> 4) & 0x07;
-        int mantissa = mu & 0x0f;
-        int sample = ((mantissa << 3) + 0x84) << exponent;
-        sample -= 0x84;
-        return (short) (sign == 0 ? sample : -sample);
     }
 
     private static byte[] readFrame(java.io.InputStream input, int length) throws IOException {

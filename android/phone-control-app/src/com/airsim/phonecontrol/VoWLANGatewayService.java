@@ -22,12 +22,10 @@ public final class VoWLANGatewayService extends Service {
     // DJOneHub owns 7590/7591 on devices where both apps are installed.
     // AirSIM advertises these independent ports through Bonjour.
     public static final int CONTROL_PORT = 7592;
-    public static final int PCM_PORT = 7593;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final NotificationUpdateGate notificationGate = new NotificationUpdateGate();
     private volatile boolean running;
     private VoWLANControlGateway control;
-    private VoWLANPCMRelay pcm;
     private NsdManager.RegistrationListener advertisement;
     private String activeHotspot = "";
     private String lastDiagnosticState = "";
@@ -75,11 +73,9 @@ public final class VoWLANGatewayService extends Service {
                 boolean pcmReady = false;
                 if (hotspot != null && avf != null && paired && AppConfig.configured(this)) {
                     boolean sameRunningGateway = hotspot.getHostAddress().equals(activeHotspot)
-                            && control != null && control.localPort() > 0
-                            && pcm != null && pcm.localPort() > 0;
+                            && control != null && control.localPort() > 0;
                     if (sameRunningGateway) {
-                        // 不用空 TCP 探针打扰正在使用的单会话 PCM bridge。已启动的 relay
-                        // 会在真实客户端连接时完成内部握手并报告精确错误。
+                        // The telephony bridge on 7580 stays up for the WebRTC peer.
                         agentReady = true;
                         pcmReady = true;
                     } else {
@@ -121,28 +117,18 @@ public final class VoWLANGatewayService extends Service {
 
     private synchronized void ensureStarted(Inet4Address hotspot, Inet4Address avf) throws Exception {
         String host = hotspot.getHostAddress();
-        if (host.equals(activeHotspot) && control != null && control.localPort() > 0
-                && pcm != null && pcm.localPort() > 0 && advertisement != null) return;
+        if (host.equals(activeHotspot) && control != null && control.localPort() > 0 && advertisement != null) return;
         stopGateways();
         VoWLANControlGateway nextControl = new VoWLANControlGateway(this);
-        VoWLANPCMRelay nextPCM = new VoWLANPCMRelay(this);
         nextControl.start(hotspot, CONTROL_PORT);
-        try {
-            nextPCM.start(hotspot, PCM_PORT, new InetSocketAddress(avf, 7580));
-        } catch (Exception error) {
-            nextControl.close();
-            throw error;
-        }
         control = nextControl;
-        pcm = nextPCM;
         activeHotspot = host;
-        if (control.localPort() != CONTROL_PORT || pcm.localPort() != PCM_PORT) {
-            BridgeLog.info("vowlan_preferred_port_occupied control_port=" + control.localPort()
-                    + " pcm_port=" + pcm.localPort());
+        if (control.localPort() != CONTROL_PORT) {
+            BridgeLog.info("vowlan_preferred_port_occupied control_port=" + control.localPort());
         }
         advertise();
         BridgeLog.info("vowlan_ready hotspot=" + host + " control_port=" + control.localPort()
-                + " pcm_port=" + pcm.localPort());
+                + " audio=webrtc_host_ice telephony_pcm=" + avf.getHostAddress() + ":7580");
     }
 
     private void advertise() {
@@ -160,8 +146,7 @@ public final class VoWLANGatewayService extends Service {
         info.setAttribute("model", android.os.Build.MODEL);
         info.setAttribute("host", activeHotspot);
         info.setAttribute("control_port", Integer.toString(control.localPort()));
-        info.setAttribute("pcm_port", Integer.toString(pcm.localPort()));
-        info.setAttribute("caps", "control,pcm");
+        info.setAttribute("caps", "control,webrtc");
         advertisement = new NsdManager.RegistrationListener() {
             @Override public void onServiceRegistered(NsdServiceInfo ignored) {}
             @Override public void onRegistrationFailed(NsdServiceInfo ignored, int code) {
@@ -180,14 +165,12 @@ public final class VoWLANGatewayService extends Service {
             advertisement = null;
         }
         try { if (control != null) control.close(); } catch (Exception ignored) {}
-        try { if (pcm != null) pcm.close(); } catch (Exception ignored) {}
         control = null;
-        pcm = null;
         activeHotspot = "";
     }
 
     private synchronized boolean hasVoWLANCall() {
-        return (control != null && control.ownsCall()) || (pcm != null && pcm.hasActiveSession());
+        return control != null && control.ownsCall();
     }
 
     private void diagnosticState(Inet4Address hotspot, Inet4Address avf, boolean paired,

@@ -232,6 +232,19 @@ final class CloudICEPreparation {
     }
 }
 
+/// Binary call-WebSocket payloads are not PCM playout. The closure is the only
+/// schedule hook; cloud speech stays on `CloudWebRTCPeer`.
+enum CloudCallBinaryFrame {
+    static func deliver(_ wire: Data, schedule: (Data) -> Void) {
+        _ = (wire, schedule)
+    }
+}
+
+/// A failed WebRTC negotiation does not open the legacy PCM engine.
+enum CloudWebRTCNegotiationRecovery {
+    static func opensLegacyPCMEngine() -> Bool { false }
+}
+
 enum CloudWebRTCError: LocalizedError {
     case iceUnavailable, turnUnavailable, negotiationFailed, candidateOverflow
     var errorDescription: String? {
@@ -382,10 +395,17 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     private var timer: DispatchSourceTimer?
     private var statisticsReducer = CloudWebRTCStatistics()
     private var statisticsPending = false
+    private let hostOnly: Bool
+    private var hostLocalAction: CloudWebRTCSignal.Action?
+    private var hostLocalReady = false
+    private var hostGatheringComplete = false
+    private var hostLocalSent = false
     private(set) var isConnected = false
+    let usesHostICE: Bool
 
     init(callUUID: UUID, generation: UInt64, sessionID: UUID = UUID(), servers: [RTCIceServer],
          queue: DispatchQueue, factory: RTCPeerConnectionFactory? = nil, relayOnly: Bool = false,
+         hostOnly: Bool = false,
          signal: @escaping (CloudWebRTCSignal) -> Void, connected: @escaping () -> Void,
          failure: @escaping () -> Void, statistics: @escaping ([String: String]) -> Void) throws {
         self.callUUID = callUUID
@@ -396,13 +416,15 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         self.connected = connected
         self.failure = failure
         self.statistics = statistics
+        self.hostOnly = hostOnly
+        self.usesHostICE = hostOnly && !relayOnly
         super.init()
         let factory = factory ?? Self.factory
         let config = RTCConfiguration()
         config.iceServers = servers
         if relayOnly { config.iceTransportPolicy = .relay }
         config.sdpSemantics = .unifiedPlan
-        config.continualGatheringPolicy = .gatherContinually
+        config.continualGatheringPolicy = hostOnly ? .gatherOnce : .gatherContinually
         guard let peer = factory.peerConnection(with: config,
             constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil), delegate: self) else {
             throw CloudWebRTCError.negotiationFailed
@@ -538,6 +560,12 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             self?.queue.async { [weak self] in
                 guard let self, self.peer === peer else { return }
                 guard error == nil else { self.fail(); return }
+                if self.hostOnly {
+                    self.hostLocalAction = action
+                    self.hostLocalReady = true
+                    self.publishHostLocal()
+                    return
+                }
                 self.signal(.init(action: action, callUUID: self.callUUID, generation: self.generation, sessionID: self.sessionID, sdp: description.sdp))
                 self.localDescriptionSent = true
                 for candidate in self.localCandidates { self.send(candidate) }
@@ -545,6 +573,13 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             }
         }
     }
+    private func publishHostLocal() {
+        guard hostOnly, hostLocalReady, hostGatheringComplete, !hostLocalSent,
+              let action = hostLocalAction, let sdp = peer?.localDescription?.sdp, !sdp.isEmpty else { return }
+        hostLocalSent = true
+        signal(.init(action: action, callUUID: callUUID, generation: generation, sessionID: sessionID, sdp: sdp))
+    }
+
     private func send(_ candidate: RTCIceCandidate) {
         signal(.init(action: .ice, callUUID: callUUID, generation: generation, sessionID: sessionID,
             candidate: .init(candidate: candidate.sdp, sdpMid: candidate.sdpMid, sdpMlineIndex: candidate.sdpMLineIndex)))
@@ -570,12 +605,18 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
+    func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
+        queue.async { [weak self] in
+            guard let self, self.peer === peerConnection, newState == .complete else { return }
+            self.hostGatheringComplete = true
+            self.publishHostLocal()
+        }
+    }
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         queue.async { [weak self] in
-            guard let self, self.peer === peerConnection else { return }
+            guard let self, self.peer === peerConnection, !self.hostOnly else { return }
             if self.localDescriptionSent { self.send(candidate) }
             else if self.localCandidates.count < 128 { self.localCandidates.append(candidate) }
             else { self.fail() }

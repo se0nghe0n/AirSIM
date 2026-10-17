@@ -115,7 +115,6 @@ final class VoBLECallCoordinator {
     var onState: ((VoBLECallIdentity, CallLifecycleState) -> Void)?
     var onEnded: ((VoBLECallIdentity) -> Void)?
     var onError: ((String) -> Void)?
-    var audioSessionContext: () -> (managedByCallKit: Bool, active: Bool) = { (true, false) }
 
     private let central: any VoBLECallControlling
     private let media: VoBLEGATTMediaTransport
@@ -149,30 +148,8 @@ final class VoBLECallCoordinator {
     var isReady: Bool { central.state == .ready }
 
     func startOutgoing(number: String) async throws -> VoBLECallIdentity {
-        let stored = UInt64(max(0, defaults.integer(forKey: generationKey)))
-        let generation = max(stored, reducer.current?.generation ?? 0) + 1
-        let provisionalID = UUID().uuidString.lowercased()
-        let identity = reducer.beginOutgoing(
-            callID: provisionalID, generation: generation, number: number)
-        do {
-            let response = try await central.send(
-                command: "dial", callID: provisionalID,
-                generation: generation, number: number)
-            guard response.success else {
-                throw VoBLECentralError.bluetooth(response.detail.isEmpty ? response.code : response.detail)
-            }
-            defaults.set(Int(generation), forKey: generationKey)
-            // Telecom events may arrive before the dial response. Never restore
-            // the provisional ID or regress an already active call to connecting.
-            guard let current = reducer.current, current.generation == generation else {
-                throw CancellationError()
-            }
-            if current.isProvisional { onState?(current, .connecting) }
-            return current
-        } catch {
-            _ = reducer.resetIfMatching(identity)
-            throw error
-        }
+        _ = number
+        throw VoBLECentralError.bluetooth("bluetooth_unavailable")
     }
 
     func answer() async throws {
@@ -241,9 +218,8 @@ final class VoBLECallCoordinator {
                 generation: identity.generation, number: identity.number))
             onState?(identity, .ringing)
         case let .connecting(identity): onState?(identity, .connecting)
-        case let .active(identity, shouldStartMedia):
+        case let .active(identity, _):
             onState?(identity, .active)
-            if shouldStartMedia { Task { await startMedia(for: identity) } }
         case let .ended(identity):
             audio.stop()
             media.stop(identity: identity.mediaIdentity)
@@ -257,7 +233,6 @@ final class VoBLECallCoordinator {
         recoveryTask?.cancel()
         recoveryTask = nil
         recoveringIdentity = nil
-        Task { await startMedia(for: identity) }
     }
 
     private func failRecovery(_ identity: VoBLECallIdentity) {
@@ -267,33 +242,6 @@ final class VoBLECallCoordinator {
         guard reducer.resetIfMatching(identity) else { return }
         audio.stop()
         onEnded?(identity)
-    }
-
-    private func startMedia(for identity: VoBLECallIdentity) async {
-        do {
-            let context = audioSessionContext()
-            try await audio.prepareForCall(
-                managedByCallKit: context.managedByCallKit,
-                callKitAudioActive: context.active)
-            guard reducer.current == identity else {
-                if reducer.current == nil { audio.stop() }
-                return
-            }
-            // Permission prompts can yield while CallKit activates its session.
-            audio.setCallKitAudioActive(audioSessionContext().active)
-            let response = try await central.send(
-                command: "start_media", callID: identity.callID,
-                generation: identity.generation, number: "")
-            guard response.success, response.detail == "media_ready",
-                  reducer.current == identity else {
-                throw VoBLECentralError.bluetooth(
-                    response.detail.isEmpty ? response.code : response.detail)
-            }
-            try media.start(identity: identity.mediaIdentity,
-                            mediaKey: central.mediaKey(
-                                callID: identity.callID, generation: identity.generation))
-            audio.setMediaReady(true)
-        } catch { onError?(error.localizedDescription) }
     }
 
     private func requireSuccess(_ command: String, identity: VoBLECallIdentity) async throws {

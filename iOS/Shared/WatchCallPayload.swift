@@ -68,7 +68,7 @@ struct WatchCallPayload: Equatable, Sendable {
     }
 }
 
-enum WatchVoIPPayloadError: LocalizedError {
+enum WatchVoIPPayloadError: LocalizedError, Equatable {
     case unsupportedEvent
     case missingCallID
     case invalidCallUUID
@@ -76,6 +76,7 @@ enum WatchVoIPPayloadError: LocalizedError {
     case invalidMediaURL
     case expired
     case invalidLocalMedia
+    case legacyPCMNotCarrier
 
     var errorDescription: String? {
         switch self {
@@ -86,6 +87,7 @@ enum WatchVoIPPayloadError: LocalizedError {
         case .invalidMediaURL: return "The watch call notification is missing a secure media address"
         case .expired: return "The watch call notification has expired"
         case .invalidLocalMedia: return "Invalid watch local audio parameters"
+        case .legacyPCMNotCarrier: return "The watch cannot use legacy PCM as its audio carrier"
         }
     }
 }
@@ -115,10 +117,46 @@ struct WatchLocalPCMEndpoint: Equatable, Sendable {
 }
 
 enum WatchCallMedia: Equatable, Sendable {
-    case cloud(URL, String)
+    /// The iPhone `CloudWebRTCPeer` is the microphone and speaker. The watch does not open a PCM socket.
+    case iphoneWebRTC
     case local(WatchLocalPCMEndpoint)
     /// APNs does not carry the paired VoWLAN secret; fetch it from the paired iPhone on answer.
     case pendingLocal
+}
+
+/// Watch cloud audio is always the iPhone WebRTC peer. A missing transport defaults to
+/// `webrtc`. `legacy_pcm` is not a watch audio carrier.
+enum WatchCloudAudioPlan {
+    static let requestedTransport = "webrtc"
+    static let iphoneRoute = "iphone"
+
+    static func accepts(transport: String?) -> Bool {
+        let trimmed = transport?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty || trimmed == requestedTransport
+    }
+
+    static func dialReply(
+        requestID: UUID, callID: String, callUUID: UUID, number: String, expiresAt: Date
+    ) -> [String: Any] {
+        [
+            "ok": true,
+            "request_id": requestID.uuidString,
+            "call_id": callID,
+            "call_uuid": callUUID.uuidString,
+            "number": number,
+            "media_transport": requestedTransport,
+            "media_route": iphoneRoute,
+            "expires_at": expiresAt.timeIntervalSince1970,
+        ]
+    }
+
+    static func companionControl(action: String, callID: String, callUUID: UUID) -> [String: Any] {
+        [
+            "action": action,
+            "call_id": callID,
+            "call_uuid": callUUID.uuidString,
+        ]
+    }
 }
 
 /// Watch 直接接听所需的完整 VoIP 会话。媒体密钥只保存在内存中，
@@ -131,10 +169,17 @@ struct WatchVoIPCall: Equatable, Sendable {
     let expiresAt: Date?
     let media: WatchCallMedia
     let isOutgoing: Bool
+    /// Local VoWLAN control still ends on the hotspot. Audio is the iPhone WebRTC peer.
+    let endsOnVoWLAN: Bool
 
-    var authenticatedMediaURL: URL? {
-        if case let .cloud(url, _) = media { return url }
-        return nil
+    /// Cloud media stays on the iPhone. The watch payload never carries a PCM WebSocket.
+    var authenticatedMediaURL: URL? { nil }
+
+    var opensBinaryPCMWebSocket: Bool {
+        switch media {
+        case .iphoneWebRTC, .local, .pendingLocal:
+            return false
+        }
     }
 
     var displayName: String { callerName ?? number ?? "AirSIM" }
@@ -153,29 +198,28 @@ struct WatchVoIPCall: Equatable, Sendable {
         let expiresAt = Self.date(from: userInfo["expires_at"])
         if let expiresAt, expiresAt <= now { throw WatchVoIPPayloadError.expired }
         let media: WatchCallMedia
+        var endsOnVoWLAN = false
         if userInfo["media_route"] as? String == "vowlan" {
+            endsOnVoWLAN = true
             let dictionary = Dictionary(uniqueKeysWithValues: userInfo.compactMap { key, value in
                 (key as? String).map { ($0, value) }
             })
-            guard let endpoint = WatchLocalPCMEndpoint(dictionary: dictionary) else {
+            if let endpoint = WatchLocalPCMEndpoint(dictionary: dictionary) {
+                media = .local(endpoint)
+            } else if WatchCloudAudioPlan.accepts(transport: userInfo["media_transport"] as? String) {
+                media = .iphoneWebRTC
+            } else {
                 throw WatchVoIPPayloadError.invalidLocalMedia
             }
-            media = .local(endpoint)
-        } else if userInfo["call_secret"] != nil || userInfo["media_url"] != nil {
-            guard let secret = Self.nonEmpty(userInfo["call_secret"] as? String),
-                  secret.count >= 24 else { throw WatchVoIPPayloadError.missingSecret }
-            guard let rawMediaURL = Self.nonEmpty(userInfo["media_url"] as? String),
-                  var components = URLComponents(string: rawMediaURL),
-                  components.scheme?.lowercased() == "wss",
-                  components.host?.isEmpty == false,
-                  components.user == nil, components.password == nil else {
-                throw WatchVoIPPayloadError.invalidMediaURL
+        } else if userInfo["media_route"] as? String == WatchCloudAudioPlan.iphoneRoute
+            || userInfo["call_secret"] != nil
+            || userInfo["media_url"] != nil
+            || userInfo["media_transport"] != nil {
+            let rawTransport = userInfo["media_transport"] as? String
+            guard WatchCloudAudioPlan.accepts(transport: rawTransport) else {
+                throw WatchVoIPPayloadError.legacyPCMNotCarrier
             }
-            components.queryItems = [
-                URLQueryItem(name: "role", value: "watch"),
-            ]
-            guard let url = components.url else { throw WatchVoIPPayloadError.invalidMediaURL }
-            media = .cloud(url, secret)
+            media = .iphoneWebRTC
         } else {
             media = .pendingLocal
         }
@@ -186,12 +230,16 @@ struct WatchVoIPCall: Equatable, Sendable {
         self.expiresAt = expiresAt
         self.media = media
         isOutgoing = false
+        self.endsOnVoWLAN = endsOnVoWLAN
     }
 
     init(outgoingReply: [String: Any]) throws {
-        guard outgoingReply["media_route"] as? String == "vowlan"
-                || outgoingReply["call_secret"] != nil else {
-            throw WatchVoIPPayloadError.missingSecret
+        let route = outgoingReply["media_route"] as? String
+        if route != "vowlan" {
+            guard route == WatchCloudAudioPlan.iphoneRoute,
+                  WatchCloudAudioPlan.accepts(transport: outgoingReply["media_transport"] as? String) else {
+                throw WatchVoIPPayloadError.legacyPCMNotCarrier
+            }
         }
         var payload: [AnyHashable: Any] = outgoingReply
         payload["event"] = "incoming_call"
@@ -203,20 +251,31 @@ struct WatchVoIPCall: Equatable, Sendable {
             callerName: parsed.callerName,
             expiresAt: parsed.expiresAt,
             media: parsed.media,
-            isOutgoing: true
+            isOutgoing: true,
+            endsOnVoWLAN: parsed.endsOnVoWLAN
+        )
+    }
+
+    func usingIPhoneVoWLANAudio() -> WatchVoIPCall {
+        WatchVoIPCall(
+            callID: callID, uuid: uuid, number: number, callerName: callerName,
+            expiresAt: expiresAt, media: .iphoneWebRTC, isOutgoing: isOutgoing,
+            endsOnVoWLAN: true
         )
     }
 
     func usingLocalMedia(_ endpoint: WatchLocalPCMEndpoint) -> WatchVoIPCall {
         WatchVoIPCall(
             callID: callID, uuid: uuid, number: number, callerName: callerName,
-            expiresAt: expiresAt, media: .local(endpoint), isOutgoing: isOutgoing
+            expiresAt: expiresAt, media: .local(endpoint), isOutgoing: isOutgoing,
+            endsOnVoWLAN: true
         )
     }
 
     private init(
         callID: String, uuid: UUID, number: String?, callerName: String?,
-        expiresAt: Date?, media: WatchCallMedia, isOutgoing: Bool
+        expiresAt: Date?, media: WatchCallMedia, isOutgoing: Bool,
+        endsOnVoWLAN: Bool = false
     ) {
         self.callID = callID
         self.uuid = uuid
@@ -225,6 +284,7 @@ struct WatchVoIPCall: Equatable, Sendable {
         self.expiresAt = expiresAt
         self.media = media
         self.isOutgoing = isOutgoing
+        self.endsOnVoWLAN = endsOnVoWLAN
     }
 
     private static func nonEmpty(_ value: String?) -> String? {

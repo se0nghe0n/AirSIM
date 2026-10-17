@@ -1,5 +1,18 @@
 import AVFoundation
-import Network
+import WebRTC
+
+enum VoWLANAudioPlan {
+    static let controlPath = "/api/calls/webrtc"
+    static let usesHostICE = true
+    static let opensNetworkPCM = false
+
+    static func offerJSON(callUUID: UUID, generation: UInt64, sessionID: UUID, sdp: String) -> String {
+        let escaped = sdp
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return #"{"action":"webrtc_offer","call_uuid":"\#(callUUID.uuidString.lowercased())","generation":\#(generation),"session_id":"\#(sessionID.uuidString.lowercased())","sdp":"\#(escaped)"}"#
+    }
+}
 
 enum PCMRoute: Equatable, Sendable {
     case moduleLocal
@@ -25,35 +38,7 @@ enum PCMRoute: Equatable, Sendable {
     }
 
     func handshake() throws -> Data {
-        switch self {
-        case .moduleLocal: throw APIError.disabledLegacyRoute
-        case let .vowlan(_, credential): return try VoWLANPCMHandshake.make(credential: credential)
-        }
-    }
-}
-
-enum VoWLANPCMHandshake {
-    static func make(
-        credential: VoWLANCredential,
-        timestamp: Int64 = Int64(Date().timeIntervalSince1970),
-        nonce: String = VoWLANRequestSigner.makeNonce()
-    ) throws -> Data {
-        let signed = try VoWLANRequestSigner(secret: credential.secret).sign(
-            method: "PCM", path: "/v1/pcm", body: Data(), timestamp: timestamp, nonce: nonce
-        )
-        return Data("AIRSIMVWL1 \(signed.timestamp) \(signed.nonce) \(signed.signature)\n".utf8)
-    }
-}
-
-final class PCMHandshakeSequence {
-    private let makeHandshake: () throws -> Data
-
-    init(makeHandshake: @escaping () throws -> Data) {
-        self.makeHandshake = makeHandshake
-    }
-
-    func next() throws -> Data {
-        try makeHandshake()
+        throw APIError.disabledLegacyRoute
     }
 }
 
@@ -98,8 +83,8 @@ final class AudioSessionController: ObservableObject {
 
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
-    private var transport: NetworkPCMTransport?
-    private var encoder: VoicePCMEncoder?
+    private var vowlanPeer: CloudWebRTCPeer?
+    private let vowlanQueue = DispatchQueue(label: "com.example.airsim.vowlan-webrtc")
     private var callTonePlayer: AVAudioPlayer?
     private var currentCallTone: CallTone?
     private var muted = false
@@ -107,7 +92,6 @@ final class AudioSessionController: ObservableObject {
     private var speakerRouteRetryTask: Task<Void, Never>?
     private var sessionActivationManagedByCallKit = false
     private var routeChangeObserver: NSObjectProtocol?
-    private var playbackQueue = PlaybackQueueTracker(maximumFrames: 4_000)
 
     init() {
         // CallKit、蓝牙或系统控制中心都可能改变输出路由，按钮状态必须跟随真实会话。
@@ -148,7 +132,9 @@ final class AudioSessionController: ObservableObject {
     @discardableResult
     func activateForCall(
         route: PCMRoute = .moduleLocal,
-        sessionAlreadyActive: Bool = false
+        sessionAlreadyActive: Bool = false,
+        callUUID: UUID = UUID(),
+        generation: UInt64 = 1
     ) async -> Bool {
         guard !active else { return true }
         let permission = await requestMicrophonePermission()
@@ -167,83 +153,86 @@ final class AudioSessionController: ObservableObject {
             // 每次通话默认使用听筒；仅在用户主动开启扬声器后覆盖输出路由。
             try session.overrideOutputAudioPort(requestedSpeakerOverride ? .speaker : .none)
             refreshRouteDescription()
-
-            let engine = AVAudioEngine()
-            let player = AVAudioPlayerNode()
-            let encoder = VoicePCMEncoder()
-            // 用户可能在权限弹窗或音频启动期间切换静音，新编码器必须继承期望状态。
-            encoder.setMuted(muted)
-            let handshakeSequence: PCMHandshakeSequence
             switch route {
             case .moduleLocal:
                 _ = try route.handshake()
                 throw APIError.disabledLegacyRoute
-            case .vowlan:
-                handshakeSequence = PCMHandshakeSequence { try route.handshake() }
-            }
-            let transport = NetworkPCMTransport(
-                host: NWEndpoint.Host(route.host),
-                port: NWEndpoint.Port(rawValue: route.port)!,
-                handshakeSequence: handshakeSequence,
-                requiresWiFi: route.requiresWiFi,
-                onPCM: { [weak self] pcm in
-                    Task { @MainActor [weak self] in self?.schedulePlayback(pcm) }
-                },
-                onEvent: { [weak self] event in
-                    Task { @MainActor [weak self] in self?.handleTransportEvent(event) }
+            case let .vowlan(endpoint, credential):
+                guard VoWLANAudioPlan.usesHostICE, !VoWLANAudioPlan.opensNetworkPCM else {
+                    throw APIError.disabledLegacyRoute
                 }
-            )
-
-            engine.attach(player)
-            guard let playbackFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: 8_000,
-                channels: 1,
-                interleaved: false
-            ) else {
-                throw VoiceAudioError.invalidPlaybackFormat
+                try startVoWLANWebRTC(
+                    endpoint: endpoint,
+                    credential: credential,
+                    callUUID: callUUID,
+                    generation: max(1, generation)
+                )
             }
-            engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
-
-            let input = engine.inputNode
-            // voiceChat 只声明用途；显式启用 VoiceProcessingIO 才能获得回声消除与自动增益。
-            try input.setVoiceProcessingEnabled(true)
-            let inputFormat = input.outputFormat(forBus: 0)
-            guard inputFormat.channelCount > 0, inputFormat.sampleRate >= 8_000 else {
-                throw VoiceAudioError.microphoneUnavailable
-            }
-            input.installTap(onBus: 0, bufferSize: 960, format: inputFormat) {
-                buffer, _ in
-                let pcm = encoder.encode(buffer)
-                if !pcm.isEmpty {
-                    CallAudioRecorder.shared.appendPCM16(pcm, channel: .local, source: .localPCM)
-                    transport.sendPCM(pcm)
-                }
-            }
-
-            engine.prepare()
-            try engine.start()
-            player.play()
-
-            self.engine = engine
-            self.player = player
-            self.encoder = encoder
-            self.transport = transport
-            playbackQueue.reset()
             active = true
             transportReady = false
-            routeDescription = route.requiresWiFi ? "Connecting VoWLAN audio…" : "Connecting module network audio…"
-            diagnosticDescription = "\(DeviceContext.displayName) PCM handshake pending"
+            routeDescription = "Connecting VoWLAN WebRTC…"
+            diagnosticDescription = "\(DeviceContext.displayName) WebRTC offer pending"
             moduleDiagnosticDescription = ""
             errorMessage = nil
             retryRequestedSpeakerRoute()
-            transport.start()
             return true
         } catch {
             deactivate()
             errorMessage = "Unable to enable call audio: \(error.localizedDescription)"
             return false
         }
+    }
+
+    private func startVoWLANWebRTC(
+        endpoint: VoWLANEndpoint,
+        credential: VoWLANCredential,
+        callUUID: UUID,
+        generation: UInt64
+    ) throws {
+        let api = AirSIMAPI(route: .vowlan(endpoint: endpoint, credential: credential))
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.useManualAudio = true
+        rtc.isAudioEnabled = true
+        let queue = vowlanQueue
+        let peer = try CloudWebRTCPeer(
+            callUUID: callUUID,
+            generation: generation,
+            servers: [],
+            queue: queue,
+            hostOnly: true,
+            signal: { [weak self] signal in
+                Task {
+                    do {
+                        let answer = try await api.exchangeVoWLANWebRTC(signal)
+                        queue.async { self?.vowlanPeer?.receive(answer) }
+                    } catch {
+                        Task { @MainActor [weak self] in
+                            self?.errorMessage = error.localizedDescription
+                            self?.transportReady = false
+                        }
+                    }
+                }
+            },
+            connected: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.transportReady = true
+                    self?.routeDescription = "VoWLAN WebRTC"
+                    self?.diagnosticDescription = "\(DeviceContext.displayName) WebRTC host ICE connected"
+                    self?.errorMessage = nil
+                }
+            },
+            failure: { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.transportReady = false
+                    self?.errorMessage = "VoWLAN WebRTC failed"
+                }
+            },
+            statistics: { _ in }
+        )
+        guard peer.usesHostICE else { throw APIError.disabledLegacyRoute }
+        vowlanPeer = peer
+        peer.setMuted(muted)
+        peer.offer()
     }
 
     /// CallKit 执行动作前先声明语音类别，真正激活由系统随后回调 didActivate。
@@ -257,7 +246,7 @@ final class AudioSessionController: ObservableObject {
     func setMuted(_ muted: Bool) {
         CallAudioRecorder.shared.setMuted(muted)
         self.muted = muted
-        encoder?.setMuted(muted)
+        vowlanPeer?.setMuted(muted)
     }
 
     /// 根据模块通话状态播放来电铃声或呼出等待音，接通后立即让位给网络 PCM。
@@ -405,9 +394,9 @@ final class AudioSessionController: ObservableObject {
         speakerRouteRetryTask = nil
         speakerRoutePending = false
         stopCallTone()
-        transport?.stop()
-        transport = nil
-        encoder = nil
+        vowlanPeer?.close()
+        vowlanPeer = nil
+        RTCAudioSession.sharedInstance().isAudioEnabled = false
         if let engine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -415,7 +404,6 @@ final class AudioSessionController: ObservableObject {
         player?.stop()
         player = nil
         engine = nil
-        playbackQueue.reset()
         do {
             let session = AVAudioSession.sharedInstance()
             // 清除本次通话的外放覆盖，避免影响下一次通话或其他 App。
@@ -472,33 +460,6 @@ final class AudioSessionController: ObservableObject {
         try session.setPreferredIOBufferDuration(0.02)
     }
 
-    private func handleTransportEvent(_ event: NetworkPCMTransport.Event) {
-        switch event {
-        case .connected:
-            transportReady = true
-            diagnosticDescription = "\(DeviceContext.displayName) PCM handshake complete, waiting for audio"
-            refreshRouteDescription()
-            errorMessage = nil
-        case let .statistics(statistics):
-            let handshakeState = transportReady ? "PCM handshake complete" : "PCM handshake pending"
-            let playbackDrops = playbackQueue.droppedFrames > 0
-                ? " · Playback dropped \(playbackQueue.droppedFrames) frames"
-                : ""
-            diagnosticDescription = "\(DeviceContext.displayName) \(handshakeState) ↑\(statistics.uplinkBytes)B peak \(statistics.uplinkPeak) · ↓\(statistics.downlinkBytes)B peak \(statistics.downlinkPeak)\(playbackDrops)"
-            refreshRouteDescription()
-        case let .status(message):
-            // 连接状态单独显示，避免把“尚未握手”误读成模块已经拒绝握手。
-            diagnosticDescription = "\(DeviceContext.displayName) PCM：\(message)"
-        case let .failed(message):
-            transportReady = false
-            routeDescription = "Network audio disconnected"
-            diagnosticDescription = "\(DeviceContext.displayName) PCM connection failed: \(message)"
-            errorMessage = message
-        case .closed:
-            transportReady = false
-        }
-    }
-
     private func refreshRouteDescription() {
         let session = AVAudioSession.sharedInstance()
         let input = session.currentRoute.inputs.map { "\($0.portName)[\($0.portType.rawValue)]" }.joined(separator: ", ")
@@ -512,7 +473,8 @@ final class AudioSessionController: ObservableObject {
             requestedSpeaker: requestedSpeakerOverride,
             currentRouteIsSpeaker: routedToSpeaker
         )
-        routeDescription = "\(input.isEmpty ? "No Input" : input) ↔ Network PCM ↔ \(output.isEmpty ? "No Output" : output) (available inputs: \(inputs))"
+        let carrier = vowlanPeer == nil ? "Call audio" : "VoWLAN WebRTC"
+        routeDescription = "\(input.isEmpty ? "No Input" : input) ↔ \(carrier) ↔ \(output.isEmpty ? "No Output" : output) (available inputs: \(inputs))"
         IPhoneCloudCallSession.shared.recordAudioRoute(output.isEmpty ? "unknown" : output)
     }
 
@@ -526,43 +488,6 @@ final class AudioSessionController: ObservableObject {
         speakerRoutePending = false
     }
 
-    private func schedulePlayback(_ pcm: Data) {
-        guard active, let player, !pcm.isEmpty else { return }
-        let frames = pcm.count / MemoryLayout<Int16>.size
-        guard frames > 0, playbackQueue.reserve(frames: frames) else { return }
-        guard let format = AVAudioFormat(
-                  commonFormat: .pcmFormatFloat32,
-                  sampleRate: 8_000,
-                  channels: 1,
-                  interleaved: false
-              ),
-              let buffer = AVAudioPCMBuffer(
-                  pcmFormat: format,
-                  frameCapacity: AVAudioFrameCount(frames)
-              ),
-              let output = buffer.floatChannelData?[0] else {
-            playbackQueue.complete(frames: frames)
-            return
-        }
-
-        buffer.frameLength = AVAudioFrameCount(frames)
-        pcm.withUnsafeBytes { rawBuffer in
-            let bytes = rawBuffer.bindMemory(to: UInt8.self)
-            for frame in 0 ..< frames {
-                let bits = UInt16(bytes[frame * 2]) |
-                    UInt16(bytes[frame * 2 + 1]) << 8
-                output[frame] = Float(Int16(bitPattern: bits)) / 32_768
-            }
-        }
-        CallAudioRecorder.shared.appendPCM16(pcm, channel: .remote, source: .localPCM)
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) {
-            [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.playbackQueue.complete(frames: frames)
-            }
-        }
-        if !player.isPlaying { player.play() }
-    }
 }
 
 struct PlaybackQueueTracker {
@@ -742,318 +667,6 @@ private enum SynthesizedCallTone {
     }
 }
 
-/// 维护低延迟 TCP 字节流；每次连接尝试都生成新的认证握手。
-private final class NetworkPCMTransport: @unchecked Sendable {
-    enum Event: Sendable {
-        case connected
-        case statistics(NetworkPCMStatistics)
-        case status(String)
-        case failed(String)
-        case closed
-    }
-
-    private let host: NWEndpoint.Host
-    private let port: NWEndpoint.Port
-    private let handshakeSequence: PCMHandshakeSequence
-    private let requiresWiFi: Bool
-    private let queue = DispatchQueue(label: "com.jieden.airsim.network-pcm")
-    private let onPCM: @Sendable (Data) -> Void
-    private let onEvent: @Sendable (Event) -> Void
-    private var connection: NWConnection?
-    private var generation = 0
-    private var stopped = false
-    private var readyForPCM = false
-    private var pcmAccumulator = PCMFrameAccumulator(frameBytes: 320)
-    private var deadline: UInt64 = 0
-    private var uplinkBytes: UInt64 = 0
-    private var uplinkPeak = 0
-    private var downlinkBytes: UInt64 = 0
-    private var downlinkPeak = 0
-    private var nextStatisticsEmission: UInt64 = 0
-    private var fallbackAttempted = false
-    private var lastFailureMessage = ""
-
-    private static let acknowledgement = Data("AIRSIMREADY".utf8)
-    // 模块首次加载语音驱动、ACDB 校准和 D4 route session 最坏需要约 35 秒。
-    private static let coldStartRetryWindowNanoseconds: UInt64 = 45_000_000_000
-
-    init(
-        host: NWEndpoint.Host,
-        port: NWEndpoint.Port,
-        handshakeSequence: PCMHandshakeSequence,
-        requiresWiFi: Bool,
-        onPCM: @escaping @Sendable (Data) -> Void,
-        onEvent: @escaping @Sendable (Event) -> Void
-    ) {
-        self.host = host
-        self.port = port
-        self.handshakeSequence = handshakeSequence
-        self.requiresWiFi = requiresWiFi
-        self.onPCM = onPCM
-        self.onEvent = onEvent
-    }
-
-    func start() {
-        queue.async { [self] in
-            stopped = false
-            uplinkBytes = 0
-            uplinkPeak = 0
-            downlinkBytes = 0
-            downlinkPeak = 0
-            nextStatisticsEmission = 0
-            fallbackAttempted = false
-            lastFailureMessage = ""
-            deadline = DispatchTime.now().uptimeNanoseconds
-                + Self.coldStartRetryWindowNanoseconds
-            startAttempt()
-        }
-    }
-
-    func stop() {
-        queue.async { [self] in
-            stopped = true
-            readyForPCM = false
-            generation += 1
-            connection?.cancel()
-            connection = nil
-            pcmAccumulator.reset()
-            onEvent(.closed)
-        }
-    }
-
-    func sendPCM(_ pcm: Data) {
-        guard !pcm.isEmpty else { return }
-        queue.async { [self] in
-            guard readyForPCM, let connection else { return }
-            let attempt = generation
-            connection.send(content: pcm, completion: .contentProcessed { [weak self] error in
-                guard let self else { return }
-                self.queue.async {
-                    guard !self.stopped, self.generation == attempt else { return }
-                    if let error {
-                        self.retryOrFail("Microphone uplink failed: \(error.localizedDescription)", attempt: attempt)
-                        return
-                    }
-                    self.uplinkBytes += UInt64(pcm.count)
-                    self.uplinkPeak = max(self.uplinkPeak, Self.peak(of: pcm))
-                    self.emitStatisticsIfNeeded()
-                }
-            })
-        }
-    }
-
-    private func startAttempt() {
-        guard !stopped else { return }
-        generation += 1
-        let attempt = generation
-        let useWiredInterface = !requiresWiFi && !fallbackAttempted
-        let tcp = NWProtocolTCP.Options()
-        tcp.noDelay = true
-        tcp.enableKeepalive = true
-        tcp.keepaliveIdle = 2
-        let parameters = NWParameters(tls: nil, tcp: tcp)
-        // 首选 USB ECM；部分 iOS 版本把 USB 网卡报告为 other，失败后再放宽接口筛选。
-        if requiresWiFi {
-            parameters.requiredInterfaceType = .wifi
-        } else if useWiredInterface {
-            parameters.requiredInterfaceType = .wiredEthernet
-        }
-        let connection = NWConnection(host: host, port: port, using: parameters)
-        self.connection = connection
-        readyForPCM = false
-        onEvent(.status(requiresWiFi ? "Connecting PCM over VoWLAN" : (useWiredInterface ? "Connecting PCM over USB network adapter" : "Falling back to TCP for PCM")))
-        connection.pathUpdateHandler = { [weak self, weak connection] path in
-            guard let self, connection != nil else { return }
-            self.queue.async {
-                guard !self.stopped, self.generation == attempt else { return }
-                let interfaces = path.availableInterfaces.map { String(describing: $0.type) }.joined(separator: ",")
-                let route = path.status == .satisfied ? "Available" : "Unavailable"
-                self.onEvent(.status("PCM Network Path \(route): \(interfaces.isEmpty ? "Unknown Interface" : interfaces)"))
-            }
-        }
-        connection.stateUpdateHandler = { [weak self, weak connection] state in
-            guard let self, let connection else { return }
-            self.queue.async {
-                guard !self.stopped, self.generation == attempt else { return }
-                switch state {
-                case .ready:
-                    self.sendHandshake(connection, attempt: attempt)
-                case let .waiting(error):
-                    // NWConnection 在模块 helper 冷启动时会短暂报告 POSIX 61；
-                    // 这是可恢复状态，不能把底层错误原样暴露成通话失败。
-                    self.onEvent(.status(self.transientStatus(for: error)))
-                case let .failed(error):
-                    self.retryOrFail(error.localizedDescription, attempt: attempt, allowFallback: useWiredInterface)
-                case .cancelled:
-                    break
-                default:
-                    break
-                }
-            }
-        }
-        connection.start(queue: queue)
-        queue.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self, !self.stopped, self.generation == attempt,
-                  !self.readyForPCM else { return }
-            self.retryOrFail("Module network PCM connection timed out", attempt: attempt, allowFallback: useWiredInterface)
-        }
-    }
-
-    private func sendHandshake(_ connection: NWConnection, attempt: Int) {
-        let handshake: Data
-        do {
-            handshake = try handshakeSequence.next()
-        } catch {
-            retryOrFail("Unable to generate PCM authentication handshake: \(error.localizedDescription)", attempt: attempt)
-            return
-        }
-        connection.send(content: handshake, completion: .contentProcessed {
-            [weak self, weak connection] error in
-            guard let self, let connection else { return }
-            self.queue.async {
-                guard !self.stopped, self.generation == attempt else { return }
-                if let error {
-                    self.retryOrFail(error.localizedDescription, attempt: attempt, allowFallback: !self.fallbackAttempted)
-                } else {
-                    self.receiveAcknowledgement(connection, attempt: attempt)
-                }
-            }
-        })
-    }
-
-    private func receiveAcknowledgement(_ connection: NWConnection, attempt: Int) {
-        connection.receive(
-            minimumIncompleteLength: Self.acknowledgement.count,
-            maximumLength: 4_096
-        ) { [weak self, weak connection] data, _, isComplete, error in
-            guard let self, let connection else { return }
-            self.queue.async {
-                guard !self.stopped, self.generation == attempt else { return }
-                if let error {
-                    self.retryOrFail(error.localizedDescription, attempt: attempt, allowFallback: !self.fallbackAttempted)
-                    return
-                }
-                guard var data, data.count >= Self.acknowledgement.count,
-                      data.prefix(Self.acknowledgement.count) == Self.acknowledgement else {
-                    self.retryOrFail("Invalid module network PCM handshake", attempt: attempt, allowFallback: !self.fallbackAttempted)
-                    return
-                }
-                data.removeFirst(Self.acknowledgement.count)
-                self.readyForPCM = true
-                // 每次成功握手都重新开启恢复窗口，避免长通话在首次 45 秒窗口后断线即永久静音。
-                self.deadline = DispatchTime.now().uptimeNanoseconds
-                    + Self.coldStartRetryWindowNanoseconds
-                self.onEvent(.connected)
-                self.emitStatisticsIfNeeded(force: true)
-                if !data.isEmpty { self.consumeDownlink(data) }
-                if isComplete {
-                    self.retryOrFail("Module network PCM disconnected", attempt: attempt)
-                } else {
-                    self.receiveLoop(connection, attempt: attempt)
-                }
-            }
-        }
-    }
-
-    private func receiveLoop(_ connection: NWConnection, attempt: Int) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 4_096) {
-            [weak self, weak connection] data, _, isComplete, error in
-            guard let self, let connection else { return }
-            self.queue.async {
-                guard !self.stopped, self.generation == attempt else { return }
-                if let data, !data.isEmpty { self.consumeDownlink(data) }
-                if let error {
-                    self.retryOrFail(error.localizedDescription, attempt: attempt, allowFallback: !self.fallbackAttempted)
-                } else if isComplete {
-                    self.retryOrFail("Module network PCM disconnected", attempt: attempt, allowFallback: !self.fallbackAttempted)
-                } else {
-                    self.receiveLoop(connection, attempt: attempt)
-                }
-            }
-        }
-    }
-
-    private func consumeDownlink(_ data: Data) {
-        downlinkBytes += UInt64(data.count)
-        downlinkPeak = max(downlinkPeak, Self.peak(of: data))
-        emitStatisticsIfNeeded()
-        // 一次 Network.framework 回调中的完整 20 ms 帧合并后再跨到主线程，
-        // 避免每个小帧各创建一个 MainActor task 造成播放调度抖动。
-        if let batch = pcmAccumulator.append(data) { onPCM(batch) }
-    }
-
-    private func emitStatisticsIfNeeded(force: Bool = false) {
-        let now = DispatchTime.now().uptimeNanoseconds
-        guard force || now >= nextStatisticsEmission else { return }
-        nextStatisticsEmission = now + 1_000_000_000
-        onEvent(.statistics(NetworkPCMStatistics(
-            uplinkBytes: uplinkBytes,
-            uplinkPeak: uplinkPeak,
-            downlinkBytes: downlinkBytes,
-            downlinkPeak: downlinkPeak
-        )))
-    }
-
-    private static func peak(of pcm: Data) -> Int {
-        pcm.withUnsafeBytes { rawBuffer in
-            let bytes = rawBuffer.bindMemory(to: UInt8.self)
-            var peak = 0
-            var offset = 0
-            while offset + 1 < bytes.count {
-                let bits = UInt16(bytes[offset]) | UInt16(bytes[offset + 1]) << 8
-                let sample = Int(Int16(bitPattern: bits))
-                peak = max(peak, sample == -32_768 ? 32_768 : abs(sample))
-                offset += 2
-            }
-            return peak
-        }
-    }
-
-    private func retryOrFail(_ message: String, attempt: Int, allowFallback: Bool = false) {
-        guard generation == attempt else { return }
-        lastFailureMessage = message
-        readyForPCM = false
-        connection?.cancel()
-        connection = nil
-        if allowFallback && !fallbackAttempted {
-            // USB ECM 在不同 iOS 版本上的接口类型标识不一致；只切换 Network.framework
-            // 的接口筛选，不改变目标地址，避免把控制链路误切到公网。
-            fallbackAttempted = true
-            onEvent(.status("USB network connection failed, retrying PCM"))
-            queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.startAttempt() }
-            return
-        }
-        if !stopped, DispatchTime.now().uptimeNanoseconds < deadline {
-            // 连接拒绝通常只表示模块语音桥还在启动；保留重试，但不显示 NWError。
-            onEvent(.status(transientStatus(for: message)))
-            queue.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                self?.startAttempt()
-            }
-        } else if !stopped {
-            onEvent(.failed("Timed out waiting for the module audio bridge. Keep the module connected and retry the call."))
-        }
-    }
-
-    /// 将启动阶段的底层连接错误压缩为用户可理解的可恢复状态。
-    private func transientStatus(for error: NWError) -> String {
-        transientStatus(for: error.localizedDescription)
-    }
-
-    private func transientStatus(for message: String) -> String {
-        let normalized = message.lowercased()
-        if normalized.contains("connection refused") || normalized.contains("错误 61") {
-            return "Module audio bridge is starting, retrying connection…"
-        }
-        return "Module audio bridge is starting, retrying network PCM…"
-    }
-}
-
-private struct NetworkPCMStatistics: Sendable {
-    let uplinkBytes: UInt64
-    let uplinkPeak: Int
-    let downlinkBytes: UInt64
-    let downlinkPeak: Int
-}
 
 /// 对麦克风做语音带限与线性降采样，输出模块需要的 8 kHz PCM16LE。
 final class VoicePCMEncoder: @unchecked Sendable {

@@ -7,7 +7,7 @@ struct VoWLANEndpoint: Equatable, Hashable, Sendable {
     let pcmPort: UInt16
 
     init(host: String, controlPort: UInt16, pcmPort: UInt16) throws {
-        guard Self.isPrivateIPv4(host), controlPort >= 1024, pcmPort >= 1024 else {
+        guard Self.isPrivateIPv4(host), controlPort >= 1024, pcmPort == 0 || pcmPort >= 1024 else {
             throw VoWLANControllerError.invalidAdvertisement
         }
         self.host = host
@@ -542,8 +542,8 @@ final class VoWLANController: ObservableObject {
     private nonisolated static func parseAgent(_ result: NWBrowser.Result) -> VoWLANDiscoveredAgent? {
         guard case let .bonjour(record) = result.metadata,
               record["v"] == "1", let host = record["host"],
-              let controlText = record["control_port"], let control = UInt16(controlText),
-              let pcmText = record["pcm_port"], let pcm = UInt16(pcmText) else { return nil }
+              let controlText = record["control_port"], let control = UInt16(controlText) else { return nil }
+        let pcm = UInt16(record["pcm_port"] ?? "0") ?? 0
         guard let endpoint = try? VoWLANEndpoint(host: host, controlPort: control, pcmPort: pcm) else {
             return nil
         }

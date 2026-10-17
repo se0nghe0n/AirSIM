@@ -1,35 +1,14 @@
 package main
 
 import (
-	"bytes"
+	"bufio"
 	"context"
-	"errors"
+	"encoding/json"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 )
-
-func TestCloudPCMStartsListenerBeforeDialWithoutWaitingForClient(t *testing.T) {
-	wantErr := errors.New("stop after ordering assertion")
-	events := make(chan string, 2)
-	_, err := establishCloudPCMConnection(
-		context.Background(),
-		func() error {
-			events <- "listening"
-			return nil
-		},
-		func(context.Context) (net.Conn, error) {
-			events <- "dial"
-			return nil, wantErr
-		},
-	)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("error=%v, want %v", err, wantErr)
-	}
-	if first, second := <-events, <-events; first != "listening" || second != "dial" {
-		t.Fatalf("order=%q,%q, want listening,dial", first, second)
-	}
-}
 
 func TestCloudPCMMilestonesAreMonotonic(t *testing.T) {
 	sequence := []string{"answer_ok", "pcm_listening", "active", "pcm_ready", "pcm_first_frame"}
@@ -57,36 +36,6 @@ func TestCloudPCMMilestoneDurationsDescribeStartupBoundaries(t *testing.T) {
 		if got := fields[key]; got != want {
 			t.Fatalf("%s=%q, want %q", key, got, want)
 		}
-	}
-}
-
-func TestCloudPCMFrameRoundTripsSequenceTimestampAndPayload(t *testing.T) {
-	payload := bytes.Repeat([]byte{0x34, 0x12}, cloudPCMFrameBytes/2)
-	wire := encodeCloudPCMFrame(payload, 42, 1_800_000_000_123)
-
-	frame, framed, err := decodeCloudPCMFrame(wire)
-	if err != nil {
-		t.Fatalf("解码带头 PCM 帧失败: %v", err)
-	}
-	if !framed {
-		t.Fatal("AirSIM PCM 帧应被识别为带序号媒体帧")
-	}
-	if frame.Sequence != 42 || frame.TimestampMilliseconds != 1_800_000_000_123 {
-		t.Fatalf("帧身份=(%d,%d)，期望 (42,1800000000123)", frame.Sequence, frame.TimestampMilliseconds)
-	}
-	if !bytes.Equal(frame.Payload, payload) {
-		t.Fatal("PCM 负载往返后发生变化")
-	}
-}
-
-func TestCloudPCMFrameDecoderKeepsLegacyRawPCMCompatible(t *testing.T) {
-	payload := bytes.Repeat([]byte{0x78, 0x56}, cloudPCMFrameBytes/2)
-	frame, framed, err := decodeCloudPCMFrame(payload)
-	if err != nil || framed {
-		t.Fatalf("旧 PCM 解码 framed=%v err=%v，期望原样兼容", framed, err)
-	}
-	if !bytes.Equal(frame.Payload, payload) {
-		t.Fatal("旧 PCM 负载不应被修改")
 	}
 }
 
@@ -242,14 +191,127 @@ func TestECMWatchdogFieldsCarryCurrentCallIdentity(t *testing.T) {
 	}
 }
 
-func TestCloudMediaTransportFallsBackUnlessRequestedProtocolIsSupported(t *testing.T) {
-	if got := resolveCloudMediaTransport("webrtc", []string{"legacy_pcm"}, false); got != "legacy_pcm" {
-		t.Fatalf("Agent 不支持 WebRTC 时传输=%q，期望 legacy_pcm", got)
-	}
-	if got := resolveCloudMediaTransport("webrtc", []string{"legacy_pcm", "webrtc"}, false); got != "webrtc" {
+func TestCloudMediaTransportRejectsAnythingExceptWebRTC(t *testing.T) {
+	if got := resolveCloudMediaTransport("webrtc", []string{"webrtc"}, false); got != "webrtc" {
 		t.Fatalf("双方支持 WebRTC 时传输=%q，期望 webrtc", got)
 	}
-	if got := resolveCloudMediaTransport("webrtc", []string{"legacy_pcm", "webrtc"}, true); got != "legacy_pcm" {
-		t.Fatalf("强制回退时传输=%q，期望 legacy_pcm", got)
+	if got := resolveCloudMediaTransport("", []string{"webrtc"}, false); got != "" {
+		t.Fatalf("缺少请求时传输=%q，期望拒绝", got)
+	}
+	if got := resolveCloudMediaTransport("webrtc", []string{"webrtc"}, true); got != "" {
+		t.Fatalf("强制回退时传输=%q，期望拒绝", got)
+	}
+}
+
+func TestCloudCallTextControlAnswersAndEndsWithoutPCMCopy(t *testing.T) {
+	a := testAndroidAgent("secret-value")
+	a.push = newPushManager(filepath.Join(t.TempDir(), "push.json"))
+	descriptor := cloudCallDescriptor{
+		CallID: "agent-call-text", CallUUID: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9",
+		Generation: 1, Direction: "incoming", MediaTransport: "webrtc",
+	}
+	a.calls.Active = &callRecord{
+		ID: descriptor.CallID, AndroidID: "telecom-text", Direction: "incoming", State: "incoming",
+	}
+	client, server := net.Pipe()
+	defer server.Close()
+	socket := &cloudWebSocket{conn: client, reader: bufio.NewReader(client)}
+	serverSocket := &cloudWebSocket{conn: server, reader: bufio.NewReader(server)}
+	done := make(chan bool, 1)
+	go func() {
+		done <- a.serveCloudCall(context.Background(), socket, descriptor, newCloudMediaHealthTracker(time.Now(), descriptor))
+	}()
+
+	assertCloudTextStatus(t, serverSocket, "agent_ready")
+	writeCloudServerText(t, server, cloudCallAction{
+		Action: "answer", CallID: descriptor.CallID, CallUUID: descriptor.CallUUID,
+		Generation: descriptor.Generation, Owner: "iphone",
+		CommandID: "dc7c37df-ae31-4d4b-aef4-893a92c58c86",
+	})
+	go completeAndroidCall(t, a, "answer", "telecom-text")
+	assertCloudTextStatus(t, serverSocket, "answer_ok")
+	if a.voice.hostEnabled {
+		t.Fatal("text answer started a PCM voice route")
+	}
+	writeCloudServerBinary(t, server, []byte{1, 2, 3, 4})
+	writeCloudServerText(t, server, cloudCallAction{
+		Action: "end", CallID: descriptor.CallID, CallUUID: descriptor.CallUUID,
+		Generation: descriptor.Generation, Owner: "iphone",
+		CommandID: "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145",
+	})
+	go completeAndroidCall(t, a, "end", "telecom-text")
+	assertCloudTextStatus(t, serverSocket, "ended")
+	select {
+	case terminal := <-done:
+		if !terminal {
+			t.Fatal("end did not finish the cloud call")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cloud call did not finish after end")
+	}
+}
+
+func completeAndroidCall(t *testing.T, a *agent, action, callID string) {
+	t.Helper()
+	command, ok := a.android.next(context.Background(), time.Second)
+	if !ok || command.Action != action || command.CallID != callID {
+		t.Errorf("Telecom command=%#v ok=%v, want %s %s", command, ok, action, callID)
+		return
+	}
+	if err := a.android.complete(androidCommandResult{ID: command.ID, Success: true}); err != nil {
+		t.Error(err)
+		return
+	}
+	if action == "answer" {
+		a.applyAndroidCallEvent(androidCallEvent{
+			EventID: "event-text-active", CallID: callID, Direction: "incoming", State: "active",
+		}, time.Now())
+	}
+}
+
+func assertCloudTextStatus(t *testing.T, socket *cloudWebSocket, status string) {
+	t.Helper()
+	opcode, payload, err := socket.ReadMessage()
+	if err != nil {
+		t.Fatalf("read %s: %v", status, err)
+	}
+	if opcode != cloudOpcodeText {
+		t.Fatalf("opcode=%d, want text for %s", opcode, status)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	if value["status"] != status {
+		t.Fatalf("status=%v message=%v, want %s", value["status"], value["message"], status)
+	}
+}
+
+func writeCloudServerText(t *testing.T, conn net.Conn, action cloudCallAction) {
+	t.Helper()
+	payload, err := json.Marshal(action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeCloudServerFrame(t, conn, cloudOpcodeText, payload)
+}
+
+func writeCloudServerBinary(t *testing.T, conn net.Conn, payload []byte) {
+	t.Helper()
+	writeCloudServerFrame(t, conn, cloudOpcodeBinary, payload)
+}
+
+func writeCloudServerFrame(t *testing.T, conn net.Conn, opcode byte, payload []byte) {
+	t.Helper()
+	header := []byte{0x80 | opcode}
+	switch {
+	case len(payload) < 126:
+		header = append(header, byte(len(payload)))
+	default:
+		header = append(header, 126, byte(len(payload)>>8), byte(len(payload)))
+	}
+	frame := append(header, payload...)
+	if _, err := conn.Write(frame); err != nil {
+		t.Fatal(err)
 	}
 }

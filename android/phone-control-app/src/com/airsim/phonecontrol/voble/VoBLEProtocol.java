@@ -15,7 +15,6 @@ public final class VoBLEProtocol {
     public static final int MESSAGE_CONTROL = 2;
     public static final int MESSAGE_HEADER_LENGTH = 8;
     public static final int MAX_MESSAGE_LENGTH = 4096;
-    public static final int CODEC_G711_MULAW = 1;
     public static final int FLAG_DISCONTINUITY = 1 << 3;
     public static final int AUDIO_HEADER_LENGTH = 18;
     public static final int AUTH_TAG_LENGTH = 16;
@@ -309,7 +308,7 @@ public final class VoBLEProtocol {
         if ((packet[2] & 0xff) != VERSION) throw new IllegalArgumentException("unsupported version");
         if ((packet[3] & 0xff) != TYPE_AUDIO) throw new IllegalArgumentException("invalid packet type");
         int codec = packet[5] & 0xff;
-        if (codec != CODEC_G711_MULAW) throw new IllegalArgumentException("unsupported codec");
+        if (codec == 0) throw new IllegalArgumentException("unsupported codec");
         int index = packet[15] & 0xff;
         int count = packet[16] & 0xff;
         int length = packet[17] & 0xff;

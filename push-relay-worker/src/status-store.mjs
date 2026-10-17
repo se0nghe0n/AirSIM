@@ -1,5 +1,12 @@
 import { constantTimeEqual, sha256Hex } from "./auth-crypto.mjs";
 
+export function retainStoredWebRTCCapability(stored, advertised) {
+  const previous = Array.isArray(stored) && stored.includes("webrtc");
+  const next = Array.isArray(advertised) && advertised.includes("webrtc");
+  if (previous || next) return ["webrtc"];
+  return [];
+}
+
 const HEARTBEAT_PREFIX = "heartbeat:";
 const DEVICE_PREFIX = "device:";
 const DASHBOARD_EVENT_PREFIX = "dashboard:event:";
@@ -28,9 +35,11 @@ export class AgentStatusRegistry {
       const normalizedDeviceID = deviceID.trim();
       const deviceKey = `${DEVICE_PREFIX}${normalizedDeviceID}`;
       const device = await this.storage.get(deviceKey);
-      if (Array.isArray(record.agent_media_capabilities) &&
-          JSON.stringify(device.agent_media_capabilities) !== JSON.stringify(record.agent_media_capabilities)) {
-        await this.storage.put(deviceKey, { ...device, agent_media_capabilities: record.agent_media_capabilities });
+      const mergedCapabilities = retainStoredWebRTCCapability(
+        device?.agent_media_capabilities, record.agent_media_capabilities,
+      );
+      if (JSON.stringify(device?.agent_media_capabilities) !== JSON.stringify(mergedCapabilities)) {
+        await this.storage.put(deviceKey, { ...device, agent_media_capabilities: mergedCapabilities });
       }
       await this.storage.put(`${HEARTBEAT_PREFIX}${normalizedDeviceID}:agent:${agentID}`, record);
       await this.storage.put(`${HEARTBEAT_PREFIX}${normalizedDeviceID}`, record);
