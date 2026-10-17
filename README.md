@@ -30,6 +30,7 @@ This fork at [se0nghe0n/AirSIM](https://github.com/se0nghe0n/AirSIM) includes th
 - English is the default app language. The existing language preference and Chinese option remain available; caller names, SMS content, and operating-system messages keep their original language.
 - The Q25 Android package is `com.airsim.phonecontrol.q25`. Apple signing and Relay settings in this branch are configured for the fork owner; use your own identities and credentials for a separate installation. A `workers.dev` Relay endpoint can be used without a custom domain.
 - Native WebRTC/Opus cloud calls are available for rooted Android Standalone and iPhone, with authenticated signaling and expiring TURN credentials. See the [WebRTC setup and validation guide](docs/webrtc.md). Older clients and Apple Watch retain PCM.
+- iPhone call recording saves both sides locally when you tap Record. Open Recents → Recordings to play, share, or delete files. See the [recording guide](docs/call-recording.md).
 - The legacy iPhone PCM receive buffer adapts to observed delivery stalls and preserves queued speech during recovery. Native WebRTC uses its own playout and bypasses that PCM buffer. Local tests do not establish real carrier-call quality.
 - Release links below point to upstream binaries. They do not include this fork's additional changes; build this branch to use them.
 
@@ -223,6 +224,7 @@ Replacing only the certificate while retaining someone else's Bundle ID does not
 | [iOS and watchOS](iOS/README.md) | Xcode, Bundle IDs, Apple signing, CallKit, PushKit, and device tests |
 | [Cloudflare Relay](push-relay-worker/README.md) | Wrangler, KV, Durable Objects, APNs, Secrets, and custom domains |
 | [Native WebRTC cloud calls](docs/webrtc.md) | Q25/iPhone audio, TURN setup, compatibility, protocol, and validation |
+| [iPhone call recording](docs/call-recording.md) | Start/stop recording, local files, playback, export, and limits |
 | [VoWLAN design](docs/2026-09-11-vowlan-design.md) | Local transport design and protocol boundaries |
 | [VoBLE device test matrix](docs/voble-real-device-test-matrix.md) | Bluetooth setup, automation results, device matrix, and outstanding hardware acceptance |
 | [Samsung hotspot pairing protocol](docs/samsung-hotspot-pairing-protocol.md) | Pairing, key derivation, HMAC, and replay protection |
@@ -253,7 +255,7 @@ Automation does not replace end-to-end acceptance on Samsung Android, iPhone, Ap
 - AVF Agent, installer, and PCM ports may bind only to the device's internal private network or loopback.
 - VoWLAN control requests must validate timestamps, nonces, and HMAC; pairing keys reside in platform secure storage.
 - Never commit device secrets, Agent tokens, APNs `.p8`, `DASHBOARD_TOKEN`, signing private keys, real phone numbers, or production configuration.
-- Call PCM is processed only in memory and on the network, never saved to disk. Logs must omit PCM, complete SMS messages, push tokens, and authentication material.
+- Call PCM is kept in memory and on the network unless the user explicitly starts a local iPhone recording. Recordings are private, excluded from backups, and never uploaded to Relay. Logs must omit PCM, complete SMS messages, push tokens, and authentication material.
 - Emergency calls must use system telephony; AirSIM is not an emergency communications guarantee.
 - The Android app cannot bypass OEM firmware or system-signature restrictions to enable hidden or removed AVF Linux features.
 

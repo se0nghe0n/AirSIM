@@ -1548,6 +1548,10 @@ final class IPhoneCloudCallSession {
     }
     func setMuted(_ muted: Bool) { media.setMuted(muted) }
 
+    var recordingSource: CallRecordingSource {
+        call?.requestedMediaTransport == .webRTC ? .cloudWebRTC : .cloudPCM
+    }
+
     func recordAudioRoute(_ route: String) {
         guard call != nil else { return }
         mediaHealthTracker?.recordRoute(route)
@@ -2079,6 +2083,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     }
 
     func setMuted(_ muted: Bool) {
+        CallAudioRecorder.shared.setMuted(muted)
         queue.async { [weak self] in
             self?.muted = muted
             self?.encoder?.setMuted(muted)
@@ -2130,7 +2135,10 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         input.installTap(onBus: 0, bufferSize: 960, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
             let pcm = encoder.encode(buffer)
-            if !pcm.isEmpty { enqueueUplink(pcm, generation: generation) }
+            if !pcm.isEmpty {
+                CallAudioRecorder.shared.appendPCM16(pcm, channel: .local, source: .cloudPCM)
+                enqueueUplink(pcm, generation: generation)
+            }
         }
         do {
             engine.prepare()
@@ -2443,6 +2451,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             }
         }
         let generation = playbackGeneration
+        CallAudioRecorder.shared.appendPCM16(pcm, channel: .remote, source: .cloudPCM)
         player.scheduleBuffer(buffer, completionCallbackType: CloudPCMPlaybackWindow.completionType) { [weak self] _ in
             let completedAt = ProcessInfo.processInfo.systemUptime
             self?.queue.async {

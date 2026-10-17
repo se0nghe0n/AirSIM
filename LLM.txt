@@ -61,7 +61,7 @@ NON-NEGOTIABLE ARCHITECTURE CONTRACTS
 - Standalone does not use AVF, Linux Terminal, Debian, ports 8575/8576, or airsim-installerd. Legacy AVF services and PCM must listen only on the internal private network or loopback.
 - VoWLAN control requires route allowlists, timestamp, nonce, HMAC, and size checks.
 - A call chooses VoWLAN or Relay at setup and does not silently switch transport during that call.
-- PCM stays in memory and on the network; never store it on disk or in logs.
+- PCM stays in memory and on the network except for explicit user-started iPhone call recordings. These protected local files are excluded from backups and never uploaded. Never include PCM in logs.
 - In legacy AVF mode, the main Agent does not self-update. Android manages updates through airsim-installerd, which accepts only the expected signed arm64 Debian package and cannot run arbitrary shell commands.
 - Android application code cannot force-enable AVF functionality removed or hidden by OEM firmware or system-signature restrictions.
 

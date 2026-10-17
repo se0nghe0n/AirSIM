@@ -1,6 +1,5 @@
 import Foundation
 import Combine
-import Darwin
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -31,16 +30,14 @@ enum CallRecordingError: LocalizedError {
     }
 }
 
-/// Audio callbacks never wait for a lock or disk. A coalescing dispatch source drains
-/// at most 256 KiB per batch. Contention is an explicit recording failure, not a
-/// silent loss of audio. The legacy Darwin atomics support our iOS 16 deployment.
+/// A short metadata lock never spans conversion or file I/O. A coalescing dispatch
+/// source drains at most 256 KiB per batch, away from the audio processing threads.
 final class CallAudioRecorder: @unchecked Sendable {
     static let shared = CallAudioRecorder()
     static let sampleRate = 8_000
     static let maximumFrames = sampleRate * 60 * 60 * 2
     private let queue = DispatchQueue(label: "AirSIM.call-recording", qos: .utility)
     private let lock = NSLock()
-    private var ingressFailures: Int32 = 0
     private var muted = false
     private var admission: Admission?
     private var pending: [Packet] = []
@@ -60,7 +57,6 @@ final class CallAudioRecorder: @unchecked Sendable {
         let id: UUID
         let source: CallRecordingSource
         let uptime: TimeInterval
-        let failureCount: Int32
     }
     private struct Packet {
         let id: UUID
@@ -133,9 +129,7 @@ final class CallAudioRecorder: @unchecked Sendable {
 
     private func append(channel: CallRecordingChannel, source: CallRecordingSource, uptime: TimeInterval,
                         inputCount: Int, copy: (Bool) -> Data?) {
-        guard lock.try() else {
-            OSAtomicIncrement32Barrier(&ingressFailures); signal.add(data: 1); return
-        }
+        lock.lock()
         guard let active = admission, active.source == source else { lock.unlock(); return }
         guard uptime.isFinite, inputCount > 0 else { lock.unlock(); return }
         let elapsed = max(0, uptime - active.uptime)
@@ -153,9 +147,7 @@ final class CallAudioRecorder: @unchecked Sendable {
         lock.unlock()
         // Conversion and copying run outside the very short admission critical section.
         var data = copy(silence)
-        guard lock.try() else {
-            OSAtomicIncrement32Barrier(&ingressFailures); signal.add(data: 1); return
-        }
+        lock.lock()
         guard admission?.id == active.id else { lock.unlock(); return }
         reservedBytes -= inputCount * 2
         guard data != nil else {
@@ -187,8 +179,7 @@ final class CallAudioRecorder: @unchecked Sendable {
                 do { remote = try FileHandle(forUpdating: remoteURL) }
                 catch { try? local.close(); throw error }
                 self.lock.lock()
-                let active = Admission(id: id, source: source, uptime: atUptime,
-                                       failureCount: OSAtomicAdd32Barrier(0, &self.ingressFailures))
+                let active = Admission(id: id, source: source, uptime: atUptime)
                 self.pending.removeAll(keepingCapacity: true); self.pendingBytes = 0; self.reservedBytes = 0; self.pendingError = nil
                 self.session = Session(admission: active, callID: callID, local: local, remote: remote,
                                        localURL: localURL, remoteURL: remoteURL, failure: onFailure)
@@ -214,9 +205,8 @@ final class CallAudioRecorder: @unchecked Sendable {
                 try? FileManager.default.removeItem(at: active.remoteURL)
                 self.session = nil
             }
-            if let error = active.error { throw error }
             let frames = max(active.localEnd, active.remoteEnd)
-            guard frames > 0 else { throw CallRecordingError.empty }
+            guard frames > 0 else { throw active.error ?? CallRecordingError.empty }
             let name = active.admission.id.uuidString + ".wav"
             let outputURL = self.directory.appendingPathComponent(name)
             let metadataURL = outputURL.deletingPathExtension().appendingPathExtension("json")
@@ -242,18 +232,18 @@ final class CallAudioRecorder: @unchecked Sendable {
         pending = []; pendingBytes = 0; pendingError = nil
         lock.unlock()
         guard let active = session, active.error == nil else { return }
-        if let (id, error) = ingressError, id == active.admission.id { fail(active, error: error); return }
-        if OSAtomicAdd32Barrier(0, &ingressFailures) != active.admission.failureCount {
-            fail(active, error: CallRecordingError.overloaded); return
-        }
         do {
             for packet in packets where packet.id == active.admission.id {
                 let previous = packet.channel == .local ? active.localEnd : active.remoteEnd
-                // Trim overlaps rather than accumulating callback jitter as timeline drift.
-                let skip = max(0, previous - packet.frame)
+                // The sample clock is authoritative within a continuous stream.
+                // Scheduling jitter must not trim speech or insert a hole each callback.
+                // Larger interruptions retain their wall-clock gap as silence.
+                let frame = previous > 0 && abs(packet.frame - previous) <= 800
+                    ? previous : packet.frame
+                let skip = max(0, previous - frame)
                 let count = packet.pcm.count / 2 - skip
                 guard count > 0 else { continue }
-                let offset = max(previous, packet.frame)
+                let offset = max(previous, frame)
                 guard offset + count <= Self.maximumFrames else { throw CallRecordingError.limit }
                 let handle = packet.channel == .local ? active.local : active.remote
                 try handle.seek(toOffset: UInt64(offset * 2)) // Sparse holes read back as silence.
@@ -261,6 +251,7 @@ final class CallAudioRecorder: @unchecked Sendable {
                 if packet.channel == .local { active.localEnd = offset + count }
                 else { active.remoteEnd = offset + count }
             }
+            if let (id, error) = ingressError, id == active.admission.id { fail(active, error: error) }
         } catch { fail(active, error: (error as? CallRecordingError) ?? .storage) }
     }
 

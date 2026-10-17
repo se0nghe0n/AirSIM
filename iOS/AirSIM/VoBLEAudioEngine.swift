@@ -75,6 +75,7 @@ final class VoBLEAudioEngine: ObservableObject {
     }
 
     func setMuted(_ value: Bool) {
+        CallAudioRecorder.shared.setMuted(value)
         muted = value
         encoder?.setMuted(value)
     }
@@ -156,6 +157,7 @@ final class VoBLEAudioEngine: ObservableObject {
     }
 
     private func acceptCaptured(_ data: Data) {
+        CallAudioRecorder.shared.appendPCM16(data, channel: .local, source: .bluetooth)
         pendingCapture.append(data)
         while pendingCapture.count >= 320 {
             transport.enqueueCapturedPCM(Data(pendingCapture.prefix(320)))
@@ -191,6 +193,7 @@ final class VoBLEAudioEngine: ObservableObject {
             }
         }
         guard playbackQueue.reserve(frames: samples) else { return }
+        CallAudioRecorder.shared.appendPCM16(frame.pcm, channel: .remote, source: .bluetooth)
         let generation = playbackGeneration
         VoBLEPlaybackScheduling.schedule(buffer, on: player) {
             [weak self] in

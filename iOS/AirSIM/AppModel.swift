@@ -264,7 +264,8 @@ final class AppModel: ObservableObject {
     @Published var connectionMessage: String?
     @Published var isBusy = false
     @Published var isMuted = false
-    @Published var isRecording = false
+    @Published private(set) var isRecording = false
+    @Published private(set) var isRecordingBusy = false
     @Published var errorMessage: String?
     @Published private(set) var modemStatus: ModemStatus?
     @Published private(set) var agentVersion: String?
@@ -281,6 +282,7 @@ final class AppModel: ObservableObject {
     let api: AirSIMAPI
     let contacts = ContactStore()
     let audio = AudioSessionController()
+    let recordings = CallRecordingStore.shared
     let callKit = CallKitController.shared
     let backgroundStandby = BackgroundStandbyController()
     let vowlan = VoWLANController()
@@ -684,6 +686,11 @@ final class AppModel: ObservableObject {
 
     init(api: AirSIMAPI = AirSIMAPI()) {
         self.api = api
+        recordings.$isRecording.assign(to: &$isRecording)
+        recordings.$isBusy.assign(to: &$isRecordingBusy)
+        recordings.$errorMessage.compactMap { $0 }.sink { [weak self] message in
+            self?.errorMessage = message
+        }.store(in: &cancellables)
         let runtimePolicy = ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected())
         callKit.handler = self
         callKit.setEnabled(runtimePolicy.usesCallKit)
@@ -1265,7 +1272,6 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled, generation == pollingGeneration else { return }
                 backgroundStandby.resumeAfterCall()
                 isMuted = false
-                isRecording = false
             }
             if appIsActive, status.active?.state == "active",
                Date() >= nextAudioDiagnosticRefresh,
@@ -1813,16 +1819,31 @@ final class AppModel: ObservableObject {
     }
 
     func toggleRecording() async {
-        let target = !isRecording
+        guard !recordings.isBusy else { return }
         do {
-            guard let samsungAPI = verifiedVoWLANAPI() else {
-                throw CallKitBridgeError.noReachableTransport
+            if recordings.isRecording {
+                try await recordings.stop()
+            } else {
+                guard let callID = callLifecycleSnapshot.callID,
+                      callLifecycleSnapshot.state == .active else {
+                    errorMessage = "Recording is available once the call is connected"
+                    return
+                }
+                guard !WatchCallCoordinator.shared.ownsMedia(callID: callID) else {
+                    errorMessage = "Recording is available when call audio is on this iPhone"
+                    return
+                }
+                let source: CallRecordingSource
+                switch currentCallTransport {
+                case .cloud: source = IPhoneCloudCallSession.shared.recordingSource
+                case .bluetooth: source = .bluetooth
+                default: source = .localPCM
+                }
+                CallAudioRecorder.shared.setMuted(isMuted)
+                try await recordings.start(callID: callID, source: source)
             }
-            let response = try await samsungAPI.setCallRecording(target)
-            isRecording = response.recording
             errorMessage = nil
         } catch {
-            debugDialLog("操作失败：\(error.localizedDescription)")
             errorMessage = error.localizedDescription
         }
     }
@@ -2305,6 +2326,7 @@ final class AppModel: ObservableObject {
         guard callLifecycleStore.apply(event) else { return false }
         callLifecycleSnapshot = callLifecycleStore.snapshot
         if event.state == .ending || event.state.isTerminal {
+            recordings.finishCall(event.callID)
             callPresentationSurface = nil
             pendingOutgoingCall = nil
             audio.stopCallTone()
@@ -2958,6 +2980,7 @@ extension AppModel: CallKitActionHandling {
     }
 
     func callKitCallDidEnd() {
+        recordings.finishCall(callLifecycleSnapshot.callID)
         outgoingAttemptID = UUID()
         // 远端挂断、系统通话页挂断以及 Provider 主动结束都会走这里。
         // Agent 已拥有唯一的通话结束媒体清理权；App 不再重复关闭 Audio Host。

@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 @testable import AirSIM
 
 final class CallRecordingTests: XCTestCase {
@@ -116,5 +117,48 @@ final class CallRecordingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         do { _ = try await recorder.start(callID: "disk", source: .cloudPCM); XCTFail("File cannot be a directory") }
         catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
+    }
+
+    func testCallbackJitterPreservesEverySpeechSample() async throws {
+        let (recorder, directory) = try fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await recorder.start(callID: "jitter", source: .cloudPCM, atUptime: 10)
+        recorder.appendPCM16(pcm([1, 2]), channel: .local, source: .cloudPCM, atUptime: 10)
+        recorder.appendPCM16(pcm([3, 4]), channel: .local, source: .cloudPCM, atUptime: 10 + 1.0 / 8_000)
+        let file = try await recorder.stop()
+        XCTAssertEqual(try samples(recorder.url(for: file)), [1, 0, 2, 0, 3, 0, 4, 0])
+    }
+
+    func testStorageLimitPreservesCompletedAudio() async throws {
+        let (recorder, directory) = try fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await recorder.start(callID: "limit", source: .cloudPCM, atUptime: 1)
+        recorder.appendPCM16(pcm([100, 200]), channel: .local, source: .cloudPCM, atUptime: 1)
+        recorder.appendPCM16(pcm([999]), channel: .local, source: .cloudPCM, atUptime: 7_202)
+        let file = try await recorder.stop()
+        XCTAssertEqual(try samples(recorder.url(for: file)), [100, 0, 200, 0])
+    }
+
+    func testConcurrentDirectionsSavePlayableStereoFile() async throws {
+        let (recorder, directory) = try fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        _ = try await recorder.start(callID: "concurrent", source: .cloudPCM, atUptime: 100)
+        let chunk = pcm([Int16](repeating: 5_000, count: 160))
+        DispatchQueue.concurrentPerform(iterations: 2) { direction in
+            for frame in 0..<100 {
+                recorder.appendPCM16(chunk, channel: direction == 0 ? .local : .remote,
+                    source: .cloudPCM, atUptime: 100 + Double(frame) * 0.02)
+            }
+        }
+        let file = try await recorder.stop()
+        let audio = try AVAudioFile(forReading: recorder.url(for: file))
+        XCTAssertEqual(audio.length, 16_000)
+        XCTAssertEqual(audio.processingFormat.channelCount, 2)
+        XCTAssertEqual(audio.processingFormat.sampleRate, 8_000)
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 16_000))
+        try audio.read(into: buffer)
+        let channels = try XCTUnwrap(buffer.floatChannelData)
+        XCTAssertEqual(channels[0][8_000], 5_000.0 / 32_768, accuracy: 0.0001)
+        XCTAssertEqual(channels[1][8_000], 5_000.0 / 32_768, accuracy: 0.0001)
     }
 }

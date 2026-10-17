@@ -45,7 +45,7 @@ AirSIM 使用 `PolyForm-Noncommercial-1.0.0`，属于源码可见项目而不是
 5. AVF 控制和 PCM 服务只监听内部私网或 loopback，不得暴露到通用 Wi-Fi、热点、蜂窝或公网接口。
 6. VoWLAN 控制面必须执行路由白名单、时间戳、nonce、HMAC 和消息大小校验。
 7. 通话建立时确定 VoWLAN 或 Relay 传输；本次通话结束前不得静默切换路径。
-8. PCM 只在内存与网络中处理，不保存到磁盘或诊断日志。
+8. PCM 只在内存与网络中处理；仅用户主动开启的 iPhone 通话录音可写入受保护、排除备份的本地文件。不得上传录音或将 PCM 写入诊断日志。
 9. iOS/watchOS 工程中的 `com.example.airsim` 是占位符。部署者必须使用自己的 Apple Team、唯一 Bundle ID、证书和 provisioning profile。
 10. Relay 的 `ALLOWED_BUNDLE_ID` 必须等于重新签名后的主 iOS App Bundle ID。
 11. AirSIM 与 DJOneHub 必须使用不同 hostname、Worker、KV、Durable Objects 和 Dashboard token。维护者 AirSIM hostname 是 `airsim-push.remotepilot.site`；`push.remotepilot.site` 属于 DJOneHub，不得由 AirSIM 接管。
