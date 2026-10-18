@@ -97,11 +97,13 @@ Replacing only a certificate while retaining someone else's Bundle ID does not g
 
 Inject the Relay URL through `AIRSIM_PUSH_RELAY_URL` and the APNs environment through `AIRSIM_APNS_ENVIRONMENT`. Debug development signing uses APNs `sandbox`; Release/TestFlight uses `production`.
 
+Enhanced Security entitlements (see `xcode-security-settings.md`): when re-signing, keep the `com.apple.security.hardened-process` family present in each target's `.entitlements` file — `com.apple.security.hardened-process`, `com.apple.security.hardened-process.enhanced-security-version-string` (`2`), `com.apple.security.hardened-process.hardened-heap`, `com.apple.security.hardened-process.dyld-ro`, `com.apple.security.hardened-process.platform-restrictions-string` (`2`), `com.apple.security.hardened-process.checked-allocations`, and `com.apple.security.hardened-process.checked-allocations.soft-mode`; the Watch app and Live Activity extension additionally carry `com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow`. The Live Activity extension now has its own `AirSIMLiveActivityExtension.entitlements`, so regenerate its App ID and provisioning profile together with the other targets. Removing these keys silently weakens runtime hardening and can produce signing/validation warnings.
+
 Do not enter DJOneHub's `https://push.remotepilot.site` in AirSIM. It accepts only DJOneHub Bundle IDs. AirSIM and DJOneHub device registration, command queues, media sessions, and Dashboards are isolated. The maintainer's AirSIM URL accepts only `com.eric3u.airsim`; users changing Bundle ID must also change Relay `ALLOWED_BUNDLE_ID` and APNs credentials.
 
 New installations require Samsung pairing, notification authorization, CallKit/PushKit registration, and Watch companion installation again.
 
-The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is an arm64 build for re-signing, without `_CodeSignature` or `embedded.mobileprovision`; it cannot be installed directly. Signing only the main app is insufficient: replace and sign the Watch app and Live Activity Extension Bundle IDs, entitlements, and provisioning profiles as well. Public Releases must not contain development/ad hoc IPAs exposing device UDIDs.
+The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is a re-signing package whose main app binary is arm64 (the embedded Watch app and Live Activity extension binaries also carry `arm64e`/`arm64e.x1` slices), without `_CodeSignature` or `embedded.mobileprovision`; it cannot be installed directly. Signing only the main app is insufficient: replace and sign the Watch app and Live Activity Extension Bundle IDs, entitlements, and provisioning profiles as well. Public Releases must not contain development/ad hoc IPAs exposing device UDIDs.
 
 ## Security and privacy
 
