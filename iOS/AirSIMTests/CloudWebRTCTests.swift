@@ -1,26 +1,30 @@
-import XCTest
+import Testing
+import Foundation
 import WebRTC
 import AudioToolbox
 @testable import AirSIM
 
-final class CloudWebRTCTests: XCTestCase {
-    @MainActor
-    func testICEPrefetchAndConcurrentAudioStartsShareOneRequest() async throws {
+struct CloudWebRTCTests {
+    @Test @MainActor
+    func `ICE prefetch and concurrent audio starts share one request`() async throws {
         let gate = ICEFetchGate()
         let preparation = CloudICEPreparation(fetch: { try await gate.fetch($0) })
         let call = try iceCall()
-        preparation.prefetch(for: call)
-        await fulfillment(of: [gate.firstRequest], timeout: 2)
+        try await confirmation("first ICE request") { firstRequest in
+            gate.onFirstRequest = firstRequest
+            preparation.prefetch(for: call)
+            try await waitUntil({ !gate.calls.isEmpty }, "first ICE request was not started")
+        }
         let first = Task { try await preparation.configuration(for: call) }
         let second = Task { try await preparation.configuration(for: call) }
         gate.complete(0, username: "one")
         let results = try await [first.value, second.value]
-        XCTAssertEqual(results.map { $0.iceServers.first?.username }, ["one", "one"])
-        XCTAssertEqual(gate.calls.count, 1)
+        #expect(results.map { $0.iceServers.first?.username } == ["one", "one"])
+        #expect(gate.calls.count == 1)
     }
 
-    @MainActor
-    func testICELeaseRefreshesBeforeExpiryAndReusesFreshLease() async throws {
+    @Test @MainActor
+    func `ICE lease refreshes before expiry and reuses fresh lease`() async throws {
         var time: TimeInterval = 100
         var requests = 0
         let preparation = CloudICEPreparation(fetch: { _ in
@@ -32,98 +36,109 @@ final class CloudWebRTCTests: XCTestCase {
         let first = try await preparation.configuration(for: call)
         time = 189
         let reused = try await preparation.configuration(for: call)
-        XCTAssertEqual(first.iceServers.first?.username, reused.iceServers.first?.username)
-        XCTAssertEqual(requests, 1)
+        #expect(first.iceServers.first?.username == reused.iceServers.first?.username)
+        #expect(requests == 1)
         time = 190
         let refreshed = try await preparation.configuration(for: call)
-        XCTAssertEqual(refreshed.iceServers.first?.username, "2")
-        XCTAssertEqual(requests, 2)
+        #expect(refreshed.iceServers.first?.username == "2")
+        #expect(requests == 2)
     }
 
-    @MainActor
-    func testICEFailedPrefetchRetriesOnceWhenAudioNeedsIt() async throws {
-        let fetched = expectation(description: "prefetch failed")
+    @Test @MainActor
+    func `ICE failed prefetch retries once when audio needs it`() async throws {
         var requests = 0
-        let preparation = CloudICEPreparation(fetch: { _ in
-            requests += 1
-            if requests == 1 {
-                fetched.fulfill()
-                throw CloudWebRTCError.iceUnavailable
-            }
-            return self.iceConfig(username: "retry")
-        })
-        let call = try iceCall()
-        preparation.prefetch(for: call)
-        await fulfillment(of: [fetched], timeout: 2)
-        let config = try await preparation.configuration(for: call)
-        XCTAssertEqual(config.iceServers.first?.username, "retry")
-        XCTAssertEqual(requests, 2)
+        try await confirmation("prefetch failed") { fetched in
+            let preparation = CloudICEPreparation(fetch: { _ in
+                requests += 1
+                if requests == 1 {
+                    fetched()
+                    throw CloudWebRTCError.iceUnavailable
+                }
+                return self.iceConfig(username: "retry")
+            })
+            let call = try iceCall()
+            preparation.prefetch(for: call)
+            try await waitUntil({ requests >= 1 }, "failed prefetch did not run")
+            let config = try await preparation.configuration(for: call)
+            #expect(config.iceServers.first?.username == "retry")
+            #expect(requests == 2)
+        }
     }
 
-    @MainActor
-    func testICERepeatedFailureStopsAfterOneRetry() async throws {
+    @Test @MainActor
+    func `ICE repeated failure stops after one retry`() async throws {
         var requests = 0
         let preparation = CloudICEPreparation(fetch: { _ in
             requests += 1
             throw CloudWebRTCError.iceUnavailable
         })
-        do {
+        await #expect(throws: CloudWebRTCError.self) {
             _ = try await preparation.configuration(for: iceCall())
-            XCTFail("Unavailable credentials must fail")
-        } catch is CloudWebRTCError {} catch { XCTFail("Unexpected error") }
-        XCTAssertEqual(requests, 2)
+        }
+        #expect(requests == 2)
     }
 
-    @MainActor
-    func testICEHangupDiscardsLateResponseBeforeNextCall() async throws {
+    @Test @MainActor
+    func `ICE hangup discards late response before next call`() async throws {
         let gate = ICEFetchGate()
         let preparation = CloudICEPreparation(fetch: { try await gate.fetch($0) })
         let old = try iceCall(), next = try iceCall()
-        preparation.prefetch(for: old)
-        await fulfillment(of: [gate.firstRequest], timeout: 2)
-        let started = expectation(description: "old waiter entered")
+        try await confirmation("first ICE request") { firstRequest in
+            gate.onFirstRequest = firstRequest
+            preparation.prefetch(for: old)
+            try await waitUntil({ !gate.calls.isEmpty }, "first ICE request was not started")
+        }
+        var waiterEntered = false
         let waiter = Task {
-            started.fulfill()
+            waiterEntered = true
             return try await preparation.configuration(for: old)
         }
-        await fulfillment(of: [started], timeout: 2)
+        try await waitUntil({ waiterEntered }, "old waiter did not enter the configuration call")
         preparation.cancel()
-        preparation.prefetch(for: next)
-        await fulfillment(of: [gate.secondRequest], timeout: 2)
+        try await confirmation("second ICE request") { secondRequest in
+            gate.onSecondRequest = secondRequest
+            preparation.prefetch(for: next)
+            try await waitUntil({ gate.calls.count >= 2 }, "second ICE request was not started")
+        }
         // Simulate a transport that delivers a response despite cancellation.
         gate.complete(0, username: "stale")
-        do { _ = try await waiter.value; XCTFail("Ended call reused credentials") }
-        catch is CancellationError {} catch { XCTFail("Unexpected error") }
+        await #expect(throws: CancellationError.self) {
+            try await waiter.value
+        }
         gate.complete(1, username: "next")
         let config = try await preparation.configuration(for: next)
-        XCTAssertEqual(config.iceServers.first?.username, "next")
-        XCTAssertEqual(gate.calls.map(\.uuid), [old.uuid, next.uuid])
+        #expect(config.iceServers.first?.username == "next")
+        #expect(gate.calls.map(\.uuid) == [old.uuid, next.uuid])
     }
 
-    @MainActor
-    func testICEAudioInterruptionDoesNotCancelSharedPreparation() async throws {
+    @Test @MainActor
+    func `ICE audio interruption does not cancel shared preparation`() async throws {
         let gate = ICEFetchGate()
         let preparation = CloudICEPreparation(fetch: { try await gate.fetch($0) })
         let call = try iceCall()
-        preparation.prefetch(for: call)
-        await fulfillment(of: [gate.firstRequest], timeout: 2)
-        let started = expectation(description: "audio waiter entered")
+        try await confirmation("first ICE request") { firstRequest in
+            gate.onFirstRequest = firstRequest
+            preparation.prefetch(for: call)
+            try await waitUntil({ !gate.calls.isEmpty }, "first ICE request was not started")
+        }
+        var waiterEntered = false
         let waiter = Task {
-            started.fulfill()
+            waiterEntered = true
             return try await preparation.configuration(for: call)
         }
-        await fulfillment(of: [started], timeout: 2)
+        try await waitUntil({ waiterEntered }, "audio waiter did not enter the configuration call")
         waiter.cancel()
         gate.complete(0, username: "retained")
-        do { _ = try await waiter.value; XCTFail("Cancelled audio start continued") }
-        catch is CancellationError {} catch { XCTFail("Unexpected error") }
+        await #expect(throws: CancellationError.self) {
+            try await waiter.value
+        }
         let config = try await preparation.configuration(for: call)
-        XCTAssertEqual(config.iceServers.first?.username, "retained")
-        XCTAssertEqual(gate.calls.count, 1)
+        #expect(config.iceServers.first?.username == "retained")
+        #expect(gate.calls.count == 1)
     }
 
-    @MainActor
-    func testICECredentialsAreScopedToGenerationSecretAndRelay() async throws {
+    @Test @MainActor
+    func `ICE credentials are scoped to generation secret and relay`() async throws {
         var requests = 0
         let preparation = CloudICEPreparation(fetch: { _ in
             requests += 1
@@ -138,9 +153,27 @@ final class CloudWebRTCTests: XCTestCase {
         ]
         for (index, call) in calls.enumerated() {
             let config = try await preparation.configuration(for: call)
-            XCTAssertEqual(config.iceServers.first?.username, String(index + 1))
+            #expect(config.iceServers.first?.username == String(index + 1))
         }
-        XCTAssertEqual(requests, 4)
+        #expect(requests == 4)
+    }
+
+    /// Bounded replacement for the former `await fulfillment(of:timeout:)` waits.
+    @MainActor
+    private func waitUntil(
+        _ condition: @MainActor () -> Bool,
+        timeout seconds: TimeInterval = 2,
+        _ timeoutMessage: String
+    ) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !condition() {
+            guard Date() < deadline else {
+                struct WaitTimeout: Error {}
+                Issue.record("\(timeoutMessage)")
+                throw WaitTimeout()
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
     }
 
     private func iceCall(id: UUID = UUID(), generation: UInt64 = 1, secret: String = "x",
@@ -154,19 +187,20 @@ final class CloudWebRTCTests: XCTestCase {
         .init(iceServers: [.init(urls: ["turn:relay.test"], username: username, credential: "test")], ttl: ttl)
     }
 
-    func testSignalUsesContractKeysAndRoundTrips() throws {
+    @Test func `Signal uses contract keys and round trips`() throws {
         let signal = CloudWebRTCSignal(action: .ice, callUUID: UUID(), generation: 7, sessionID: UUID(),
             candidate: .init(candidate: "candidate:1 1 udp 1 127.0.0.1 1234 typ host", sdpMid: "0", sdpMlineIndex: 0))
         let data = try JSONEncoder().encode(signal)
-        XCTAssertEqual(try JSONDecoder().decode(CloudWebRTCSignal.self, from: data), signal)
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(json["call_uuid"] as? String, signal.callUUID.uuidString.lowercased())
-        XCTAssertEqual(json["session_id"] as? String, signal.sessionID.uuidString.lowercased())
-        XCTAssertEqual((json["candidate"] as? [String: Any])?["sdp_mline_index"] as? Int, 0)
-        XCTAssertTrue(signal.isValid)
+        #expect(try JSONDecoder().decode(CloudWebRTCSignal.self, from: data) == signal)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["call_uuid"] as? String == signal.callUUID.uuidString.lowercased())
+        #expect(json["session_id"] as? String == signal.sessionID.uuidString.lowercased())
+        #expect((json["candidate"] as? [String: Any])?["sdp_mline_index"] as? Int == 0)
+        #expect(signal.isValid)
     }
-    @MainActor
-    func testStandaloneAnswerOKPublishesConnectedBeforeMediaWithoutActiveMessage() {
+
+    @Test @MainActor
+    func `Standalone answer OK publishes connected before media without active message`() {
         let handshake = CloudWebRTCAnswerHandshake()
         var events: [String] = []
         // The standalone agent sends answer_ok only after Telecom is active.
@@ -174,17 +208,17 @@ final class CloudWebRTCTests: XCTestCase {
         handshake.confirm(status: "answer_ok", callConnected: {
             events.append("call_connected")
         }) {
-            XCTAssertEqual(events, ["call_connected"])
+            #expect(events == ["call_connected"])
             events.append("start_media")
         }
-        XCTAssertEqual(events, ["call_connected", "start_media"])
+        #expect(events == ["call_connected", "start_media"])
         handshake.confirm(status: "active", callConnected: {
-            XCTFail("Duplicate status republished connection")
-        }) { XCTFail("Duplicate status restarted media") }
+            Issue.record("Duplicate status republished connection")
+        }) { Issue.record("Duplicate status restarted media") }
     }
 
-    @MainActor
-    func testStandaloneAnswerEnablesRecordingInAppModelAndEndingDisablesIt() {
+    @Test @MainActor
+    func `Standalone answer enables recording in app model and ending disables it`() {
         let session = IPhoneCloudCallSession.shared
         let previousLifecycle = session.onLifecycleEvent
         let previousAudio = session.onAudioStateChange
@@ -199,145 +233,152 @@ final class CloudWebRTCTests: XCTestCase {
                 generation: 1, state: state, source: .agent, timestamp: Date(), traceID: nil, failure: nil))
         }
         publish(.connecting)
-        XCTAssertFalse(model.canToggleRecording)
+        #expect(!model.canToggleRecording)
         let handshake = CloudWebRTCAnswerHandshake()
         handshake.confirm(status: "answer_ok", callConnected: { publish(.active) }) {}
-        XCTAssertEqual(model.callLifecycleSnapshot.state, .active)
-        XCTAssertTrue(model.canToggleRecording)
+        #expect(model.callLifecycleSnapshot.state == .active)
+        #expect(model.canToggleRecording)
         publish(.ending)
-        XCTAssertFalse(model.canToggleRecording)
+        #expect(!model.canToggleRecording)
         // Late confirmation may not undo an explicit hangup.
         handshake.invalidate()
         handshake.confirm(status: "answer_ok", callConnected: { publish(.active) }) {}
-        XCTAssertEqual(model.callLifecycleSnapshot.state, .ending)
-        XCTAssertFalse(model.canToggleRecording)
+        #expect(model.callLifecycleSnapshot.state == .ending)
+        #expect(!model.canToggleRecording)
     }
 
-    @MainActor
-    func testUnconfirmedAnswerCannotPublishConnectedOrEnableRecording() {
+    @Test @MainActor
+    func `Unconfirmed answer cannot publish connected or enable recording`() {
         let handshake = CloudWebRTCAnswerHandshake()
         for status in ["agent_ready", "action_queued", "action_forwarded", "action_error", "webrtc_ready"] {
             handshake.confirm(status: status, callConnected: {
-                XCTFail("Unconfirmed call became connected")
-            }) { XCTFail("Unconfirmed call started media") }
+                Issue.record("Unconfirmed call became connected")
+            }) { Issue.record("Unconfirmed call started media") }
         }
-        XCTAssertFalse(handshake.acknowledged)
+        #expect(!handshake.acknowledged)
         handshake.invalidate(requiringAnswerOK: true)
         handshake.confirm(status: "active", callConnected: {
-            XCTFail("Reconnect requires fresh answer confirmation")
-        }) { XCTFail("Stale activity restarted media") }
-        XCTAssertFalse(handshake.acknowledged)
+            Issue.record("Reconnect requires fresh answer confirmation")
+        }) { Issue.record("Stale activity restarted media") }
+        #expect(!handshake.acknowledged)
     }
 
-    @MainActor
-    func testAgentReconnectReplaysAnswerBeforeAllowingNewOffer() {
+    @Test @MainActor
+    func `Agent reconnect replays answer before allowing new offer`() {
         let handshake = CloudWebRTCAnswerHandshake()
         var events: [String] = []
         handshake.confirm { events.append("initial_offer") }
-        XCTAssertTrue(handshake.acknowledged)
+        #expect(handshake.acknowledged)
 
         // These are the same stop, send, timer and offer callbacks wired into
         // IPhoneCloudCallSession, driven in actual Relay/agent event order.
         handshake.agentReconnected(role: "agent", stopMedia: {
-            XCTAssertFalse(handshake.acknowledged)
+            #expect(!handshake.acknowledged)
             events.append("stop_old_peer")
         }, replayAnswer: {
             events.append("answer")
         }, scheduleConfirmation: {
             events.append("arm_bounded_confirmation")
         })
-        XCTAssertEqual(events, ["initial_offer", "stop_old_peer", "answer", "arm_bounded_confirmation"])
-        XCTAssertFalse(handshake.acknowledged)
+        #expect(events == ["initial_offer", "stop_old_peer", "answer", "arm_bounded_confirmation"])
+        #expect(!handshake.acknowledged)
         // agent_ready may arrive after peer_connected. Replay is idempotent,
         // and still must not produce SDP while the agent has no answer ack.
         handshake.replayIfNeeded { events.append("answer_retry") }
-        XCTAssertFalse(events.contains("replacement_offer"))
-        handshake.confirm(status: "active") { XCTFail("Call activity is not a fresh peer answer acknowledgement") }
-        XCTAssertFalse(handshake.acknowledged)
+        #expect(!events.contains("replacement_offer"))
+        handshake.confirm(status: "active") { Issue.record("Call activity is not a fresh peer answer acknowledgement") }
+        #expect(!handshake.acknowledged)
         handshake.confirm { events.append("replacement_offer") }
-        XCTAssertEqual(events.suffix(2), ["answer_retry", "replacement_offer"])
-        XCTAssertTrue(handshake.acknowledged)
-        handshake.replayIfNeeded { XCTFail("agent_ready must not create an answer loop after ack") }
-        handshake.confirm { XCTFail("duplicate answer_ok must not renegotiate") }
+        #expect(Array(events.suffix(2)) == ["answer_retry", "replacement_offer"])
+        #expect(handshake.acknowledged)
+        handshake.replayIfNeeded { Issue.record("agent_ready must not create an answer loop after ack") }
+        handshake.confirm { Issue.record("duplicate answer_ok must not renegotiate") }
     }
 
-    @MainActor
-    func testWatchReconnectPreservesAcknowledgedAnswerAndMedia() {
+    @Test @MainActor
+    func `Watch reconnect preserves acknowledged answer and media`() {
         let handshake = CloudWebRTCAnswerHandshake()
         handshake.confirm {}
-        handshake.agentReconnected(role: "watch", stopMedia: { XCTFail("Watch stopped the agent peer") },
-            replayAnswer: { XCTFail("Watch replayed answer") },
-            scheduleConfirmation: { XCTFail("Watch armed answer retry") })
-        XCTAssertTrue(handshake.acknowledged)
+        handshake.agentReconnected(role: "watch", stopMedia: { Issue.record("Watch stopped the agent peer") },
+            replayAnswer: { Issue.record("Watch replayed answer") },
+            scheduleConfirmation: { Issue.record("Watch armed answer retry") })
+        #expect(handshake.acknowledged)
     }
 
-    func testWireBoundsMatchRelay() {
+    @Test func `Wire bounds match relay`() {
         let id = UUID()
-        XCTAssertFalse(CloudWebRTCSignal(action: .offer, callUUID: id, generation: 1, sessionID: id,
+        #expect(!CloudWebRTCSignal(action: .offer, callUUID: id, generation: 1, sessionID: id,
             sdp: String(repeating: "a", count: 48 * 1024 + 1)).isValid)
-        XCTAssertFalse(CloudWebRTCSignal(action: .ice, callUUID: id, generation: 1, sessionID: id,
+        #expect(!CloudWebRTCSignal(action: .ice, callUUID: id, generation: 1, sessionID: id,
             candidate: .init(candidate: String(repeating: "a", count: 4097), sdpMid: nil, sdpMlineIndex: 0)).isValid)
-        XCTAssertFalse(CloudWebRTCSignal(action: .ice, callUUID: id, generation: 1, sessionID: id,
+        #expect(!CloudWebRTCSignal(action: .ice, callUUID: id, generation: 1, sessionID: id,
             candidate: .init(candidate: "candidate:x", sdpMid: String(repeating: "a", count: 257), sdpMlineIndex: 0)).isValid)
     }
-    func testReadinessRequiresNativeAndAgentForCurrentSession() {
+
+    @Test func `Readiness requires native and agent for current session`() {
         var state = CloudWebRTCReadiness()
         let old = UUID(), current = UUID()
         state.begin(old)
         state.nativeConnected(old)
-        XCTAssertFalse(state.isReady)
+        #expect(!state.isReady)
         state.agentConnected(old)
-        XCTAssertTrue(state.isReady)
+        #expect(state.isReady)
         state.begin(current)
         state.nativeConnected(current)
         state.agentConnected(old)
-        XCTAssertFalse(state.isReady)
+        #expect(!state.isReady)
         state.agentConnected(current)
-        XCTAssertTrue(state.isReady)
+        #expect(state.isReady)
         state.agentRecovering()
-        XCTAssertFalse(state.isReady)
+        #expect(!state.isReady)
         state.reset()
         state.nativeConnected(current)
         state.agentConnected(current)
-        XCTAssertFalse(state.isReady)
+        #expect(!state.isReady)
     }
-    func testOnlyAgentReconnectRenegotiatesAndStatusDecodesSession() throws {
-        XCTAssertTrue(CloudWebRTCReadiness.shouldRenegotiatePeer(role: "agent"))
-        XCTAssertFalse(CloudWebRTCReadiness.shouldRenegotiatePeer(role: "watch"))
-        XCTAssertFalse(CloudWebRTCReadiness.shouldRenegotiatePeer(role: nil))
+
+    @Test func `Only agent reconnect renegotiates and status decodes session`() throws {
+        #expect(CloudWebRTCReadiness.shouldRenegotiatePeer(role: "agent"))
+        #expect(!CloudWebRTCReadiness.shouldRenegotiatePeer(role: "watch"))
+        #expect(!CloudWebRTCReadiness.shouldRenegotiatePeer(role: nil))
         let id = UUID()
-        let control = try XCTUnwrap(CloudPCMControlMessage.decode("{\"status\":\"webrtc_ready\",\"session_id\":\"\(id.uuidString.lowercased())\",\"role\":\"agent\"}"))
-        XCTAssertEqual(control.sessionID, id)
-        XCTAssertEqual(control.role, "agent")
+        let decoded = try CloudPCMControlMessage.decode("{\"status\":\"webrtc_ready\",\"session_id\":\"\(id.uuidString.lowercased())\",\"role\":\"agent\"}")
+        let control = try #require(decoded)
+        #expect(control.sessionID == id)
+        #expect(control.role == "agent")
     }
-    func testVoiceSDPForcesMonoOpusAndTwentyMillisecondFrames() {
+
+    @Test func `Voice SDP forces mono Opus and twenty millisecond frames`() {
         let input = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111 0\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:0 PCMU/8000\r\n"
         let output = CloudWebRTCPeer.voiceSDP(input)
-        XCTAssertTrue(output.contains("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"))
-        XCTAssertFalse(output.contains("PCMU"))
-        XCTAssertTrue(output.contains("stereo=0"))
-        XCTAssertTrue(output.contains("a=ptime:20\r\na=maxptime:20"))
-        XCTAssertTrue(output.contains("useinbandfec=1"))
-        XCTAssertTrue(output.contains("usedtx=1"))
+        #expect(output.contains("m=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"))
+        #expect(!output.contains("PCMU"))
+        #expect(output.contains("stereo=0"))
+        #expect(output.contains("a=ptime:20\r\na=maxptime:20"))
+        #expect(output.contains("useinbandfec=1"))
+        #expect(output.contains("usedtx=1"))
     }
-    func testICERequestKeepsSecretOutOfURL() throws {
+
+    @Test func `ICE request keeps secret out of URL`() throws {
         let id = UUID()
         let call = try IncomingVoIPCall(outgoingCallID: "test", uuid: id, number: "1",
             secret: String(repeating: "x", count: 32), mediaURL: URL(string: "wss://relay.test/v1/calls/test/connect")!)
         let request = try CloudICEConfiguration.request(for: call)
-        XCTAssertEqual(request.url?.absoluteString, "https://relay.test/v1/calls/\(id.uuidString.lowercased())/ice?role=iphone")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer " + String(repeating: "x", count: 32))
+        #expect(request.url?.absoluteString == "https://relay.test/v1/calls/\(id.uuidString.lowercased())/ice?role=iphone")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer " + String(repeating: "x", count: 32))
     }
-    func testInvalidAndStaleSignalsAreRejected() throws {
+
+    @Test func `Invalid and stale signals are rejected`() throws {
         let id = UUID(), session = UUID()
         let call = try IncomingVoIPCall(outgoingCallID: "test", uuid: id, number: "1",
             secret: String(repeating: "x", count: 32), mediaURL: URL(string: "wss://relay.test/connect")!, generation: 7)
-        XCTAssertFalse(CloudWebRTCSignal(action: .answer, callUUID: id, generation: 7, sessionID: UUID(), sdp: "sdp").matches(call: call, sessionID: session))
-        XCTAssertFalse(CloudWebRTCSignal(action: .answer, callUUID: id, generation: 6, sessionID: session, sdp: "sdp").matches(call: call, sessionID: session))
-        XCTAssertFalse(CloudWebRTCSignal(action: .ice, callUUID: id, generation: 7, sessionID: session,
+        #expect(!CloudWebRTCSignal(action: .answer, callUUID: id, generation: 7, sessionID: UUID(), sdp: "sdp").matches(call: call, sessionID: session))
+        #expect(!CloudWebRTCSignal(action: .answer, callUUID: id, generation: 6, sessionID: session, sdp: "sdp").matches(call: call, sessionID: session))
+        #expect(!CloudWebRTCSignal(action: .ice, callUUID: id, generation: 7, sessionID: session,
             candidate: .init(candidate: "x", sdpMid: nil, sdpMlineIndex: -1)).isValid)
     }
-    func testRemoteICEQueueIsBoundedAndFencedBySession() throws {
+
+    @Test func `Remote ICE queue is bounded and fenced by session`() throws {
         RTCInitializeSSL()
         let queue = DispatchQueue(label: "airsim.webrtc.ice-bound")
         let id = UUID(), session = UUID()
@@ -351,16 +392,17 @@ final class CloudWebRTCTests: XCTestCase {
                     candidate: .init(candidate: "candidate:1 1 udp 2122260223 127.0.0.1 1234 typ host", sdpMid: "0", sdpMlineIndex: 0))
             }
             for _ in 0..<200 { peer.receive(ice(UUID())) }
-            XCTAssertEqual(failures, 0)
+            #expect(failures == 0)
             for _ in 0..<128 { peer.receive(ice(session)) }
-            XCTAssertEqual(failures, 0)
+            #expect(failures == 0)
             peer.receive(ice(session))
-            XCTAssertEqual(failures, 1)
+            #expect(failures == 1)
             peer.receive(ice(session))
-            XCTAssertEqual(failures, 1)
+            #expect(failures == 1)
         }
     }
-    func testStatisticsUseSelectedAudioPathAndDoNotLeakCandidates() {
+
+    @Test func `Statistics use selected audio path and do not leak candidates`() {
         var reducer = CloudWebRTCStatistics()
         var records = statisticsRecords()
         records["decoy"] = .init(type: "candidate-pair", values: [
@@ -374,66 +416,66 @@ final class CloudWebRTCTests: XCTestCase {
             "kind": "video", "jitter": "99", "packetsReceived": "999999", "transportId": "video-transport"
         ])
         let fields = reducer.fields(for: records, at: 10)
-        XCTAssertEqual(fields["path_rtt_ms"], "125.000")
-        XCTAssertEqual(fields["candidate-pair.currentRoundTripTime"], "0.125")
-        XCTAssertEqual(fields["local-candidate.candidateType"], "host")
-        XCTAssertEqual(fields["remote-candidate.candidateType"], "srflx")
-        XCTAssertEqual(fields["rx_jitter_ms"], "12.000")
-        XCTAssertEqual(fields["codec.mimeType"], "audio/opus")
-        XCTAssertEqual(fields["inbound-rtp.packetsReceived"], "100")
-        XCTAssertNil(fields["rx_buffer_ms"], "The first sample is not a measurement interval")
-        XCTAssertFalse(fields.values.contains(where: { $0.contains("private-") }))
+        #expect(fields["path_rtt_ms"] == "125.000")
+        #expect(fields["candidate-pair.currentRoundTripTime"] == "0.125")
+        #expect(fields["local-candidate.candidateType"] == "host")
+        #expect(fields["remote-candidate.candidateType"] == "srflx")
+        #expect(fields["rx_jitter_ms"] == "12.000")
+        #expect(fields["codec.mimeType"] == "audio/opus")
+        #expect(fields["inbound-rtp.packetsReceived"] == "100")
+        #expect(fields["rx_buffer_ms"] == nil, "The first sample is not a measurement interval")
+        #expect(!fields.values.contains(where: { $0.contains("private-") }))
     }
 
-    func testStatisticsOmitPathWithoutExplicitSelectedPair() {
+    @Test func `Statistics omit path without explicit selected pair`() {
         var reducer = CloudWebRTCStatistics()
         var records = statisticsRecords()
         records["transport"] = .init(type: "transport", values: [:])
         let fields = reducer.fields(for: records, at: 10)
-        XCTAssertNil(fields["path_rtt_ms"])
-        XCTAssertNil(fields["candidate-pair.currentRoundTripTime"])
-        XCTAssertNil(fields["local-candidate.candidateType"])
-        XCTAssertEqual(fields["rx_jitter_ms"], "12.000")
+        #expect(fields["path_rtt_ms"] == nil)
+        #expect(fields["candidate-pair.currentRoundTripTime"] == nil)
+        #expect(fields["local-candidate.candidateType"] == nil)
+        #expect(fields["rx_jitter_ms"] == "12.000")
     }
 
-    func testStatisticsReportIntervalDelayAndConcealment() {
+    @Test func `Statistics report interval delay and concealment`() {
         var reducer = CloudWebRTCStatistics()
         _ = reducer.fields(for: statisticsRecords(), at: 10)
         let fields = reducer.fields(for: statisticsRecords(packets: 350, lost: 5,
             concealed: 320, samples: 48_000, delay: 1_440, emitted: 24_000), at: 15)
-        XCTAssertEqual(fields["rx_sample_interval_ms"], "5000.000")
-        XCTAssertEqual(fields["rx_buffer_ms"], "80.000") // (1440 - 800) / (24000 - 16000)
-        XCTAssertEqual(fields["rx_concealed_samples"], "160.000")
-        XCTAssertEqual(fields["rx_concealment_pct"], "1.000")
-        XCTAssertEqual(fields["rx_lost_packets"], "3.000")
+        #expect(fields["rx_sample_interval_ms"] == "5000.000")
+        #expect(fields["rx_buffer_ms"] == "80.000") // (1440 - 800) / (24000 - 16000)
+        #expect(fields["rx_concealed_samples"] == "160.000")
+        #expect(fields["rx_concealment_pct"] == "1.000")
+        #expect(fields["rx_lost_packets"] == "3.000")
     }
 
-    func testStatisticsResetIntervalsForNewStreamAndCounterRestart() {
+    @Test func `Statistics reset intervals for new stream and counter restart`() {
         var reducer = CloudWebRTCStatistics()
         _ = reducer.fields(for: statisticsRecords(), at: 10)
         let reset = reducer.fields(for: statisticsRecords(packets: 1, lost: 0,
             concealed: 0, samples: 160, delay: 8, emitted: 160), at: 15)
-        XCTAssertNil(reset["rx_buffer_ms"])
-        XCTAssertNil(reset["rx_concealment_pct"])
+        #expect(reset["rx_buffer_ms"] == nil)
+        #expect(reset["rx_concealment_pct"] == nil)
         var replacement = statisticsRecords()
         replacement["replacement"] = replacement.removeValue(forKey: "rx")
-        XCTAssertNil(reducer.fields(for: replacement, at: 20)["rx_buffer_ms"])
+        #expect(reducer.fields(for: replacement, at: 20)["rx_buffer_ms"] == nil)
         _ = reducer.fields(for: [:], at: 21)
-        XCTAssertNil(reducer.fields(for: replacement, at: 22)["rx_buffer_ms"])
+        #expect(reducer.fields(for: replacement, at: 22)["rx_buffer_ms"] == nil)
     }
 
-    func testStatisticsHandleIdleAndCorrectedLossWithoutInventingDelay() {
+    @Test func `Statistics handle idle and corrected loss without inventing delay`() {
         var reducer = CloudWebRTCStatistics()
         _ = reducer.fields(for: statisticsRecords(), at: 10)
         let fields = reducer.fields(for: statisticsRecords(lost: 1), at: 15)
-        XCTAssertEqual(fields["rx_lost_packets"], "-1.000")
-        XCTAssertNil(fields["rx_buffer_ms"])
-        XCTAssertNil(fields["rx_concealment_pct"])
+        #expect(fields["rx_lost_packets"] == "-1.000")
+        #expect(fields["rx_buffer_ms"] == nil)
+        #expect(fields["rx_concealment_pct"] == nil)
         var invalid = statisticsRecords()
         invalid["path"] = .init(type: "candidate-pair", values: [
             "state": "succeeded", "currentRoundTripTime": "nan"
         ])
-        XCTAssertNil(reducer.fields(for: invalid, at: 20)["path_rtt_ms"])
+        #expect(reducer.fields(for: invalid, at: 20)["path_rtt_ms"] == nil)
     }
 
     private func statisticsRecords(packets: Int = 100, lost: Int = 2, concealed: Int = 160,
@@ -466,63 +508,77 @@ final class CloudWebRTCTests: XCTestCase {
         ]
     }
 
-    func testNativePeersNegotiateOpusOverHostICE() async throws {
+    @Test func `Native peers negotiate Opus over host ICE`() async throws {
         try await runLoopback(servers: [], relayOnly: false)
     }
-    func testNativePeersNegotiateOpusThroughTURN() async throws {
+
+    @Test func `Native peers negotiate Opus through TURN`() async throws {
         guard let path = ProcessInfo.processInfo.environment["AIRSIM_WEBRTC_TURN_CONFIG"] else {
-            throw XCTSkip("Set AIRSIM_WEBRTC_TURN_CONFIG to a private ephemeral TURN test configuration")
+            try Test.cancel("Set AIRSIM_WEBRTC_TURN_CONFIG to a private ephemeral TURN test configuration")
         }
         struct TURN: Decodable { let ios_url: String; let username: String; let credential: String }
         let turn = try JSONDecoder().decode(TURN.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
         try await runLoopback(servers: [RTCIceServer(urlStrings: [turn.ios_url], username: turn.username, credential: turn.credential)], relayOnly: true)
     }
+
     private func runLoopback(servers: [RTCIceServer], relayOnly: Bool) async throws {
         RTCInitializeSSL()
         let queue = DispatchQueue(label: "airsim.webrtc.loopback")
-        let connected = expectation(description: "Native host ICE and DTLS connected")
-        connected.expectedFulfillmentCount = 2
-        let stats = expectation(description: "Both native peers report Opus RTP")
-        stats.expectedFulfillmentCount = 2
         let id = UUID(), session = UUID()
         let outputA = SyntheticWebRTCAudioDevice(), outputB = SyntheticWebRTCAudioDevice()
         let factoryA = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputA)
         let factoryB = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputB)
         var offerer: CloudWebRTCPeer!
         var answerer: CloudWebRTCPeer!
+        // Close the peers even when the wait times out, so the audio pump
+        // threads cannot leak into other tests running in parallel.
+        defer { queue.sync { offerer?.close(); answerer?.close() } }
         var reported = Set<String>()
+        var connectedCount = 0
         var negotiatedOpus = false
         var observedRelayCandidate = false
         var observedSelectedPath = false
-        try queue.sync {
-            offerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryA, relayOnly: relayOnly,
-                signal: { signal in answerer.receive(signal, answering: true) }, connected: { connected.fulfill() },
-                failure: { XCTFail("Offerer native negotiation failed") }, statistics: { fields in
-                    if fields["codec.mimeType"]?.lowercased() == "audio/opus" { negotiatedOpus = true }
-                    if fields["local-candidate.candidateType"] == "relay" { observedRelayCandidate = true }
-                    if fields["local-candidate.candidateType"] != nil && fields["remote-candidate.candidateType"] != nil {
-                        observedSelectedPath = true
+        try await confirmation("Native host ICE and DTLS connected", expectedCount: 2) { connected in
+            try await confirmation("Both native peers report Opus RTP", expectedCount: 2) { stats in
+                try queue.sync {
+                    offerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryA, relayOnly: relayOnly,
+                        signal: { signal in answerer.receive(signal, answering: true) }, connected: { connectedCount += 1; connected() },
+                        failure: { Issue.record("Offerer native negotiation failed") }, statistics: { fields in
+                            if fields["codec.mimeType"]?.lowercased() == "audio/opus" { negotiatedOpus = true }
+                            if fields["local-candidate.candidateType"] == "relay" { observedRelayCandidate = true }
+                            if fields["local-candidate.candidateType"] != nil && fields["remote-candidate.candidateType"] != nil {
+                                observedSelectedPath = true
+                            }
+                            if Int(fields["outbound-rtp.packetsSent"] ?? "0") ?? 0 > 0, reported.insert("offerer").inserted { stats() }
+                        })
+                    answerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryB, relayOnly: relayOnly,
+                        signal: { signal in offerer.receive(signal) }, connected: { connectedCount += 1; connected() },
+                        failure: { Issue.record("Answerer native negotiation failed") }, statistics: { fields in
+                            if Int(fields["inbound-rtp.packetsReceived"] ?? "0") ?? 0 > 0, reported.insert("answerer").inserted { stats() }
+                        })
+                    offerer.offer()
+                }
+                // Bounded stand-in for the former shared 20 s fulfillment timeout.
+                let deadline = Date().addingTimeInterval(20)
+                while queue.sync(execute: { reported.count < 2 || connectedCount < 2 }) {
+                    guard Date() < deadline else {
+                        struct LoopbackTimeout: Error {}
+                        Issue.record("Native peers did not both connect and report Opus RTP within 20 seconds")
+                        throw LoopbackTimeout()
                     }
-                    if Int(fields["outbound-rtp.packetsSent"] ?? "0") ?? 0 > 0, reported.insert("offerer").inserted { stats.fulfill() }
-                })
-            answerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryB, relayOnly: relayOnly,
-                signal: { signal in offerer.receive(signal) }, connected: { connected.fulfill() },
-                failure: { XCTFail("Answerer native negotiation failed") }, statistics: { fields in
-                    if Int(fields["inbound-rtp.packetsReceived"] ?? "0") ?? 0 > 0, reported.insert("answerer").inserted { stats.fulfill() }
-                })
-            offerer.offer()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+            }
         }
-        await fulfillment(of: [connected, stats], timeout: 20)
         let observed = queue.sync { (negotiatedOpus, observedRelayCandidate, observedSelectedPath) }
-        XCTAssertTrue(observed.0, "Native codec stats must identify audio/opus")
-        XCTAssertTrue(observed.2, "Native transport references must resolve the selected candidate pair")
-        if relayOnly { XCTAssertTrue(observed.1, "Force-relay test must gather TURN candidates") }
-        XCTAssertGreaterThan(outputA.receivedAudibleFrames, 0, "Real Opus decode must deliver audible PCM to peer A")
-        XCTAssertGreaterThan(outputB.receivedAudibleFrames, 0, "Real Opus decode must deliver audible PCM to peer B")
-        queue.sync { offerer.close(); answerer.close() }
+        #expect(observed.0, "Native codec stats must identify audio/opus")
+        #expect(observed.2, "Native transport references must resolve the selected candidate pair")
+        if relayOnly { #expect(observed.1, "Force-relay test must gather TURN candidates") }
+        #expect(outputA.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer A")
+        #expect(outputB.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer B")
     }
 
-    func testCloudCallRejectsLegacyPCM() throws {
+    @Test func `Cloud call rejects legacy PCM`() throws {
         let supported: Set<CloudMediaTransport> = [.legacyPCM, .webRTC]
         let legacy = CloudMediaTransportNegotiator.resolve(
             requested: .legacyPCM,
@@ -530,7 +586,7 @@ final class CloudWebRTCTests: XCTestCase {
             agentSupported: supported,
             forceLegacy: true
         )
-        XCTAssertEqual(legacy, .failure(.unsupported))
+        #expect(legacy == .failure(.unsupported))
 
         let forced = CloudMediaTransportNegotiator.resolve(
             requested: .webRTC,
@@ -538,23 +594,23 @@ final class CloudWebRTCTests: XCTestCase {
             agentSupported: [.webRTC],
             forceLegacy: true
         )
-        XCTAssertEqual(try forced.get(), .webRTC)
+        #expect(try forced.get() == .webRTC)
 
         let suite = "airsim.iphone-cloud-pcm-test"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try #require(UserDefaults(suiteName: suite))
         defaults.removePersistentDomain(forName: suite)
         defaults.set(CloudMediaTransport.legacyPCM.rawValue, forKey: CloudMediaTransportPreference.requestedKey)
         defaults.set(true, forKey: CloudMediaTransportPreference.forceLegacyKey)
-        XCTAssertEqual(CloudMediaTransportPreference.requested(defaults: defaults), .webRTC)
-        XCTAssertFalse(CloudMediaTransportPreference.forceLegacy(defaults: defaults))
+        #expect(CloudMediaTransportPreference.requested(defaults: defaults) == .webRTC)
+        #expect(!CloudMediaTransportPreference.forceLegacy(defaults: defaults))
 
         var scheduled = 0
         CloudCallBinaryFrame.deliver(Data(repeating: 0x11, count: 320)) { _ in scheduled += 1 }
         var envelope = Data([65, 83, 80, 77, 1, 0, 0, 20])
         envelope.append(Data(repeating: 2, count: 320))
         CloudCallBinaryFrame.deliver(envelope) { _ in scheduled += 1 }
-        XCTAssertEqual(scheduled, 0)
-        XCTAssertFalse(CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine())
+        #expect(scheduled == 0)
+        #expect(!CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine())
 
         let call = try IncomingVoIPCall(
             outgoingCallID: "legacy",
@@ -564,7 +620,7 @@ final class CloudWebRTCTests: XCTestCase {
             mediaURL: URL(string: "wss://relay.test/connect")!,
             mediaTransport: .legacyPCM
         )
-        XCTAssertEqual(call.requestedMediaTransport, .webRTC)
+        #expect(call.requestedMediaTransport == .webRTC)
     }
 }
 
@@ -650,8 +706,8 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
 
 @MainActor
 private final class ICEFetchGate {
-    let firstRequest = XCTestExpectation(description: "first ICE request")
-    let secondRequest = XCTestExpectation(description: "second ICE request")
+    var onFirstRequest: Confirmation?
+    var onSecondRequest: Confirmation?
     private(set) var calls: [IncomingVoIPCall] = []
     private var continuations: [CheckedContinuation<CloudICEConfiguration, Error>] = []
 
@@ -659,8 +715,8 @@ private final class ICEFetchGate {
         try await withCheckedThrowingContinuation { continuation in
             calls.append(call)
             continuations.append(continuation)
-            if calls.count == 1 { firstRequest.fulfill() }
-            if calls.count == 2 { secondRequest.fulfill() }
+            if calls.count == 1 { onFirstRequest?() }
+            if calls.count == 2 { onSecondRequest?() }
         }
     }
 
