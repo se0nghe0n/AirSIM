@@ -1625,27 +1625,25 @@ struct AirSIMTests {
     }
 }
 
-final class RecentCallTimeFormatterTests: XCTestCase {
+struct RecentCallTimeFormatterTests {
     private let calendar = Calendar(identifier: .gregorian)
 
     private func date(hour: Int, minute: Int) -> Date {
         calendar.date(from: DateComponents(year: 2026, month: 3, day: 15, hour: hour, minute: minute))!
     }
 
-    // review round 2 #1：12 小时制地区（en_US）必须保留 AM/PM，不再输出歧义的 "02:30"。
-    func testTodayShowsMeridiemInTwelveHourLocale() {
-        XCTAssertEqual(
-            RecentCallTimeFormatter.string(
-                for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
-                calendar: calendar, locale: Locale(identifier: "en_US")),
-            "2:30 PM")
+    // 12 小时制地区（en_US）必须保留 AM/PM；系统可能在 PM 前插入窄不换行空格（U+202F）。
+    @Test func `Today shows meridiem in twelve hour locale`() {
+        let text = RecentCallTimeFormatter.string(
+            for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
+            calendar: calendar, locale: Locale(identifier: "en_US"))
+        #expect(text.replacingOccurrences(of: "\u{202F}", with: " ") == "2:30 PM")
     }
 
-    func testTodayKeepsTwentyFourHourIn24HourLocale() {
-        XCTAssertEqual(
-            RecentCallTimeFormatter.string(
-                for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
-                calendar: calendar, locale: Locale(identifier: "en_GB")),
-            "14:30")
+    @Test func `Today keeps twenty four hour in 24 hour locale`() {
+        let text = RecentCallTimeFormatter.string(
+            for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
+            calendar: calendar, locale: Locale(identifier: "en_GB"))
+        #expect(text == "14:30")
     }
 }
