@@ -1,0 +1,17 @@
+{
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
+  "defaultProvider": "LLMProxy",
+  "defaultModel": "claude-opus-5-5",
+  "defaultThinkingLevel": "xhigh",
+  "subagents": {
+    "defaultModel": "CMP/dsv4s",
+    "agentOverrides": {
+      "reviewer": {
+        "model": "LLMProxy/claude-opus-5-5"
+      },
+      "worker": {
+        "model": "CMP/dsv4s"
+      }
+    }
+  }
+}
