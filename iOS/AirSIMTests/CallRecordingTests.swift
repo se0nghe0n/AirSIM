@@ -1,20 +1,21 @@
-import XCTest
+import Testing
+import Foundation
 import AVFoundation
 import WebRTC
 @testable import AirSIM
 
-final class CallRecordingTests: XCTestCase {
-    func testWebRTCModuleActuallyRegistersAndRetainsBothRecordingObservers() throws {
+struct CallRecordingTests {
+    @Test func `WebRTC module actually registers and retains both recording observers`() throws {
         let audio = CloudWebRTCRecordingAudio()
         // Test the real SDK getters, not a mock initializer: this SDK accepts
         // constructor delegates but does not bind them to the native adapter.
-        let capture = try XCTUnwrap(audio.module.capturePostProcessingDelegate)
-        let render = try XCTUnwrap(audio.module.renderPreProcessingDelegate)
-        XCTAssertFalse(capture === render)
+        let capture = try #require(audio.module.capturePostProcessingDelegate)
+        let render = try #require(audio.module.renderPreProcessingDelegate)
+        #expect(capture !== render)
         capture.audioProcessingInitialize(sampleRate: 48_000, channels: 1)
         render.audioProcessingInitialize(sampleRate: 48_000, channels: 1)
-        XCTAssertTrue(audio.module.capturePostProcessingDelegate === capture)
-        XCTAssertTrue(audio.module.renderPreProcessingDelegate === render)
+        #expect(audio.module.capturePostProcessingDelegate === capture)
+        #expect(audio.module.renderPreProcessingDelegate === render)
         withExtendedLifetime(audio) {}
     }
 
@@ -27,35 +28,35 @@ final class CallRecordingTests: XCTestCase {
     }
     private func samples(_ url: URL) throws -> [Int16] {
         let wav = try Data(contentsOf: url)
-        XCTAssertEqual(String(data: wav.prefix(4), encoding: .ascii), "RIFF")
-        XCTAssertEqual(String(data: wav[8..<12], encoding: .ascii), "WAVE")
-        XCTAssertEqual(Array(wav[22..<24]), [2, 0])
-        XCTAssertEqual(Array(wav[24..<28]), [0x40, 0x1f, 0, 0])
-        XCTAssertEqual(Array(wav[34..<36]), [16, 0])
+        #expect(String(data: wav.prefix(4), encoding: .ascii) == "RIFF")
+        #expect(String(data: wav[8..<12], encoding: .ascii) == "WAVE")
+        #expect(Array(wav[22..<24]) == [2, 0])
+        #expect(Array(wav[24..<28]) == [0x40, 0x1f, 0, 0])
+        #expect(Array(wav[34..<36]) == [16, 0])
         return stride(from: 44, to: wav.count, by: 2).map {
             Int16(bitPattern: UInt16(wav[$0]) | UInt16(wav[$0 + 1]) << 8)
         }
     }
 
-    func testStereoWAVPreservesBothDirectionsAndTimelineSilence() async throws {
+    @Test func `Stereo WAV preserves both directions and timeline silence`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await recorder.start(callID: "synthetic", source: .cloudPCM, atUptime: 100)
         recorder.appendPCM16(pcm([100, -200]), channel: .local, source: .cloudPCM, atUptime: 100)
         recorder.appendPCM16(pcm([300, -400]), channel: .remote, source: .cloudPCM, atUptime: 100 + 2.0 / 8_000)
         let file = try await recorder.stop()
-        XCTAssertEqual(file.duration, 4.0 / 8_000, accuracy: 0.000001)
-        XCTAssertEqual(try samples(recorder.url(for: file)), [100, 0, -200, 0, 0, 300, 0, -400])
-        XCTAssertEqual(file.bytes, 60)
+        #expect(abs(file.duration - 4.0 / 8_000) <= 0.000001)
+        #expect(try samples(recorder.url(for: file)) == [100, 0, -200, 0, 0, 300, 0, -400])
+        #expect(file.bytes == 60)
         let persisted = try await recorder.recordings()
-        XCTAssertEqual(persisted.map(\.id), [file.id])
+        #expect(persisted.map(\.id) == [file.id])
         let files = try FileManager.default.contentsOfDirectory(atPath: directory.path)
-        XCTAssertEqual(Set(files), [file.id.uuidString + ".wav", file.id.uuidString + ".json"])
-        XCTAssertFalse(file.fileName.contains("synthetic"))
-        XCTAssertEqual(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        #expect(Set(files) == [file.id.uuidString + ".wav", file.id.uuidString + ".json"])
+        #expect(!file.fileName.contains("synthetic"))
+        #expect(try directory.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
     }
 
-    func testMutePersistsAcrossStartAndNeverMutesRemote() async throws {
+    @Test func `Mute persists across start and never mutes remote`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         recorder.setMuted(true)
@@ -66,10 +67,10 @@ final class CallRecordingTests: XCTestCase {
         }
         recorder.appendPCM16(pcm([123, -456]), channel: .remote, source: .cloudWebRTC, atUptime: 10)
         let file = try await recorder.stop()
-        XCTAssertEqual(try samples(recorder.url(for: file)), [0, 123, 0, -456])
+        #expect(try samples(recorder.url(for: file)) == [0, 123, 0, -456])
     }
 
-    func testFloatS16AndNormalizedDownsamplingCopiesCallerBuffer() async throws {
+    @Test func `Float S16 and normalized downsampling copies caller buffer`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await recorder.start(callID: "float", source: .cloudWebRTC, atUptime: 10)
@@ -83,33 +84,36 @@ final class CallRecordingTests: XCTestCase {
             recorder.appendFloat32($0, sampleRate: 8_000, normalized: true, channel: .remote, source: .cloudWebRTC, atUptime: 10)
         }
         let file = try await recorder.stop()
-        XCTAssertEqual(try samples(recorder.url(for: file)), [1_000, 32_767, -2_000, -32_767])
+        #expect(try samples(recorder.url(for: file)) == [1_000, 32_767, -2_000, -32_767])
     }
 
-    func testEmptyWrongSourceAndFailedSessionCannotPolluteNextRecording() async throws {
+    @Test func `Empty wrong source and failed session cannot pollute next recording`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await recorder.start(callID: "empty", source: .cloudWebRTC, atUptime: 1)
         recorder.appendPCM16(pcm([999]), channel: .local, source: .localPCM, atUptime: 1)
-        do { _ = try await recorder.stop(); XCTFail("Empty recording must fail") }
-        catch { XCTAssertTrue(error is CallRecordingError) }
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
+        await #expect(throws: CallRecordingError.self) {
+            _ = try await recorder.stop()
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
         _ = try await recorder.start(callID: "limit", source: .localPCM, atUptime: 1)
         recorder.appendPCM16(pcm([999]), channel: .local, source: .localPCM, atUptime: 7_202)
-        do { _ = try await recorder.stop(); XCTFail("Recording must stop at its limit") }
-        catch { XCTAssertEqual(error.localizedDescription, CallRecordingError.limit.localizedDescription) }
+        let limitError = await #expect(throws: (any Error).self) {
+            _ = try await recorder.stop()
+        }
+        #expect(limitError?.localizedDescription == CallRecordingError.limit.localizedDescription)
         _ = try await recorder.start(callID: "fresh", source: .localPCM, atUptime: 10)
         recorder.appendPCM16(pcm([42]), channel: .remote, source: .localPCM, atUptime: 10)
         let file = try await recorder.stop()
-        XCTAssertEqual(try samples(recorder.url(for: file)), [0, 42])
+        #expect(try samples(recorder.url(for: file)) == [0, 42])
         try await recorder.delete(file)
         let files = try await recorder.recordings()
-        XCTAssertTrue(files.isEmpty)
-        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
+        #expect(files.isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
     }
 
-    @MainActor
-    func testCallEndingWhileStartSuspendsFinalizesAndReportsEmpty() async throws {
+    @Test @MainActor
+    func `Call ending while start suspends finalizes and reports empty`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = CallRecordingStore(recorder: recorder)
@@ -117,44 +121,46 @@ final class CallRecordingTests: XCTestCase {
         // start reserves the call ID before its first suspension.
         while store.currentCallID == nil { await Task.yield() }
         store.finishCall("another-call")
-        XCTAssertEqual(store.currentCallID, "ended")
+        #expect(store.currentCallID == "ended")
         store.finishCall("ended")
         _ = try? await starting.value
         while store.isBusy || store.isRecording { await Task.yield() }
-        XCTAssertNil(store.currentCallID)
-        XCTAssertNotNil(store.errorMessage)
-        XCTAssertTrue(store.recordings.isEmpty)
+        #expect(store.currentCallID == nil)
+        #expect(store.errorMessage != nil)
+        #expect(store.recordings.isEmpty)
     }
 
-    func testDiskFailureDoesNotPublishRecording() async throws {
+    @Test func `Disk failure does not publish recording`() async throws {
         let (recorder, directory) = try fixture()
         try Data([1]).write(to: directory)
         defer { try? FileManager.default.removeItem(at: directory) }
-        do { _ = try await recorder.start(callID: "disk", source: .cloudPCM); XCTFail("File cannot be a directory") }
-        catch { XCTAssertFalse(error.localizedDescription.isEmpty) }
+        let error = await #expect(throws: (any Error).self) {
+            _ = try await recorder.start(callID: "disk", source: .cloudPCM)
+        }
+        #expect(error?.localizedDescription.isEmpty == false)
     }
 
-    func testCallbackJitterPreservesEverySpeechSample() async throws {
+    @Test func `Callback jitter preserves every speech sample`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await recorder.start(callID: "jitter", source: .cloudPCM, atUptime: 10)
         recorder.appendPCM16(pcm([1, 2]), channel: .local, source: .cloudPCM, atUptime: 10)
         recorder.appendPCM16(pcm([3, 4]), channel: .local, source: .cloudPCM, atUptime: 10 + 1.0 / 8_000)
         let file = try await recorder.stop()
-        XCTAssertEqual(try samples(recorder.url(for: file)), [1, 0, 2, 0, 3, 0, 4, 0])
+        #expect(try samples(recorder.url(for: file)) == [1, 0, 2, 0, 3, 0, 4, 0])
     }
 
-    func testStorageLimitPreservesCompletedAudio() async throws {
+    @Test func `Storage limit preserves completed audio`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await recorder.start(callID: "limit", source: .cloudPCM, atUptime: 1)
         recorder.appendPCM16(pcm([100, 200]), channel: .local, source: .cloudPCM, atUptime: 1)
         recorder.appendPCM16(pcm([999]), channel: .local, source: .cloudPCM, atUptime: 7_202)
         let file = try await recorder.stop()
-        XCTAssertEqual(try samples(recorder.url(for: file)), [100, 0, 200, 0])
+        #expect(try samples(recorder.url(for: file)) == [100, 0, 200, 0])
     }
 
-    func testConcurrentDirectionsSavePlayableStereoFile() async throws {
+    @Test func `Concurrent directions save playable stereo file`() async throws {
         let (recorder, directory) = try fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await recorder.start(callID: "concurrent", source: .cloudPCM, atUptime: 100)
@@ -167,13 +173,13 @@ final class CallRecordingTests: XCTestCase {
         }
         let file = try await recorder.stop()
         let audio = try AVAudioFile(forReading: recorder.url(for: file))
-        XCTAssertEqual(audio.length, 16_000)
-        XCTAssertEqual(audio.processingFormat.channelCount, 2)
-        XCTAssertEqual(audio.processingFormat.sampleRate, 8_000)
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 16_000))
+        #expect(audio.length == 16_000)
+        #expect(audio.processingFormat.channelCount == 2)
+        #expect(audio.processingFormat.sampleRate == 8_000)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 16_000))
         try audio.read(into: buffer)
-        let channels = try XCTUnwrap(buffer.floatChannelData)
-        XCTAssertEqual(channels[0][8_000], 5_000.0 / 32_768, accuracy: 0.0001)
-        XCTAssertEqual(channels[1][8_000], 5_000.0 / 32_768, accuracy: 0.0001)
+        let channels = try #require(buffer.floatChannelData)
+        #expect(abs(channels[0][8_000] - 5_000.0 / 32_768) <= 0.0001)
+        #expect(abs(channels[1][8_000] - 5_000.0 / 32_768) <= 0.0001)
     }
 }
