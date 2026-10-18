@@ -286,10 +286,7 @@ final class VoWLANController {
 
     @ObservationIgnored var onAvailabilityChange: ((VoWLANAvailability) -> Void)?
 
-    private(set) var discoveredAgents: [VoWLANDiscoveredAgent] = [] {
-        didSet { onDiscoveredAgentsChange?() }
-    }
-    @ObservationIgnored var onDiscoveredAgentsChange: (() -> Void)?
+    private(set) var discoveredAgents: [VoWLANDiscoveredAgent] = []
 
     @ObservationIgnored private let queue = DispatchQueue(label: "com.example.airsim.vowlan.discovery")
     @ObservationIgnored private var browser: NWBrowser?

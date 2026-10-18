@@ -272,6 +272,9 @@ final class AppModel {
     private(set) var pendingOutgoingCall: CallRecord?
     private(set) var callPresentationSurface: CallPresentationSurface?
     private(set) var cloudCallAudioState: CloudCallAudioState = .idle
+    /// VirtualCallTTSController 不是 @Observable；在虚拟来电 prepare/stop 处把
+    /// isPrepared 镜像为可追踪状态，callAudioIsActive 才能驱动通话页音频角标。
+    private(set) var isVirtualCallTTSPrepared = false
     private(set) var callLifecycleSnapshot: CallLifecycleSnapshot = .idle
     /// UserDefaults 偏好不在 observation 追踪内；写入偏好的方法递增该值，
     /// 让读取偏好的展示计算属性重新建立依赖（替代旧的 objectWillChange.send()）。
@@ -316,7 +319,10 @@ final class AppModel {
     @ObservationIgnored private var callTransitionProtectedUntil = Date.distantPast
     @ObservationIgnored private var nextAudioDiagnosticRefresh = Date.distantPast
     @ObservationIgnored private var nextModuleMetadataRefresh = Date.distantPast
-    @ObservationIgnored private var lastCloudStatusRefresh = Date.distantPast
+    // pairedAndroidAgents 按 90 秒窗口读取它；必须参与 observation 追踪，
+    // 否则刷新/重置后依赖它的展示不会重算（@Observable 不再像 objectWillChange
+    // 那样让任意赋值触发全部视图重算）。
+    private var lastCloudStatusRefresh = Date.distantPast
     @ObservationIgnored private var cloudStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var cloudStatusRefreshGeneration = 0
     @ObservationIgnored private var audioWarmupCallID: String?
@@ -336,7 +342,7 @@ final class AppModel {
     }
 
     var callAudioIsActive: Bool {
-        audio.active || cloudCallAudioState.isConnected || VirtualCallTTSController.shared.isPrepared
+        audio.active || cloudCallAudioState.isConnected || isVirtualCallTTSPrepared
     }
 
     var connectionModePresentation: ConnectionModePresentation {
@@ -648,6 +654,8 @@ final class AppModel {
         let runtimePolicy = ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected())
         callKit.handler = self
         callKit.setEnabled(runtimePolicy.usesCallKit)
+        // 冷启动 handler 可能已在本模型创建前为虚拟来电准备 TTS；接管 handler 时同步镜像。
+        isVirtualCallTTSPrepared = VirtualCallTTSController.shared.isPrepared
         WatchCallCoordinator.shared.configure(model: self)
         WatchCallCoordinator.shared.start()
         IPhoneCloudCallSession.shared.onAudioStateChange = { [weak self] state in
@@ -2479,6 +2487,7 @@ extension AppModel: CallKitActionHandling {
             let pushedCall = callKit.currentIncomingPush
             if let pushedCall, pushedCall.isVirtual {
                 try VirtualCallTTSController.shared.prepare(pushedCall)
+                isVirtualCallTTSPrepared = true
                 clearLockedTransport()
                 updateRemoteCallState("active")
                 return
@@ -2553,6 +2562,7 @@ extension AppModel: CallKitActionHandling {
         applyCurrentCallIntent(.ending, source: .callKit)
         if VirtualCallTTSController.shared.isPrepared || callKit.currentIncomingPush?.isVirtual == true {
             VirtualCallTTSController.shared.stop()
+            isVirtualCallTTSPrepared = false
             clearLockedTransport()
             backgroundStandby.resumeAfterCall()
             return
@@ -2639,6 +2649,7 @@ extension AppModel: CallKitActionHandling {
         beginCallTransitionProtection()
         if VirtualCallTTSController.shared.isPrepared {
             VirtualCallTTSController.shared.stop()
+            isVirtualCallTTSPrepared = false
             backgroundStandby.resumeAfterCall()
             return
         }
@@ -2658,6 +2669,7 @@ extension AppModel: CallKitActionHandling {
         let wasVirtual = VirtualCallTTSController.shared.isPrepared
         if wasVirtual {
             VirtualCallTTSController.shared.stop()
+            isVirtualCallTTSPrepared = false
         } else if currentCallTransport == .cloud || IPhoneCloudCallSession.shared.isPrepared {
             IPhoneCloudCallSession.shared.stopAudio()
         } else {
@@ -2711,6 +2723,7 @@ extension AppModel: CallKitActionHandling {
         cloudCallAudioState = .idle
         IPhoneCloudCallSession.shared.stop()
         VirtualCallTTSController.shared.stop()
+        isVirtualCallTTSPrepared = false
         backgroundStandby.resumeAfterCall()
     }
 }

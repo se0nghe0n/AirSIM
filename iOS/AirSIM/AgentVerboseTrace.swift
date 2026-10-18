@@ -15,7 +15,7 @@ struct AgentVerboseTraceContext: Sendable {
     let startedAt: Date
 }
 
-struct AgentVerboseTraceEntry: Codable, Identifiable, Sendable {
+struct AgentVerboseTraceEntry: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let traceID: String
     let timestamp: Date

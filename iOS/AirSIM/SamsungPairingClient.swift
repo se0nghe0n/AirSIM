@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-struct SamsungPairingService: Identifiable {
+struct SamsungPairingService: Identifiable, Equatable {
     let endpoint: NWEndpoint
     let sessionID: String
     let serverPublicKey: Data

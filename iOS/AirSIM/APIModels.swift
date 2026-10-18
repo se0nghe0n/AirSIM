@@ -853,7 +853,7 @@ struct ModuleDebugSMSStatus: Codable, Sendable {
     }
 }
 
-struct ModuleDebugEvent: Codable, Sendable, Identifiable {
+struct ModuleDebugEvent: Codable, Sendable, Identifiable, Equatable {
     let sequence: UInt64
     let timestamp: String
     let category: String

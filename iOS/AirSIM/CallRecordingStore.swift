@@ -6,7 +6,7 @@ import UIKit
 enum CallRecordingSource: String, Sendable { case cloudWebRTC, cloudPCM, localPCM }
 enum CallRecordingChannel: Sendable { case local, remote }
 
-struct CallRecordingFile: Codable, Identifiable, Sendable {
+struct CallRecordingFile: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
     let callID: String
     let startedAt: Date
