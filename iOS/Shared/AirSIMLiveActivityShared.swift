@@ -220,39 +220,99 @@ private enum LiveActivityCallClient {
     }
 
     static func perform(_ action: Action, callID: String) async throws {
+        // 空通话 ID（Shortcuts/Siri 的默认参数）绝不能匹配待机/离线岛的 callID ""，
+        // 否则没有通话时运行意图会结束常驻待机活动。
+        guard !callID.isEmpty else { throw LiveActivityCallError.staleCall }
         let transport = WiredHTTPTransport()
         let statusResponse = try await transport.send(request(method: "GET", path: "api/calls/status"))
         guard (200..<300).contains(statusResponse.statusCode) else {
             throw LiveActivityCallError.httpStatus(statusResponse.statusCode)
         }
-        let status = try JSONDecoder().decode(Status.self, from: statusResponse.body)
-        guard status.active?.id == callID else { throw LiveActivityCallError.staleCall }
+        let status: Status
+        do {
+            status = try JSONDecoder().decode(Status.self, from: statusResponse.body)
+        } catch {
+            throw LiveActivityCallError.invalidResponse
+        }
+
+        // perform() 可能被系统从头重跑（App Intents execution-model）：POST 是唯一
+        // 不可逆副作用，放在状态检查之后，让重放幂等。POST body 携带 call_id，
+        // 由 Agent 原子校验（requireActiveCallID）；客户端 GET 检查只是快速路径，
+        // 不能保证检查与执行之间通话不变。
+        // 已接通的 answer 与已结束（或已被新通话取代）的 reject/hangup 直接成功，
+        // 不再重复 POST，也不再报令人困惑的状态错误。
+        guard let active = status.active, active.id == callID else {
+            try await finishStaleCall(action, callID: callID)
+            return
+        }
 
         switch action {
-        case .answer, .reject:
-            guard status.active?.direction == "incoming",
-                  let state = status.active?.state,
-                  ["incoming", "waiting"].contains(state) else {
+        case .answer:
+            // 已接通的重试不重复 POST，避免双答。
+            guard active.state != "active" else {
+                await synchronizeActivities(after: action, callID: callID)
+                return
+            }
+            guard active.direction == "incoming",
+                  ["incoming", "waiting"].contains(active.state) else {
+                throw LiveActivityCallError.invalidState
+            }
+        case .reject:
+            guard active.direction == "incoming",
+                  ["incoming", "waiting"].contains(active.state) else {
                 throw LiveActivityCallError.invalidState
             }
         case .hangup:
-            guard status.active != nil else { throw LiveActivityCallError.invalidState }
+            break
         }
 
-        let response = try await transport.send(request(method: "POST", path: action.endpoint))
+        let response = try await transport.send(request(method: "POST", path: action.endpoint, callID: callID))
+        if response.statusCode == 502, isStaleCallRejection(response.body) {
+            // GET 检查之后通话被取代时，Agent 的 call_id 校验会以 502 拒绝且未执行
+            // 动作；按 stale 分支收尾，而不是报 HTTP 错误。真实的动作失败同样返回
+            // 502，但 error 文本不同，仍按失败上报。
+            try await finishStaleCall(action, callID: callID)
+            return
+        }
         guard (200..<300).contains(response.statusCode) else {
             throw LiveActivityCallError.httpStatus(response.statusCode)
         }
         await synchronizeActivities(after: action, callID: callID)
     }
 
-    private static func request(method: String, path: String) -> URLRequest {
+    /// 模块端点已无匹配通话：answer 报 stale；reject/hangup 收尾结束对应活动。
+    /// 但模块端点不管辖 VoWLAN/云端通话，端点没有匹配通话不能证明通话已结束，
+    /// 此时保留岛并报 stale。
+    private static func finishStaleCall(_ action: Action, callID: String) async throws {
+        guard action != .answer else { throw LiveActivityCallError.staleCall }
+        for activity in Activity<AirSIMCallActivityAttributes>.activities
+        where activity.content.state.callID == callID {
+            switch activity.content.state.transport {
+            case .vowlan, .cloud:
+                throw LiveActivityCallError.staleCall
+            case .moduleLocal, nil:
+                break
+            }
+        }
+        await synchronizeActivities(after: action, callID: callID)
+    }
+
+    /// Agent 对失效 call_id 的拒绝固定返回该错误文本（module-agent 的
+    /// requireActiveCallID / answerCallForID / executeAndroidCallCommandForID），
+    /// 用于区分「通话已被取代」与同样返回 502 的真实动作失败。
+    private static func isStaleCallRejection(_ body: Data) -> Bool {
+        struct Payload: Decodable { let error: String? }
+        return (try? JSONDecoder().decode(Payload.self, from: body))?.error == "Call ID is no longer valid"
+    }
+
+    private static func request(method: String, path: String, callID: String = "") -> URLRequest {
         var request = URLRequest(url: URL(string: "http://192.168.225.1:7575/\(path)")!)
         request.httpMethod = method
         request.timeoutInterval = 8
         if method == "POST" {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = Data("{}".utf8)
+            // 与主 App LocalCallControlBody 相同的 call_id 字段。
+            request.httpBody = try? JSONEncoder().encode(["call_id": callID])
         }
         return request
     }
@@ -268,7 +328,8 @@ private enum LiveActivityCallClient {
                     number: previous.number,
                     displayName: previous.displayName,
                     phase: .active,
-                    startedAt: Date(),
+                    // 重试同步不应重置通话计时：已处于 active 就沿用原起始时间。
+                    startedAt: previous.phase == .active ? previous.startedAt : Date(),
                     transport: previous.transport,
                     agentDeviceName: previous.agentDeviceName,
                     agentPhoneNumber: previous.agentPhoneNumber,
@@ -287,8 +348,11 @@ private enum LiveActivityCallClient {
 }
 
 struct AnswerAirSIMCallIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "Answer Module Call"
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "Answer Module Call"
+    // openAppWhenRun 在 iOS 26.0 废弃。supportedModes iOS 26.0+ 可用，按部署目标
+    // 17.0 做可用性门控；iOS 17–25 沿用框架默认（等价 openAppWhenRun = false）。
+    @available(iOS 26.0, *)
+    static var supportedModes: IntentModes { .background }
 
     @Parameter(title: "Call ID") var callID: String
 
@@ -302,8 +366,10 @@ struct AnswerAirSIMCallIntent: LiveActivityIntent {
 }
 
 struct RejectAirSIMCallIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "Decline Module Call"
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "Decline Module Call"
+    // 与 AnswerAirSIMCallIntent 相同的 supportedModes 门控。
+    @available(iOS 26.0, *)
+    static var supportedModes: IntentModes { .background }
 
     @Parameter(title: "Call ID") var callID: String
 
@@ -317,8 +383,10 @@ struct RejectAirSIMCallIntent: LiveActivityIntent {
 }
 
 struct HangUpAirSIMCallIntent: LiveActivityIntent {
-    static var title: LocalizedStringResource = "End Module Call"
-    static var openAppWhenRun = false
+    static let title: LocalizedStringResource = "End Module Call"
+    // 与 AnswerAirSIMCallIntent 相同的 supportedModes 门控。
+    @available(iOS 26.0, *)
+    static var supportedModes: IntentModes { .background }
 
     @Parameter(title: "Call ID") var callID: String
 
@@ -331,16 +399,20 @@ struct HangUpAirSIMCallIntent: LiveActivityIntent {
     }
 }
 
-private enum LiveActivityCallError: LocalizedError {
+/// 只有 CustomLocalizedStringResourceConvertible 错误才会把真实消息呈现给
+/// Siri/Shortcuts；LocalizedError 不被 App Intents 框架读取。
+private enum LiveActivityCallError: Error, CustomLocalizedStringResourceConvertible {
     case staleCall
     case invalidState
+    case invalidResponse
     case httpStatus(Int)
 
-    var errorDescription: String? {
+    var localizedStringResource: LocalizedStringResource {
         switch self {
-        case .staleCall: return "This call has ended or was replaced by another call"
-        case .invalidState: return "This action is unavailable in the current call state"
-        case let .httpStatus(code): return "Module call endpoint returned HTTP \(code)"
+        case .staleCall: "This call has ended or was replaced by another call"
+        case .invalidState: "This action is unavailable in the current call state"
+        case .invalidResponse: "The module returned an unreadable response"
+        case let .httpStatus(code): "Module call endpoint returned HTTP \(code)"
         }
     }
 }
