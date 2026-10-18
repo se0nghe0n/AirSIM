@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WatchCallView: View {
-    @EnvironmentObject private var session: WatchCallSession
+    @Environment(WatchCallSession.self) private var session
     @State private var dialNumber = ""
 
     @State private var showConnectionStatus = false
@@ -161,7 +161,7 @@ struct WatchCallView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            controls
+            WatchCallControls()
 
             if let error = session.errorMessage {
                 Text(error)
@@ -176,22 +176,63 @@ struct WatchCallView: View {
             }
         }
     }
+}
 
-    @ViewBuilder
-    private var controls: some View {
+/// 通话控制按钮独立成子视图：只读取 phase 与 isSendingAction，状态文本等
+/// 其他会话属性变化时不再重建整个通话页（structure.md 失效边界）。
+private struct WatchCallControls: View {
+    @Environment(WatchCallSession.self) private var session
+
+    var body: some View {
         switch session.call.phase {
         case .incoming:
             HStack(spacing: 18) {
-                actionButton("phone.down.fill", label: "Decline", color: .red, action: session.reject)
-                actionButton("phone.fill", label: "Answer", color: .green, action: session.answer)
+                WatchCallActionButton(
+                    "phone.down.fill",
+                    label: "Decline",
+                    color: .red,
+                    action: session.reject
+                )
+                WatchCallActionButton(
+                    "phone.fill",
+                    label: "Answer",
+                    color: .green,
+                    action: session.answer
+                )
             }
         case .active, .connecting:
-            actionButton("phone.down.fill", label: "End Call", color: .red, action: session.end)
-        case .ended, .idle: EmptyView()
+            WatchCallActionButton(
+                "phone.down.fill",
+                label: "End Call",
+                color: .red,
+                action: session.end
+            )
+        case .ended, .idle:
+            EmptyView()
         }
     }
+}
 
-    private func actionButton(_ symbol: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
+private struct WatchCallActionButton: View {
+    @Environment(WatchCallSession.self) private var session
+    let symbol: String
+    let label: String
+    let color: Color
+    let action: () -> Void
+
+    init(
+        _ symbol: String,
+        label: String,
+        color: Color,
+        action: @escaping () -> Void
+    ) {
+        self.symbol = symbol
+        self.label = label
+        self.color = color
+        self.action = action
+    }
+
+    var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.title3.weight(.semibold))

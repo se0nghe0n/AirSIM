@@ -57,8 +57,8 @@ enum PhoneTab: String, CaseIterable, Identifiable {
 /// 五个主要目的地使用系统 TabView；iOS 26 原生标签栏负责 Liquid Glass、
 /// 长按放大与选中态交互，避免分页手势和自绘按钮争抢横向滑动。
 struct RootView: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var settings: AppSettings
+    @Environment(AppModel.self) private var model
+    @Environment(AppSettings.self) private var settings
     @AppStorage("airsim.selected-tab") private var selectedTabRawValue = PhoneTab.dial.rawValue
     @State private var pendingSMSRecipient: String?
     @State private var pendingSMSConversation: String?
@@ -116,7 +116,7 @@ struct RootView: View {
             set: { if !$0 { firstConnectionComplete = true } }
         )) {
             AirSIMFirstConnectionView()
-                .environmentObject(model)
+                .environment(model)
         }
         .onOpenURL(perform: handleSystemCommunicationURL)
         .onAppear {

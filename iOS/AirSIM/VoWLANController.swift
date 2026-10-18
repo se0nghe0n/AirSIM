@@ -277,26 +277,24 @@ struct VoWLANRecoveryGate {
 }
 
 @MainActor
-final class VoWLANController: ObservableObject {
-    @Published private(set) var availability: VoWLANAvailability =
+@Observable
+final class VoWLANController {
+    private(set) var availability: VoWLANAvailability =
         VoWLANCredentialStore.load() == nil ? .unpaired : .discovering {
         didSet { onAvailabilityChange?(availability) }
     }
 
-    var onAvailabilityChange: ((VoWLANAvailability) -> Void)?
+    @ObservationIgnored var onAvailabilityChange: ((VoWLANAvailability) -> Void)?
 
-    @Published private(set) var discoveredAgents: [VoWLANDiscoveredAgent] = [] {
-        didSet { onDiscoveredAgentsChange?() }
-    }
-    var onDiscoveredAgentsChange: (() -> Void)?
+    private(set) var discoveredAgents: [VoWLANDiscoveredAgent] = []
 
-    private let queue = DispatchQueue(label: "com.example.airsim.vowlan.discovery")
-    private var browser: NWBrowser?
-    private var browserLifecycle = VoWLANBrowserLifecycle()
-    private var recoveryGate = VoWLANRecoveryGate()
-    private var discoveredEndpoint: VoWLANEndpoint?
-    private var disappearanceTask: Task<Void, Never>?
-    private var identityEpoch: UInt64 = 0
+    @ObservationIgnored private let queue = DispatchQueue(label: "com.example.airsim.vowlan.discovery")
+    @ObservationIgnored private var browser: NWBrowser?
+    @ObservationIgnored private var browserLifecycle = VoWLANBrowserLifecycle()
+    @ObservationIgnored private var recoveryGate = VoWLANRecoveryGate()
+    @ObservationIgnored private var discoveredEndpoint: VoWLANEndpoint?
+    @ObservationIgnored private var disappearanceTask: Task<Void, Never>?
+    @ObservationIgnored private var identityEpoch: UInt64 = 0
 
     func forget(_ agentID: String) {
         identityEpoch &+= 1

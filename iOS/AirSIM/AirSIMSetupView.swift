@@ -2,7 +2,7 @@ import SwiftUI
 
 /// AirSIM 只引导三星配对；不检查旧模块 USB ECM、AT 或 QDC507 固件。
 struct AirSIMFirstConnectionView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @AppStorage("airsim.first-connection-complete") private var completed = false
     @AppStorage(ConnectionModePreference.key) private var connectionModeRaw = ConnectionModePreference.selected().rawValue
     @State private var showingPairing = false
@@ -42,7 +42,7 @@ struct AirSIMFirstConnectionView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: connectionModeRaw) { rawValue in
+                    .onChange(of: connectionModeRaw) { _, rawValue in
                         guard let mode = AirSIMConnectionMode(rawValue: rawValue) else { return }
                         model.setConnectionMode(mode)
                     }
@@ -80,7 +80,7 @@ struct AirSIMFirstConnectionView: View {
             }) {
                 NavigationStack {
                     SamsungPairingView()
-                        .environmentObject(model)
+                        .environment(model)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Done") { showingPairing = false }
@@ -152,15 +152,16 @@ private struct PairedAndroidDeviceRows: View {
     }
 }
 
-struct AirSIMSettingsView: View {
-    private enum SelfTestPhase {
-        case idle
-        case running
-        case completed
-    }
+/// 自检进度阶段。原先嵌在 AirSIMSettingsView 内；抽成独立分区视图后移到文件级。
+private enum SelfTestPhase {
+    case idle
+    case running
+    case completed
+}
 
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var settings: AppSettings
+struct AirSIMSettingsView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AppSettings.self) private var settings
     @AppStorage(ConnectionModePreference.key) private var connectionModeRaw = ConnectionModePreference.selected().rawValue
     @AppStorage(LiveActivityVisibilityPreference.key) private var liveActivityEnabled = true
     @State private var relayURL = RelayConfiguration.effectiveURL(
@@ -176,6 +177,7 @@ struct AirSIMSettingsView: View {
     @State private var deviceDeletionInProgress = false
 
     var body: some View {
+        @Bindable var settings = settings
         NavigationStack {
             Form {
                 Section {
@@ -184,7 +186,7 @@ struct AirSIMSettingsView: View {
                             Label(mode.title, systemImage: modeIcon(mode)).tag(mode.rawValue)
                         }
                     }
-                    .onChange(of: connectionModeRaw) { rawValue in
+                    .onChange(of: connectionModeRaw) { _, rawValue in
                         guard let mode = AirSIMConnectionMode(rawValue: rawValue) else { return }
                         selfTestTask?.cancel()
                         selfTestPhase = .idle
@@ -197,25 +199,7 @@ struct AirSIMSettingsView: View {
                     Text(selectedMode.detail)
                 }
 
-                Section("Current Connection") {
-                    LabeledContent("Current Mode", value: model.connectionModePresentation.title)
-                    LabeledContent("Connection Status", value: model.connectionModePresentation.status)
-                    LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
-                    LabeledContent(
-                        "Cloud Relay",
-                        value: runtimePolicy.startsCloud
-                            ? (model.cloudAgentStatus?.cloudOnline == true ? "Agent Online" : "Unreachable")
-                            : "Disabled in current mode"
-                    )
-                    Text(model.connectionModePresentation.detail)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    if let connectionMessage = model.connectionMessage, !connectionMessage.isEmpty {
-                        Text(connectionMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                CurrentConnectionSection(cloudModeEnabled: runtimePolicy.startsCloud)
 
                 Section("Android Connection") {
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
@@ -236,7 +220,7 @@ struct AirSIMSettingsView: View {
                     Toggle(isOn: $liveActivityEnabled) {
                         Label("Show Dynamic Island", systemImage: "platter.filled.top.iphone")
                     }
-                    .onChange(of: liveActivityEnabled) { enabled in
+                    .onChange(of: liveActivityEnabled) { _, enabled in
                         model.setLiveActivityEnabled(enabled)
                     }
                 } header: {
@@ -274,47 +258,12 @@ struct AirSIMSettingsView: View {
                     Text("Local VoWLAN remains available when cloud mode is off. Remote calls and messages require a cloud Relay and valid device registration.")
                 }
 
-                Section {
-                    Button {
-                        startCloudSelfTest()
-                    } label: {
-                        HStack {
-                            Label("Run Cloud Self-Test", systemImage: "stethoscope")
-                            Spacer()
-                            if selfTestPhase == .running {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(!runtimePolicy.startsCloud || selfTestPhase == .running)
-
-                    if let report = selfTestReport {
-                        ForEach(report.steps) { step in
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: selfTestSymbol(for: step.state))
-                                    .foregroundStyle(selfTestColor(for: step.state))
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(step.title)
-                                    Text(step.detail)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        if selfTestPhase == .completed {
-                            Text(report.allPassed ? "Cloud self-test passed" : "Self-test failed. Resolve the failed steps and try again.")
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(report.allPassed ? .green : .orange)
-                        }
-                    }
-                } header: {
-                    Text("Cloud Self-Test")
-                } footer: {
-                    Text(!runtimePolicy.startsCloud
-                        ? "Cloud self-test is unavailable in the current connection mode."
-                        : "Checks local push credentials, AirSIM Relay identity, device registration, and an Agent heartbeat within the last 90 seconds. No calls or messages are sent.")
-                }
+                CloudSelfTestSection(
+                    isEnabled: runtimePolicy.startsCloud,
+                    phase: selfTestPhase,
+                    report: selfTestReport,
+                    onStart: startCloudSelfTest
+                )
 
                 Section("About") {
                     LabeledContent("Project", value: "AirSIM · Samsung")
@@ -326,20 +275,13 @@ struct AirSIMSettingsView: View {
                 }
             }
             .task { await model.refreshPairedDeviceInformation() }
-            .confirmationDialog("Delete this device's local pairing record?",
-                isPresented: Binding(get: { deletingDevice != nil }, set: { if !$0 { deletingDevice = nil } }),
-                titleVisibility: .visible, presenting: deletingDevice) { device in
-                Button("Delete \(device.deviceName)", role: .destructive) {
-                    deviceDeletionInProgress = true
-                    Task {
-                        defer { deviceDeletionInProgress = false }
-                        do { try await model.forgetAndroidDevice(device.id) }
-                        catch { message = error.localizedDescription }
-                    }
+            .deletePairedDeviceConfirmation(item: $deletingDevice) { device in
+                deviceDeletionInProgress = true
+                Task {
+                    defer { deviceDeletionInProgress = false }
+                    do { try await model.forgetAndroidDevice(device.id) }
+                    catch { message = error.localizedDescription }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.")
             }
             .navigationTitle("Settings")
             .onDisappear {
@@ -381,8 +323,99 @@ struct AirSIMSettingsView: View {
         case .automatic: return "arrow.triangle.branch"
         }
     }
+}
 
-    private func selfTestSymbol(for state: CloudSelfTestStepState) -> String {
+/// 当前连接分区独立成子视图：分区内的模式/云端状态/心跳读取移入子视图 body，
+/// 这些字段变化只重算本分区（structure.md 失效边界）。父级 body 仍读取
+/// vowlan.availability 与自检 @State，这些变化仍会重算整个表单。
+private struct CurrentConnectionSection: View {
+    @Environment(AppModel.self) private var model
+    let cloudModeEnabled: Bool
+
+    var body: some View {
+        Section("Current Connection") {
+            LabeledContent("Current Mode", value: model.connectionModePresentation.title)
+            LabeledContent("Connection Status", value: model.connectionModePresentation.status)
+            LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
+            LabeledContent(
+                "Cloud Relay",
+                value: cloudModeEnabled
+                    ? (model.cloudAgentStatus?.cloudOnline == true ? "Agent Online" : "Unreachable")
+                    : "Disabled in current mode"
+            )
+            Text(model.connectionModePresentation.detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if let connectionMessage = model.connectionMessage, !connectionMessage.isEmpty {
+                Text(connectionMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// 云端自检分区独立成子视图（structure.md 失效边界）。自检报告与阶段仍由父级
+/// @State 持有并传入，流式更新时父级 body 与其余分区仍会重算。
+private struct CloudSelfTestSection: View {
+    let isEnabled: Bool
+    let phase: SelfTestPhase
+    let report: CloudSelfTestReport?
+    let onStart: () -> Void
+
+    var body: some View {
+        Section {
+            Button {
+                onStart()
+            } label: {
+                HStack {
+                    Label("Run Cloud Self-Test", systemImage: "stethoscope")
+                    Spacer()
+                    if phase == .running {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(!isEnabled || phase == .running)
+
+            if let report {
+                ForEach(report.steps) { step in
+                    CloudSelfTestStepRow(step: step)
+                }
+                if phase == .completed {
+                    Text(report.allPassed ? "Cloud self-test passed" : "Self-test failed. Resolve the failed steps and try again.")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(report.allPassed ? .green : .orange)
+                }
+            }
+        } header: {
+            Text("Cloud Self-Test")
+        } footer: {
+            Text(!isEnabled
+                ? "Cloud self-test is unavailable in the current connection mode."
+                : "Checks local push credentials, AirSIM Relay identity, device registration, and an Agent heartbeat within the last 90 seconds. No calls or messages are sent.")
+        }
+    }
+}
+
+private struct CloudSelfTestStepRow: View {
+    let step: CloudSelfTestStep
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: Self.symbol(for: step.state))
+                .foregroundStyle(Self.color(for: step.state))
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(step.title)
+                Text(step.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private static func symbol(for state: CloudSelfTestStepState) -> String {
         switch state {
         case .pending: return "circle"
         case .running: return "arrow.triangle.2.circlepath"
@@ -391,12 +424,69 @@ struct AirSIMSettingsView: View {
         }
     }
 
-    private func selfTestColor(for state: CloudSelfTestStepState) -> Color {
+    private static func color(for state: CloudSelfTestStepState) -> Color {
         switch state {
         case .pending: return .secondary
         case .running: return .blue
         case .passed: return .green
         case .failed: return .red
         }
+    }
+}
+
+/// swiftui-whats-new-27 item-binding.md：iOS 27 为 confirmationDialog 增加 item:
+/// 重载，单一可选值同时驱动呈现并传给按钮；部署目标是 iOS 17，因此按参考的
+/// ViewModifier 分流形式采用，旧系统分支保持原 isPresented + presenting 行为。
+private struct DeletePairedDeviceConfirmation: ViewModifier {
+    @Binding var item: AndroidAgentPresentation?
+    let onConfirm: (AndroidAgentPresentation) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27, *) {
+            content.confirmationDialog(
+                "Delete this device's local pairing record?",
+                item: $item,
+                titleVisibility: .visible
+            ) { device in
+                deleteActions(for: device)
+            } message: { _ in
+                deleteMessage
+            }
+        } else {
+            content.confirmationDialog(
+                "Delete this device's local pairing record?",
+                isPresented: Binding(
+                    get: { item != nil },
+                    set: { if !$0 { item = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: item
+            ) { device in
+                deleteActions(for: device)
+            } message: { _ in
+                deleteMessage
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deleteActions(for device: AndroidAgentPresentation) -> some View {
+        Button("Delete \(device.deviceName)", role: .destructive) {
+            onConfirm(device)
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    private var deleteMessage: some View {
+        Text("Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.")
+    }
+}
+
+private extension View {
+    func deletePairedDeviceConfirmation(
+        item: Binding<AndroidAgentPresentation?>,
+        onConfirm: @escaping (AndroidAgentPresentation) -> Void
+    ) -> some View {
+        modifier(DeletePairedDeviceConfirmation(item: item, onConfirm: onConfirm))
     }
 }

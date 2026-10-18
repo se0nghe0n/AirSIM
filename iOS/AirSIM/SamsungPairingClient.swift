@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-struct SamsungPairingService: Identifiable {
+struct SamsungPairingService: Identifiable, Equatable {
     let endpoint: NWEndpoint
     let sessionID: String
     let serverPublicKey: Data
@@ -15,12 +15,13 @@ struct SamsungPairingService: Identifiable {
 }
 
 @MainActor
-final class SamsungPairingBrowser: ObservableObject {
-    @Published private(set) var services: [SamsungPairingService] = []
-    @Published private(set) var stateText = "Scanning the local network for VoWLAN…"
+@Observable
+final class SamsungPairingBrowser {
+    private(set) var services: [SamsungPairingService] = []
+    private(set) var stateText = "Scanning the local network for VoWLAN…"
 
-    private let queue = DispatchQueue(label: "com.airsim.samsung-pair.browser")
-    private var browser: NWBrowser?
+    @ObservationIgnored private let queue = DispatchQueue(label: "com.airsim.samsung-pair.browser")
+    @ObservationIgnored private var browser: NWBrowser?
 
     func start() {
         guard browser == nil else { return }

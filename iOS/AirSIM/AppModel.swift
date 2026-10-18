@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import UIKit
 
@@ -247,33 +246,45 @@ enum ModuleConnectivityPolicy {
 
 /// 移动端 App 的主状态中心：前台轮询模块代理并驱动五个主要页面。
 @MainActor
-final class AppModel: ObservableObject {
-    @Published var activeCall: CallRecord?
-    @Published var callHistory: [CallRecord] = []
-    @Published private(set) var isRefreshingCallHistory = false
-    @Published private(set) var callHistoryMessage: String?
-    @Published var messages: [SMSMessage] = []
-    @Published var numberInput = ""
-    @Published var isOnline = false
-    @Published private(set) var isReconnecting = false
-    @Published var connectionMessage: String?
-    @Published var isBusy = false
-    @Published var isMuted = false
-    @Published private(set) var isRecording = false
-    @Published private(set) var isRecordingBusy = false
-    @Published var errorMessage: String?
-    @Published private(set) var modemStatus: ModemStatus?
-    @Published private(set) var agentVersion: String?
-    @Published private(set) var connectionSummary: ModuleConnectionSummary = .offline
-    @Published private(set) var cloudAgentStatus: CloudAgentStatus?
-    @Published private(set) var cloudAgentDirectory: CloudAgentStatus?
-    @Published private(set) var remoteCall: CallRecord?
-    @Published private(set) var pendingOutgoingCall: CallRecord?
-    @Published private(set) var callPresentationSurface: CallPresentationSurface?
-    @Published private(set) var cloudCallAudioState: CloudCallAudioState = .idle
-    @Published private(set) var callLifecycleSnapshot: CallLifecycleSnapshot = .idle
-    private var outgoingAttemptID = UUID()
-
+@Observable
+final class AppModel {
+    var activeCall: CallRecord?
+    var callHistory: [CallRecord] = []
+    private(set) var isRefreshingCallHistory = false
+    private(set) var callHistoryMessage: String?
+    var messages: [SMSMessage] = [] {
+        didSet { rebuildConversations() }
+    }
+    /// foreach.md：会话分组与排序移入模型，仅在消息集合变化时重算（review round 2 #4）；
+    /// MessagesView 首帧即读到最终数据，不再闪现“暂无短信”空态。
+    private(set) var conversations: [(sender: String, messages: [SMSMessage])] = []
+    var numberInput = ""
+    var isOnline = false
+    private(set) var isReconnecting = false
+    var connectionMessage: String?
+    var isBusy = false
+    var isMuted = false
+    /// 录音状态权威在 CallRecordingStore；直接读源对象，替代旧的 Combine 转发。
+    var isRecording: Bool { recordings.isRecording }
+    var isRecordingBusy: Bool { recordings.isBusy }
+    var errorMessage: String?
+    private(set) var modemStatus: ModemStatus?
+    private(set) var agentVersion: String?
+    private(set) var connectionSummary: ModuleConnectionSummary = .offline
+    private(set) var cloudAgentStatus: CloudAgentStatus?
+    private(set) var cloudAgentDirectory: CloudAgentStatus?
+    private(set) var remoteCall: CallRecord?
+    private(set) var pendingOutgoingCall: CallRecord?
+    private(set) var callPresentationSurface: CallPresentationSurface?
+    private(set) var cloudCallAudioState: CloudCallAudioState = .idle
+    /// VirtualCallTTSController 不是 @Observable；在虚拟来电 prepare/stop 处把
+    /// isPrepared 镜像为可追踪状态，callAudioIsActive 才能驱动通话页音频角标。
+    private(set) var isVirtualCallTTSPrepared = false
+    private(set) var callLifecycleSnapshot: CallLifecycleSnapshot = .idle
+    /// UserDefaults 偏好不在 observation 追踪内；写入偏好的方法递增该值，
+    /// 让读取偏好的展示计算属性重新建立依赖（替代旧的 objectWillChange.send()）。
+    private var preferenceRevision = 0
+    private(set) var pairedDeviceRecords = PairedAndroidDeviceStore.records()
     let api: AirSIMAPI
     let contacts = ContactStore()
     let audio = AudioSessionController()
@@ -281,48 +292,50 @@ final class AppModel: ObservableObject {
     let callKit = CallKitController.shared
     let backgroundStandby = BackgroundStandbyController()
     let vowlan = VoWLANController()
-    @Published private(set) var pairedDeviceRecords = PairedAndroidDeviceStore.records()
     let incomingNotifier = IncomingCallNotifier()
     let incomingSMSNotifier = IncomingSMSNotifier()
     let liveActivity = LiveActivityController()
 
-    private let historyStore = LocalHistoryStore()
-    private var cancellables: Set<AnyCancellable> = []
-
-    private var pollingTask: Task<Void, Never>?
-    private var moduleMetadataTask: Task<Void, Never>?
-    private var callHistoryRefreshTask: Task<Void, Never>?
-    private var scheduledCallHistoryRefreshTask: Task<Void, Never>?
-    private var activeOperationCount = 0
-    private var startingCallAudio = false
-    private var currentCallTransport: CallTransport?
-    private var lockedCallTransport: LockedCallTransport?
-    private var currentLocalAPI: AirSIMAPI?
-    private var currentPCMRoute: PCMRoute?
-    private var lastSuccessfulLocalAPI: AirSIMAPI?
-    private var observedCallLocalAPI: (callID: String, service: AirSIMAPI)?
-    private var callLifecycleStore = CallLifecycleStore()
-    private var appIsActive = true
-    private let initialPermissionCoordinator = InitialPermissionCoordinator()
-    private var initialPermissionTask: Task<Void, Never>?
-    private var eventRevision: UInt64 = AgentEventCursor.initial
-    private var smsRevision: UInt64 = 0
-    private var eventStreamSupported: Bool?
-    private var pollingGeneration = 0
-    private var hasStarted = false
-    private var consecutivePollFailures = 0
-    private var callTransitionProtectedUntil = Date.distantPast
-    private var nextAudioDiagnosticRefresh = Date.distantPast
-    private var nextModuleMetadataRefresh = Date.distantPast
+    @ObservationIgnored private let historyStore = LocalHistoryStore()
+    @ObservationIgnored private var outgoingAttemptID = UUID()
+    // 以下均为轮询/通话链路簿记，不是 UI 状态，不参与 observation。
+    @ObservationIgnored private var pollingTask: Task<Void, Never>?
+    @ObservationIgnored private var moduleMetadataTask: Task<Void, Never>?
+    @ObservationIgnored private var callHistoryRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduledCallHistoryRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var activeOperationCount = 0
+    @ObservationIgnored private var startingCallAudio = false
+    @ObservationIgnored private var currentCallTransport: CallTransport?
+    @ObservationIgnored private var lockedCallTransport: LockedCallTransport?
+    @ObservationIgnored private var currentLocalAPI: AirSIMAPI?
+    @ObservationIgnored private var currentPCMRoute: PCMRoute?
+    @ObservationIgnored private var lastSuccessfulLocalAPI: AirSIMAPI?
+    @ObservationIgnored private var observedCallLocalAPI: (callID: String, service: AirSIMAPI)?
+    @ObservationIgnored private var callLifecycleStore = CallLifecycleStore()
+    @ObservationIgnored private var appIsActive = true
+    @ObservationIgnored private let initialPermissionCoordinator = InitialPermissionCoordinator()
+    @ObservationIgnored private var initialPermissionTask: Task<Void, Never>?
+    @ObservationIgnored private var eventRevision: UInt64 = AgentEventCursor.initial
+    @ObservationIgnored private var smsRevision: UInt64 = 0
+    @ObservationIgnored private var eventStreamSupported: Bool?
+    @ObservationIgnored private var pollingGeneration = 0
+    @ObservationIgnored private var hasStarted = false
+    @ObservationIgnored private var consecutivePollFailures = 0
+    @ObservationIgnored private var callTransitionProtectedUntil = Date.distantPast
+    @ObservationIgnored private var nextAudioDiagnosticRefresh = Date.distantPast
+    @ObservationIgnored private var nextModuleMetadataRefresh = Date.distantPast
+    // pairedAndroidAgents 按 90 秒窗口读取它；必须参与 observation 追踪，
+    // 否则刷新/重置后依赖它的展示不会重算（@Observable 不再像 objectWillChange
+    // 那样让任意赋值触发全部视图重算）。
     private var lastCloudStatusRefresh = Date.distantPast
-    private var cloudStatusRefreshTask: Task<Void, Never>?
-    private var cloudStatusRefreshGeneration = 0
-    private var audioWarmupCallID: String?
-    private var lowPowerModeEnabled = true
-    private let backgroundStandbyKey = "airsim.background-standby-enabled"
-    private let lowPowerModeKey = "airsim.low-power-mode-enabled"
-    private let maxCallHistoryCount = 500
-    private let maxMessageCount = 2_000
+    @ObservationIgnored private var cloudStatusRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var cloudStatusRefreshGeneration = 0
+    @ObservationIgnored private var audioWarmupCallID: String?
+    @ObservationIgnored private var lowPowerModeEnabled = true
+    @ObservationIgnored private let backgroundStandbyKey = "airsim.background-standby-enabled"
+    @ObservationIgnored private let lowPowerModeKey = "airsim.low-power-mode-enabled"
+    @ObservationIgnored private let maxCallHistoryCount = 500
+    @ObservationIgnored private let maxMessageCount = 2_000
 
     var inAppPresentedCall: CallRecord? {
         return CallPresentationPolicy.inAppCall(
@@ -334,11 +347,12 @@ final class AppModel: ObservableObject {
     }
 
     var callAudioIsActive: Bool {
-        audio.active || cloudCallAudioState.isConnected || VirtualCallTTSController.shared.isPrepared
+        audio.active || cloudCallAudioState.isConnected || isVirtualCallTTSPrepared
     }
 
     var connectionModePresentation: ConnectionModePresentation {
-        ConnectionModePresentation.make(
+        _ = preferenceRevision
+        return ConnectionModePresentation.make(
             selectedMode: ConnectionModePreference.selected(),
             vowlanOnline: permitsVoWLANEndpoint(vowlan.availability.endpoint)
                 && vowlan.availability.isOnlineForDisplay,
@@ -348,6 +362,7 @@ final class AppModel: ObservableObject {
     }
 
     var pairedAndroidAgents: [AndroidAgentPresentation] {
+        _ = preferenceRevision
         let cloudStatus = cloudAgentDirectory ?? cloudAgentStatus
         let cloudStatusIsFresh = Date().timeIntervalSince(lastCloudStatusRefresh) <= 90
         var values: [String: AndroidAgentPresentation] = [:]
@@ -446,6 +461,7 @@ final class AppModel: ObservableObject {
 
     /// History retains identity/name only; numbers and online state come from the live session.
     var pairedDeviceHistory: [AndroidAgentPresentation] {
+        _ = preferenceRevision
         var values = Dictionary(uniqueKeysWithValues: pairedDeviceRecords.map {
             ($0.id, AndroidAgentPresentation(id: $0.id, deviceName: $0.deviceName, phoneNumber: nil,
                 agentKind: $0.agentKind, cloudOnline: false, vowlanOnline: false, isCurrent: false))
@@ -480,7 +496,7 @@ final class AppModel: ObservableObject {
         PairedAndroidDeviceStore.forget(agentID)
         pairedDeviceRecords = PairedAndroidDeviceStore.records()
         vowlan.forget(agentID)
-        objectWillChange.send()
+        preferenceRevision &+= 1
         if hasStarted { restartPolling() }
     }
 
@@ -495,11 +511,14 @@ final class AppModel: ObservableObject {
         guard PairedAndroidDeviceStore.permits(agentID) else { return }
         AndroidAgentBindingPreference.set(agentID)
         vowlan.bind(to: agentID)
-        objectWillChange.send()
+        preferenceRevision &+= 1
         if hasStarted { restartPolling() }
     }
 
-    private var boundAgentID: String? { AndroidAgentBindingPreference.selected() }
+    private var boundAgentID: String? {
+        _ = preferenceRevision
+        return AndroidAgentBindingPreference.selected()
+    }
 
     private var boundVoWLANAgent: VoWLANDiscoveredAgent? {
         guard let boundAgentID else {
@@ -600,7 +619,8 @@ final class AppModel: ObservableObject {
     var callUsesVoWLAN: Bool { currentCallTransport == .vowlan }
 
     var dialPadTransportPresentation: DialPadTransportPresentation? {
-        DialPadTransportPresentation.make(
+        _ = preferenceRevision
+        return DialPadTransportPresentation.make(
             mode: ConnectionModePreference.selected(),
             vowlanOnline: permitsVoWLANEndpoint(vowlan.availability.endpoint)
                 && vowlan.availability.isOnlineForDisplay,
@@ -613,7 +633,8 @@ final class AppModel: ObservableObject {
     /// Relay 保持心跳时会刻意为 false。云端模式开启且心跳新鲜时，同样允许
     /// 用户发起拨号，实际执行仍会在 CallKit action 中再次鉴权和确认状态。
     var canStartOutgoingCommand: Bool {
-        OutgoingCommandAvailability.isAvailable(
+        _ = preferenceRevision
+        return OutgoingCommandAvailability.isAvailable(
             mode: ConnectionModePreference.selected(),
             localControlReachable: permitsVoWLANEndpoint(vowlan.availability.endpoint)
                 && vowlan.availability.allowsCallAttempt,
@@ -630,14 +651,16 @@ final class AppModel: ObservableObject {
 
     init(api: AirSIMAPI = AirSIMAPI()) {
         self.api = api
-        recordings.$isRecording.assign(to: &$isRecording)
-        recordings.$isBusy.assign(to: &$isRecordingBusy)
-        recordings.$errorMessage.compactMap { $0 }.sink { [weak self] message in
+        // 录音状态经 isRecording/isRecordingBusy 直接读源对象；错误经回调转发，
+        // 替代旧的 $isRecording.assign / $errorMessage.sink Combine 管线。
+        recordings.onErrorMessage = { [weak self] message in
             self?.errorMessage = message
-        }.store(in: &cancellables)
+        }
         let runtimePolicy = ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected())
         callKit.handler = self
         callKit.setEnabled(runtimePolicy.usesCallKit)
+        // 冷启动 handler 可能已在本模型创建前为虚拟来电准备 TTS；接管 handler 时同步镜像。
+        isVirtualCallTTSPrepared = VirtualCallTTSController.shared.isPrepared
         WatchCallCoordinator.shared.configure(model: self)
         WatchCallCoordinator.shared.start()
         IPhoneCloudCallSession.shared.onAudioStateChange = { [weak self] state in
@@ -659,7 +682,8 @@ final class AppModel: ObservableObject {
         }
         vowlan.onAvailabilityChange = { [weak self] availability in
             guard let self else { return }
-            self.objectWillChange.send()
+            // availability/discoveredAgents 本身已被 @Observable 追踪，视图读取时
+            // 直接建立依赖，不再需要 objectWillChange 转发。
             if availability.isOnlineForDisplay {
                 Task { @MainActor in self.rememberVerifiedDevices() }
             }
@@ -677,9 +701,6 @@ final class AppModel: ObservableObject {
                   case .unavailable = availability,
                   self.callLifecycleSnapshot.state.representsCall else { return }
             Task { @MainActor [weak self] in await self?.endVoWLANCallAfterPathLoss() }
-        }
-        vowlan.onDiscoveredAgentsChange = { [weak self] in
-            self?.objectWillChange.send()
         }
     }
 
@@ -842,7 +863,7 @@ final class AppModel: ObservableObject {
             vowlan.stopBrowsing()
         }
         if policy.startsCloud { startCloudStatusQueryIfNeeded() }
-        objectWillChange.send()
+        preferenceRevision &+= 1
         if hasStarted { restartPolling() }
     }
 
@@ -1703,6 +1724,13 @@ final class AppModel: ObservableObject {
         errorMessage = nil
     }
 
+    /// foreach.md：分组与排序只在消息集合变化时重算；由 messages.didSet 触发。
+    private func rebuildConversations() {
+        conversations = Dictionary(grouping: messages, by: \.sender)
+            .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
+            .sorted { ($0.messages.last?.timestamp ?? .distantPast) > ($1.messages.last?.timestamp ?? .distantPast) }
+    }
+
     func deleteCallHistory(ids: Set<String>) {
         guard !ids.isEmpty else { return }
         let deletedIDs = historyStore.loadDeletedCallIDs().union(ids)
@@ -2471,6 +2499,7 @@ extension AppModel: CallKitActionHandling {
             let pushedCall = callKit.currentIncomingPush
             if let pushedCall, pushedCall.isVirtual {
                 try VirtualCallTTSController.shared.prepare(pushedCall)
+                isVirtualCallTTSPrepared = true
                 clearLockedTransport()
                 updateRemoteCallState("active")
                 return
@@ -2545,6 +2574,7 @@ extension AppModel: CallKitActionHandling {
         applyCurrentCallIntent(.ending, source: .callKit)
         if VirtualCallTTSController.shared.isPrepared || callKit.currentIncomingPush?.isVirtual == true {
             VirtualCallTTSController.shared.stop()
+            isVirtualCallTTSPrepared = false
             clearLockedTransport()
             backgroundStandby.resumeAfterCall()
             return
@@ -2631,6 +2661,7 @@ extension AppModel: CallKitActionHandling {
         beginCallTransitionProtection()
         if VirtualCallTTSController.shared.isPrepared {
             VirtualCallTTSController.shared.stop()
+            isVirtualCallTTSPrepared = false
             backgroundStandby.resumeAfterCall()
             return
         }
@@ -2650,6 +2681,7 @@ extension AppModel: CallKitActionHandling {
         let wasVirtual = VirtualCallTTSController.shared.isPrepared
         if wasVirtual {
             VirtualCallTTSController.shared.stop()
+            isVirtualCallTTSPrepared = false
         } else if currentCallTransport == .cloud || IPhoneCloudCallSession.shared.isPrepared {
             IPhoneCloudCallSession.shared.stopAudio()
         } else {
@@ -2703,6 +2735,7 @@ extension AppModel: CallKitActionHandling {
         cloudCallAudioState = .idle
         IPhoneCloudCallSession.shared.stop()
         VirtualCallTTSController.shared.stop()
+        isVirtualCallTTSPrepared = false
         backgroundStandby.resumeAfterCall()
     }
 }

@@ -10,12 +10,16 @@ private enum AgentVerboseTraceFilter: String, CaseIterable, Identifiable {
     case usb = "USB"
 
     var id: String { rawValue }
-    var title: String {
+
+    /// localization.md：筛选标签属于用户可见文案，用 LocalizedStringResource 延迟解析。
+    var title: LocalizedStringResource {
         switch self {
         case .all: return "All"
         case .failures: return "Errors"
         case .calls: return "Calls"
-        default: return rawValue
+        case .relay: return "Relay"
+        case .at: return "AT"
+        case .usb: return "USB"
         }
     }
 }
@@ -56,16 +60,20 @@ private struct AgentVerboseTimelineItem: Identifiable, Equatable {
 }
 
 @MainActor
-private final class AgentVerboseTraceViewModel: ObservableObject {
-    @Published var enabled = false
-    @Published var localEntries: [AgentVerboseTraceEntry] = []
-    @Published var agentEvents: [ModuleDebugEvent] = []
-    @Published var agentState = "Not Connected"
-    @Published var errorMessage: String?
-    @Published var exportText = "AirSIM Agent Verbose Trace\n"
+@Observable
+private final class AgentVerboseTraceViewModel {
+    var enabled = false
+    var localEntries: [AgentVerboseTraceEntry] = []
+    var agentEvents: [ModuleDebugEvent] = []
+    var agentState = "Not Connected"
+    var errorMessage: String?
+    var exportText = "AirSIM Agent Verbose Trace\n"
+    // foreach.md：时间线是派生集合，只在 localEntries/agentEvents 变化时重建，
+    // 不随视图每次读取重新映射排序（最多 2000 条）。
+    private(set) var timeline: [AgentVerboseTimelineItem] = []
 
-    private let api: AirSIMAPI
-    private var lastSequence: UInt64 = 0
+    @ObservationIgnored private let api: AirSIMAPI
+    @ObservationIgnored private var lastSequence: UInt64 = 0
 
     init(api: AirSIMAPI) { self.api = api }
 
@@ -104,25 +112,11 @@ private final class AgentVerboseTraceViewModel: ObservableObject {
                 errorMessage = error.localizedDescription
             }
         }
+        rebuildTimeline()
         await rebuildExport()
     }
 
-    func clear() async {
-        await AgentVerboseTraceRecorder.shared.clear()
-        localEntries = []
-        agentEvents = []
-        lastSequence = 0
-        do {
-            try await api.clearModuleDebug()
-            agentState = "Agent Logs Cleared"
-            errorMessage = nil
-        } catch {
-            errorMessage = "Local logs cleared; failed to clear Agent logs: \(error.localizedDescription)"
-        }
-        await refresh()
-    }
-
-    var timeline: [AgentVerboseTimelineItem] {
+    private func rebuildTimeline() {
         let local = localEntries.map { entry in
             let fields = (entry.fields ?? [:])
                 .filter { $0.key != "trace_id" }
@@ -168,10 +162,26 @@ private final class AgentVerboseTraceViewModel: ObservableObject {
                 isFailure: event.direction == "error" || statusFailure
             )
         }
-        return (local + remote).sorted {
+        timeline = (local + remote).sorted {
             if $0.timestamp == $1.timestamp { return $0.id < $1.id }
             return $0.timestamp < $1.timestamp
         }
+    }
+
+    func clear() async {
+        await AgentVerboseTraceRecorder.shared.clear()
+        localEntries = []
+        agentEvents = []
+        lastSequence = 0
+        rebuildTimeline()
+        do {
+            try await api.clearModuleDebug()
+            agentState = "Agent Logs Cleared"
+            errorMessage = nil
+        } catch {
+            errorMessage = "Local logs cleared; failed to clear Agent logs: \(error.localizedDescription)"
+        }
+        await refresh()
     }
 
     private func merge(_ newEvents: [ModuleDebugEvent]) {
@@ -214,13 +224,13 @@ private final class AgentVerboseTraceViewModel: ObservableObject {
 }
 
 struct AgentVerboseTraceView: View {
-    @StateObject private var model: AgentVerboseTraceViewModel
+    @State private var model: AgentVerboseTraceViewModel
     @State private var filter: AgentVerboseTraceFilter = .all
     @State private var selectedItem: AgentVerboseTimelineItem?
     @State private var showingClearConfirmation = false
 
     init(api: AirSIMAPI) {
-        _model = StateObject(wrappedValue: AgentVerboseTraceViewModel(api: api))
+        model = AgentVerboseTraceViewModel(api: api)
     }
 
     var body: some View {
@@ -285,7 +295,7 @@ struct AgentVerboseTraceView: View {
                             Button {
                                 selectedItem = item
                             } label: {
-                                timelineRow(item)
+                                AgentVerboseTimelineRow(item: item)
                             }
                             .buttonStyle(.plain)
                             .id(item.id)
@@ -334,8 +344,14 @@ struct AgentVerboseTraceView: View {
             }
         }
     }
+}
 
-    private func timelineRow(_ item: AgentVerboseTimelineItem) -> some View {
+/// 时间线行独立成子视图：条目内容不变时，刷新循环不再重建行内容
+/// （structure.md 失效边界；AgentVerboseTimelineItem 是 Equatable）。
+private struct AgentVerboseTimelineRow: View {
+    let item: AgentVerboseTimelineItem
+
+    var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: item.systemImage)
                 .font(.callout.weight(.semibold))
@@ -347,9 +363,18 @@ struct AgentVerboseTraceView: View {
                     Text(item.source)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(item.source == "APP" ? .blue : .purple)
-                    Text(Self.timeFormatter.string(from: item.timestamp))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    // 诊断时间戳是调试输出，保持固定 24 小时制 HH:mm:ss.SSS：
+                    // 不随语言环境变化，避免 12 小时制地区 03:15 与 15:15 同显歧义。
+                    Text(
+                        item.timestamp,
+                        format: Date.VerbatimFormatStyle(
+                            format: "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits):\(second: .twoDigits).\(secondFraction: .fractional(3))",
+                            timeZone: .current,
+                            calendar: .current
+                        )
+                    )
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
                     if let traceID = item.traceID {
                         Text("#\(traceID)")
                             .font(.caption2.monospaced())
@@ -370,12 +395,6 @@ struct AgentVerboseTraceView: View {
         }
         .padding(.vertical, 3)
     }
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss.SSS"
-        return formatter
-    }()
 }
 
 private struct AgentVerboseTraceDetailView: View {

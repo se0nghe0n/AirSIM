@@ -71,27 +71,28 @@ enum SpeakerRoutePolicy {
 
 /// 管理 iPhone/iPad 内置麦克风、扬声器与模块 ECM 网络 PCM 之间的双向通话音频。
 @MainActor
-final class AudioSessionController: ObservableObject {
-    @Published private(set) var active = false
-    @Published private(set) var routeDescription = ""
-    @Published private(set) var transportReady = false
-    @Published private(set) var diagnosticDescription = ""
-    @Published private(set) var moduleDiagnosticDescription = ""
-    @Published private(set) var speakerEnabled = false
-    @Published private(set) var speakerRoutePending = false
-    @Published var errorMessage: String?
+@Observable
+final class AudioSessionController {
+    private(set) var active = false
+    private(set) var routeDescription = ""
+    private(set) var transportReady = false
+    private(set) var diagnosticDescription = ""
+    private(set) var moduleDiagnosticDescription = ""
+    private(set) var speakerEnabled = false
+    private(set) var speakerRoutePending = false
+    var errorMessage: String?
 
-    private var engine: AVAudioEngine?
-    private var player: AVAudioPlayerNode?
-    private var vowlanPeer: CloudWebRTCPeer?
-    private let vowlanQueue = DispatchQueue(label: "com.example.airsim.vowlan-webrtc")
-    private var callTonePlayer: AVAudioPlayer?
-    private var currentCallTone: CallTone?
-    private var muted = false
-    private var requestedSpeakerOverride = false
-    private var speakerRouteRetryTask: Task<Void, Never>?
-    private var sessionActivationManagedByCallKit = false
-    private var routeChangeObserver: NSObjectProtocol?
+    @ObservationIgnored private var engine: AVAudioEngine?
+    @ObservationIgnored private var player: AVAudioPlayerNode?
+    @ObservationIgnored private var vowlanPeer: CloudWebRTCPeer?
+    @ObservationIgnored private let vowlanQueue = DispatchQueue(label: "com.example.airsim.vowlan-webrtc")
+    @ObservationIgnored private var callTonePlayer: AVAudioPlayer?
+    @ObservationIgnored private var currentCallTone: CallTone?
+    @ObservationIgnored private var muted = false
+    @ObservationIgnored private var requestedSpeakerOverride = false
+    @ObservationIgnored private var speakerRouteRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var sessionActivationManagedByCallKit = false
+    @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
 
     init() {
         // CallKit、蓝牙或系统控制中心都可能改变输出路由，按钮状态必须跟随真实会话。

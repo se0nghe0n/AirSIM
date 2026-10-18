@@ -1,9 +1,9 @@
 import SwiftUI
 
 struct SamsungPairingView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var localPairingOnly = LocalModePreference.isEnabled()
-    @StateObject private var browser = SamsungPairingBrowser()
+    @State private var browser = SamsungPairingBrowser()
     @State private var code = ""
     @State private var pairingServiceID: String?
     @State private var message = ""
@@ -43,7 +43,7 @@ struct SamsungPairingView: View {
                         TextField("Six-digit code shown on Android", text: $code)
                             .keyboardType(.numberPad)
                             .textContentType(.oneTimeCode)
-                            .onChange(of: code) { value in
+                            .onChange(of: code) { _, value in
                                 code = String(value.filter(\.isNumber).prefix(6))
                             }
                         Button("Pair Securely", systemImage: "lock.shield") {

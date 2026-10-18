@@ -103,7 +103,8 @@ struct ContactFetcher: Sendable {
 }
 
 @MainActor
-final class ContactStore: ObservableObject {
+@Observable
+final class ContactStore {
     struct Contact: Codable, Identifiable, Equatable, Sendable {
         let id: String
         let name: String
@@ -112,11 +113,11 @@ final class ContactStore: ObservableObject {
         let photoData: Data?
     }
 
-    @Published private(set) var contacts: [Contact] = []
-    @Published private(set) var isAuthorized = false
-    @Published private(set) var authorizationState: ContactAuthorizationState = .notDetermined
-    @Published var errorMessage: String?
-    private let cache: ContactCacheStore
+    private(set) var contacts: [Contact] = []
+    private(set) var isAuthorized = false
+    private(set) var authorizationState: ContactAuthorizationState = .notDetermined
+    var errorMessage: String?
+    @ObservationIgnored private let cache: ContactCacheStore
 
     init(fileManager: FileManager = .default) {
         cache = ContactCacheStore(fileManager: fileManager)
