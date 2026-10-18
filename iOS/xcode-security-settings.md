@@ -43,7 +43,9 @@ project uses no `.xcconfig` files.
     enforcement; no soft mode exists for this protection, so latent pointer-arithmetic
     bugs terminate the app on capable hardware).
 - Existing keys untouched: `aps-environment` = `$(APS_ENVIRONMENT)` in the app and
-  watch entitlements; push, VoIP, and app-group entitlements unchanged.
+  watch entitlements. No app-group entitlements exist anywhere in the project, and
+  VoIP is a `UIBackgroundModes` value in the app and watch `Info.plist` files (not an
+  entitlement), so no push or VoIP entitlement keys changed.
 
 ## Disabled settings
 
@@ -58,6 +60,16 @@ project uses no `.xcconfig` files.
   per the skill (`arm64e.x1` is a pointer-authentication slice and must not be built
   where pointer authentication is off; a slice-less enforcement entitlement would
   only produce build warnings).
+- `ENABLE_POINTER_AUTHENTICATION` = `NO` on the `AirSIMTests` target (both
+  configurations, target-level): the test bundle is hosted by the `AirSIM` app
+  (`BUNDLE_LOADER`/`TEST_HOST`) and imports the app module and the WebRTC framework
+  directly; both are arm64-only on device, so an `arm64e` test slice has no app
+  module or host binary to link against (reproduced: unsigned device
+  `build-for-testing` failed with `SwiftDriver AirSIMTests normal arm64e` before this
+  opt-out, and passed after it).
+- `ENABLE_HARDWARE_CHECKED_POINTER_ARITHMETIC_SLICE` = `NO` on the `AirSIMTests`
+  target (both configurations, target-level): paired with the pointer-authentication
+  opt-out, same as the `AirSIM` app target.
 - `treat-warnings-as-errors` — deliberately not enabled anywhere (owner rule).
 
 ## Deferred
@@ -87,7 +99,8 @@ Settings considered but not yet enabled. Revisit them later.
   crash reports to enforcement): deferred until simulated crash reports are reviewed
   on MTE-capable hardware (iPhone/iPad A19+, Apple Watch S11+).
 - `AirSIMTests` stays without entitlements (test bundles are outside the skill's
-  entitlement scope); it inherits the project-level Enhanced Security cascade.
+  entitlement scope); it inherits the project-level Enhanced Security cascade except
+  for the pointer-authentication opt-outs recorded under Disabled settings.
 
 ## Notes
 
@@ -100,9 +113,36 @@ Settings considered but not yet enabled. Revisit them later.
 - Validation: `build-for-testing` (generic iOS Simulator) and `build`
   (generic iOS device, `CODE_SIGNING_ALLOWED=NO`) both succeeded after the change;
   deduplicated compiler warnings unchanged (4 unique messages before and after).
+  Reviewer round 1 (same day): the device failure was reproduced and fixed by the
+  `AirSIMTests` opt-outs above; unsigned device `build-for-testing` now passes too,
+  and simulator deduplicated warnings are unchanged across the fix (13 unique
+  `file:line` warning lines before and after).
+- `AirSIMLiveActivityExtension` hardening is an owner-approved override outside the
+  skill's supported product types: `enhanced-security.md` lists applications, XPC
+  services, driver/system extensions, and tools, and says to skip other app
+  extensions, but the owner directed full inclusion (plan: "owner directed
+  inclusion"). Every check so far ran with `CODE_SIGNING_ALLOWED=NO`, so Automatic
+  granting of these entitlements to the extension's App ID is unverified until a
+  signed device build or archive runs. CPA enforcement has no soft mode: a latent
+  pointer-arithmetic bug would terminate the Live Activity process on capable
+  hardware (iOS A20 Pro+).
+- watchOS platform reading: `enhanced-security.md` says Enhanced Security applies on
+  iOS, macOS, visionOS, and DriverKit, while `checked-pointer-arithmetic.md` and
+  `hardware-memory-tagging.md` explicitly support watchOS S11; the skill references
+  contradict each other. The reading followed here keeps the Watch app fully
+  configured (hardened-process, memory tagging in soft mode, CPA), because the two
+  protection-specific references cover watchOS directly. Signed-device confirmation
+  is tracked in the "Not yet verified" list below.
+- Not yet verified (do not present simulator results as device-ready): signed device
+  `build-for-testing`; signed device install of the app, Watch app, and Live Activity
+  extension (confirming Automatic signing grants the new entitlements to each App
+  ID); archive and TestFlight processing; and a real-device
+  CallKit/PushKit/WebRTC-audio/Live Activity smoke test with MTE soft-mode
+  crash-report review.
 
 ## Validation commands
 
 - `xcodebuild -project AirSIM.xcodeproj -scheme AirSIM -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/airsim-dd-security CODE_SIGNING_ALLOWED=NO build-for-testing` — passed.
 - `xcodebuild -project AirSIM.xcodeproj -scheme AirSIM -destination 'generic/platform=iOS' -derivedDataPath /tmp/airsim-dd-security-dev CODE_SIGNING_ALLOWED=NO build` — passed.
+- `xcodebuild -project AirSIM.xcodeproj -scheme AirSIM -destination 'generic/platform=iOS' -derivedDataPath /tmp/airsim-dd-security-dev CODE_SIGNING_ALLOWED=NO build-for-testing` — failed before the `AirSIMTests` opt-out (`SwiftDriver AirSIMTests normal arm64e`); passed after it.
 - `lipo -archs` on the built app, watch app, and Live Activity extension binaries — slices as listed above.

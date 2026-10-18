@@ -103,7 +103,7 @@ Do not enter DJOneHub's `https://push.remotepilot.site` in AirSIM. It accepts on
 
 New installations require Samsung pairing, notification authorization, CallKit/PushKit registration, and Watch companion installation again.
 
-The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is an arm64 build for re-signing, without `_CodeSignature` or `embedded.mobileprovision`; it cannot be installed directly. Signing only the main app is insufficient: replace and sign the Watch app and Live Activity Extension Bundle IDs, entitlements, and provisioning profiles as well. Public Releases must not contain development/ad hoc IPAs exposing device UDIDs.
+The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is a re-signing package whose main app binary is arm64 (the embedded Watch app and Live Activity extension binaries also carry `arm64e`/`arm64e.x1` slices), without `_CodeSignature` or `embedded.mobileprovision`; it cannot be installed directly. Signing only the main app is insufficient: replace and sign the Watch app and Live Activity Extension Bundle IDs, entitlements, and provisioning profiles as well. Public Releases must not contain development/ad hoc IPAs exposing device UDIDs.
 
 ## Security and privacy
 
