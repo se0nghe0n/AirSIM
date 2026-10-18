@@ -327,20 +327,13 @@ struct AirSIMSettingsView: View {
                 }
             }
             .task { await model.refreshPairedDeviceInformation() }
-            .confirmationDialog("Delete this device's local pairing record?",
-                isPresented: Binding(get: { deletingDevice != nil }, set: { if !$0 { deletingDevice = nil } }),
-                titleVisibility: .visible, presenting: deletingDevice) { device in
-                Button("Delete \(device.deviceName)", role: .destructive) {
-                    deviceDeletionInProgress = true
-                    Task {
-                        defer { deviceDeletionInProgress = false }
-                        do { try await model.forgetAndroidDevice(device.id) }
-                        catch { message = error.localizedDescription }
-                    }
+            .deletePairedDeviceConfirmation(item: $deletingDevice) { device in
+                deviceDeletionInProgress = true
+                Task {
+                    defer { deviceDeletionInProgress = false }
+                    do { try await model.forgetAndroidDevice(device.id) }
+                    catch { message = error.localizedDescription }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.")
             }
             .navigationTitle("Settings")
             .onDisappear {
@@ -399,5 +392,62 @@ struct AirSIMSettingsView: View {
         case .passed: return .green
         case .failed: return .red
         }
+    }
+}
+
+/// swiftui-whats-new-27 item-binding.md：iOS 27 为 confirmationDialog 增加 item:
+/// 重载，单一可选值同时驱动呈现并传给按钮；部署目标是 iOS 17，因此按参考的
+/// ViewModifier 分流形式采用，旧系统分支保持原 isPresented + presenting 行为。
+private struct DeletePairedDeviceConfirmation: ViewModifier {
+    @Binding var item: AndroidAgentPresentation?
+    let onConfirm: (AndroidAgentPresentation) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 27, *) {
+            content.confirmationDialog(
+                "Delete this device's local pairing record?",
+                item: $item,
+                titleVisibility: .visible
+            ) { device in
+                deleteActions(for: device)
+            } message: { _ in
+                deleteMessage
+            }
+        } else {
+            content.confirmationDialog(
+                "Delete this device's local pairing record?",
+                isPresented: Binding(
+                    get: { item != nil },
+                    set: { if !$0 { item = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: item
+            ) { device in
+                deleteActions(for: device)
+            } message: { _ in
+                deleteMessage
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deleteActions(for device: AndroidAgentPresentation) -> some View {
+        Button("Delete \(device.deviceName)", role: .destructive) {
+            onConfirm(device)
+        }
+        Button("Cancel", role: .cancel) {}
+    }
+
+    private var deleteMessage: some View {
+        Text("Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.")
+    }
+}
+
+private extension View {
+    func deletePairedDeviceConfirmation(
+        item: Binding<AndroidAgentPresentation?>,
+        onConfirm: @escaping (AndroidAgentPresentation) -> Void
+    ) -> some View {
+        modifier(DeletePairedDeviceConfirmation(item: item, onConfirm: onConfirm))
     }
 }
