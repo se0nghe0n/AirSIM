@@ -132,6 +132,7 @@ mkdir -p "$OUT"
   "$ROOT"/src/com/airsim/phonecontrol/AgentCommand.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallRepository.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudAnswerReplayPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CallLifecycleConflict.java \
   "$ROOT"/src/com/airsim/phonecontrol/DefaultCallAccount.java \
 	"$ROOT"/src/com/airsim/phonecontrol/CloudCallTarget.java \
 	"$ROOT"/src/com/airsim/phonecontrol/CloudCallMedia.java \

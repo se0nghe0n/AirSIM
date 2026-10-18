@@ -585,9 +585,6 @@ public final class MainActivity extends Activity {
         }
         root.addView(callAccountCard, matchWithTop(10));
 
-                .hasStoredCredential(this);
-                matchWithTop(6));
-
 		root.addView(sectionTitle("SMS inbox fallback"), matchWithTop(22));
 		LinearLayout smsCard = card(SURFACE, 22);
 		smsCard.setOrientation(LinearLayout.VERTICAL);

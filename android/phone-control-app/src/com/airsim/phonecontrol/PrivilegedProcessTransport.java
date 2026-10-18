@@ -19,7 +19,7 @@ import rikka.shizuku.Shizuku;
 
 /** App-local fallback for ROMs whose LoadedApk.makeApplication breaks UserService startup. */
 final class PrivilegedProcessTransport {
-    static final String PREFIX = "AIRSIM_Q25_RPC ";
+    static final String PREFIX = "AIRSIM_PIXEL_RPC ";
     private final IRemoteProcess remote;
     private final BufferedWriter commands;
     private final ArrayBlockingQueue<String> responses = new ArrayBlockingQueue<>(16);
@@ -75,7 +75,7 @@ final class PrivilegedProcessTransport {
             } finally {
                 if (protocol) responses.offer("EOF");
             }
-        }, protocol ? "airsim-q25-rpc" : "airsim-q25-stderr");
+        }, protocol ? "airsim-pixel-rpc" : "airsim-pixel-stderr");
         reader.setDaemon(true);
         reader.start();
     }

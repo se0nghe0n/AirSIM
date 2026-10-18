@@ -7,6 +7,8 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -29,10 +31,34 @@ final class StandaloneCloudMediaManager implements Closeable {
     private final android.content.Context context;
     private final ExecutorService sessions = Executors.newCachedThreadPool();
     private final Object lock = new Object();
+    private final Map<String, Descriptor> owners = new LinkedHashMap<>();
     private CloudSession active;
+    private String pendingOutgoingTelecomID;
 
     private StandaloneCloudMediaManager(android.content.Context context) {
         this.context = context.getApplicationContext();
+    }
+
+    void detachTelecomCall(String androidID) {
+        if (androidID == null || androidID.isBlank()) return;
+        synchronized (lock) {
+            // Keep the owner until the ended lifecycle is published. Only forget
+            // the id as a candidate for the next outgoing session.
+            if (androidID.equals(pendingOutgoingTelecomID)) pendingOutgoingTelecomID = null;
+        }
+    }
+
+    /** Bind a Telecom call as soon as it exists, before the iPhone answer arrives. */
+    void attachTelecomCall(String androidID, String direction) {
+        if (androidID == null || androidID.isBlank() || !"outgoing".equals(direction)) return;
+        synchronized (lock) {
+            pendingOutgoingTelecomID = androidID;
+            if (active != null && active.descriptor.androidID.isEmpty()
+                    && "outgoing".equals(active.descriptor.direction)) {
+                active.descriptor.androidID = androidID;
+                remember(active.descriptor);
+            }
+        }
     }
 
     void startOutgoing(JSONObject call) {
@@ -59,9 +85,12 @@ final class StandaloneCloudMediaManager implements Closeable {
         String androidID = event.optString("call_id", "");
         Descriptor descriptor;
         synchronized (lock) {
-            descriptor = active == null ? null : active.descriptor;
+            descriptor = owners.get(androidID);
+            if (descriptor == null && active != null) descriptor = active.descriptor;
         }
-        if ("incoming".equals(direction) && "incoming".equals(state) && descriptor == null) {
+        boolean sameTelecomCall = descriptor != null && androidID.equals(descriptor.androidID);
+        if ("incoming".equals(direction) && "incoming".equals(state) && !sameTelecomCall
+                && (descriptor == null || !descriptor.androidID.isEmpty())) {
             descriptor = Descriptor.incoming(registration, androidID);
             JSONObject payload = identity(registration).put("event", "incoming_call")
                     .put("call_id", descriptor.callID).put("call_uuid", descriptor.callUUID)
@@ -75,30 +104,102 @@ final class StandaloneCloudMediaManager implements Closeable {
             descriptor.mediaTransport = accepted.optString("media_transport", CloudCallMedia.WEBRTC);
             start(descriptor);
         } else if (descriptor != null && descriptor.androidID.isEmpty()
-                && "outgoing".equals(direction)) {
+                && "outgoing".equals(direction) && !"ended".equals(state)) {
             descriptor.androidID = androidID;
+            synchronized (lock) { remember(descriptor); }
+        }
+        if (descriptor != null && !androidID.isBlank() && !androidID.equals(descriptor.androidID)) {
+            descriptor = null;
         }
         if (descriptor != null) {
             String phase = phase(state);
-            if (!phase.isEmpty()) {
-                JSONObject lifecycle = identity(registration).put("event", "call_state")
-                        .put("call_id", descriptor.callID).put("call_uuid", descriptor.callUUID)
-                        .put("generation", descriptor.generation).put("phase", phase)
-                        .put("source", "agent").put("timestamp", Instant.now().toString())
-                        .put("trace_id", "standalone-" + descriptor.callUUID + "-" + phase);
+            if (!phase.isEmpty()) publishLifecycle(registration, relay, descriptor, phase);
+            if ("ended".equals(state)) {
+                synchronized (lock) {
+                    owners.remove(androidID);
+                    if (androidID.equals(pendingOutgoingTelecomID)) pendingOutgoingTelecomID = null;
+                }
+                closeActive(descriptor);
+            }
+        }
+    }
+
+    private void publishLifecycle(JSONObject registration, StandaloneRelayClient relay,
+                                  Descriptor descriptor, String phase) throws Exception {
+        JSONObject lifecycle = lifecycleEvent(registration, descriptor.callID, descriptor.callUUID,
+                descriptor.generation, phase);
+        try {
+            relay.postJSON(registration, "/v1/events/call-state", lifecycle, 12_000);
+        } catch (RelayHTTPException error) {
+            JSONObject stuck = mismatchSnapshot(error);
+            CallLifecycleConflict.Action action = CallLifecycleConflict.decide(
+                    stuck != null, phase, descriptor.callID, descriptor.callUUID,
+                    stuck == null ? "" : stuck.optString("call_id"),
+                    stuck == null ? "" : stuck.optString("call_uuid"),
+                    stuck == null ? "" : stuck.optString("phase"));
+            if (action == CallLifecycleConflict.Action.RETHROW) throw error;
+            if (action != CallLifecycleConflict.Action.DROP) {
+                postPhase(registration, relay, stuck.optString("call_id"), stuck.optString("call_uuid"),
+                        stuck.optLong("generation", 1), "ended");
+            }
+            if (action == CallLifecycleConflict.Action.END_OPEN_THEN_RETRY) {
+                postPhase(registration, relay, descriptor.callID, descriptor.callUUID,
+                        descriptor.generation, "connecting");
+            }
+            if (action == CallLifecycleConflict.Action.END_THEN_RETRY
+                    || action == CallLifecycleConflict.Action.END_OPEN_THEN_RETRY) {
                 relay.postJSON(registration, "/v1/events/call-state", lifecycle, 12_000);
             }
-            if ("ended".equals(state)) closeActive(descriptor);
+            BridgeLog.info("cloud_lifecycle_replaced_stuck_call phase=" + phase);
+        }
+    }
+
+    private void postPhase(JSONObject registration, StandaloneRelayClient relay,
+                           String callID, String callUUID, long generation, String phase) throws Exception {
+        relay.postJSON(registration, "/v1/events/call-state",
+                lifecycleEvent(registration, callID, callUUID, generation, phase), 12_000);
+    }
+
+    private static JSONObject lifecycleEvent(JSONObject registration, String callID, String callUUID,
+                                             long generation, String phase) throws Exception {
+        return identity(registration).put("event", "call_state")
+                .put("call_id", callID).put("call_uuid", callUUID)
+                .put("generation", generation).put("phase", phase)
+                .put("source", "agent").put("timestamp", Instant.now().toString())
+                .put("trace_id", "standalone-" + callUUID + "-" + phase);
+    }
+
+    private static JSONObject mismatchSnapshot(RelayHTTPException error) {
+        if (error.statusCode() != 409 || error.getMessage() == null) return null;
+        int start = error.getMessage().indexOf('{');
+        if (start < 0) return null;
+        try {
+            JSONObject body = new JSONObject(error.getMessage().substring(start));
+            if (!"identity_mismatch".equals(body.optString("reason"))) return null;
+            return body.optJSONObject("lifecycle");
+        } catch (Exception ignored) {
+            return null;
         }
     }
 
     private void start(Descriptor descriptor) {
         synchronized (lock) {
             if (active != null && active.descriptor.same(descriptor)) return;
+            if ("outgoing".equals(descriptor.direction) && descriptor.androidID.isEmpty()
+                    && CallRepository.contains(pendingOutgoingTelecomID)) {
+                descriptor.androidID = pendingOutgoingTelecomID;
+            }
             if (active != null) active.close();
             active = new CloudSession(descriptor);
+            remember(descriptor);
             sessions.execute(active);
         }
+    }
+
+    private void remember(Descriptor descriptor) {
+        if (descriptor.androidID == null || descriptor.androidID.isBlank()) return;
+        owners.put(descriptor.androidID, descriptor);
+        while (owners.size() > 8) owners.remove(owners.keySet().iterator().next());
     }
 
     private void closeActive(Descriptor descriptor) {
@@ -182,7 +283,12 @@ final class StandaloneCloudMediaManager implements Closeable {
                                 .put("generation", descriptor.generation));
                 JSONObject result = StandaloneAgentGateway.get(context).executeCloudCommand(command);
                 if (!"completed".equals(result.optString("status"))) {
-                    owner.writeText(status("action_error", result.optString("error", "Telecom command failed")));
+                    String error = result.optString("error", "Telecom command failed");
+                    if ("answer".equals(action) && !CloudAnswerReplayPolicy.isFinal(action, false, error)) {
+                        owner.writeText(status("answer_pending", ""));
+                        continue;
+                    }
+                    owner.writeText(status("action_error", error));
                     continue;
                 }
                 if ("answer".equals(action)) {
@@ -190,6 +296,8 @@ final class StandaloneCloudMediaManager implements Closeable {
                     if (!mediaStarted) {
                         StandaloneAgentStore.startCloudCallMedia(mediaTransport, () -> {
                             mediaStarted = true;
+                            BridgeLog.info("standalone_webrtc_starting call_uuid="
+                                    + DebugRedactor.safeIdentifier(descriptor.callUUID));
                             startWebRTC(owner);
                         });
                     }

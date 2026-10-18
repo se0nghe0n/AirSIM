@@ -192,6 +192,18 @@ final class StandaloneAgentGateway {
                 ? StandaloneCloudMediaManager.get(context).androidCallIDFor(command.optJSONObject("call"))
                 : "dial".equals(action) || "send_sms".equals(action)
                     ? "" : CallRepository.idForAction(action);
+        if ("answer".equals(action) && (callID.isBlank() || !CallRepository.contains(callID))) {
+            // The iPhone reuses one command id for the whole answer. Caching a miss
+            // while the Telecom call is unbound or already replaced blocks WebRTC.
+            BridgeLog.info("cloud_answer_waiting_for_telecom retryable=true");
+            return new JSONObject().put("command_id", commandID).put("status", "failed")
+                    .put("error", "cloud call not bound");
+        }
+        if (("end".equals(action) || "reject".equals(action))
+                && (callID.isBlank() || !CallRepository.contains(callID))) {
+            return new JSONObject().put("command_id", commandID).put("status", "completed")
+                    .put("result", new JSONObject().put("ended", true).put("android_confirmed", true));
+        }
         AgentCommand local = new AgentCommand(commandID, action, callID,
                 command.optString("number", ""), command.optString("message", ""));
         AgentCommandDispatcher.Result result = execute(local);

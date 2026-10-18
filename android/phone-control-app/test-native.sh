@@ -18,11 +18,11 @@ mkdir -p "$OUT/classes" "$OUT/dex"
 "$TOOLS/apksigner" sign --ks "$ROOT/build/debug.keystore" --ks-pass pass:android --key-pass pass:android --out "$OUT/test.apk" "$OUT/test-aligned.apk"
 "$SDK/platform-tools/adb" -s "$SERIAL" install --no-incremental -r "$APP"
 "$SDK/platform-tools/adb" -s "$SERIAL" install --no-incremental -r "$OUT/test.apk"
-trap '"$SDK/platform-tools/adb" -s "$SERIAL" shell run-as com.airsim.phonecontrol.q25 rm -f files/webrtc-test-ice.json >/dev/null 2>&1 || true' EXIT
+trap '"$SDK/platform-tools/adb" -s "$SERIAL" shell run-as com.airsim.phonecontrol.pixel8pro rm -f files/webrtc-test-ice.json >/dev/null 2>&1 || true' EXIT
 ARGS=(-e relay false)
 if [ -n "${AIRSIM_TEST_TURN_CONFIG:-}" ]; then
-    "$SDK/platform-tools/adb" -s "$SERIAL" shell run-as com.airsim.phonecontrol.q25 mkdir -p files
-    "$SDK/platform-tools/adb" -s "$SERIAL" shell 'run-as com.airsim.phonecontrol.q25 sh -c "umask 077; cat > files/webrtc-test-ice.json"' < "$AIRSIM_TEST_TURN_CONFIG"
+    "$SDK/platform-tools/adb" -s "$SERIAL" shell run-as com.airsim.phonecontrol.pixel8pro mkdir -p files
+    "$SDK/platform-tools/adb" -s "$SERIAL" shell 'run-as com.airsim.phonecontrol.pixel8pro sh -c "umask 077; cat > files/webrtc-test-ice.json"' < "$AIRSIM_TEST_TURN_CONFIG"
     ARGS=(-e relay true)
 fi
 python3 - "$SDK/platform-tools/adb" "$SERIAL" "${ARGS[@]}" <<'NATIVE_TEST' | tee "$OUT/result.txt"
@@ -35,7 +35,7 @@ try:
                    timeout=90, check=True)
 except subprocess.TimeoutExpired:
     subprocess.run([adb, '-s', serial, 'shell', 'am', 'force-stop',
-                    'com.airsim.phonecontrol.q25'], timeout=10, check=False)
+                    'com.airsim.phonecontrol.pixel8pro'], timeout=10, check=False)
     raise SystemExit('FAIL: native loopback timed out')
 NATIVE_TEST
 grep -q 'PASS native JNI bidirectional Opus' "$OUT/result.txt"

@@ -25,10 +25,10 @@ AirSIM is a source-available, noncommercial cross-device calling and messaging p
 
 ## About this fork
 
-This fork at [se0nghe0n/AirSIM](https://github.com/se0nghe0n/AirSIM) includes the rooted Q25 setup, complete English app UI and basic guides, and cloud-call reliability fixes. The original project and its attribution are retained below.
+This fork at [se0nghe0n/AirSIM](https://github.com/se0nghe0n/AirSIM) includes the Pixel 8 Pro Standalone setup (retaining the earlier rooted Q25 audio work), complete English app UI and basic guides, and cloud-call reliability fixes. The original project and its attribution are retained below.
 
 - English is the default app language. The existing language preference and Chinese option remain available; caller names, SMS content, and operating-system messages keep their original language.
-- The Q25 Android package is `com.airsim.phonecontrol.q25`. Apple signing and Relay settings in this branch are configured for the fork owner; use your own identities and credentials for a separate installation. A `workers.dev` Relay endpoint can be used without a custom domain.
+- The Pixel 8 Pro Android package is `com.airsim.phonecontrol.pixel8pro` (formerly `com.airsim.phonecontrol.q25` for the rooted Q25 device). Apple signing and Relay settings in this branch are configured for the fork owner; use your own identities and credentials for a separate installation. A `workers.dev` Relay endpoint can be used without a custom domain.
 - Native WebRTC/Opus cloud calls are available for rooted Android Standalone and iPhone, with authenticated signaling and expiring TURN credentials. See the [WebRTC setup and validation guide](docs/webrtc.md). Older clients and Apple Watch retain PCM.
 - iPhone call recording saves both sides locally when you tap Record. Open Recents → Recordings to play, share, or delete files. See the [recording guide](docs/call-recording.md).
 - The legacy iPhone PCM receive buffer adapts to observed delivery stalls and preserves queued speech during recovery. Native WebRTC uses its own playout and bypasses that PCM buffer. Local tests do not establish real carrier-call quality.

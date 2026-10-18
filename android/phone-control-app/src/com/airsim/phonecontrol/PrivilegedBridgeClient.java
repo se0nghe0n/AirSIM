@@ -50,7 +50,7 @@ final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transp
         if (process != null) {
             try { return process.request(code, hasBoolean && value); }
             catch (Exception error) {
-                throw new RemoteException("Q25 process bridge: " + error.getMessage());
+                throw new RemoteException("Pixel process bridge: " + error.getMessage());
             }
         }
         Parcel data = Parcel.obtain();

@@ -9,6 +9,9 @@ public final class CallRepositoryTests {
         localRejectUsesPublishedCallIdentity();
         answeredCallCanConfirmMediaWithoutAnsweringAgain();
         pendingAnswerDoesNotPoisonCompletedReplay();
+        outgoingDialingWaitsInsteadOfAnswering();
+        endedCallAcceptsHangupAfterTelecomRemoval();
+        stuckRelayCallYieldsToTheNextConnectingCall();
         System.out.println("call repository tests passed");
     }
 
@@ -31,9 +34,59 @@ public final class CallRepositoryTests {
         String timeout = "Telecom state confirmation timeout";
         assertTrue(!CloudAnswerReplayPolicy.isFinal("answer", false, timeout));
         assertTrue(CloudAnswerReplayPolicy.isFinal("answer", true, ""));
-        assertTrue(CloudAnswerReplayPolicy.isFinal("answer", false, "active call id mismatch"));
+        assertTrue(!CloudAnswerReplayPolicy.isFinal("answer", false, "active call id mismatch"));
+        assertTrue(!CloudAnswerReplayPolicy.isFinal("answer", false, "cloud call not bound"));
         assertTrue(CloudAnswerReplayPolicy.isFinal("end", false, timeout));
         assertTrue(CloudAnswerReplayPolicy.isFinal("send_sms", false, timeout));
+    }
+
+    private static void outgoingDialingWaitsInsteadOfAnswering() {
+        boolean[] answered = {false};
+        Call dialing = new Call(Call.STATE_DIALING) {
+            @Override public void answer(int videoState) { answered[0] = true; }
+        };
+        String id = CallRepository.add(dialing);
+        try {
+            CallRepository.ActionResult result = CallRepository.execute(
+                    null, new AgentCommand("media-join", "answer", id, ""));
+            assertTrue(!result.success);
+            assertEquals("Telecom state confirmation timeout", result.error);
+            assertTrue(!answered[0]);
+            assertTrue(!CloudAnswerReplayPolicy.isFinal("answer", false, result.error));
+        } finally { CallRepository.remove(dialing); }
+    }
+
+    private static void endedCallAcceptsHangupAfterTelecomRemoval() {
+        Call active = new Call(Call.STATE_ACTIVE);
+        String id = CallRepository.add(active);
+        CallRepository.remove(active);
+        assertTrue(!CallRepository.contains(id));
+        CallRepository.ActionResult ended = CallRepository.execute(
+                null, new AgentCommand("hangup", "end", id, ""));
+        assertTrue(ended.success);
+        CallRepository.ActionResult answer = CallRepository.execute(
+                null, new AgentCommand("late-answer", "answer", id, ""));
+        assertTrue(!answer.success);
+        assertEquals("active call id mismatch", answer.error);
+    }
+
+    private static void stuckRelayCallYieldsToTheNextConnectingCall() {
+        assertEquals(CallLifecycleConflict.Action.END_THEN_RETRY.name(),
+                CallLifecycleConflict.decide(true, "connecting", "outgoing-new",
+                        "11111111-1111-1111-1111-111111111111",
+                        "outgoing-old", "22222222-2222-2222-2222-222222222222", "active").name());
+        assertEquals(CallLifecycleConflict.Action.END_OPEN_THEN_RETRY.name(),
+                CallLifecycleConflict.decide(true, "active", "outgoing-new",
+                        "11111111-1111-1111-1111-111111111111",
+                        "outgoing-old", "22222222-2222-2222-2222-222222222222", "active").name());
+        assertEquals(CallLifecycleConflict.Action.END_THEN_DROP.name(),
+                CallLifecycleConflict.decide(true, "ended", "outgoing-new",
+                        "11111111-1111-1111-1111-111111111111",
+                        "outgoing-old", "22222222-2222-2222-2222-222222222222", "active").name());
+        assertEquals(CallLifecycleConflict.Action.RETHROW.name(),
+                CallLifecycleConflict.decide(true, "ended", "outgoing-old",
+                        "22222222-2222-2222-2222-222222222222",
+                        "outgoing-old", "22222222-2222-2222-2222-222222222222", "active").name());
     }
 
     private static void answerNeverTargetsAnActiveCallWithoutRinging() {

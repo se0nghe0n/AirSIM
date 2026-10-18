@@ -29,6 +29,7 @@ public final class AirSIMInCallService extends InCallService {
 		instance = this;
 		if (localAudio == null) localAudio = new LocalCallAudioController(this);
         String callId = CallRepository.add(call);
+        StandaloneCloudMediaManager.get(this).attachTelecomCall(callId, direction(call));
         BridgeLog.info("telecom_call_added call_id=" + DebugRedactor.safeIdentifier(callId)
                 + " direction=" + direction(call) + " state=" + TelecomStateMapper.toWireState(call.getState()));
         Call.Callback callback = new Call.Callback() {
@@ -44,6 +45,7 @@ public final class AirSIMInCallService extends InCallService {
     @Override
     public void onCallRemoved(Call call) {
         String callId = CallRepository.id(call);
+        StandaloneCloudMediaManager.get(this).detachTelecomCall(callId);
         BridgeLog.info("telecom_call_removed call_id=" + DebugRedactor.safeIdentifier(callId));
         emit(callId, direction(call), "ended", number(call));
 		deduplicator.remove(callId);

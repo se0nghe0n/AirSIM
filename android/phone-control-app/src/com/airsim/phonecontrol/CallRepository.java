@@ -32,6 +32,10 @@ public final class CallRepository {
         return IDS.getOrDefault(call, "");
     }
 
+    public static boolean contains(String callId) {
+        return callId != null && !callId.isBlank() && CALLS.containsKey(callId);
+    }
+
     public static void remove(Call call) {
         String id = IDS.remove(call);
         if (id != null) CALLS.remove(id);
@@ -93,9 +97,19 @@ public final class CallRepository {
             return error.isEmpty() ? ActionResult.success() : ActionResult.failure(error);
         }
         Call call = CALLS.get(command.callId);
-        if (call == null) return ActionResult.failure("active call id mismatch");
-        if ("answer".equals(command.action) && call.getState() == Call.STATE_ACTIVE) {
-            return ActionResult.success();
+        if (call == null) {
+            // Remote hangup removes the Telecom call before the iPhone end arrives.
+            if ("end".equals(command.action) || "reject".equals(command.action)) return ActionResult.success();
+            return ActionResult.failure("active call id mismatch");
+        }
+        if ("answer".equals(command.action)) {
+            int state = call.getState();
+            if (state == Call.STATE_ACTIVE) return ActionResult.success();
+            // Outgoing setup is not an incoming ring. answer() would target the
+            // wrong Telecom state; the iPhone retries until the carrier call is up.
+            if (state == Call.STATE_DIALING) {
+                return ActionResult.failure("Telecom state confirmation timeout");
+            }
         }
         CountDownLatch invoked = new CountDownLatch(1);
 		AtomicReference<Throwable> invocationError = new AtomicReference<>();

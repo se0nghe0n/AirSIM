@@ -325,15 +325,15 @@ final class ShizukuBridgeManager {
             client = PrivilegedBridgeClient.openProcess(app);
             coordinator.connect(client);
             privilegedClient = client;
-            status = "Shizuku connected · Q25 process · " + client.status();
-            BridgeLog.info("shizuku_q25_process_connected " + status);
+            status = "Shizuku connected · Pixel process · " + client.status();
+            BridgeLog.info("shizuku_pixel_process_connected " + status);
             runPendingDialerRoleRequest(client);
         } catch (Exception error) {
             if (client != null) client.close();
             coordinator.disconnect();
-            status = "Shizuku Q25 service failed to start";
-            BridgeLog.error("shizuku_q25_process_failed", error);
-            finishDialerRoleRequest(false, "Shizuku Q25 service failed to start");
+            status = "Shizuku Pixel service failed to start";
+            BridgeLog.error("shizuku_pixel_process_failed", error);
+            finishDialerRoleRequest(false, "Shizuku Pixel service failed to start");
         } finally {
             binding = false;
         }
