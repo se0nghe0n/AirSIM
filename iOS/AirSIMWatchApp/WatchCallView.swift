@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct WatchCallView: View {
-    @EnvironmentObject private var session: WatchCallSession
+    @Environment(WatchCallSession.self) private var session
     @State private var dialNumber = ""
 
     @State private var showConnectionStatus = false

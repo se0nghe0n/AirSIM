@@ -1,5 +1,4 @@
 import Foundation
-import Combine
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -351,19 +350,24 @@ final class CallAudioRecorder: @unchecked Sendable {
 }
 
 @MainActor
-final class CallRecordingStore: ObservableObject {
+@Observable
+final class CallRecordingStore {
     static let shared = CallRecordingStore()
-    @Published private(set) var isRecording = false
-    @Published private(set) var isBusy = false
-    @Published private(set) var recordings: [CallRecordingFile] = []
-    @Published private(set) var errorMessage: String?
-    private(set) var currentCallID: String?
-    private let recorder: CallAudioRecorder
-    private var sessionID: UUID?
-    private var finishAfterStart = false
-    private var failureDuringStart: (UUID, Error)?
+    private(set) var isRecording = false
+    private(set) var isBusy = false
+    private(set) var recordings: [CallRecordingFile] = []
+    private(set) var errorMessage: String? {
+        didSet { if let errorMessage { onErrorMessage?(errorMessage) } }
+    }
+    /// AppModel 把录音错误转发进自己的全局横幅；回调属于桥接管线，不参与 observation。
+    @ObservationIgnored var onErrorMessage: ((String) -> Void)?
+    @ObservationIgnored private(set) var currentCallID: String?
+    @ObservationIgnored private let recorder: CallAudioRecorder
+    @ObservationIgnored private var sessionID: UUID?
+    @ObservationIgnored private var finishAfterStart = false
+    @ObservationIgnored private var failureDuringStart: (UUID, Error)?
 #if canImport(UIKit)
-    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 #endif
 
     init(recorder: CallAudioRecorder = .shared) { self.recorder = recorder }

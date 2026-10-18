@@ -48,11 +48,12 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 }
 
 @MainActor
-final class AppSettings: ObservableObject {
-    @Published var appearance: AppAppearance {
+@Observable
+final class AppSettings {
+    var appearance: AppAppearance {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: L10n.appearanceKey) }
     }
-    @Published var language: AppLanguage {
+    var language: AppLanguage {
         didSet { UserDefaults.standard.set(language.rawValue, forKey: L10n.languageKey) }
     }
 

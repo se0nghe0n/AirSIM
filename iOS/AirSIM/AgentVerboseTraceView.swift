@@ -56,16 +56,17 @@ private struct AgentVerboseTimelineItem: Identifiable, Equatable {
 }
 
 @MainActor
-private final class AgentVerboseTraceViewModel: ObservableObject {
-    @Published var enabled = false
-    @Published var localEntries: [AgentVerboseTraceEntry] = []
-    @Published var agentEvents: [ModuleDebugEvent] = []
-    @Published var agentState = "Not Connected"
-    @Published var errorMessage: String?
-    @Published var exportText = "AirSIM Agent Verbose Trace\n"
+@Observable
+private final class AgentVerboseTraceViewModel {
+    var enabled = false
+    var localEntries: [AgentVerboseTraceEntry] = []
+    var agentEvents: [ModuleDebugEvent] = []
+    var agentState = "Not Connected"
+    var errorMessage: String?
+    var exportText = "AirSIM Agent Verbose Trace\n"
 
-    private let api: AirSIMAPI
-    private var lastSequence: UInt64 = 0
+    @ObservationIgnored private let api: AirSIMAPI
+    @ObservationIgnored private var lastSequence: UInt64 = 0
 
     init(api: AirSIMAPI) { self.api = api }
 
@@ -214,13 +215,13 @@ private final class AgentVerboseTraceViewModel: ObservableObject {
 }
 
 struct AgentVerboseTraceView: View {
-    @StateObject private var model: AgentVerboseTraceViewModel
+    @State private var model: AgentVerboseTraceViewModel
     @State private var filter: AgentVerboseTraceFilter = .all
     @State private var selectedItem: AgentVerboseTimelineItem?
     @State private var showingClearConfirmation = false
 
     init(api: AirSIMAPI) {
-        _model = StateObject(wrappedValue: AgentVerboseTraceViewModel(api: api))
+        model = AgentVerboseTraceViewModel(api: api)
     }
 
     var body: some View {

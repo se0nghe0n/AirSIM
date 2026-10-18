@@ -2,9 +2,9 @@
 import SwiftUI
 
 struct CallRecordingsView: View {
-    @ObservedObject var store: CallRecordingStore
-    @EnvironmentObject private var model: AppModel
-    @StateObject private var playback = CallRecordingPlayback()
+    var store: CallRecordingStore
+    @Environment(AppModel.self) private var model
+    @State private var playback = CallRecordingPlayback()
     @State private var errorMessage: String?
 
     private var callInProgress: Bool { model.callLifecycleSnapshot.state.representsCall }
@@ -73,7 +73,7 @@ struct CallRecordingsView: View {
         }
         .task { await store.reload() }
         .refreshable { await store.reload() }
-        .onChange(of: callInProgress) { active in
+        .onChange(of: callInProgress) { _, active in
             if active { playback.stop(deactivateSession: false) }
         }
         .onDisappear { playback.stop(deactivateSession: !callInProgress) }
@@ -93,9 +93,10 @@ struct CallRecordingsView: View {
 }
 
 @MainActor
-private final class CallRecordingPlayback: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published private(set) var playingID: UUID?
-    private var player: AVAudioPlayer?
+@Observable
+private final class CallRecordingPlayback: NSObject, AVAudioPlayerDelegate {
+    private(set) var playingID: UUID?
+    @ObservationIgnored private var player: AVAudioPlayer?
 
     func toggle(_ recording: CallRecordingFile, url: URL) throws {
         if playingID == recording.id { stop(); return }

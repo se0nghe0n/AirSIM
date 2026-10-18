@@ -4,24 +4,24 @@ import SwiftUI
 @main
 struct AirSIMIPadApp: App {
     @UIApplicationDelegateAdaptor(AirSIMNotificationDelegate.self) private var appDelegate
-    @StateObject private var model = AppModel()
-    @StateObject private var settings = AppSettings()
+    @State private var model = AppModel()
+    @State private var settings = AppSettings()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environmentObject(model)
-                .environmentObject(model.contacts)
-                .environmentObject(model.audio)
-                .environmentObject(settings)
+                .environment(model)
+                .environment(model.contacts)
+                .environment(model.audio)
+                .environment(settings)
                 .onAppear {
                     WatchCallCoordinator.shared.configure(model: model)
                     WatchCallCoordinator.shared.start()
                     model.start(sceneIsActive: scenePhase == .active)
                 }
         }
-        .onChange(of: scenePhase) { phase in
+        .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
                 model.didBecomeActive()

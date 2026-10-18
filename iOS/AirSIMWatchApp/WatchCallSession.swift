@@ -7,29 +7,32 @@ import WatchConnectivity
 /// Apple Watch 注册 VoIP Push 并上报 CallKit。拨号和接听控制走 WCSession。
 /// 云端音频留在 iPhone 的 WebRTC peer；手表不打开 PCM WebSocket，也不发送 PCM 上行。
 /// 本地 VoWLAN 音频由 iPhone 的 WebRTC peer 承载。
-final class WatchCallSession: NSObject, ObservableObject {
-    @Published private(set) var call = WatchCallPayload(
+/// 观察机制替换 ObservableObject；CallKit/WCSession 回调线程保持原样，
+/// 因此不加 @MainActor（WCSessionDelegate 会在非主队列回调并写 pushStatus）。
+@Observable
+final class WatchCallSession: NSObject {
+    private(set) var call = WatchCallPayload(
         callID: "", callUUID: nil, phase: .idle, number: nil,
         callerName: nil, updatedAt: Date()
     )
-    @Published private(set) var isSendingAction = false
-    @Published private(set) var isDialing = false
-    @Published var errorMessage: String?
-	@Published private(set) var pushStatus = "Registering Watch VoIP…"
-	@Published private(set) var microphoneStatus = "Checking microphone access…"
+    private(set) var isSendingAction = false
+    private(set) var isDialing = false
+    var errorMessage: String?
+	private(set) var pushStatus = "Registering Watch VoIP…"
+	private(set) var microphoneStatus = "Checking microphone access…"
 
     private let provider: CXProvider
     private let callController = CXCallController()
     private let media = WatchCallMediaBridge()
-    private var pushRegistry: PKPushRegistry!
-    private var connectivity: WCSession?
-    private var voIPCall: WatchVoIPCall?
-    private var answered = false
-    private var answering = false
-    private var dialRequestID: UUID?
-    private var activeDialRequestID: UUID?
-	private var pendingWatchToken: Data?
-    private var endedCallIDs = Set<String>()
+    @ObservationIgnored private var pushRegistry: PKPushRegistry!
+    @ObservationIgnored private var connectivity: WCSession?
+    @ObservationIgnored private var voIPCall: WatchVoIPCall?
+    @ObservationIgnored private var answered = false
+    @ObservationIgnored private var answering = false
+    @ObservationIgnored private var dialRequestID: UUID?
+    @ObservationIgnored private var activeDialRequestID: UUID?
+	@ObservationIgnored private var pendingWatchToken: Data?
+    @ObservationIgnored private var endedCallIDs = Set<String>()
     private let cloudMediaPreferenceKey = "airsim.watch.cloud-media-allowed"
 
     private var cloudMediaAllowed: Bool {

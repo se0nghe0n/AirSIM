@@ -127,7 +127,7 @@ private struct DialPadLayoutMetrics {
 // MARK: - 拨号
 
 struct DialPadView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var deleteRepeatTask: Task<Void, Never>?
     @State private var zeroWasLongPressed = false
@@ -534,8 +534,8 @@ private final class DialKeyFeedback {
 // MARK: - 最近通话
 
 struct RecentsView: View {
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var contacts: ContactStore
+    @Environment(AppModel.self) private var model
+    @Environment(ContactStore.self) private var contacts
     let onCall: (String) -> Void
     let onMessage: (String) -> Void
     @State private var selectedCall: CallRecord?
@@ -792,7 +792,7 @@ struct RecentsView: View {
 // MARK: - 短信
 
 struct MessagesView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Binding var pendingRecipient: String?
     @Binding var pendingConversation: String?
     @State private var conversationPath: [String] = []
@@ -865,10 +865,10 @@ struct MessagesView: View {
                 await model.loadMessagesFromAgent(silently: true)
             }
             .onAppear { showPendingConversation() }
-            .onChange(of: pendingRecipient) { recipient in
+            .onChange(of: pendingRecipient) { _, recipient in
                 if recipient != nil { showingComposer = true }
             }
-            .onChange(of: pendingConversation) { _ in showPendingConversation() }
+            .onChange(of: pendingConversation) { showPendingConversation() }
             .sheet(isPresented: $showingComposer, onDismiss: { pendingRecipient = nil }) {
                 MessageComposer(initialRecipient: pendingRecipient ?? "")
                     .presentationDetents([.medium, .large])
@@ -895,7 +895,7 @@ struct MessagesView: View {
     }
 
     private struct MessageConversationRow: View {
-        @EnvironmentObject private var model: AppModel
+        @Environment(AppModel.self) private var model
         let sender: String
         let messages: [SMSMessage]
 
@@ -940,7 +940,7 @@ struct MessagesView: View {
 }
 
 private struct MessageThreadView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let sender: String
     @State private var reply = ""
 
@@ -1009,7 +1009,7 @@ private struct MessageThreadView: View {
 
 private struct MessageComposer: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var recipient: String
     @State private var content = ""
     @State private var sending = false
@@ -1071,7 +1071,7 @@ private struct MessageComposer: View {
                     recipient = phone
                     showingContacts = false
                 }
-                .environmentObject(model)
+                .environment(model)
             }
         }
     }
@@ -1195,7 +1195,7 @@ private struct MessageComposer: View {
 
 private struct MessageContactPicker: View {
     @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var search = ""
     let onSelect: (String) -> Void
 
@@ -1269,7 +1269,7 @@ private struct MessageContactPicker: View {
 // MARK: - 通讯录
 
 struct ContactsView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.openURL) private var openURL
     let onCall: (String) -> Void
     let onMessage: (String) -> Void
@@ -1591,7 +1591,7 @@ enum CallProximityPolicy {
 }
 
 struct ActiveCallView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let call: CallRecord
@@ -1631,8 +1631,8 @@ struct ActiveCallView: View {
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         .onAppear { updateProximityMonitoring() }
-        .onChange(of: call.state) { _ in updateProximityMonitoring() }
-        .onChange(of: model.audio.speakerEnabled) { _ in updateProximityMonitoring() }
+        .onChange(of: call.state) { updateProximityMonitoring() }
+        .onChange(of: model.audio.speakerEnabled) { updateProximityMonitoring() }
         .onDisappear { UIDevice.current.isProximityMonitoringEnabled = false }
     }
 
@@ -1896,7 +1896,7 @@ struct ActiveCallView: View {
 }
 
 private struct SpeakerRouteButton: View {
-    @ObservedObject var audio: AudioSessionController
+    var audio: AudioSessionController
     let size: CGFloat
     let action: () -> Void
 
@@ -2028,7 +2028,7 @@ private extension View {
 private struct DTMFKeypadView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var enteredDigits = ""
     private let rows = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["*", "0", "#"]]
 

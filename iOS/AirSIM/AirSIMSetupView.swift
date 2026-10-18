@@ -2,7 +2,7 @@ import SwiftUI
 
 /// AirSIM 只引导三星配对；不检查旧模块 USB ECM、AT 或 QDC507 固件。
 struct AirSIMFirstConnectionView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @AppStorage("airsim.first-connection-complete") private var completed = false
     @AppStorage(ConnectionModePreference.key) private var connectionModeRaw = ConnectionModePreference.selected().rawValue
     @State private var showingPairing = false
@@ -42,7 +42,7 @@ struct AirSIMFirstConnectionView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: connectionModeRaw) { rawValue in
+                    .onChange(of: connectionModeRaw) { _, rawValue in
                         guard let mode = AirSIMConnectionMode(rawValue: rawValue) else { return }
                         model.setConnectionMode(mode)
                     }
@@ -80,7 +80,7 @@ struct AirSIMFirstConnectionView: View {
             }) {
                 NavigationStack {
                     SamsungPairingView()
-                        .environmentObject(model)
+                        .environment(model)
                         .toolbar {
                             ToolbarItem(placement: .confirmationAction) {
                                 Button("Done") { showingPairing = false }
@@ -159,8 +159,8 @@ struct AirSIMSettingsView: View {
         case completed
     }
 
-    @EnvironmentObject private var model: AppModel
-    @EnvironmentObject private var settings: AppSettings
+    @Environment(AppModel.self) private var model
+    @Environment(AppSettings.self) private var settings
     @AppStorage(ConnectionModePreference.key) private var connectionModeRaw = ConnectionModePreference.selected().rawValue
     @AppStorage(LiveActivityVisibilityPreference.key) private var liveActivityEnabled = true
     @State private var relayURL = RelayConfiguration.effectiveURL(
@@ -176,6 +176,7 @@ struct AirSIMSettingsView: View {
     @State private var deviceDeletionInProgress = false
 
     var body: some View {
+        @Bindable var settings = settings
         NavigationStack {
             Form {
                 Section {
@@ -184,7 +185,7 @@ struct AirSIMSettingsView: View {
                             Label(mode.title, systemImage: modeIcon(mode)).tag(mode.rawValue)
                         }
                     }
-                    .onChange(of: connectionModeRaw) { rawValue in
+                    .onChange(of: connectionModeRaw) { _, rawValue in
                         guard let mode = AirSIMConnectionMode(rawValue: rawValue) else { return }
                         selfTestTask?.cancel()
                         selfTestPhase = .idle
@@ -236,7 +237,7 @@ struct AirSIMSettingsView: View {
                     Toggle(isOn: $liveActivityEnabled) {
                         Label("Show Dynamic Island", systemImage: "platter.filled.top.iphone")
                     }
-                    .onChange(of: liveActivityEnabled) { enabled in
+                    .onChange(of: liveActivityEnabled) { _, enabled in
                         model.setLiveActivityEnabled(enabled)
                     }
                 } header: {

@@ -2,12 +2,12 @@ import SwiftUI
 
 @main
 struct AirSIMWatchApp: App {
-    @StateObject private var callSession = WatchCallSession()
+    @State private var callSession = WatchCallSession()
 
     var body: some Scene {
         WindowGroup {
             WatchCallView()
-                .environmentObject(callSession)
+                .environment(callSession)
         }
     }
 }
