@@ -530,7 +530,11 @@ struct CloudWebRTCTests {
         let factoryB = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputB)
         var offerer: CloudWebRTCPeer!
         var answerer: CloudWebRTCPeer!
+        // Close the peers even when the wait times out, so the audio pump
+        // threads cannot leak into other tests running in parallel.
+        defer { queue.sync { offerer?.close(); answerer?.close() } }
         var reported = Set<String>()
+        var connectedCount = 0
         var negotiatedOpus = false
         var observedRelayCandidate = false
         var observedSelectedPath = false
@@ -538,7 +542,7 @@ struct CloudWebRTCTests {
             try await confirmation("Both native peers report Opus RTP", expectedCount: 2) { stats in
                 try queue.sync {
                     offerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryA, relayOnly: relayOnly,
-                        signal: { signal in answerer.receive(signal, answering: true) }, connected: { connected() },
+                        signal: { signal in answerer.receive(signal, answering: true) }, connected: { connectedCount += 1; connected() },
                         failure: { Issue.record("Offerer native negotiation failed") }, statistics: { fields in
                             if fields["codec.mimeType"]?.lowercased() == "audio/opus" { negotiatedOpus = true }
                             if fields["local-candidate.candidateType"] == "relay" { observedRelayCandidate = true }
@@ -548,7 +552,7 @@ struct CloudWebRTCTests {
                             if Int(fields["outbound-rtp.packetsSent"] ?? "0") ?? 0 > 0, reported.insert("offerer").inserted { stats() }
                         })
                     answerer = try CloudWebRTCPeer(callUUID: id, generation: 1, sessionID: session, servers: servers, queue: queue, factory: factoryB, relayOnly: relayOnly,
-                        signal: { signal in offerer.receive(signal) }, connected: { connected() },
+                        signal: { signal in offerer.receive(signal) }, connected: { connectedCount += 1; connected() },
                         failure: { Issue.record("Answerer native negotiation failed") }, statistics: { fields in
                             if Int(fields["inbound-rtp.packetsReceived"] ?? "0") ?? 0 > 0, reported.insert("answerer").inserted { stats() }
                         })
@@ -556,7 +560,7 @@ struct CloudWebRTCTests {
                 }
                 // Bounded stand-in for the former shared 20 s fulfillment timeout.
                 let deadline = Date().addingTimeInterval(20)
-                while queue.sync(execute: { reported.count < 2 }) {
+                while queue.sync(execute: { reported.count < 2 || connectedCount < 2 }) {
                     guard Date() < deadline else {
                         struct LoopbackTimeout: Error {}
                         Issue.record("Native peers did not both connect and report Opus RTP within 20 seconds")
@@ -572,7 +576,6 @@ struct CloudWebRTCTests {
         if relayOnly { #expect(observed.1, "Force-relay test must gather TURN candidates") }
         #expect(outputA.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer A")
         #expect(outputB.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer B")
-        queue.sync { offerer.close(); answerer.close() }
     }
 
     @Test func `Cloud call rejects legacy PCM`() throws {

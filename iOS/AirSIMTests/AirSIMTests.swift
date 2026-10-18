@@ -564,33 +564,31 @@ struct AirSIMTests {
     }
 
 
-    @Test @MainActor
-    func `Late cloud reconnect does not complete or fail a newer call`() async throws {
-        try await confirmation("connect suspended", expectedCount: 2) { started in
-            for succeeds in [true, false] {
-                var current = UUID()
-                let original = current
-                var completion: CheckedContinuation<Void, Error>?
-                var connected = 0
-                var failed = 0
-                let recovery = Task { @MainActor in
-                    await CloudCallRecoveryCoordinator.run(
-                        delays: [0], isCurrent: { current == original },
-                        connect: { _ in
-                            try await withCheckedThrowingContinuation { continuation in
-                                completion = continuation; started()
-                            }
-                        }, connected: { connected += 1 }, failed: { _ in failed += 1 }
-                    )
-                }
-                try await waitUntil({ completion != nil }, "connect did not suspend")
-                current = UUID() // Hangup, followed by a new call, while connect is pending.
-                if succeeds { completion?.resume() }
-                else { completion?.resume(throwing: URLError(.networkConnectionLost)) }
-                await recovery.value
-                #expect(connected == 0)
-                #expect(failed == 0)
+    @Test(arguments: [true, false]) @MainActor
+    func `Late cloud reconnect does not complete or fail a newer call`(_ succeeds: Bool) async throws {
+        try await confirmation("connect suspended") { started in
+            var current = UUID()
+            let original = current
+            var completion: CheckedContinuation<Void, Error>?
+            var connected = 0
+            var failed = 0
+            let recovery = Task { @MainActor in
+                await CloudCallRecoveryCoordinator.run(
+                    delays: [0], isCurrent: { current == original },
+                    connect: { _ in
+                        try await withCheckedThrowingContinuation { continuation in
+                            completion = continuation; started()
+                        }
+                    }, connected: { connected += 1 }, failed: { _ in failed += 1 }
+                )
             }
+            try await waitUntil({ completion != nil }, "connect did not suspend")
+            current = UUID() // Hangup, followed by a new call, while connect is pending.
+            if succeeds { completion?.resume() }
+            else { completion?.resume(throwing: URLError(.networkConnectionLost)) }
+            await recovery.value
+            #expect(connected == 0)
+            #expect(failed == 0)
         }
     }
 
@@ -904,14 +902,10 @@ struct AirSIMTests {
         let endpoint = try VoWLANEndpoint(host: "192.168.43.1", controlPort: 7592, pcmPort: 0)
         let credential = try VoWLANCredential(secret: Data(repeating: 7, count: 32))
         let route = PCMRoute.vowlan(endpoint: endpoint, credential: credential)
-        do {
-            _ = try route.handshake()
-            Issue.record("VoWLAN audio must not send a PCM preface")
-        } catch {
-            guard case APIError.disabledLegacyRoute = error else {
-                Issue.record("VoWLAN audio must not send a PCM preface, actual \(error)")
-                return
-            }
+        let error = #expect(throws: APIError.self) { _ = try route.handshake() }
+        guard case APIError.disabledLegacyRoute? = error else {
+            Issue.record("VoWLAN audio must not send a PCM preface, actual \(String(describing: error))")
+            return
         }
         let peer = try CloudWebRTCPeer(
             callUUID: callUUID,
@@ -1057,25 +1051,21 @@ struct AirSIMTests {
     }
 
     @Test func `Legacy module request is rejected before network access`() async {
-        do {
+        // Expected: the old module route is blocked at the transport boundary.
+        let error = await #expect(throws: APIError.self) {
             _ = try await AirSIMAPI().health()
-            Issue.record("旧模块路线不应发出请求")
-        } catch APIError.disabledLegacyRoute {
-            // Expected: the old module route is blocked at the transport boundary.
-        } catch {
-            Issue.record("预期得到旧路线已停用错误，实际为 \(error)")
+        }
+        guard case APIError.disabledLegacyRoute? = error else {
+            Issue.record("预期得到旧路线已停用错误，实际为 \(String(describing: error))")
+            return
         }
     }
 
     @Test func `Legacy module PCM handshake is rejected`() {
-        do {
-            _ = try PCMRoute.moduleLocal.handshake()
-            Issue.record("预期旧模块 PCM 被拦截，实际未被拦截")
-        } catch {
-            guard case APIError.disabledLegacyRoute = error else {
-                Issue.record("预期旧模块 PCM 被拦截，实际为 \(error)")
-                return
-            }
+        let error = #expect(throws: APIError.self) { _ = try PCMRoute.moduleLocal.handshake() }
+        guard case APIError.disabledLegacyRoute? = error else {
+            Issue.record("预期旧模块 PCM 被拦截，实际为 \(String(describing: error))")
+            return
         }
     }
 
@@ -1332,7 +1322,7 @@ struct AirSIMTests {
         )
         var cloudAttempts = 0
 
-        do {
+        let error = await #expect(throws: APIError.self) {
             _ = try await OutgoingCallRouteCoordinator.start(
                 number: "10086",
                 vowlanService: local,
@@ -1341,11 +1331,11 @@ struct AirSIMTests {
                 cloudAttempts += 1
                 return "cloud-call"
             }
-            Issue.record("Agent 已明确拒绝时不得通过云端重放非幂等拨号")
-        } catch APIError.http(let status, _) {
+        }
+        if case APIError.http(let status, _)? = error {
             #expect(status == 502)
-        } catch {
-            Issue.record("预期保留 Agent HTTP 错误，实际为 \(error)")
+        } else {
+            Issue.record("预期保留 Agent HTTP 错误，实际为 \(String(describing: error))")
         }
 
         #expect(cloudAttempts == 0)
@@ -1595,10 +1585,10 @@ struct AirSIMTests {
     @Test @MainActor
     func `Pairing failure releases agent write gate`() async throws {
         let gate = SamsungPairingRegistrationGate()
-        do {
+        let error = await #expect(throws: SamsungPairingClientError.self) {
             try await gate.withPairing { throw SamsungPairingClientError.expired }
-            Issue.record("pairing must fail")
-        } catch { /* preserve original error, unlock for retry */ }
+        }
+        #expect(error == .expired, "pairing must fail with the expiry error")
         #expect(gate.beginAgentWrite())
         gate.endAgentWrite()
     }
