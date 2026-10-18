@@ -8,7 +8,8 @@ enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable
 
     var id: String { rawValue }
 
-    var title: String {
+    /// localization.md：面向用户的选项文案用 LocalizedStringResource 延迟解析。
+    var title: LocalizedStringResource {
         switch self {
         case .vowlan: return "VoWLAN"
         case .cloud: return "Cloud"
@@ -16,7 +17,7 @@ enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable
         }
     }
 
-    var detail: String {
+    var detail: LocalizedStringResource {
         switch self {
         case .vowlan: return "Uses only the same Wi-Fi or phone hotspot, without Relay"
         case .cloud: return "Uses only Relay, PushKit, and CallKit"

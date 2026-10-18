@@ -88,7 +88,8 @@ struct CallRecordingsView: View {
 
     private static func duration(_ value: TimeInterval) -> String {
         let seconds = max(0, Int(value))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+        // localization.md：用 FormatStyle 取代 String(format:)；en 输出与旧格式一致。
+        return Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond))
     }
 }
 

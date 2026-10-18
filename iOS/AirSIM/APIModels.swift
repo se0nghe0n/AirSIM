@@ -184,7 +184,9 @@ struct AndroidAgentPresentation: Equatable, Identifiable, Sendable {
         self.isCurrent = isCurrent
     }
 
-    var agentKindTitle: String {
+    /// localization.md：模型承载的用户可见文案用 LocalizedStringResource，
+    /// 延迟到展示时才按语言环境解析。
+    var agentKindTitle: LocalizedStringResource {
         switch agentKind {
         case "standalone": return "Standalone"
         case "avf": return "AVF Agent"

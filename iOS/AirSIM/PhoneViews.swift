@@ -9,18 +9,29 @@ enum RecentCallTimeFormatter {
     ) -> String {
         let day = calendar.dateComponents([.year, .month, .day], from: date)
         let currentDay = calendar.dateComponents([.year, .month, .day], from: now)
+        // localization.md：时间与日期展示改用 FormatStyle，按用户语言环境输出；
+        // en 环境下时分与月/日补零输出与旧 String(format:) 完全一致。
         if day == currentDay {
-            let time = calendar.dateComponents([.hour, .minute], from: date)
-            return String(format: "%02d:%02d", time.hour ?? 0, time.minute ?? 0)
+            return date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute())
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            day == calendar.dateComponents([.year, .month, .day], from: yesterday) {
             return "Yesterday"
         }
         if day.year == currentDay.year {
-            return String(format: "%02d/%02d", day.month ?? 0, day.day ?? 0)
+            return date.formatted(.dateTime.month(.twoDigits).day(.twoDigits))
         }
-        return String(format: "%04d/%02d/%02d", day.year ?? 0, day.month ?? 0, day.day ?? 0)
+        // 跨年日期改为随语言环境排序（en 从 yyyy/MM/dd 变为 MM/dd/yyyy）。
+        return date.formatted(.dateTime.year().month(.twoDigits).day(.twoDigits))
+    }
+}
+
+/// 联系人可能重复保存同一号码；在选择与拨号场景中重复行完全可互换，
+/// 因此按号码去重，保证 `ForEach(phones, id: \.self)` 的身份唯一（foreach.md）。
+enum ContactPhoneListPolicy {
+    static func displayPhones(for phones: [String]) -> [String] {
+        var seen = Set<String>()
+        return phones.filter { seen.insert($0).inserted }
     }
 }
 
@@ -130,8 +141,6 @@ struct DialPadView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var deleteRepeatTask: Task<Void, Never>?
-    @State private var zeroWasLongPressed = false
-    @State private var dialKeyFeedback = DialKeyFeedback()
     @State private var pairedAgentListPresentation: PairedAgentListPresentation?
 
     private let rows = [
@@ -211,7 +220,7 @@ struct DialPadView: View {
                         .buttonStyle(.plain)
                     }
 
-                    dialKeyGrid(metrics: metrics)
+                    DialPadKeyGrid(rows: rows, metrics: metrics)
                     dialActions(metrics: metrics)
                 }
                 .frame(maxWidth: 520)
@@ -233,31 +242,6 @@ struct DialPadView: View {
             }
             .onDisappear(perform: stopRepeatingDelete)
         }
-    }
-
-    @ViewBuilder
-    private func dialKeyGrid(metrics: DialPadLayoutMetrics) -> some View {
-        if #available(iOS 26.0, *) {
-            // 融合距离必须明显小于按键的真实间距，否则 Liquid Glass 会把相邻圆键吸成一体。
-            GlassEffectContainer(spacing: 6) {
-                dialKeyRows(metrics: metrics)
-            }
-        } else {
-            dialKeyRows(metrics: metrics)
-        }
-    }
-
-    private func dialKeyRows(metrics: DialPadLayoutMetrics) -> some View {
-        VStack(spacing: metrics.rowSpacing) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: metrics.keySpacing) {
-                    ForEach(row, id: \.0) { digit, letters in
-                        dialKey(digit: digit, letters: letters, metrics: metrics)
-                    }
-                }
-            }
-        }
-        .frame(width: metrics.keypadWidth)
     }
 
     private func dialActions(metrics: DialPadLayoutMetrics) -> some View {
@@ -303,11 +287,6 @@ struct DialPadView: View {
         model.numberInput = DialPadDeletePolicy.removingLast(from: model.numberInput)
     }
 
-    private func playDialKeySound() {
-        guard !model.isMuted else { return }
-        dialKeyFeedback.play()
-    }
-
     private func beginDeleting() {
         guard deleteRepeatTask == nil, !model.numberInput.isEmpty else { return }
         deleteLastDigit()
@@ -335,12 +314,56 @@ struct DialPadView: View {
             .onChanged { _ in beginDeleting() }
             .onEnded { _ in stopRepeatingDelete() }
     }
+}
+
+/// 拨号键盘独立成子视图：输入数字只应使号码文本与拨号按钮失效，
+/// 不再重建 12 个按键的 Liquid Glass 子树（structure.md 失效边界）。
+private struct DialPadKeyGrid: View {
+    @Environment(AppModel.self) private var model
+    @State private var zeroWasLongPressed = false
+    @State private var dialKeyFeedback = DialKeyFeedback()
+    let rows: [[(String, String)]]
+    let metrics: DialPadLayoutMetrics
+
+    var body: some View {
+        dialKeyGrid
+    }
 
     @ViewBuilder
+    private var dialKeyGrid: some View {
+        if #available(iOS 26.0, *) {
+            // 融合距离必须明显小于按键的真实间距，否则 Liquid Glass 会把相邻圆键吸成一体。
+            GlassEffectContainer(spacing: 6) {
+                dialKeyRows
+            }
+        } else {
+            dialKeyRows
+        }
+    }
+
+    private var dialKeyRows: some View {
+        VStack(spacing: metrics.rowSpacing) {
+            // rows 是常量布局表，每行首个数字互不相同；用它做内容身份，
+            // 替代 foreach.md 禁止的 offset/id 位置身份。
+            ForEach(rows, id: \.first?.0) { row in
+                HStack(spacing: metrics.keySpacing) {
+                    ForEach(row, id: \.0) { digit, letters in
+                        dialKey(digit: digit, letters: letters)
+                    }
+                }
+            }
+        }
+        .frame(width: metrics.keypadWidth)
+    }
+
+    private func playDialKeySound() {
+        guard !model.isMuted else { return }
+        dialKeyFeedback.play()
+    }
+
     private func dialKey(
         digit: String,
-        letters: String,
-        metrics: DialPadLayoutMetrics
+        letters: String
     ) -> some View {
         Button {
             guard !(digit == "0" && zeroWasLongPressed) else {
@@ -663,83 +686,102 @@ struct RecentsView: View {
                     .onTapGesture(perform: dismissCallDetails)
                     .transition(.opacity)
 
-                callDetailsCard(call: call, number: number)
-                    .padding(.horizontal, 28)
-                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                RecentCallDetailsCard(
+                    call: call,
+                    number: number,
+                    onCall: onCall,
+                    onMessage: onMessage,
+                    onDelete: { model.deleteCallHistory(ids: [call.id]) },
+                    onDismiss: dismissCallDetails
+                )
+                .padding(.horizontal, 28)
+                .transition(.scale(scale: 0.88).combined(with: .opacity))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: selectedCall?.id)
         .task { await model.refreshCallHistory() }
     }
 
-    private func callDetailsCard(call: CallRecord, number: String) -> some View {
-        let contact = contacts.contact(for: number)
-        let displayName = contact?.name ?? contacts.displayName(for: number)
-
-        return VStack(spacing: 16) {
-            InitialAvatar(
-                name: displayName,
-                photoData: contact?.photoData,
-                fallbackContent: RecentAvatarPolicy.content(contactName: contact?.name),
-                size: 58
-            )
-
-            VStack(spacing: 4) {
-                Text(displayName)
-                    .font(.title3.weight(.semibold))
-                Text(number)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Text(RecentCallTimeFormatter.string(for: call.startedAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Button {
-                dismissCallDetails()
-                onCall(number)
-            } label: {
-                Label(L10n.t("回拨"), systemImage: "phone.fill")
-                    .frame(maxWidth: .infinity, minHeight: 32)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.green)
-            .controlSize(.large)
-
-            Button {
-                dismissCallDetails()
-                onMessage(number)
-            } label: {
-                Label(L10n.t("发短信"), systemImage: "message.fill")
-                    .frame(maxWidth: .infinity, minHeight: 32)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-
-            Button(role: .destructive) {
-                dismissCallDetails()
-                model.deleteCallHistory(ids: [call.id])
-            } label: {
-                Label(L10n.t("删除通话记录"), systemImage: "trash")
-                    .frame(maxWidth: .infinity, minHeight: 32)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-
-            Button(L10n.t("取消"), action: dismissCallDetails)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .frame(minHeight: 34)
-        }
-        .padding(22)
-        .frame(maxWidth: 340)
-        .phoneGlassSurface(cornerRadius: 28)
-        .shadow(color: .black.opacity(0.14), radius: 20, y: 8)
-    }
-
     private func dismissCallDetails() {
         withAnimation(.easeInOut(duration: 0.18)) {
             selectedCall = nil
+        }
+    }
+
+    /// 通话详情浮层独立成子视图：通话记录刷新等无效化不再重建浮层内容
+    /// （structure.md 失效边界）。
+    private struct RecentCallDetailsCard: View {
+        @Environment(ContactStore.self) private var contacts
+        let call: CallRecord
+        let number: String
+        let onCall: (String) -> Void
+        let onMessage: (String) -> Void
+        let onDelete: () -> Void
+        let onDismiss: () -> Void
+
+        var body: some View {
+            let contact = contacts.contact(for: number)
+            let displayName = contact?.name ?? contacts.displayName(for: number)
+
+            return VStack(spacing: 16) {
+                InitialAvatar(
+                    name: displayName,
+                    photoData: contact?.photoData,
+                    fallbackContent: RecentAvatarPolicy.content(contactName: contact?.name),
+                    size: 58
+                )
+
+                VStack(spacing: 4) {
+                    Text(displayName)
+                        .font(.title3.weight(.semibold))
+                    Text(number)
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Text(RecentCallTimeFormatter.string(for: call.startedAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    onDismiss()
+                    onCall(number)
+                } label: {
+                    Label(L10n.t("回拨"), systemImage: "phone.fill")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.large)
+
+                Button {
+                    onDismiss()
+                    onMessage(number)
+                } label: {
+                    Label(L10n.t("发短信"), systemImage: "message.fill")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(role: .destructive) {
+                    onDismiss()
+                    onDelete()
+                } label: {
+                    Label(L10n.t("删除通话记录"), systemImage: "trash")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(L10n.t("取消"), action: onDismiss)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .frame(minHeight: 34)
+            }
+            .padding(22)
+            .frame(maxWidth: 340)
+            .phoneGlassSurface(cornerRadius: 28)
+            .shadow(color: .black.opacity(0.14), radius: 20, y: 8)
         }
     }
 
@@ -798,12 +840,8 @@ struct MessagesView: View {
     @State private var conversationPath: [String] = []
     @State private var showingComposer = false
     @State private var showingClearConfirmation = false
-
-    private var conversations: [(sender: String, messages: [SMSMessage])] {
-        Dictionary(grouping: model.messages, by: \.sender)
-            .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
-            .sorted { ($0.messages.last?.timestamp ?? .distantPast) > ($1.messages.last?.timestamp ?? .distantPast) }
-    }
+    // foreach.md：分组与排序只在消息集合变化时重算，不在每次 body 求值时重做。
+    @State private var conversations: [(sender: String, messages: [SMSMessage])] = []
 
     var body: some View {
         NavigationStack(path: $conversationPath) {
@@ -865,6 +903,9 @@ struct MessagesView: View {
                 await model.loadMessagesFromAgent(silently: true)
             }
             .onAppear { showPendingConversation() }
+            .onChange(of: model.messages, initial: true) { _, messages in
+                rebuildConversations(from: messages)
+            }
             .onChange(of: pendingRecipient) { _, recipient in
                 if recipient != nil { showingComposer = true }
             }
@@ -892,6 +933,12 @@ struct MessagesView: View {
         guard let sender = pendingConversation else { return }
         conversationPath = [sender]
         pendingConversation = nil
+    }
+
+    private func rebuildConversations(from messages: [SMSMessage]) {
+        conversations = Dictionary(grouping: messages, by: \.sender)
+            .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
+            .sorted { ($0.messages.last?.timestamp ?? .distantPast) > ($1.messages.last?.timestamp ?? .distantPast) }
     }
 
     private struct MessageConversationRow: View {
@@ -943,12 +990,8 @@ private struct MessageThreadView: View {
     @Environment(AppModel.self) private var model
     let sender: String
     @State private var reply = ""
-
-    private var messages: [SMSMessage] {
-        model.messages
-            .filter { $0.sender == sender }
-            .sorted { $0.timestamp < $1.timestamp }
-    }
+    // foreach.md：会话内过滤与排序只在消息集合变化时重算。
+    @State private var messages: [SMSMessage] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -986,6 +1029,11 @@ private struct MessageThreadView: View {
                     .padding()
                 }
                 .onAppear { if let id = messages.last?.id { proxy.scrollTo(id) } }
+            }
+            .onChange(of: model.messages, initial: true) { _, allMessages in
+                messages = allMessages
+                    .filter { $0.sender == sender }
+                    .sorted { $0.timestamp < $1.timestamp }
             }
             Divider()
             HStack(spacing: 10) {
@@ -1223,7 +1271,7 @@ private struct MessageContactPicker: View {
                     EmptyStateView(title: L10n.t("通讯录为空"), systemImage: "person.2")
                 } else {
                     List(filteredContacts) { contact in
-                        ForEach(contact.phones, id: \.self) { phone in
+                        ForEach(ContactPhoneListPolicy.displayPhones(for: contact.phones), id: \.self) { phone in
                             Button {
                                 onSelect(phone)
                                 dismiss()
@@ -1388,7 +1436,7 @@ private struct ContactDetailView: View {
                 .listRowBackground(Color.clear)
             }
             Section {
-                ForEach(contact.phones, id: \.self) { phone in
+                ForEach(ContactPhoneListPolicy.displayPhones(for: contact.phones), id: \.self) { phone in
                     HStack {
                         Text(phone)
                             .font(.body.monospacedDigit())
@@ -1884,7 +1932,10 @@ struct ActiveCallView: View {
 
     private func durationText(at date: Date) -> String {
         let total = max(0, Int(date.timeIntervalSince(call.startedAt)))
-        return String(format: "%02d:%02d", total / 60, total % 60)
+        // localization.md：用 FormatStyle 取代 String(format:)；补零与 en 现状完全一致，
+        // 分钟数超过 59 时也保持原有的 mm:ss 形态而不是切换到小时。
+        return Duration.seconds(total)
+            .formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2)))
     }
 
     private func updateProximityMonitoring() {
@@ -2060,8 +2111,10 @@ private struct DTMFKeypadView: View {
 
     private var keypad: some View {
         VStack(spacing: 16) {
-            ForEach(rows, id: \.description) { row in
+            // rows 是常量布局表且各行内容互不相同；[String] 可哈希，直接用 \.self。
+            ForEach(rows, id: \.self) { row in
                 HStack(spacing: 24) {
+                    // 每行数字唯一且恒定，内容身份稳定（foreach.md）。
                     ForEach(row, id: \.self) { digit in
                         Button {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()

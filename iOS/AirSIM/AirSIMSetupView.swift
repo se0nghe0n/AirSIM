@@ -152,13 +152,14 @@ private struct PairedAndroidDeviceRows: View {
     }
 }
 
-struct AirSIMSettingsView: View {
-    private enum SelfTestPhase {
-        case idle
-        case running
-        case completed
-    }
+/// 自检进度阶段。原先嵌在 AirSIMSettingsView 内；抽成独立分区视图后移到文件级。
+private enum SelfTestPhase {
+    case idle
+    case running
+    case completed
+}
 
+struct AirSIMSettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppSettings.self) private var settings
     @AppStorage(ConnectionModePreference.key) private var connectionModeRaw = ConnectionModePreference.selected().rawValue
@@ -198,25 +199,7 @@ struct AirSIMSettingsView: View {
                     Text(selectedMode.detail)
                 }
 
-                Section("Current Connection") {
-                    LabeledContent("Current Mode", value: model.connectionModePresentation.title)
-                    LabeledContent("Connection Status", value: model.connectionModePresentation.status)
-                    LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
-                    LabeledContent(
-                        "Cloud Relay",
-                        value: runtimePolicy.startsCloud
-                            ? (model.cloudAgentStatus?.cloudOnline == true ? "Agent Online" : "Unreachable")
-                            : "Disabled in current mode"
-                    )
-                    Text(model.connectionModePresentation.detail)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    if let connectionMessage = model.connectionMessage, !connectionMessage.isEmpty {
-                        Text(connectionMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                CurrentConnectionSection(cloudModeEnabled: runtimePolicy.startsCloud)
 
                 Section("Android Connection") {
                     LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
@@ -275,47 +258,12 @@ struct AirSIMSettingsView: View {
                     Text("Local VoWLAN remains available when cloud mode is off. Remote calls and messages require a cloud Relay and valid device registration.")
                 }
 
-                Section {
-                    Button {
-                        startCloudSelfTest()
-                    } label: {
-                        HStack {
-                            Label("Run Cloud Self-Test", systemImage: "stethoscope")
-                            Spacer()
-                            if selfTestPhase == .running {
-                                ProgressView()
-                            }
-                        }
-                    }
-                    .disabled(!runtimePolicy.startsCloud || selfTestPhase == .running)
-
-                    if let report = selfTestReport {
-                        ForEach(report.steps) { step in
-                            HStack(alignment: .top, spacing: 12) {
-                                Image(systemName: selfTestSymbol(for: step.state))
-                                    .foregroundStyle(selfTestColor(for: step.state))
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(step.title)
-                                    Text(step.detail)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        if selfTestPhase == .completed {
-                            Text(report.allPassed ? "Cloud self-test passed" : "Self-test failed. Resolve the failed steps and try again.")
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(report.allPassed ? .green : .orange)
-                        }
-                    }
-                } header: {
-                    Text("Cloud Self-Test")
-                } footer: {
-                    Text(!runtimePolicy.startsCloud
-                        ? "Cloud self-test is unavailable in the current connection mode."
-                        : "Checks local push credentials, AirSIM Relay identity, device registration, and an Agent heartbeat within the last 90 seconds. No calls or messages are sent.")
-                }
+                CloudSelfTestSection(
+                    isEnabled: runtimePolicy.startsCloud,
+                    phase: selfTestPhase,
+                    report: selfTestReport,
+                    onStart: startCloudSelfTest
+                )
 
                 Section("About") {
                     LabeledContent("Project", value: "AirSIM · Samsung")
@@ -375,8 +323,98 @@ struct AirSIMSettingsView: View {
         case .automatic: return "arrow.triangle.branch"
         }
     }
+}
 
-    private func selfTestSymbol(for state: CloudSelfTestStepState) -> String {
+/// 当前连接分区独立成子视图：可用性与心跳等模型读取移入子视图 body，
+/// 这些变化不再触发整个设置表单重算（structure.md 失效边界）。
+private struct CurrentConnectionSection: View {
+    @Environment(AppModel.self) private var model
+    let cloudModeEnabled: Bool
+
+    var body: some View {
+        Section("Current Connection") {
+            LabeledContent("Current Mode", value: model.connectionModePresentation.title)
+            LabeledContent("Connection Status", value: model.connectionModePresentation.status)
+            LabeledContent("VoWLAN", value: VoWLANStatusCopy.text(for: model.vowlan.availability))
+            LabeledContent(
+                "Cloud Relay",
+                value: cloudModeEnabled
+                    ? (model.cloudAgentStatus?.cloudOnline == true ? "Agent Online" : "Unreachable")
+                    : "Disabled in current mode"
+            )
+            Text(model.connectionModePresentation.detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if let connectionMessage = model.connectionMessage, !connectionMessage.isEmpty {
+                Text(connectionMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// 云端自检分区独立成子视图：自检报告流式更新时，其余设置分区不再重算
+/// （structure.md 失效边界）。
+private struct CloudSelfTestSection: View {
+    let isEnabled: Bool
+    let phase: SelfTestPhase
+    let report: CloudSelfTestReport?
+    let onStart: () -> Void
+
+    var body: some View {
+        Section {
+            Button {
+                onStart()
+            } label: {
+                HStack {
+                    Label("Run Cloud Self-Test", systemImage: "stethoscope")
+                    Spacer()
+                    if phase == .running {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(!isEnabled || phase == .running)
+
+            if let report {
+                ForEach(report.steps) { step in
+                    CloudSelfTestStepRow(step: step)
+                }
+                if phase == .completed {
+                    Text(report.allPassed ? "Cloud self-test passed" : "Self-test failed. Resolve the failed steps and try again.")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(report.allPassed ? .green : .orange)
+                }
+            }
+        } header: {
+            Text("Cloud Self-Test")
+        } footer: {
+            Text(!isEnabled
+                ? "Cloud self-test is unavailable in the current connection mode."
+                : "Checks local push credentials, AirSIM Relay identity, device registration, and an Agent heartbeat within the last 90 seconds. No calls or messages are sent.")
+        }
+    }
+}
+
+private struct CloudSelfTestStepRow: View {
+    let step: CloudSelfTestStep
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: Self.symbol(for: step.state))
+                .foregroundStyle(Self.color(for: step.state))
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(step.title)
+                Text(step.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private static func symbol(for state: CloudSelfTestStepState) -> String {
         switch state {
         case .pending: return "circle"
         case .running: return "arrow.triangle.2.circlepath"
@@ -385,7 +423,7 @@ struct AirSIMSettingsView: View {
         }
     }
 
-    private func selfTestColor(for state: CloudSelfTestStepState) -> Color {
+    private static func color(for state: CloudSelfTestStepState) -> Color {
         switch state {
         case .pending: return .secondary
         case .running: return .blue
