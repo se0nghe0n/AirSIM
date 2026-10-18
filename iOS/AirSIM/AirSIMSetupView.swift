@@ -325,8 +325,9 @@ struct AirSIMSettingsView: View {
     }
 }
 
-/// 当前连接分区独立成子视图：可用性与心跳等模型读取移入子视图 body，
-/// 这些变化不再触发整个设置表单重算（structure.md 失效边界）。
+/// 当前连接分区独立成子视图：分区内的模式/云端状态/心跳读取移入子视图 body，
+/// 这些字段变化只重算本分区（structure.md 失效边界）。父级 body 仍读取
+/// vowlan.availability 与自检 @State，这些变化仍会重算整个表单。
 private struct CurrentConnectionSection: View {
     @Environment(AppModel.self) private var model
     let cloudModeEnabled: Bool
@@ -354,8 +355,8 @@ private struct CurrentConnectionSection: View {
     }
 }
 
-/// 云端自检分区独立成子视图：自检报告流式更新时，其余设置分区不再重算
-/// （structure.md 失效边界）。
+/// 云端自检分区独立成子视图（structure.md 失效边界）。自检报告与阶段仍由父级
+/// @State 持有并传入，流式更新时父级 body 与其余分区仍会重算。
 private struct CloudSelfTestSection: View {
     let isEnabled: Bool
     let phase: SelfTestPhase

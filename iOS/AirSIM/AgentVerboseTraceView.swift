@@ -363,14 +363,15 @@ private struct AgentVerboseTimelineRow: View {
                     Text(item.source)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(item.source == "APP" ? .blue : .purple)
-                    // localization.md：诊断时间戳改用 FormatStyle，取代硬编码 HH:mm:ss.SSS。
+                    // 诊断时间戳是调试输出，保持固定 24 小时制 HH:mm:ss.SSS：
+                    // 不随语言环境变化，避免 12 小时制地区 03:15 与 15:15 同显歧义。
                     Text(
                         item.timestamp,
-                        format: .dateTime
-                            .hour(.twoDigits(amPM: .omitted))
-                            .minute()
-                            .second()
-                            .secondFraction(.fractional(3))
+                        format: Date.VerbatimFormatStyle(
+                            format: "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits):\(second: .twoDigits).\(secondFraction: .fractional(3))",
+                            timeZone: .current,
+                            calendar: .current
+                        )
                     )
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)

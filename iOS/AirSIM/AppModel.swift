@@ -252,7 +252,12 @@ final class AppModel {
     var callHistory: [CallRecord] = []
     private(set) var isRefreshingCallHistory = false
     private(set) var callHistoryMessage: String?
-    var messages: [SMSMessage] = []
+    var messages: [SMSMessage] = [] {
+        didSet { rebuildConversations() }
+    }
+    /// foreach.md：会话分组与排序移入模型，仅在消息集合变化时重算（review round 2 #4）；
+    /// MessagesView 首帧即读到最终数据，不再闪现“暂无短信”空态。
+    private(set) var conversations: [(sender: String, messages: [SMSMessage])] = []
     var numberInput = ""
     var isOnline = false
     private(set) var isReconnecting = false
@@ -1717,6 +1722,13 @@ final class AppModel {
         }
         messages = []
         errorMessage = nil
+    }
+
+    /// foreach.md：分组与排序只在消息集合变化时重算；由 messages.didSet 触发。
+    private func rebuildConversations() {
+        conversations = Dictionary(grouping: messages, by: \.sender)
+            .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
+            .sorted { ($0.messages.last?.timestamp ?? .distantPast) > ($1.messages.last?.timestamp ?? .distantPast) }
     }
 
     func deleteCallHistory(ids: Set<String>) {

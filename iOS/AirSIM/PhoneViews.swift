@@ -5,14 +5,17 @@ enum RecentCallTimeFormatter {
     static func string(
         for date: Date,
         now: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        locale: Locale = .current
     ) -> String {
         let day = calendar.dateComponents([.year, .month, .day], from: date)
         let currentDay = calendar.dateComponents([.year, .month, .day], from: now)
         // localization.md：时间与日期展示改用 FormatStyle，按用户语言环境输出；
-        // en 环境下时分与月/日补零输出与旧 String(format:) 完全一致。
+        // 12 小时制地区（如 en_US）输出 "2:30 PM" 不再丢失 AM/PM，24 小时制地区仍为 "14:30"。
         if day == currentDay {
-            return date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute())
+            return date.formatted(
+                Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
+            )
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
            day == calendar.dateComponents([.year, .month, .day], from: yesterday) {
@@ -840,17 +843,15 @@ struct MessagesView: View {
     @State private var conversationPath: [String] = []
     @State private var showingComposer = false
     @State private var showingClearConfirmation = false
-    // foreach.md：分组与排序只在消息集合变化时重算，不在每次 body 求值时重做。
-    @State private var conversations: [(sender: String, messages: [SMSMessage])] = []
 
     var body: some View {
         NavigationStack(path: $conversationPath) {
             List {
-                if conversations.isEmpty {
+                if model.conversations.isEmpty {
                     EmptyStateView(title: L10n.t("暂无短信"), systemImage: "message")
                         .listRowBackground(Color.clear)
                 } else {
-                    ForEach(conversations, id: \.sender) { conversation in
+                    ForEach(model.conversations, id: \.sender) { conversation in
                         NavigationLink(value: conversation.sender) {
                             MessageConversationRow(sender: conversation.sender, messages: conversation.messages)
                                 .contentShape(Rectangle())
@@ -903,9 +904,6 @@ struct MessagesView: View {
                 await model.loadMessagesFromAgent(silently: true)
             }
             .onAppear { showPendingConversation() }
-            .onChange(of: model.messages, initial: true) { _, messages in
-                rebuildConversations(from: messages)
-            }
             .onChange(of: pendingRecipient) { _, recipient in
                 if recipient != nil { showingComposer = true }
             }
@@ -933,12 +931,6 @@ struct MessagesView: View {
         guard let sender = pendingConversation else { return }
         conversationPath = [sender]
         pendingConversation = nil
-    }
-
-    private func rebuildConversations(from messages: [SMSMessage]) {
-        conversations = Dictionary(grouping: messages, by: \.sender)
-            .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
-            .sorted { ($0.messages.last?.timestamp ?? .distantPast) > ($1.messages.last?.timestamp ?? .distantPast) }
     }
 
     private struct MessageConversationRow: View {
@@ -1028,6 +1020,9 @@ private struct MessageThreadView: View {
                     }
                     .padding()
                 }
+                // review round 2 #3：首帧 messages 仍为空时 onAppear 的 scrollTo 无行可滚；
+                // iOS 17 defaultScrollAnchor(.bottom) 让会话打开即定位到最新消息。
+                .defaultScrollAnchor(.bottom)
                 .onAppear { if let id = messages.last?.id { proxy.scrollTo(id) } }
             }
             .onChange(of: model.messages, initial: true) { _, allMessages in
