@@ -8,7 +8,7 @@ enum CallKitSynchronizationPolicy {
 }
 import Foundation
 
-/// 把系统 CallKit 操作转发给模块控制层，协议限定在主线程以保护 AppModel 状态。
+/// Forwards system CallKit actions to the module control layer; main-actor isolated to protect AppModel state.
 @MainActor
 protocol CallKitActionHandling: AnyObject {
     func callKitPrepareAudioSession() throws
@@ -30,8 +30,8 @@ enum CallAnswerOrigin: Equatable, Sendable {
     case app
 }
 
-/// CallKit 的系统事务必须先于慢速 Agent/Relay I/O 完成，系统才会及时激活
-/// AVAudioSession。后端错误单独返回，由调用方结束已建立的系统通话。
+/// CallKit system transactions must complete before slow Agent/Relay I/O so the system activates
+/// AVAudioSession promptly. Backend errors are returned separately for the caller to end the established system call.
 enum CallKitActionCoordinator {
     static func perform(
         prepare: () throws -> Void,
@@ -61,8 +61,8 @@ extension CallKitActionHandling {
     func callKitCallDidEnd() {}
 }
 
-/// 挂断后 PushKit、USB 长轮询与系统回调可能乱序到达。短期保留已经结束的
-/// call_id/UUID，避免同一通电话在 CallKit 关闭后被晚到事件重新拉起。
+/// After hangup, PushKit, USB long-polling, and system callbacks may arrive out of order. Retain recently ended
+/// call_id/UUID pairs briefly so late events cannot re-present the same call after CallKit closes.
 struct IncomingCallDeduplicator {
     let retention: TimeInterval
     private var endedCallIDs: [String: Date] = [:]
@@ -91,7 +91,7 @@ struct IncomingCallDeduplicator {
     }
 }
 
-/// 维护模块通话与系统通话 UUID 的一一映射，并承接锁屏与系统通话界面的操作。
+/// Maintains a 1-to-1 mapping between module calls and system call UUIDs, handling lock-screen and system call UI actions.
 @MainActor
 final class CallKitController: NSObject {
     static let shared = CallKitController()
@@ -150,7 +150,7 @@ final class CallKitController: NSObject {
         audioSessionIsActive = false
         resetCurrentCall()
 #if DEBUG
-        debugLog("本地模式已关闭 CallKit")
+        debugLog("CallKit disabled in local mode")
 #endif
     }
 
@@ -162,7 +162,7 @@ final class CallKitController: NSObject {
         ["active", "held"].contains(currentState)
     }
 
-    /// 只公开不可变身份，生命周期状态由 CallLifecycleStore 统一管理。
+    /// Exposes immutable call identity only; lifecycle state is managed centrally by CallLifecycleStore.
     var currentSystemCallUUID: UUID? { currentUUID }
 
     var suppressesInAppIncomingRingtone: Bool {
@@ -181,7 +181,7 @@ final class CallKitController: NSObject {
         return backendMatches && uuidMatches
     }
 
-    /// 配对设备接管同一通电话后，立即结束本机 CallKit，避免双端同时响铃或抢占媒体。
+    /// Ends local CallKit immediately once a paired device takes over the same call to prevent dual ringing or media contention.
     func reportCurrentCallEnded(reason: CXCallEndedReason) {
         finishCurrentCall(previous: nil, reason: reason)
     }
@@ -193,8 +193,8 @@ final class CallKitController: NSObject {
         provider.reportOutgoingCall(with: uuid, connectedAt: Date())
     }
 
-    /// PushKit 冷启动必须立即把同一通真实来电交给系统。后续 USB 状态同步会复用
-    /// call_id/UUID，不会再生成第二个系统来电。
+    /// PushKit cold launch must immediately hand the incoming call to the system. Subsequent USB status sync reuses
+    /// the same call_id/UUID without creating a duplicate system call.
     func reportIncomingPush(
         _ call: IncomingVoIPCall,
         completion: @escaping (Error?) -> Void
@@ -204,7 +204,7 @@ final class CallKitController: NSObject {
             return
         }
         guard incomingDeduplicator.shouldAccept(callID: call.callID, uuid: call.uuid) else {
-            debugLog("忽略已结束通话的晚到 PushKit 事件")
+            debugLog("Ignoring late PushKit event for ended call")
             completion(nil)
             return
         }
@@ -240,7 +240,7 @@ final class CallKitController: NSObject {
         handler?.callKitDidReceiveIncoming(call)
     }
 
-    /// 先让系统接管呼出事务；真正的模块 ATD 只能在 CXProvider delegate 回调中执行。
+    /// Lets the system take over the outgoing call transaction first; the actual module ATD is executed only inside the CXProvider delegate callback.
     func startOutgoingCall(number: String) async throws {
         guard isAvailable else { throw CallKitBridgeError.unavailable }
         guard currentUUID == nil else { throw CallKitBridgeError.callInProgress }
@@ -291,7 +291,7 @@ final class CallKitController: NSObject {
         try await requestSystemAction(CXSetMutedCallAction(call: uuid, muted: muted))
     }
 
-    /// App 内键盘也走 CallKit 事务，保证系统通话页和 App 页不会各自维护一套 DTMF 状态。
+    /// In-app keypad digits also go through CallKit transactions so the system call screen and in-app UI do not maintain separate DTMF states.
     func playDTMF(_ digits: String) async throws {
         guard let uuid = currentUUID, systemCallReported else {
             throw CallKitBridgeError.noSystemCall
@@ -303,16 +303,16 @@ final class CallKitController: NSObject {
         )
     }
 
-    /// 每次模块轮询后把呼入与呼出生命周期同步给系统。
+    /// Synchronizes incoming and outgoing call lifecycle with the system after each module poll.
     func synchronize(call: CallRecord?, previous: CallRecord?, callerName: String?) {
-        // CallKit 权限被系统拒绝后只保留 App 内状态机，不能继续伪造系统通话 UUID。
+        // Keep only the in-app state machine once CallKit is denied by the system; do not continue fabricating system call UUIDs.
         guard isAvailable else {
             if call == nil { resetCurrentCall() }
             return
         }
         guard let call else {
-            // 模块已把同一 ID 写入带 ended_at 的 history，这是明确的结束事件，
-            // 必须立即关闭系统通话，不再等待空 CLCC 防抖。
+            // The module has written the same ID into history with ended_at, which is a definitive end event;
+            // close the system call immediately without waiting for empty-CLCC debouncing.
             if previous?.endedAt != nil {
                 guard let previous,
                       CallKitSynchronizationPolicy.mayFinishEndedHistory(
@@ -321,7 +321,7 @@ final class CallKitController: NSObject {
                 finishCurrentCall(previous: previous)
                 return
             }
-            // AT+CLCC 偶发空响应不等于电话已挂断；保留 UUID，避免系统扬声器/静音事务变成未知 UUID。
+            // An occasional empty AT+CLCC response does not mean the call ended; retain the UUID so speaker/mute transactions do not fail with unknown UUID.
             if currentDirection == "outgoing", outgoingStartInFlight { return }
             if currentUUID != nil, systemCallReported || currentDirection == "outgoing" {
                 missingCallPolls += 1
@@ -332,7 +332,7 @@ final class CallKitController: NSObject {
         }
 
         if call.direction == "outgoing" {
-            // 只同步由 startOutgoingCall 建立的系统呼出；不为外部 ATD 伪造 UUID。
+            // Synchronize only system outgoing calls started via startOutgoingCall; do not fabricate UUIDs for external ATD calls.
             guard currentDirection == "outgoing", let uuid = currentUUID else { return }
             if let backendID = currentBackendID, backendID != call.id {
                 finishCurrentCall(previous: previous, reason: .failed)
@@ -360,7 +360,7 @@ final class CallKitController: NSObject {
         }
         if currentUUID == nil,
            !incomingDeduplicator.shouldAccept(callID: call.id, uuid: nil) {
-            debugLog("忽略已结束通话的晚到模块状态")
+            debugLog("Ignoring late module state for ended call")
             return
         }
         if currentUUID == nil { currentUUID = UUID() }
@@ -377,7 +377,7 @@ final class CallKitController: NSObject {
     private func reportIncomingIfNeeded(number: String?, callerName: String?, source: String) {
         guard !incomingReportRequested, !systemCallReported, let uuid = currentUUID else { return }
         incomingReportRequested = true
-        debugLog("请求系统来电界面；来源=\(source)")
+        debugLog("Requesting system incoming call UI; source=\(source)")
         provider.reportNewIncomingCall(
             with: uuid,
             update: update(number: number, callerName: callerName)
@@ -387,7 +387,7 @@ final class CallKitController: NSObject {
                 if let error {
                     let diagnosticError = error as NSError
                     self.debugLog(
-                        "系统来电上报失败；domain=\(diagnosticError.domain) code=\(diagnosticError.code) "
+                        "Failed to report system incoming call; domain=\(diagnosticError.domain) code=\(diagnosticError.code) "
                             + "message=\(diagnosticError.localizedDescription)"
                     )
                     if self.disableCallKitIfUnentitled(error) {
@@ -400,7 +400,7 @@ final class CallKitController: NSObject {
                     self.handler?.callKitDidFail("Unable to show system incoming call screen: \(error.localizedDescription)")
                     self.finishIncomingReport(error)
                 } else {
-                    self.debugLog("系统来电上报成功")
+                    self.debugLog("System incoming call reported successfully")
                     self.systemCallReported = true
                     self.finishIncomingReport(nil)
                 }
@@ -462,8 +462,8 @@ final class CallKitController: NSObject {
         }
     }
 
-    /// CallKit 可能在系统界面重建期间短暂丢失 UUID；转换成业务层可恢复错误，
-    /// 不让错误 4 直接传播成“通话已结束”。
+    /// CallKit may briefly lose the UUID while rebuilding system UI; convert it into a recoverable domain error
+    /// rather than letting error code 4 propagate as "call ended".
     private func requestSystemAction(_ action: CXAction) async throws {
         do {
             try await request(action)
@@ -477,7 +477,7 @@ final class CallKitController: NSObject {
         }
     }
 
-    /// 个人签名或受限设备可能返回 requesttransaction/unentitled；此时自动使用 App 内通话。
+    /// Personal team signing or restricted devices may return requesttransaction/unentitled; automatically fall back to in-app calls.
     private func disableCallKitIfUnentitled(_ error: Error) -> Bool {
         let error = error as NSError
         guard error.domain == CXErrorDomainRequestTransaction,
@@ -486,11 +486,11 @@ final class CallKitController: NSObject {
         }
         entitlementAvailable = false
         audioSessionIsActive = false
-        debugLog("CallKit 被系统判定为无权限，已降级到 App 内通话")
+        debugLog("CallKit marked unentitled by system; falling back to in-app call UI")
         return true
     }
 
-    /// 真机联调只记录状态与系统错误码，避免把电话号码写入设备日志。
+    /// Logs only state and system error codes during device debugging to avoid writing phone numbers to device logs.
     private func debugLog(_ message: String) {
 #if DEBUG
         print("[AirSIM CallKit] \(message)")
@@ -530,8 +530,8 @@ final class CallKitController: NSObject {
                 prepare: { try handler.callKitPrepareAudioSession() },
                 fulfill: {
                     self.currentState = "connecting"
-                    // 系统事务只确认“用户接受了接听”。公网 WebSocket、ATA 和 PCM
-                    // 在其后异步建立，不能阻塞 CallKit 激活 AVAudioSession。
+                    // The system transaction confirms only that the user accepted the call. Cloud WebSocket, ATA, and PCM
+                    // are established asynchronously afterward and must not block CallKit from activating AVAudioSession.
                     action.fulfill()
                 },
                 backend: { try await handler.callKitAnswer(origin: origin) }
@@ -564,8 +564,8 @@ final class CallKitController: NSObject {
         defer { if outgoingStartID == operationID { outgoingStartInFlight = false } }
         do {
             guard let handler else { throw CallKitBridgeError.handlerUnavailable }
-            // 除了 App 内提交的事务，系统也可能通过 Siri/联系人把呼出动作
-            // 直接交给 provider；此时以系统 UUID 建立同一套状态。
+            // Besides transactions submitted in-app, the system may hand outgoing calls directly to the provider
+            // via Siri or Contacts; establish the same state using the system UUID.
             if currentUUID == nil {
                 currentUUID = action.callUUID
                 currentDirection = "outgoing"
@@ -582,8 +582,8 @@ final class CallKitController: NSObject {
                 fulfill: {
                     self.provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date())
                     self.systemCallReported = true
-                    // 先让 CallKit 建立系统通话和音频会话；云端拨号轮询最长 25 秒，
-                    // 不能占住 CXStartCallAction，否则系统 UI 和 didActivate 都会滞后。
+                    // Let CallKit establish the system call and audio session first; cloud dial polling can take up to 25s
+                    // and must not block CXStartCallAction, otherwise both system UI and didActivate will lag.
                     action.fulfill()
                 },
                 backend: { try await handler.callKitStart(number: action.handle.value) }

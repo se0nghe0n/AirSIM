@@ -65,7 +65,7 @@ struct CallLifecycleSnapshot: Equatable, Sendable {
     )
 }
 
-/// 单通话状态的唯一归并器。所有来源只能提交事件，不能直接改写最终状态。
+/// Single reducer for per-call state. All sources must submit events rather than mutating the final state directly.
 struct CallLifecycleStore: Sendable {
     private(set) var snapshot: CallLifecycleSnapshot = .idle
     private struct RetiredCall: Hashable, Sendable {
@@ -94,8 +94,8 @@ struct CallLifecycleStore: Sendable {
         if suppressesPresentation(callID: event.callID), !event.state.isTerminal, event.state != .ending { return false }
         let sameIdentity = snapshot.callID == event.callID && snapshot.callUUID == event.callUUID
         if snapshot.generation > 0, !sameIdentity {
-            // 旧协议会把每通电话的 generation 都设为 1；上一通进入 ending 或
-            // 明确终止后，才允许不同身份的新 ringing/connecting 建立生命周期。
+            // Legacy protocols set generation = 1 for every call; allow a new ringing/connecting call
+            // with a different identity only after the previous call enters ending or reaches a terminal state.
             guard snapshot.state.isTerminal || snapshot.state == .ending,
                   event.state == .ringing || event.state == .connecting else { return false }
         } else if event.generation < snapshot.generation {

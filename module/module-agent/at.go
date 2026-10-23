@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// atPort 串行化所有基带请求。SMD AT 通道不支持并发交错命令。
+// atPort serializes every baseband request. The SMD AT channel cannot interleave concurrent commands.
 type atPort struct {
 	path         string
 	mu           sync.Mutex
@@ -38,8 +38,8 @@ func newATPort(path string) *atPort {
 }
 
 func atOpenFlags() int {
-	// system/update 会派生启动脚本；禁止脚本及监督器继承独占的 DATA11 fd，
-	// 否则旧 Agent 退出后新 Agent 会持续收到 EBUSY。
+	// system/update spawns the startup script. The script and its supervisor must
+	// not inherit the exclusive DATA11 fd, or the new Agent keeps getting EBUSY after the old Agent exits.
 	return syscall.O_RDWR | syscall.O_NONBLOCK | syscall.O_CLOEXEC
 }
 
@@ -73,8 +73,8 @@ func (p *atPort) healthSnapshot() atPortHealth {
 	return p.health
 }
 
-// startURCMonitor 在没有同步命令占用端口时持续收取异步事件。
-// TryLock 保证它不会读取属于 AT 命令、短信提示符或 eSIM APDU 的响应。
+// startURCMonitor keeps reading asynchronous events while no synchronous command owns the port.
+// TryLock keeps it from consuming responses that belong to an AT command, an SMS prompt, or an eSIM APDU.
 func (p *atPort) startURCMonitor() {
 	p.monitorOnce.Do(func() {
 		go func() {
@@ -133,7 +133,7 @@ func (p *atPort) closeLocked() error {
 	return err
 }
 
-// command 发送普通 AT 指令并等待 OK/ERROR 终止行。
+// command sends a normal AT command and waits for an OK or ERROR terminator.
 func (p *atPort) command(command string, timeout time.Duration) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -147,11 +147,11 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 	}
 	isCCHO := strings.HasPrefix(command, "AT+CCHO=")
 	if isCCHO {
-		log.Printf("AT CCHO 阶段: 端口已打开")
+		log.Printf("AT CCHO stage: port open")
 	}
 	p.harvestPendingURCs()
 	if isCCHO {
-		log.Printf("AT CCHO 阶段: 缓冲已清理")
+		log.Printf("AT CCHO stage: buffer cleared")
 	}
 	if err := p.writeAll([]byte(command+"\r"), 5*time.Second); err != nil {
 		p.recordFailure()
@@ -160,7 +160,7 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 		return "", fmt.Errorf("Failed to write AT command: %w", err)
 	}
 	if isCCHO {
-		log.Printf("AT CCHO 阶段: 指令已写入")
+		log.Printf("AT CCHO stage: command written")
 	}
 	p.debug("tx", command, command)
 	response, err := p.readUntil(timeout, func(buffer []byte) bool {
@@ -173,7 +173,7 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 		return string(response), err
 	}
 	if isCCHO {
-		log.Printf("AT CCHO 阶段: 已收到终止响应")
+		log.Printf("AT CCHO stage: terminator received")
 	}
 	text := normalizeATText(response)
 	if hasATError(text) {
@@ -185,7 +185,7 @@ func (p *atPort) command(command string, timeout time.Duration) (string, error) 
 	return text, nil
 }
 
-// promptCommand 处理 AT+CMGS 这类先返回提示符、再接收载荷的交互命令。
+// promptCommand handles interactive commands such as AT+CMGS that return a prompt before accepting the payload.
 func (p *atPort) promptCommand(command string, payload []byte, timeout time.Duration) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -266,7 +266,7 @@ func probeATWithRecovery(command func(string, time.Duration) (string, error)) er
 	return err
 }
 
-// writeAll 直接使用非阻塞 fd 写入，并给字符设备背压设置硬截止时间。
+// writeAll writes the nonblocking fd directly and sets a hard deadline for character-device backpressure.
 func (p *atPort) writeAll(payload []byte, timeout time.Duration) error {
 	if p.file == nil {
 		return errors.New("AT port is not open")
@@ -314,8 +314,8 @@ func (p *atPort) readUntil(timeout time.Duration, complete func([]byte) bool) ([
 	return buffer, errors.New("Timed out waiting for AT response")
 }
 
-// harvestPendingURCs 清走上次命令的终止残留，但先交付其中的异步事件。
-// SMD 端口可能持续输出 URC，因此同时限制时间和字节数，不能等待“绝对安静”。
+// harvestPendingURCs drains the previous command's leftover terminator, delivering any async events in it first.
+// An SMD port can keep emitting URCs, so this bounds both time and bytes instead of waiting for absolute silence.
 func (p *atPort) harvestPendingURCs() {
 	if p.file == nil {
 		return

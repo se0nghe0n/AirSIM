@@ -12,8 +12,8 @@ enum VirtualCallTTSError: LocalizedError {
     }
 }
 
-/// Dashboard 虚拟来电的本地媒体源。CallKit 仍负责系统来电生命周期与音频路由，
-/// 但接听/挂断不会向模块发送 AT，也不会建立公网 PCM 会话。
+/// Local media source for Dashboard virtual incoming calls. CallKit still manages system call lifecycle
+/// and audio routing, but answer/hangup neither sends AT commands to the module nor opens a cloud PCM session.
 @MainActor
 final class VirtualCallTTSController: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = VirtualCallTTSController()
@@ -40,7 +40,7 @@ final class VirtualCallTTSController: NSObject, AVSpeechSynthesizerDelegate {
         started = false
     }
 
-    /// 只能在 CXProvider 激活 CallKit 的 AVAudioSession 后开始播报。
+    /// Speech playback must start only after CXProvider activates CallKit's AVAudioSession.
     func start() {
         guard !started, let text = call?.ttsText else { return }
         started = true
@@ -73,7 +73,7 @@ final class VirtualCallTTSController: NSObject, AVSpeechSynthesizerDelegate {
     ) {
         Task { @MainActor in
             guard VirtualCallTTSController.shared.isPrepared else { return }
-            // 播报完成等同远端结束；CallKit 收起后由 didDeactivate 清理媒体状态。
+            // Completion of speech is treated as remote hangup; media state is cleaned up by didDeactivate after CallKit dismisses.
             CallKitController.shared.reportCurrentCallEnded(reason: .remoteEnded)
         }
     }

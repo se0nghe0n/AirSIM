@@ -29,8 +29,9 @@ const (
 	voiceAudioEnablePath  = "/sys/class/android_usb/f_audio/audio_enable"
 	voiceExpectedKernel   = "3.18.44"
 	voiceExpectedCardName = "mdm9607-tomtom-i2s-snd-card"
-	// helper 启动后只等待 TCP listener；客户端握手由独立观察器确认，不能在
-	// 启动函数内等待尚未执行的 Dial。
+	// After the helper starts, wait only for the TCP listener. The client handshake
+	// is confirmed by a separate observer and must not block inside the start
+	// function on a Dial that has not run yet.
 	voiceListenerReadyTimeout = 5 * time.Second
 )
 
@@ -59,8 +60,9 @@ type voiceRuntimeValidator struct {
 var cachedVoiceRuntimeValidator voiceRuntimeValidator
 
 type voiceTracker struct {
-	// lifecycleMu 串行化启动和停止，但绝不能用于 HTTP 状态快照。此前同一把
-	// mu 被冷启动持有最长 15 秒，导致 /audio/host/config 阻塞和 App 轮询停顿。
+	// lifecycleMu serializes start and stop, but must never guard HTTP status
+	// snapshots. The same mutex used to be held for up to 15 seconds during cold
+	// start, which blocked /audio/host/config and stalled App polling.
 	lifecycleMu       sync.Mutex
 	mu                sync.Mutex
 	command           *exec.Cmd
@@ -190,8 +192,9 @@ func (a *agent) ensureVoiceAudioGate() error {
 	return nil
 }
 
-// ensureVoiceRuntimeWarm 只做内核模块加载和 ACDB 校准，不启动通话媒体路由。
-// 预热期间即使用户尚未接听，也不会占用 7580 或向基带发送媒体启动命令。
+// ensureVoiceRuntimeWarm only loads kernel modules and runs ACDB calibration.
+// It does not start the call media route. Warmup does not occupy 7580 or send a
+// media-start command to the baseband, even when the user has not answered yet.
 func (a *agent) ensureVoiceRuntimeWarm() {
 	if !a.usesLocalVoiceRuntime() {
 		return
@@ -210,7 +213,7 @@ func (a *agent) ensureVoiceRuntimeWarm() {
 	appendVoiceDiagnosticEvent("Voice runtime warmup complete")
 }
 
-// validateVoiceRuntime 在执行任何内核模块前校验固定上游文件，拒绝运行被替换的二进制。
+// validateVoiceRuntime checks the pinned upstream files before any kernel module runs, and refuses a replaced binary.
 func validateVoiceRuntime() (bool, error) {
 	return cachedVoiceRuntimeValidator.validate(voiceRuntimePath, voiceRuntimeFiles)
 }
@@ -275,8 +278,9 @@ func (a *agent) ensureVoiceRouteListening() error {
 	}
 	defer release()
 
-	// 上一通电话可能还在异步退出。旧进程占着 7580 时直接返回会让新电话
-	// 永远等不到 AIRSIMREADY，这是“能拨出但接听后回拨失败”的典型竞态。
+	// The previous call may still be exiting asynchronously. Returning while the
+	// old process holds 7580 leaves the new call waiting forever for AIRSIMREADY.
+	// That race is the usual case where a call dials, then a callback after answer fails.
 	a.voice.mu.Lock()
 	if a.voice.command != nil || a.voice.routeCommand != nil {
 		oldCommand := a.voice.command
@@ -342,7 +346,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 		appendVoiceDiagnosticEvent("Failed to start VoLTE route session: " + err.Error())
 		return err
 	}
-	// D4 只建立 AFE hostless 路由；voc_svr 的 S 命令负责启动基带媒体时钟，二者缺一不可。
+	// D4 only sets up the AFE hostless route. The voc_svr S command starts the baseband media clock. Both are required.
 	if err := startVoiceMediaRoute(); err != nil {
 		a.voice.mu.Lock()
 		a.voice.lastError = err.Error()
@@ -372,7 +376,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 		}
 		return err
 	}
-	// D5 是主机到基带的播放端，D6 是基带到主机的采集端；不再经过 USB UAC D4。
+	// D5 is host-to-baseband playback and D6 is baseband-to-host capture. Audio no longer goes through USB UAC D4.
 	command := exec.Command(
 		helper,
 		"--tcp-listen", voiceNetworkListen,
@@ -425,7 +429,7 @@ func (a *agent) ensureVoiceRouteListening() error {
 			_ = os.Remove(voiceRoutePIDFile)
 		}
 		a.voice.mu.Unlock()
-		// 主 PCM 桥退出后必须同步释放 D4/voc_svr；否则残留 routeCommand 会阻止通话看门狗重新拉起。
+		// When the main PCM bridge exits, release D4 and voc_svr in the same step. A leftover routeCommand stops the call watchdog from starting them again.
 		if routeCommand != nil {
 			terminateVoiceProcess(routeCommand)
 			if mediaRouteStarted {
@@ -537,8 +541,8 @@ func (a *agent) ensureVoiceRouteIfHostEnabled() {
 	}
 }
 
-// maintainVoiceRoute 只在已有接通通话且当前语音桥未运行时触发恢复。
-// 不在通话外启动语音桥，避免空闲时加载内核音频模块和占用 PCM 设备。
+// maintainVoiceRoute recovers only when a call is already connected and the voice bridge is not running.
+// It does not start the voice bridge outside a call, so idle time does not load kernel audio modules or hold PCM devices.
 func (a *agent) maintainVoiceRoute() {
 	a.mu.RLock()
 	active := a.calls.Active != nil && a.calls.Active.State == "active"
@@ -556,7 +560,7 @@ func (a *agent) maintainVoiceRoute() {
 	}
 }
 
-// startVoiceRouteSession 启动 D4 hostless 会话，把 D5/D6 AFE PCM 真正接入基带通话。
+// startVoiceRouteSession starts the D4 hostless session and attaches D5/D6 AFE PCM to the baseband call.
 func (a *agent) startVoiceRouteSession(helper string, logOffset int64) error {
 	logFile, err := os.OpenFile(voiceRouteLogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -647,7 +651,7 @@ func writeVoiceMediaRoute(path string, command string) error {
 	return closeErr
 }
 
-// prepareVoiceRuntime 串行化预热与正式语音桥启动，避免快速接听时并发 insmod/校准。
+// prepareVoiceRuntime serializes warmup and the real voice-bridge start so a fast answer cannot insmod or calibrate concurrently.
 func prepareVoiceRuntime() error {
 	voiceRuntimePrepareMu.Lock()
 	defer voiceRuntimePrepareMu.Unlock()
@@ -790,8 +794,8 @@ func (a *agent) stopVoiceRoute() {
 		return
 	}
 	appendVoiceSystemSnapshot("voice-stop-before")
-	// 与冷启动生命周期串行，但状态快照使用独立的短锁，因此等待清理时
-	// /health 和 /audio/host/config 仍可正常返回。
+	// This waits in line with the cold-start lifecycle, but status snapshots use a
+	// separate short lock, so /health and /audio/host/config still respond while cleanup waits.
 	a.voice.lifecycleMu.Lock()
 	a.voice.mu.Lock()
 	if a.voice.stopping {
@@ -807,13 +811,14 @@ func (a *agent) stopVoiceRoute() {
 	a.voice.routeReady = false
 	a.voice.mediaRouteStarted = false
 	a.voice.stopping = true
-	// 先从状态中摘除旧进程，新的 ensureVoiceRoute 会看到 stopping 并等待，
-	// 避免新旧 helper 同时抢占 7580 端口。
+	// Remove the old process from state first. The next ensureVoiceRoute sees
+	// stopping and waits, so the old and new helpers do not both claim port 7580.
 	a.voice.command = nil
 	a.voice.routeCommand = nil
 	a.voice.mu.Unlock()
-	// 先断开 D5/D6 数据桥，再让 D4 route session 回滚 mixer。只有真正
-	// 启动过媒体路由才允许写 voc_svr；拒接未接通的来电不得触碰它。
+	// Disconnect the D5/D6 data bridge first, then let the D4 route session roll
+	// back the mixer. voc_svr may be written only after a media route actually
+	// started. Rejecting a call that never connected must not touch it.
 	terminateVoiceProcess(command)
 	terminateVoiceProcess(routeCommand)
 	if mediaRouteStarted {
@@ -826,10 +831,10 @@ func (a *agent) stopVoiceRoute() {
 	hostEnabled := a.voice.hostEnabled
 	a.voice.mu.Unlock()
 	appendVoiceSystemSnapshot("voice-stop-after")
-	// 必须先释放生命周期租约再触发重启；beginRouteStart 使用 TryLock，
-	// 若在持锁期间启动会把这次必要的恢复误判成重复启动。
+	// Release the lifecycle lease before restarting. beginRouteStart uses TryLock,
+	// so starting while that lock is still held would treat this required recovery as a duplicate start.
 	a.voice.lifecycleMu.Unlock()
-	// 如果停止期间已经有新通话接通，立即补起语音桥，不依赖下一轮轮询。
+	// If a new call connected while stopping, bring the voice bridge back immediately instead of waiting for the next poll.
 	a.mu.RLock()
 	active := a.calls.Active != nil && a.calls.Active.State == "active"
 	a.mu.RUnlock()
@@ -889,7 +894,7 @@ func logContains(path, marker string) bool {
 	return err == nil && strings.Contains(string(data), marker)
 }
 
-// prepareVoiceDiagnosticLog 限制持久日志大小，避免长期通话耗尽模块的 /data 分区。
+// prepareVoiceDiagnosticLog caps the persistent log so a long call cannot fill the module /data partition.
 func prepareVoiceDiagnosticLog() error {
 	voiceDiagnosticLogMu.Lock()
 	defer voiceDiagnosticLogMu.Unlock()
@@ -912,7 +917,7 @@ func prepareVoiceDiagnosticLog() error {
 	return nil
 }
 
-// appendVoiceDiagnosticEvent 写入带 UTC 时间的控制面事件，不记录号码或原始音频。
+// appendVoiceDiagnosticEvent writes control-plane events with UTC timestamps. It does not record phone numbers or raw audio.
 func appendVoiceDiagnosticEvent(message string) {
 	voiceDiagnosticLogMu.Lock()
 	defer voiceDiagnosticLogMu.Unlock()
@@ -949,7 +954,7 @@ func readVoiceDiagnosticLog(offset int64) ([]byte, error) {
 	return data[offset:], nil
 }
 
-// parseVoicePCMStats 解析 helper 最后一条累计统计，供 HTTP 与单元测试共同使用。
+// parseVoicePCMStats parses the helper's latest cumulative stats for both HTTP and unit tests.
 func parseVoicePCMStats(data []byte) (voicePCMStats, bool) {
 	lines := strings.Split(string(data), "\n")
 	for lineIndex := len(lines) - 1; lineIndex >= 0; lineIndex-- {
@@ -1010,5 +1015,5 @@ func commandFailure(prefix string, output []byte, err error) error {
 	if detail == "" {
 		return fmt.Errorf("%s: %w", prefix, err)
 	}
-	return fmt.Errorf("%s: %s（%v）", prefix, detail, err)
+	return fmt.Errorf("%s: %s (%v)", prefix, detail, err)
 }

@@ -12,35 +12,35 @@ printf 'License terms: %s\n' "$license_url"
 
 if [ -z "$test_root" ]; then
     if [ "$(id -u)" -ne 0 ]; then
-        printf '请使用 README 中带 pipefail 的 sudo 安装命令运行。\n' >&2
+        printf 'Run the sudo install command from the README, including pipefail.\n' >&2
         exit 1
     fi
     case "$release_base" in
         https://*) ;;
-        *) printf '发布地址必须使用 HTTPS。\n' >&2; exit 2 ;;
+        *) printf 'The release URL must use HTTPS.\n' >&2; exit 2 ;;
     esac
 else
     case "$release_base" in
         file://*) ;;
-        *) printf '测试模式只接受 file:// 发布地址。\n' >&2; exit 2 ;;
+        *) printf 'Test mode accepts only a file:// release URL.\n' >&2; exit 2 ;;
     esac
 fi
 
 case "$(uname -m)" in
     arm64|aarch64) ;;
-    *) printf 'AirSIM AVF Agent 只支持 arm64 Linux。\n' >&2; exit 3 ;;
+    *) printf 'AirSIM AVF Agent supports only arm64 Linux.\n' >&2; exit 3 ;;
 esac
 
 for command_name in curl openssl base64 dpkg-deb apt-get install; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
-        printf '缺少首次安装依赖：%s\n' "$command_name" >&2
+        printf 'Missing first-install dependency: %s\n' "$command_name" >&2
         exit 4
     fi
 done
 if [ -z "$test_root" ]; then
     for command_name in systemctl sleep; do
         if ! command -v "$command_name" >/dev/null 2>&1; then
-            printf '缺少服务健康检查依赖：%s\n' "$command_name" >&2
+            printf 'Missing service health-check dependency: %s\n' "$command_name" >&2
             exit 4
         fi
     done
@@ -75,14 +75,14 @@ ensure_package_state() {
     if apt-get check >/dev/null 2>&1; then
         return 0
     fi
-    printf '%s\n' 'AVF Debian 已有未满足的系统包依赖；AirSIM 安装未开始，现有 Agent 与回滚包保持不变。' >&2
-    printf '%s\n' '请先运行 apt-cache policy udev libudev1 和 apt-get -s -f install，检查拟议操作。' >&2
-    printf '%s\n' '若模拟包含 Remv 或意外降级，不要运行真正的 apt --fix-broken install。' >&2
+    printf '%s\n' 'AVF Debian already has unmet system package dependencies; AirSIM installation has not started, and the existing Agent and rollback package are unchanged.' >&2
+    printf '%s\n' 'First run apt-cache policy udev libudev1 and apt-get -s -f install, and review the proposed operations.' >&2
+    printf '%s\n' 'If the simulation includes Remv or an unexpected downgrade, do not run a real apt --fix-broken install.' >&2
     return 9
 }
 
 if [ -e "$state_directory/current.deb" ]; then
-    printf '检测到已安装的 Agent；优先恢复服务，不重复下载或替换已安装包。\n'
+    printf 'Recovery: detected an already installed Agent; restore the service first instead of downloading again or replacing the installed package.\n'
     if [ -n "$test_root" ]; then
         "$test_root/usr/bin/airsim-avf-pair"
         exit 0
@@ -91,35 +91,35 @@ if [ -e "$state_directory/current.deb" ]; then
     package_name=$(dpkg-deb --field "$state_directory/current.deb" Package)
     architecture=$(dpkg-deb --field "$state_directory/current.deb" Architecture)
     if [ "$package_name" != airsim-avf-agent ] || [ "$architecture" != arm64 ]; then
-        printf '保留的安装包身份无效，拒绝自动修复。\n' >&2
+        printf 'The retained package identity is invalid; automatic repair was refused.\n' >&2
         exit 5
     fi
     systemctl daemon-reload
     if ! systemctl enable --now airsim-agent.service airsim-installerd.service; then
-        printf '服务启动失败，尝试用保留的安装包修复服务文件。\n' >&2
+        printf 'Service startup failed; trying to repair the service files with the retained package.\n' >&2
     fi
     if ! service_ready; then
         ensure_package_state
         apt-get install --reinstall -y "$state_directory/current.deb"
     fi
     if ! wait_for_services; then
-        printf '已安装包保留不变，但 Agent 或 installerd 仍未通过健康检查。\n' >&2
-        printf '请运行 sudo systemctl status airsim-agent airsim-installerd --no-pager\n' >&2
-        printf '再运行 sudo journalctl -u airsim-installerd -n 80 --no-pager\n' >&2
+        printf 'The installed package is unchanged, but the Agent or installerd still failed its health check.\n' >&2
+        printf 'Run sudo systemctl status airsim-agent airsim-installerd --no-pager\n' >&2
+        printf 'Then run sudo journalctl -u airsim-installerd -n 80 --no-pager\n' >&2
         exit 8
     fi
-    printf '现有 Agent 服务已恢复；无需重新刷写 AVF。\n'
+    printf 'The existing Agent service has been restored; AVF does not need to be reflashed.\n'
     "$test_root/usr/bin/airsim-avf-pair"
     exit 0
 fi
 
 if [ -z "$test_root" ]; then
     if ! command -v ss >/dev/null 2>&1; then
-        printf '缺少端口冲突检查工具 ss；安装尚未开始。\n' >&2
+        printf 'The port-conflict check tool ss is missing; installation has not started.\n' >&2
         exit 4
     fi
     if ss -ltn | grep -Eq ':(8575|8576)[[:space:]]'; then
-        printf 'AirSIM 专用端口 8575 或 8576 已被占用；安装尚未开始，请先确认占用进程。\n' >&2
+        printf 'AirSIM ports 8575 or 8576 are already in use; installation has not started. Identify the process using them first.\n' >&2
         exit 10
     fi
 fi
@@ -141,7 +141,7 @@ download() {
     fi
 }
 
-printf '正在下载 AirSIM AVF Agent 最新签名包…\n'
+printf 'Downloading the latest signed AirSIM AVF Agent package…\n'
 download "$release_base/airsim-avf-agent_arm64.deb" "$package"
 download "$release_base/airsim-avf-agent_arm64.deb.sig" "$signature_text"
 
@@ -149,7 +149,7 @@ if ! printf '%s' "$release_public_key" | base64 -d > "$work_dir/public.raw" 2>/d
     printf '%s' "$release_public_key" | base64 -D > "$work_dir/public.raw"
 fi
 if [ "$(wc -c < "$work_dir/public.raw" | tr -d ' ')" -ne 32 ]; then
-    printf '安装器内置发行公钥无效。\n' >&2
+    printf 'The release public key built into the installer is invalid.\n' >&2
     exit 6
 fi
 printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$work_dir/public.der"
@@ -165,11 +165,11 @@ openssl pkeyutl -verify -pubin -inkey "$work_dir/public.pem" -rawin \
 package_name=$(dpkg-deb --field "$package" Package)
 architecture=$(dpkg-deb --field "$package" Architecture)
 if [ "$package_name" != airsim-avf-agent ] || [ "$architecture" != arm64 ]; then
-    printf '拒绝安装包：Package=%s Architecture=%s\n' "$package_name" "$architecture" >&2
+    printf 'Refusing package: Package=%s Architecture=%s\n' "$package_name" "$architecture" >&2
     exit 7
 fi
 
-printf '签名与 arm64 包身份验证通过，正在安装…\n'
+printf 'Signature and arm64 package identity verified; installing…\n'
 ensure_package_state
 apt-get install --reinstall -y "$package"
 if [ -n "$test_root" ]; then
@@ -182,12 +182,12 @@ fi
 
 if [ -z "$test_root" ]; then
     if ! wait_for_services; then
-        printf '%s\n' 'Debian 包已安装并保留，但 Agent 或 installerd 未通过健康检查。' >&2
-        printf '%s\n' '请运行 sudo systemctl status airsim-agent airsim-installerd --no-pager' >&2
-        printf '%s\n' '再运行 sudo journalctl -u airsim-installerd -n 80 --no-pager；不要清除 Linux Terminal 数据。' >&2
+        printf '%s\n' 'The Debian package is installed and retained, but the Agent or installerd failed its health check.' >&2
+        printf '%s\n' 'Run sudo systemctl status airsim-agent airsim-installerd --no-pager' >&2
+        printf '%s\n' 'Then run sudo journalctl -u airsim-installerd -n 80 --no-pager; do not clear Linux Terminal data.' >&2
         exit 8
     fi
 fi
 
-printf 'AirSIM AVF Agent 首次安装完成，并已保留回滚包。\n'
+printf 'AirSIM AVF Agent first install is complete, and the rollback package has been retained.\n'
 "$test_root/usr/bin/airsim-avf-pair"

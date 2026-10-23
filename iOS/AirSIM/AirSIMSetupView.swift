@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// AirSIM 只引导三星配对；不检查旧模块 USB ECM、AT 或 QDC507 固件。
+/// AirSIM guides Samsung pairing only; it does not check legacy module USB ECM, AT, or QDC507 firmware.
 struct AirSIMFirstConnectionView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("airsim.first-connection-complete") private var completed = false
@@ -96,6 +96,17 @@ struct AirSIMFirstConnectionView: View {
     }
 }
 
+#Preview("First Connection") {
+    AirSIMFirstConnectionView()
+        .environment(AppModel())
+}
+
+#Preview("Settings") {
+    AirSIMSettingsView()
+        .environment(AppModel())
+        .environment(AppSettings())
+}
+
 #Preview("Paired Devices · Empty") {
     Form { Section("Android Connection") { PairedAndroidDeviceRows(devices: [], onDelete: { _ in }) } }
 }
@@ -152,7 +163,7 @@ private struct PairedAndroidDeviceRows: View {
     }
 }
 
-/// 自检进度阶段。原先嵌在 AirSIMSettingsView 内；抽成独立分区视图后移到文件级。
+/// Self-check progress phase. Previously nested in AirSIMSettingsView; moved to file scope after extracting section subviews.
 private enum SelfTestPhase {
     case idle
     case running
@@ -325,9 +336,9 @@ struct AirSIMSettingsView: View {
     }
 }
 
-/// 当前连接分区独立成子视图：分区内的模式/云端状态/心跳读取移入子视图 body，
-/// 这些字段变化只重算本分区（structure.md 失效边界）。父级 body 仍读取
-/// vowlan.availability 与自检 @State，这些变化仍会重算整个表单。
+/// Isolated subview for the current connection section: mode, cloud status, and heartbeat reads are scoped to this subview body
+/// so changes to those fields only recompute this section (structure.md invalidation boundary). The parent body still reads
+/// vowlan.availability and self-check @State, which recompute the entire form when changed.
 private struct CurrentConnectionSection: View {
     @Environment(AppModel.self) private var model
     let cloudModeEnabled: Bool
@@ -355,8 +366,8 @@ private struct CurrentConnectionSection: View {
     }
 }
 
-/// 云端自检分区独立成子视图（structure.md 失效边界）。自检报告与阶段仍由父级
-/// @State 持有并传入，流式更新时父级 body 与其余分区仍会重算。
+/// Isolated subview for the cloud self-check section (structure.md invalidation boundary). The self-check report and phase are still held
+/// in parent @State and passed in, so streaming updates still recompute the parent body and sibling sections.
 private struct CloudSelfTestSection: View {
     let isEnabled: Bool
     let phase: SelfTestPhase
@@ -434,9 +445,9 @@ private struct CloudSelfTestStepRow: View {
     }
 }
 
-/// swiftui-whats-new-27 item-binding.md：iOS 27 为 confirmationDialog 增加 item:
-/// 重载，单一可选值同时驱动呈现并传给按钮；部署目标是 iOS 17，因此按参考的
-/// ViewModifier 分流形式采用，旧系统分支保持原 isPresented + presenting 行为。
+/// swiftui-whats-new-27 item-binding.md: iOS 27 adds an item: overload to confirmationDialog
+/// where a single optional drives presentation and passes the value to actions; since the deployment target is iOS 17,
+/// branch via a ViewModifier while preserving isPresented + presenting on older OS versions.
 private struct DeletePairedDeviceConfirmation: ViewModifier {
     @Binding var item: AndroidAgentPresentation?
     let onConfirm: (AndroidAgentPresentation) -> Void

@@ -12,23 +12,23 @@ import (
 func TestVoiceBackendDefaultsToSamsungAndRequiresPrivateEndpoint(t *testing.T) {
 	_, err := loadVoiceBackend(func(string) string { return "" })
 	if err == nil {
-		t.Fatal("未设置三星 PCM 私网端点时必须拒绝启动")
+		t.Fatal("startup must be rejected when the Samsung PCM private endpoint is unset")
 	}
 	config, err := loadVoiceBackend(func(key string) string {
 		if key == "AIRSIM_SAMSUNG_PCM_ADDRESS" { return "192.168.240.1:7580" }
 		return ""
 	})
 	if err != nil {
-		t.Fatalf("默认语音后端失败: %v", err)
+		t.Fatalf("default voice backend failed: %v", err)
 	}
 	if config.kind != voiceBackendSamsungAndroid {
-		t.Fatalf("默认后端=%q，期望 %q", config.kind, voiceBackendSamsungAndroid)
+		t.Fatalf("default backend=%q, want %q", config.kind, voiceBackendSamsungAndroid)
 	}
 	if config.endpoint != "192.168.240.1:7580" {
-		t.Fatalf("默认端点=%q", config.endpoint)
+		t.Fatalf("default endpoint=%q", config.endpoint)
 	}
 	if config.requiresLocalRuntime() {
-		t.Fatal("AirSIM 不得准备 QDC507 本机语音运行时")
+		t.Fatal("AirSIM must not prepare the QDC507 on-device voice runtime")
 	}
 }
 
@@ -42,16 +42,16 @@ func TestSamsungVoiceBackendRequiresExplicitPrivateEndpoint(t *testing.T) {
 	}
 	config, err := loadVoiceBackend(lookup)
 	if err != nil {
-		t.Fatalf("三星语音后端失败: %v", err)
+		t.Fatalf("Samsung voice backend failed: %v", err)
 	}
 	if config.kind != voiceBackendSamsungAndroid {
-		t.Fatalf("三星后端=%q", config.kind)
+		t.Fatalf("Samsung backend=%q", config.kind)
 	}
 	if config.endpoint != "192.168.240.1:7580" {
-		t.Fatalf("三星端点=%q", config.endpoint)
+		t.Fatalf("Samsung endpoint=%q", config.endpoint)
 	}
 	if config.requiresLocalRuntime() {
-		t.Fatal("三星后端不得启动 QDC507 内核或混音器运行时")
+		t.Fatal("Samsung backend must not start the QDC507 kernel or mixer runtime")
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSamsungVoiceBackendRejectsUnsafeEndpoints(t *testing.T) {
 				return endpoint
 			})
 			if err == nil {
-				t.Fatalf("不安全端点 %q 应被拒绝", endpoint)
+				t.Fatalf("unsafe endpoint %q must be rejected", endpoint)
 			}
 		})
 	}
@@ -82,7 +82,7 @@ func TestVoiceBackendRejectsUnknownKind(t *testing.T) {
 		return ""
 	})
 	if err == nil {
-		t.Fatal("未知语音后端应被拒绝")
+		t.Fatal("unknown voice backend must be rejected")
 	}
 }
 
@@ -101,16 +101,16 @@ func TestHealthReportsVoiceBackendWithoutEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload["voice_backend"] != "samsung_android" {
-		t.Fatalf("健康接口语音后端=%v", payload["voice_backend"])
+		t.Fatalf("health API voice backend=%v", payload["voice_backend"])
 	}
 	if payload["product"] != "airsim" {
-		t.Fatalf("健康接口产品身份=%v", payload["product"])
+		t.Fatalf("health API product identity=%v", payload["product"])
 	}
 	if payload["ok"] != true {
-		t.Fatalf("三星外部后端配置有效时 Agent 应在线: ok=%v", payload["ok"])
+		t.Fatalf("Agent should be online when the Samsung external backend is valid: ok=%v", payload["ok"])
 	}
 	if _, exposed := payload["voice_pcm_endpoint"]; exposed {
-		t.Fatal("健康接口不得暴露三星 PCM 私有端点")
+		t.Fatal("health API must not expose the Samsung PCM private endpoint")
 	}
 
 	platformRequest := httptest.NewRequest("GET", "/api/platform", nil)
@@ -121,7 +121,7 @@ func TestHealthReportsVoiceBackendWithoutEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if platform["call_audio"] != true {
-		t.Fatalf("三星外部后端应报告通话音频能力: %v", platform["call_audio"])
+		t.Fatalf("Samsung external backend should report call audio capability: %v", platform["call_audio"])
 	}
 }
 
@@ -131,18 +131,18 @@ func TestAgentExposesConfiguredPCMEndpointAndRuntimeBoundary(t *testing.T) {
 	}}
 	endpoint, err := service.voicePCMEndpoint()
 	if err != nil {
-		t.Fatalf("读取 PCM 端点失败: %v", err)
+		t.Fatalf("failed to read PCM endpoint: %v", err)
 	}
 	if endpoint != "192.168.240.1:7580" {
-		t.Fatalf("PCM 端点=%q", endpoint)
+		t.Fatalf("PCM endpoint=%q", endpoint)
 	}
 	if service.usesLocalVoiceRuntime() {
-		t.Fatal("三星 Agent 不得准备 QDC507 本机运行时")
+		t.Fatal("Samsung Agent must not prepare the QDC507 on-device runtime")
 	}
 
 	invalid := &agent{voiceBackendErr: errTestVoiceBackend}
 	if _, err := invalid.voicePCMEndpoint(); err == nil {
-		t.Fatal("无效后端配置不得返回 PCM 端点")
+		t.Fatal("invalid backend config must not return a PCM endpoint")
 	}
 }
 
@@ -158,10 +158,10 @@ func TestSamsungVoiceBackendFollowsCurrentAVFDefaultGateway(t *testing.T) {
 	}
 	endpoint, err := service.voicePCMEndpoint()
 	if err != nil {
-		t.Fatalf("读取动态 PCM 端点失败: %v", err)
+		t.Fatalf("failed to read dynamic PCM endpoint: %v", err)
 	}
 	if endpoint != "172.29.240.24:7580" {
-		t.Fatalf("PCM 端点=%q，期望当前 AVF 网关 172.29.240.24:7580", endpoint)
+		t.Fatalf("PCM endpoint=%q, want current AVF gateway 172.29.240.24:7580", endpoint)
 	}
 }
 
@@ -178,7 +178,7 @@ func TestQDC507VoiceBackendKeepsFixedEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if endpoint != qdc507PCMEndpoint {
-		t.Fatalf("QDC507 PCM 端点被错误改写为 %q", endpoint)
+		t.Fatalf("QDC507 PCM endpoint was incorrectly rewritten to %q", endpoint)
 	}
 }
 
@@ -189,20 +189,20 @@ func TestSamsungVoiceRouteDoesNotStartQDC507Processes(t *testing.T) {
 	service.ensureVoiceRoute()
 	snapshot := service.voice.snapshot()
 	if !snapshot.Listening || snapshot.Ready {
-		t.Fatalf("握手前应仅标记监听可用: listening=%v ready=%v error=%q",
+		t.Fatalf("only listening should be marked before handshake: listening=%v ready=%v error=%q",
 			snapshot.Listening, snapshot.Ready, snapshot.LastError)
 	}
 	if snapshot.Command != nil || snapshot.RouteCommand != nil || snapshot.MediaRouteStarted {
-		t.Fatal("三星后端不得启动 QDC507 helper、路由进程或基带媒体路由")
+		t.Fatal("Samsung backend must not start the QDC507 helper, route process, or baseband media route")
 	}
 	service.markVoiceBackendHandshakeReady()
 	if !service.voice.snapshot().Ready {
-		t.Fatal("AIRSIMREADY 握手后应标记三星 PCM 后端就绪")
+		t.Fatal("Samsung PCM backend should be marked ready after the AIRSIMREADY handshake")
 	}
 	service.stopVoiceRoute()
 	stopped := service.voice.snapshot()
 	if stopped.Ready || stopped.Listening {
-		t.Fatal("停止三星语音路由后应清除监听和就绪状态")
+		t.Fatal("listening and ready must be cleared after the Samsung voice route stops")
 	}
 }
 
@@ -236,10 +236,10 @@ func TestProbeVoicePCMBackendPerformsLegacyHandshake(t *testing.T) {
 		return client, nil
 	})
 	if err != nil {
-		t.Fatalf("PCM 后端握手失败: %v", err)
+		t.Fatalf("PCM backend handshake failed: %v", err)
 	}
 	if err := <-done; err != nil {
-		t.Fatalf("模拟桥失败: %v", err)
+		t.Fatalf("simulated bridge failed: %v", err)
 	}
 }
 

@@ -88,7 +88,7 @@ struct CallRecordingsView: View {
 
     private static func duration(_ value: TimeInterval) -> String {
         let seconds = max(0, Int(value))
-        // localization.md：用 FormatStyle 取代 String(format:)；en 输出与旧格式一致。
+        // localization.md: use FormatStyle instead of String(format:); English output matches the legacy format.
         return Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond))
     }
 }
@@ -142,5 +142,13 @@ private final class CallRecordingPlayback: NSObject, AVAudioPlayerDelegate {
             guard self?.player === player else { return }
             self?.stop()
         }
+    }
+}
+
+#Preview("Call Recordings") {
+    let model = AppModel()
+    NavigationStack {
+        CallRecordingsView(store: model.recordings)
+            .environment(model)
     }
 }

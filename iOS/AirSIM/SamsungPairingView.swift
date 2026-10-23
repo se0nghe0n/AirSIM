@@ -104,3 +104,10 @@ struct SamsungPairingView: View {
         }
     }
 }
+
+#Preview("Samsung Pairing") {
+    NavigationStack {
+        SamsungPairingView()
+            .environment(AppModel())
+    }
+}

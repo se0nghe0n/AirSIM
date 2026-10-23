@@ -507,7 +507,7 @@ test("cloud dial and SMS commands are authenticated, device-scoped, and return A
     command_id: crypto.randomUUID(),
     type: "send_sms",
     number: "10086",
-    message: "测试",
+    message: "Test",
   }), env);
   assert.equal(forged.status, 401);
 });
@@ -925,7 +925,7 @@ test("dashboard virtual call selects an opaque device and never stores TTS conte
         body: JSON.stringify({
           device_id: summary.devices[0].control_id,
           title: "Vibe Coding",
-          content: "内容已完成，请查看这条消息。",
+          content: "The content is complete. Please review this message.",
         }),
       },
     ), env);
@@ -938,8 +938,8 @@ test("dashboard virtual call selects an opaque device and never stores TTS conte
   assert.equal(captured[0].options.headers["apns-push-type"], "voip");
   assert.equal(captured[0].payload.virtual_call, true);
   assert.equal(captured[0].payload.caller_name, "Vibe Coding");
-  assert.equal(captured[0].payload.tts_text, "内容已完成，请查看这条消息。");
-  assert.equal(JSON.stringify([...env.DEVICES.values.values()]).includes("内容已完成"), false);
+  assert.equal(captured[0].payload.tts_text, "The content is complete. Please review this message.");
+  assert.equal(JSON.stringify([...env.DEVICES.values.values()]).includes("The content is complete"), false);
 });
 
 test("dashboard virtual call requires auth, validates fields, and rate limits a device", async () => {
@@ -949,9 +949,9 @@ test("dashboard virtual call requires auth, validates fields, and rate limits a 
     "https://push.airsim.example/dashboard/api/summary",
     { headers: { authorization: `Bearer ${env.DASHBOARD_TOKEN}` } },
   ), env)).json();
-  const request = (headers, content = "测试播报") => new Request(
+  const request = (headers, content = "Test announcement") => new Request(
     "https://push.airsim.example/dashboard/api/virtual-call",
-    { method: "POST", headers, body: JSON.stringify({ device_id: summary.devices[0].control_id, title: "测试来电", content }) },
+    { method: "POST", headers, body: JSON.stringify({ device_id: summary.devices[0].control_id, title: "Test incoming call", content }) },
   );
   assert.equal((await worker.fetch(request({}), env)).status, 401);
   assert.equal((await worker.fetch(request({ authorization: `Bearer ${env.DASHBOARD_TOKEN}` }, ""), env)).status, 400);
@@ -986,7 +986,7 @@ test("relay sends iPhone VoIP, Watch VoIP, mirror alert, and SMS on distinct APN
     const sms = await worker.fetch(post("/v1/events/sms", {
       event: "incoming_sms", device_id: registration.device_id,
       device_secret: registration.device_secret, delivery_id: "sms-1",
-      sender: "10010", content: "余额提醒", timestamp: now.toISOString(),
+      sender: "10010", content: "Balance reminder", timestamp: now.toISOString(),
     }), env);
     assert.equal(sms.status, 202);
   } finally {
@@ -1015,7 +1015,7 @@ test("relay sends iPhone VoIP, Watch VoIP, mirror alert, and SMS on distinct APN
   assert.equal(captured[3].payload.aps["content-state"].callID, "call-1");
   assert.equal(captured[4].options.headers["apns-push-type"], "alert");
   assert.equal(captured[4].options.headers["apns-topic"], "com.example.airsim");
-  assert.equal(captured[4].payload.aps.alert.body, "余额提醒");
+  assert.equal(captured[4].payload.aps.alert.body, "Balance reminder");
 
   const storedCall = JSON.parse(await env.DEVICES.get("call:d9b59660-05bb-4ea8-9aeb-4505b35c93f9"));
   assert.equal(storedCall.device_id, registration.device_id);
@@ -1372,8 +1372,8 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     agent_media_capabilities: ["webrtc"],
     at_ok: true,
     cellular_state: "searching",
-    cellular_registration: "搜索中",
-    cellular_recovery: "正在自动选网",
+    cellular_registration: "Searching",
+    cellular_recovery: "Selecting a network automatically",
     ecm_carrier: "1",
   }), env);
   assert.equal(heartbeat.status, 202);
@@ -1390,8 +1390,8 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     agent_media_capabilities: ["webrtc"],
     at_ok: true,
     cellular_state: "searching",
-    cellular_registration: "搜索中",
-    cellular_recovery: "正在自动选网",
+    cellular_registration: "Searching",
+    cellular_recovery: "Selecting a network automatically",
     ecm_carrier: "1",
     active_agent_id: "legacy",
     agents: [{
@@ -1400,8 +1400,8 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
       agent_media_capabilities: ["webrtc"],
       at_ok: true,
       cellular_state: "searching",
-      cellular_registration: "搜索中",
-      cellular_recovery: "正在自动选网",
+      cellular_registration: "Searching",
+      cellular_recovery: "Selecting a network automatically",
       ecm_carrier: "1",
       cloud_online: true,
     }],
@@ -1464,14 +1464,14 @@ test("delayed incoming SMS is delivered using its relay arrival time", async () 
     const response = await worker.fetch(post("/v1/events/sms", {
       event: "incoming_sms", device_id: registration.device_id,
       device_secret: registration.device_secret, delivery_id: "delayed-sms-1",
-      sender: "10010", content: "迟到的提醒",
+      sender: "10010", content: "Late reminder",
       timestamp: new Date(before - 8 * 24 * 60 * 60 * 1000).toISOString(),
     }), env);
     const after = Date.now();
     assert.equal(response.status, 202);
     assert.equal(captured.length, 1);
     assert.equal(captured[0].delivery_id, "delayed-sms-1");
-    assert.equal(captured[0].content, "迟到的提醒");
+    assert.equal(captured[0].content, "Late reminder");
     assert.ok(Date.parse(captured[0].timestamp) >= before);
     assert.ok(Date.parse(captured[0].timestamp) <= after);
   } finally {
@@ -1492,13 +1492,13 @@ test("incoming SMS without an originating address still reaches iPhone", async (
     const response = await worker.fetch(post("/v1/events/sms", {
       event: "incoming_sms", device_id: registration.device_id,
       device_secret: registration.device_secret, delivery_id: "senderless-sms-1",
-      sender: "", content: "运营商提醒", timestamp: new Date().toISOString(),
+      sender: "", content: "Carrier reminder", timestamp: new Date().toISOString(),
     }), env);
     assert.equal(response.status, 202);
     assert.equal(captured.length, 1);
     assert.equal(captured[0].sender, "Unknown number");
     assert.equal(captured[0].aps.alert.title, "Unknown number");
-    assert.equal(captured[0].content, "运营商提醒");
+    assert.equal(captured[0].content, "Carrier reminder");
   } finally {
     globalThis.fetch = originalFetch;
   }

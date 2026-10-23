@@ -89,7 +89,7 @@ func decodeCloudCallActionForDescriptor(data []byte, descriptor cloudCallDescrip
 	if len(value.TraceID) > 128 {
 		return cloudCallAction{}, fmt.Errorf("Cloud control trace_id is too long")
 	}
-	// 兼容已经建立的旧 Watch Relay 会话；新版 Relay 会用已认证的 WebSocket 角色覆盖 owner。
+	// Compatible with Watch Relay sessions that are already up. Newer Relay overwrites owner with the authenticated WebSocket role.
 	if value.Owner == "" {
 		value.Owner = "watch"
 	}
@@ -265,7 +265,7 @@ func (a *agent) cloudCallDescriptorAlive(descriptor cloudCallDescriptor) bool {
 	if a.calls.Active != nil && a.calls.Active.Direction == "outgoing" {
 		return true
 	}
-	// ATD 成功到首个 CLCC/DSCI 之间允许短暂没有本地通话记录。
+	// A short gap with no local call record is allowed between a successful ATD and the first CLCC/DSCI.
 	return !descriptor.StartedAt.IsZero() && time.Since(descriptor.StartedAt) < 20*time.Second
 }
 

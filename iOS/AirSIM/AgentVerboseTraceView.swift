@@ -2,16 +2,16 @@ import SwiftUI
 import UIKit
 
 private enum AgentVerboseTraceFilter: String, CaseIterable, Identifiable {
-    case all = "全部"
-    case failures = "错误"
-    case calls = "通话"
+    case all = "All"
+    case failures = "Errors"
+    case calls = "Calls"
     case relay = "Relay"
     case at = "AT"
     case usb = "USB"
 
     var id: String { rawValue }
 
-    /// localization.md：筛选标签属于用户可见文案，用 LocalizedStringResource 延迟解析。
+    /// localization.md: filter labels are user-visible copy and use LocalizedStringResource for deferred resolution.
     var title: LocalizedStringResource {
         switch self {
         case .all: return "All"
@@ -68,8 +68,8 @@ private final class AgentVerboseTraceViewModel {
     var agentState = "Not Connected"
     var errorMessage: String?
     var exportText = "AirSIM Agent Verbose Trace\n"
-    // foreach.md：时间线是派生集合，只在 localEntries/agentEvents 变化时重建，
-    // 不随视图每次读取重新映射排序（最多 2000 条）。
+    // foreach.md: timeline is a derived collection rebuilt only when localEntries/agentEvents change,
+    // rather than remapping and sorting on every view read (up to 2,000 entries).
     private(set) var timeline: [AgentVerboseTimelineItem] = []
 
     @ObservationIgnored private let api: AirSIMAPI
@@ -346,8 +346,8 @@ struct AgentVerboseTraceView: View {
     }
 }
 
-/// 时间线行独立成子视图：条目内容不变时，刷新循环不再重建行内容
-/// （structure.md 失效边界；AgentVerboseTimelineItem 是 Equatable）。
+/// Isolated subview for timeline rows: when item content is unchanged, refresh cycles do not rebuild row content
+/// (structure.md invalidation boundary; AgentVerboseTimelineItem is Equatable).
 private struct AgentVerboseTimelineRow: View {
     let item: AgentVerboseTimelineItem
 
@@ -363,8 +363,8 @@ private struct AgentVerboseTimelineRow: View {
                     Text(item.source)
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(item.source == "APP" ? .blue : .purple)
-                    // 诊断时间戳是调试输出，保持固定 24 小时制 HH:mm:ss.SSS：
-                    // 不随语言环境变化，避免 12 小时制地区 03:15 与 15:15 同显歧义。
+                    // Diagnostic timestamps are debug output and keep a fixed 24-hour HH:mm:ss.SSS format:
+                    // locale-invariant so 03:15 and 15:15 are never ambiguous in 12-hour regions.
                     Text(
                         item.timestamp,
                         format: Date.VerbatimFormatStyle(
@@ -432,5 +432,11 @@ private struct AgentVerboseTraceDetailView: View {
                 }
             }
         }
+    }
+}
+
+#Preview("Agent Verbose Trace") {
+    NavigationStack {
+        AgentVerboseTraceView(api: AirSIMAPI())
     }
 }

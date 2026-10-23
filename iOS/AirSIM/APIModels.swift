@@ -1,8 +1,8 @@
 import Foundation
 
-// MARK: - 通话与短信
+// MARK: - Calls & SMS
 
-/// 模块侧返回的单次通话记录。
+/// Single call record returned by the module.
 struct CallRecord: Codable, Equatable, Sendable, Identifiable {
     let id: String
     let index: Int
@@ -22,7 +22,7 @@ struct CallRecord: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// 通话轮询结果；额外音频诊断字段由专门接口读取。
+/// Call polling result; additional audio diagnostic fields are fetched via dedicated endpoints.
 struct CallStatus: Codable, Sendable {
     let active: CallRecord?
     let history: [CallRecord]?
@@ -41,7 +41,7 @@ struct CallStatus: Codable, Sendable {
     }
 }
 
-/// Agent 的统一事件快照；通话和短信共用一个长轮询，避免后台保持两套 USB 请求。
+/// Unified Agent event snapshot; calls and SMS share a single long-poll to avoid keeping two concurrent background USB requests.
 struct AgentEventStatus: Codable, Sendable {
     let revision: UInt64
     let smsRevision: UInt64
@@ -72,7 +72,7 @@ struct AgentHealth: Codable, Sendable {
     }
 }
 
-/// Relay 最近一次收到的 Agent 心跳。该对象只包含可展示状态，不包含设备密钥。
+/// Latest Agent heartbeat received by the Relay. Contains displayable status only, without device secrets.
 struct CloudAndroidAgent: Codable, Equatable, Sendable, Identifiable {
     let agentID: String
     let agentKind: String?
@@ -184,8 +184,8 @@ struct AndroidAgentPresentation: Equatable, Identifiable, Sendable {
         self.isCurrent = isCurrent
     }
 
-    /// localization.md：模型承载的用户可见文案用 LocalizedStringResource，
-    /// 延迟到展示时才按语言环境解析。
+    /// localization.md: user-visible copy carried by models uses LocalizedStringResource
+    /// so locale resolution is deferred until presentation.
     var agentKindTitle: LocalizedStringResource {
         switch agentKind {
         case "standalone": return "Standalone"
@@ -226,14 +226,14 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     let content: String
     let code: String?
     let timestamp: Date
-    /// 模块交付队列的稳定标识；也用于推送与本地同步之间的去重。
+    /// Stable identifier in the module delivery queue; also used for deduplication between push and local sync.
     var deliveryID: String?
-    /// 旧模块没有方向字段，缺省按收到的短信展示；发送成功后由 App 标记为 outgoing。
+    /// Legacy modules lack a direction field and default to incoming SMS; marked as outgoing by the app after successful send.
     var direction: SMSDirection? = nil
 
     var isOutgoing: Bool { direction == .outgoing }
 
-    /// 新版 Agent 用 delivery_id 对齐 APNs 与本地同步；旧版仍回退到内容指纹。
+    /// Newer Agents align APNs and local sync via delivery_id; legacy versions fall back to content fingerprints.
     var id: String {
         if let deliveryID, !deliveryID.isEmpty { return "delivery:\(deliveryID)" }
         return "\(sender)\u{0}\(timestamp.timeIntervalSince1970)\u{0}\(content)\u{0}\(direction?.rawValue ?? SMSDirection.incoming.rawValue)"
@@ -296,7 +296,7 @@ struct SIMIdentity: Codable, Sendable {
     enum CodingKeys: String, CodingKey { case phoneNumber = "phone_number" }
 }
 
-// MARK: - 模块、网络与定位
+// MARK: - Module, Network & Location
 
 struct ModemStatus: Codable, Equatable, Sendable {
     let imei: String?
@@ -349,7 +349,7 @@ struct NetworkTrafficSnapshot: Codable, Sendable {
     }
 }
 
-/// Agent 从模块只读 sysfs 接口采样的电源与温度数据。
+/// Power and thermal telemetry sampled by the Agent from read-only module sysfs interfaces.
 struct SystemPowerStatus: Codable, Sendable {
     let supported: Bool
     let readings: [SystemPowerReading]
@@ -391,7 +391,7 @@ struct CellularPolicyStatus: Codable, Sendable {
     enum CodingKeys: String, CodingKey { case forceOff = "force_off"; case services }
 }
 
-// MARK: - WRT Lite 路由与流量控制
+// MARK: - WRT Lite Routing & Traffic Control
 
 struct RouterConfig: Codable, Equatable, Sendable {
     var internetAccess: Bool
@@ -760,7 +760,7 @@ struct ESIMPhonebookProbe: Codable, Sendable {
     }
 }
 
-// MARK: - 诊断与语音运行时
+// MARK: - Diagnostics & Voice Runtime
 
 struct ModuleDebugSnapshot: Codable, Sendable {
     let debug: ModuleDebugBufferStatus
@@ -885,7 +885,7 @@ struct NetworkDiagnostic: Codable, Sendable {
         case pdpContexts = "pdp_contexts"
         case activeContexts = "active_contexts"
         case pdpAddresses = "pdp_addresses"
-        // 后端为兼容 Mac 版保留了旧字段名。
+        // Backend retains legacy field names for compatibility with the Mac app.
         case interfaces = "mac_interfaces"
         case defaultRoute = "default_route"
         case usbNetworkPresent = "usb_network_present"
@@ -1046,7 +1046,7 @@ struct MaVoAudioHostConfig: Codable, Sendable {
     }
 }
 
-/// 模块语音桥的累计 PCM 统计；峰值为 PCM16 绝对幅度，0 代表纯静音。
+/// Cumulative PCM statistics from the module voice bridge; peak is PCM16 absolute amplitude, where 0 indicates pure silence.
 struct VoicePCMStatistics: Codable, Sendable {
     let uplinkBytes: UInt64
     let uplinkFrames: UInt64

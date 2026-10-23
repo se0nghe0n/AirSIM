@@ -732,7 +732,7 @@ func applyRouterDNSOverrides(managedPath string, overrides []routerDNSOverride) 
 	if err := os.MkdirAll(filepath.Dir(managedPath), 0o700); err != nil {
 		return err
 	}
-	// 使用原位写入而不是 rename；bind mount 已建立时必须保持同一个 inode。
+	// Write in place instead of renaming. Once a bind mount exists, the same inode must be kept.
 	if err := os.WriteFile(managedPath, []byte(content), 0o644); err != nil {
 		return err
 	}

@@ -210,8 +210,18 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/test/com/airsim/phonecontrol/StandaloneWebSocketTests.java
 "$JAVA" -cp "$OUT:$ANDROID_JAR" com.airsim.phonecontrol.StandaloneWebSocketTests
 
+assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+  'config.audioJitterBufferMaxPackets = WebRTCPlayout.JITTER_BUFFER_MAX_PACKETS' \
+  'Android WebRTC peer does not cap NetEq'
+assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+  'config.audioJitterBufferFastAccelerate = WebRTCPlayout.FAST_ACCELERATE' \
+  'Android WebRTC peer does not enable NetEq fast accelerate'
+assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+  'connection.setSendBufferSize(WebRTCPcmBuffer.LOOPBACK_SOCKET_BYTES)' \
+  'WebRTC loopback does not bound its send buffer'
 "$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayout.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCOpusSDP.java \
   "$ROOT"/test/com/airsim/phonecontrol/WebRTCMediaTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.WebRTCMediaTests

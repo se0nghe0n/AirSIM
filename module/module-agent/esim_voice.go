@@ -25,7 +25,7 @@ type esimNote struct {
 	Tags  string `json:"tags,omitempty"`
 }
 
-// 常见消费级 eUICC 的 ISD-R AID；eSTK Max 的 SE0/SE1 必须优先扫描并分别保留。
+// ISD-R AID for common consumer eUICCs. eSTK Max SE0/SE1 must be scanned first and kept as separate entries.
 var euiccAIDs = []string{
 	"A06573746B6D65FFFF4953442D522030",
 	"A06573746B6D65FFFF4953442D522031",
@@ -86,7 +86,7 @@ func (a *agent) esimOverview(response http.ResponseWriter, request *http.Request
 	writeJSON(response, http.StatusOK, overview)
 }
 
-// 实体 SIM 无法打开 GSMA eUICC 管理 AID，这属于卡片类型结果而不是服务故障。
+// A physical SIM cannot open the GSMA eUICC management AID. That is a card-type result, not a service failure.
 func isPhysicalSIMESIMProbeError(err error) bool {
 	if err == nil {
 		return false
@@ -261,7 +261,7 @@ func (a *agent) esimSwitch(response http.ResponseWriter, request *http.Request) 
 		writeError(response, http.StatusBadGateway, "Failed to close eUICC channel: "+closeErr.Error())
 		return
 	}
-	// 先返回 HTTP 结果，再重启基带；否则 iPad 会把预期的 USB 断开误报成切换失败。
+	// Return the HTTP result before restarting the baseband. Otherwise the iPad reports the expected USB disconnect as a switch failure.
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		_, _ = a.at.command("AT+CFUN=1,1", 3*time.Second)

@@ -35,7 +35,7 @@ enum LocalAgentRoute: Equatable, Sendable {
     }
 }
 
-/// AirSIM 不允许把旧模块 USB ECM 地址当作三星控制通道。
+/// AirSIM does not allow using the legacy module USB ECM address as a Samsung control channel.
 enum AirSIMRoutePolicy {
     static func permits(_ route: LocalAgentRoute) -> Bool {
         if case .vowlan = route { return true }
@@ -43,10 +43,10 @@ enum AirSIMRoutePolicy {
     }
 }
 
-/// 统一封装模块代理 HTTP API；接口路径与 AirSIM Mac 版保持一致。
+/// Unified wrapper around the module Agent HTTP API; endpoint paths match the AirSIM Mac app.
 struct AirSIMAPI: Sendable {
-    /// Android Telecom 最长等待 12 秒确认；VoWLAN 必须晚于 Agent 的确认窗口超时，
-    /// 否则 iPhone 会把仍在执行的非幂等拨号误判为失败并可能触发重复呼叫。
+    /// Android Telecom waits up to 12 seconds for confirmation; VoWLAN must time out after the Agent confirmation window,
+    /// otherwise iPhone may misclassify an in-progress non-idempotent dial as failed and trigger duplicate calls.
     static let voWLANDialTimeout: TimeInterval = 15
 
     let baseURL: URL
@@ -87,7 +87,7 @@ struct AirSIMAPI: Sendable {
         self.init(route: .moduleLocal)
     }
 
-    /// 限制高权限控制接口只能指向环回或私有网络，避免误发到公网主机。
+    /// Restricts privileged control endpoints to loopback or private networks to prevent accidental requests to public hosts.
     private static func isAllowedLocalURL(_ url: URL) -> Bool {
         guard url.scheme == "http", let host = url.host?.lowercased() else { return false }
         if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
@@ -98,7 +98,7 @@ struct AirSIMAPI: Sendable {
         return (16...31).contains(second)
     }
 
-    // MARK: 通话与短信
+    // MARK: Calls & SMS
 
     func health() async throws -> AgentHealth { try await get("api/health") }
     func callStatus() async throws -> CallStatus { try await get("api/calls/status") }
@@ -161,7 +161,7 @@ struct AirSIMAPI: Sendable {
             )
         } catch {
             let originalError = error
-            // ATD 是非幂等操作：响应连接被模块重置后只能查询状态确认，绝对不能自动重发。
+            // ATD is non-idempotent: if the response connection is reset by the module, only poll status to confirm—never auto-resend.
             for delay in [0.25, 0.5, 1.0, 1.5] {
                 try? await Task.sleep(for: .seconds(delay))
                 guard let status = try? await callStatus(), let call = status.active else { continue }
@@ -205,7 +205,7 @@ struct AirSIMAPI: Sendable {
         try await send("PATCH", "api/sms/settings", ["auto_cleanup_me": enabled])
     }
 
-    // MARK: 状态、网络、定位与调试
+    // MARK: Status, Network, Location & Debug
 
     func modemStatus() async throws -> ModemStatus { try await get("api/status") }
     func moduleDebug(after sequence: UInt64 = 0, limit: Int = 400) async throws -> ModuleDebugSnapshot {
@@ -221,7 +221,7 @@ struct AirSIMAPI: Sendable {
     }
     func clearModuleDebug() async throws { try await post("api/debug/clear", EmptyBody()) }
 
-    // MARK: HTTP 公共实现
+    // MARK: Shared HTTP Implementation
 
     private func endpoint(_ path: String) -> URL { baseURL.appendingPathComponent(path) }
 

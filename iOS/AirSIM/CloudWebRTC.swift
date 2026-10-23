@@ -421,6 +421,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         super.init()
         let factory = factory ?? Self.factory
         let config = RTCConfiguration()
+        Self.configurePlayout(config)
         config.iceServers = servers
         if relayOnly { config.iceTransportPolicy = .relay }
         config.sdpSemantics = .unifiedPlan
@@ -515,6 +516,13 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
                 self.fail()
             }
         }
+    }
+
+    /// One second of 20 ms Opus. Fast accelerate lets NetEq shorten a grown buffer.
+    static let jitterBufferMaxPackets: Int32 = 50
+    static func configurePlayout(_ config: RTCConfiguration) {
+        config.audioJitterBufferMaxPackets = jitterBufferMaxPackets
+        config.audioJitterBufferFastAccelerate = true
     }
 
     /// Keep Opus mono at 20 ms; no SDP or credentials enter trace output.

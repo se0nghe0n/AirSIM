@@ -209,11 +209,11 @@ enum LegacyAgentPoller {
 }
 
 enum AgentEventCursor {
-    /// 不可能由正常计数器产生，用于首次连接时要求 Agent 立即返回当前快照。
+    /// Sentinel value never produced by a normal counter; requests an immediate snapshot from the Agent on initial connect.
     static let initial = UInt64.max
 
     static func advanced(from _: UInt64, to incoming: UInt64) -> UInt64 {
-        // Agent 重启后 revision 会回到 0，不能使用 max，否则会持续立即返回形成空转。
+        // After an Agent restart, revision resets to 0; do not use max, otherwise long-polls would return immediately in a tight loop.
         incoming
     }
 }
@@ -244,7 +244,7 @@ enum ModuleConnectivityPolicy {
     }
 }
 
-/// 移动端 App 的主状态中心：前台轮询模块代理并驱动五个主要页面。
+/// Primary state model for the mobile app: polls the module Agent in the foreground and drives the five main tabs.
 @MainActor
 @Observable
 final class AppModel {
@@ -255,8 +255,8 @@ final class AppModel {
     var messages: [SMSMessage] = [] {
         didSet { rebuildConversations() }
     }
-    /// foreach.md：会话分组与排序移入模型，仅在消息集合变化时重算（review round 2 #4）；
-    /// MessagesView 首帧即读到最终数据，不再闪现“暂无短信”空态。
+    /// foreach.md: thread grouping and sorting live in the model and recompute only when messages change (review round 2 #4);
+    /// MessagesView reads final data on the first frame without flashing the "No Messages" empty state.
     private(set) var conversations: [(sender: String, messages: [SMSMessage])] = []
     var numberInput = ""
     var isOnline = false
@@ -264,7 +264,7 @@ final class AppModel {
     var connectionMessage: String?
     var isBusy = false
     var isMuted = false
-    /// 录音状态权威在 CallRecordingStore；直接读源对象，替代旧的 Combine 转发。
+    /// CallRecordingStore is the source of truth for recording state; read it directly instead of forwarding via Combine.
     var isRecording: Bool { recordings.isRecording }
     var isRecordingBusy: Bool { recordings.isBusy }
     var errorMessage: String?
@@ -277,12 +277,12 @@ final class AppModel {
     private(set) var pendingOutgoingCall: CallRecord?
     private(set) var callPresentationSurface: CallPresentationSurface?
     private(set) var cloudCallAudioState: CloudCallAudioState = .idle
-    /// VirtualCallTTSController 不是 @Observable；在虚拟来电 prepare/stop 处把
-    /// isPrepared 镜像为可追踪状态，callAudioIsActive 才能驱动通话页音频角标。
+    /// VirtualCallTTSController is not @Observable; mirror isPrepared into tracked state on virtual call prepare/stop
+    /// so callAudioIsActive can drive the call view audio badge.
     private(set) var isVirtualCallTTSPrepared = false
     private(set) var callLifecycleSnapshot: CallLifecycleSnapshot = .idle
-    /// UserDefaults 偏好不在 observation 追踪内；写入偏好的方法递增该值，
-    /// 让读取偏好的展示计算属性重新建立依赖（替代旧的 objectWillChange.send()）。
+    /// UserDefaults preferences are outside observation tracking; preference setters increment this counter
+    /// so computed presentation properties re-establish dependencies (replacing objectWillChange.send()).
     private var preferenceRevision = 0
     private(set) var pairedDeviceRecords = PairedAndroidDeviceStore.records()
     let api: AirSIMAPI
@@ -298,7 +298,7 @@ final class AppModel {
 
     @ObservationIgnored private let historyStore = LocalHistoryStore()
     @ObservationIgnored private var outgoingAttemptID = UUID()
-    // 以下均为轮询/通话链路簿记，不是 UI 状态，不参与 observation。
+    // Polling and call-route bookkeeping below; not UI state and excluded from observation.
     @ObservationIgnored private var pollingTask: Task<Void, Never>?
     @ObservationIgnored private var moduleMetadataTask: Task<Void, Never>?
     @ObservationIgnored private var callHistoryRefreshTask: Task<Void, Never>?
@@ -324,9 +324,8 @@ final class AppModel {
     @ObservationIgnored private var callTransitionProtectedUntil = Date.distantPast
     @ObservationIgnored private var nextAudioDiagnosticRefresh = Date.distantPast
     @ObservationIgnored private var nextModuleMetadataRefresh = Date.distantPast
-    // pairedAndroidAgents 按 90 秒窗口读取它；必须参与 observation 追踪，
-    // 否则刷新/重置后依赖它的展示不会重算（@Observable 不再像 objectWillChange
-    // 那样让任意赋值触发全部视图重算）。
+    // Read by pairedAndroidAgents within a 90s window; must participate in observation tracking,
+    // otherwise dependent views will not recompute after refresh/reset (@Observable no longer triggers full-view updates on arbitrary writes like objectWillChange).
     private var lastCloudStatusRefresh = Date.distantPast
     @ObservationIgnored private var cloudStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var cloudStatusRefreshGeneration = 0
@@ -629,9 +628,9 @@ final class AppModel {
         )
     }
 
-    /// 拨号页不能只依赖 `isOnline`：该字段代表 USB 本地控制链路，模块仅通过
-    /// Relay 保持心跳时会刻意为 false。云端模式开启且心跳新鲜时，同样允许
-    /// 用户发起拨号，实际执行仍会在 CallKit action 中再次鉴权和确认状态。
+    /// The dial view cannot rely solely on `isOnline`: that property represents the local USB control link and is intentionally
+    /// false when the module only maintains a Relay heartbeat. Allow dialing when cloud mode is enabled and the heartbeat is fresh;
+    /// actual execution still re-authenticates and verifies state inside the CallKit action.
     var canStartOutgoingCommand: Bool {
         _ = preferenceRevision
         return OutgoingCommandAvailability.isAvailable(
@@ -651,15 +650,15 @@ final class AppModel {
 
     init(api: AirSIMAPI = AirSIMAPI()) {
         self.api = api
-        // 录音状态经 isRecording/isRecordingBusy 直接读源对象；错误经回调转发，
-        // 替代旧的 $isRecording.assign / $errorMessage.sink Combine 管线。
+        // Recording state is read directly from the source store via isRecording/isRecordingBusy; errors are forwarded via callback,
+        // replacing the legacy $isRecording.assign / $errorMessage.sink Combine pipelines.
         recordings.onErrorMessage = { [weak self] message in
             self?.errorMessage = message
         }
         let runtimePolicy = ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected())
         callKit.handler = self
         callKit.setEnabled(runtimePolicy.usesCallKit)
-        // 冷启动 handler 可能已在本模型创建前为虚拟来电准备 TTS；接管 handler 时同步镜像。
+        // The cold-launch handler may have prepared TTS for a virtual incoming call before this model was created; sync the mirror when taking over the handler.
         isVirtualCallTTSPrepared = VirtualCallTTSController.shared.isPrepared
         WatchCallCoordinator.shared.configure(model: self)
         WatchCallCoordinator.shared.start()
@@ -682,8 +681,8 @@ final class AppModel {
         }
         vowlan.onAvailabilityChange = { [weak self] availability in
             guard let self else { return }
-            // availability/discoveredAgents 本身已被 @Observable 追踪，视图读取时
-            // 直接建立依赖，不再需要 objectWillChange 转发。
+            // availability and discoveredAgents are already tracked by @Observable; views establish dependencies directly on read
+            // without needing objectWillChange forwarding.
             if availability.isOnlineForDisplay {
                 Task { @MainActor in self.rememberVerifiedDevices() }
             }
@@ -715,7 +714,7 @@ final class AppModel {
         lowPowerModeEnabled = storedLowPowerValue ?? true
         liveActivity.setEnabled(LiveActivityVisibilityPreference.isEnabled())
         backgroundStandby.setEnabled(storedValue ?? true)
-        // 先加载手机副本，再启动轮询，避免模块暂时离线时界面显示为空。
+        // Load the local phone cache before starting polling so the UI does not appear empty while the module is temporarily offline.
         restoreLocalHistory()
         scheduleCallHistoryRefresh()
         Task { await contacts.loadIfAuthorized() }
@@ -724,7 +723,7 @@ final class AppModel {
         restartPolling()
     }
 
-    /// 每次从锁屏或后台回来都舍弃旧连接，避免休眠前的超时结果覆盖新状态。
+    /// Discard stale connections whenever returning from lock screen or background so pre-sleep timeouts cannot overwrite fresh state.
     func didBecomeActive() {
         appIsActive = true
         let discoveryWasAlreadyStarted = initialPermissionCoordinator.didStartDiscovery
@@ -745,8 +744,8 @@ final class AppModel {
             start(sceneIsActive: true)
             return
         }
-        // App 可能在首次解锁前被 PushKit/后台任务唤醒，此时受保护文件会暂时读成空。
-        // 回到前台重新做并集合并，不能让早期空读取覆盖手机里的持久化记录。
+        // The app may be woken by PushKit or background tasks before first unlock, when protected files temporarily read as empty.
+        // Re-merge on foreground entry so an early empty read cannot overwrite persisted records on the phone.
         restoreLocalHistory()
         scheduleCallHistoryRefresh()
         Task { await contacts.loadIfAuthorized() }
@@ -798,7 +797,7 @@ final class AppModel {
     func setLowPowerModeEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: lowPowerModeKey)
         lowPowerModeEnabled = enabled
-        // 立即重建轮询任务，让用户切换后无需等待旧睡眠周期结束。
+        // Recreate the polling task immediately so user switches do not wait for the previous sleep interval to finish.
         if hasStarted { restartPolling() }
     }
 
@@ -880,14 +879,14 @@ final class AppModel {
         }
     }
 
-    /// 模块在线时与其 1 秒 AT 轮询对齐；离线后退避，避免断开模块时持续唤醒手机和 USB 栈。
+    /// Aligns with the module 1-second AT poll while online and backs off when offline to avoid repeatedly waking the phone and USB stack.
     private var nextPollingDelay: TimeInterval {
         if consecutivePollFailures > 0 {
             let maximumDelay: TimeInterval = appIsActive ? 3 : 30
             return min(maximumDelay, pow(2, Double(consecutivePollFailures - 1)))
         }
         if !appIsActive {
-            // 长轮询本身已经等待最多 15 秒；返回后只需短暂让出执行权再继续等待。
+            // The long-poll itself waits up to 15 seconds; yield briefly after it returns before starting the next wait.
             if eventStreamSupported == true { return 0.1 }
             return lowPowerModeEnabled ? 10 : 2
         }
@@ -941,8 +940,8 @@ final class AppModel {
             }
             if let active = status.active {
                 observedCallLocalAPI = (callID: active.id, service: result.api)
-                // Agent 状态与统一生命周期真正汇合后才能撤掉临时呼出页。
-                // 否则上一通 ending 的晚到事件会让用户在几秒后掉回拨号页。
+                // Dismiss the provisional outgoing call view only after Agent state converges with the unified call lifecycle,
+                // otherwise a late ending event from the previous call would drop the user back to the dial pad after a few seconds.
                 if acceptedActiveLifecycle || callLifecycleSnapshot.callID == active.id {
                     pendingOutgoingCall = nil
                 }
@@ -972,7 +971,7 @@ final class AppModel {
                ["dialing", "alerting", "incoming", "waiting"].contains(call.state),
                audioWarmupCallID != call.id {
                 audioWarmupCallID = call.id
-                // 预热只加载驱动和校准，把最慢的冷启动提前到接通之前。
+                // Prewarming only loads drivers and calibration, moving the slowest cold-start work ahead of call connection.
                 Task { [weak self] in
                     guard let self else { return }
                     try? await AgentPollingRouteSelector.select(
@@ -984,12 +983,12 @@ final class AppModel {
             } else if status.active == nil, previousCall != nil {
                 audioWarmupCallID = nil
             }
-            // HTTP 已成功返回就说明 USB 模块代理在线。last_poll_error 只是模块内部 AT+CLCC
-            // 的最近轮询结果，通话建立期间可能短暂非空，不能据此把整条 USB 链路判为离线。
+            // A successful HTTP response proves the USB module Agent is online. last_poll_error only reflects the latest
+            // internal AT+CLCC poll and may be transiently non-empty during call setup, so do not mark the USB link offline from it.
             if !isOnline { isOnline = true }
             cloudAgentStatus = nil
             updateLocalConnectionSummary(cellularState: modemStatus?.cellularState)
-            // PushKit token 必须写入当前真正可达的 Agent。热点场景不能再固定访问 USB 地址。
+            // PushKit tokens must be written to the currently reachable Agent; hotspot mode cannot hardcode the USB address.
             let callSyncSnapshot = callLifecycleSnapshot
             let callSyncAttempt = outgoingAttemptID
             await VoIPPushController.shared.syncRegistration(with: result.api)
@@ -1003,8 +1002,8 @@ final class AppModel {
                 callLifecycleStore.suppressesPresentation(callID: $0.id) ? nil : $0
             }
             let callerName = (systemCall ?? lifecycleCall).map { contacts.displayName(for: $0.number) }
-            // 必须先请求 CallKit，再决定是否发送本地通知。否则后台来电会同时出现
-            // 系统通话界面和一条带接听按钮的通知；CallKit 上报失败时下一轮再自动降级。
+            // Request CallKit before deciding whether to post a local notification, otherwise background incoming calls would show
+            // both the system call UI and a banner with an Answer button; fall back on the next poll if CallKit reporting fails.
             if !WatchCallCoordinator.shared.ownsMedia(callID: systemCall?.id) {
                 callKit.synchronize(
                     // Preserve real Agent state except for identities explicitly
@@ -1031,7 +1030,7 @@ final class AppModel {
                 agent: liveActivityAgentSnapshot,
                 appIsActive: appIsActive
             )
-            // CallKit 成功后由系统负责锁屏来电界面；仅在 CallKit 不可用或上报失败时发普通通知兜底。
+            // Once CallKit succeeds, the system owns the lock-screen incoming call UI; post a user notification only when CallKit is unavailable or fails.
             if !callKit.suppressesInAppIncomingRingtone {
                 incomingNotifier.update(
                     call: lifecycleCall,
@@ -1040,25 +1039,25 @@ final class AppModel {
                 )
             }
             if lifecycleCall?.direction == "incoming", callKit.suppressesInAppIncomingRingtone {
-                // CallKit 已负责系统铃声，不能再叠加应用内铃声。
+                // CallKit already plays the system ringtone; do not layer an in-app ringtone on top.
                 audio.stopCallTone()
             } else {
                 audio.updateCallTone(for: lifecycleCall)
             }
 
-            // 已完成首次向导的旧用户也要获得模块更新；仅在无通话时后台检查，避免中断基带媒体。
-            // AirSIM 不内置、也不自动刷写 QDC507 Agent。
+            // Existing users who already completed onboarding should still receive module updates; check in the background only when idle to avoid interrupting baseband media.
+            // AirSIM neither bundles nor auto-flashes the QDC507 Agent.
 
-            // 接通期间持续确认本地音频仍在工作。CallKit 或系统音频服务重置后，
-            // 即使模块状态没有发生变化，下一轮也必须能够重建网络 PCM。
+            // Continuously verify that local audio is still running during an active call. After a CallKit or media server reset,
+            // the next poll must be able to rebuild network PCM even if module state did not change.
             if status.active?.state == "active" {
                 await startCallAudioIfReady()
             } else if status.active == nil, previousCall != nil {
-                // 远端挂断不会经过 App 的挂断按钮；同样开启切换保护，避免媒体路由
-                // 退出时的短暂 ECM/AT 抖动被误报为整台模块离线。
+                // Remote hangup bypasses the in-app end button; enable transition protection here too so brief ECM/AT jitter
+                // during media teardown is not misreported as full module offline.
                 beginCallTransitionProtection()
-                // 云端回退通话可能在本地模块状态消失后仍然有效；不能让本地轮询
-                // 清除共享 AVAudioSession 的扬声器覆盖或打断公网 PCM。
+                // A cloud fallback call may remain active after local module state disappears; do not let local polling
+                // clear the shared AVAudioSession speaker override or interrupt cloud PCM.
                 if currentCallTransport != .cloud,
                    !IPhoneCloudCallSession.shared.hasActiveCall {
                     audio.deactivate()
@@ -1074,7 +1073,7 @@ final class AppModel {
                    lockedLocal: currentLocalAPI,
                    transport: currentCallTransport
                ).audioHostConfig() {
-                // 诊断统计无需跟随每次通话轮询，降低额外 TCP 建连和 JSON 解码频率。
+                // Diagnostic stats do not need to run on every call poll, reducing extra TCP connections and JSON decoding.
                 nextAudioDiagnosticRefresh = Date().addingTimeInterval(3)
                 audio.updateModuleDiagnostics(audioConfig)
             }
@@ -1097,16 +1096,16 @@ final class AppModel {
             }()
             connectionMessage = "Reconnecting\(failedRouteName): \(error.localizedDescription)"
 
-            // 一次长轮询中断不能代表 USB ECM 已离线。通话动作后的 8 秒保护期内
-            // 保留最后一次在线状态；其后也必须连续失败三次并让独立 health 请求失败。
+            // A single long-poll interruption does not mean USB ECM is offline. Preserve the last online state during the 8s
+            // grace window after a call action, and require three consecutive failures plus an independent health check failure afterward.
             guard ModuleConnectivityPolicy.shouldConfirmOffline(
                 consecutiveFailures: consecutivePollFailures,
                 now: Date(),
                 protectedUntil: callTransitionProtectedUntil
             ) else { return }
 
-            // 用最后实际成功的本地路线复核健康状态。VoWLAN 的长轮询偶发断开时，
-            // 不能再转去探测 USB 默认地址并据此把三星 Agent 判为离线。
+            // Re-verify health using the last local route that actually succeeded. When a VoWLAN long-poll drops transiently,
+            // do not probe the default USB address and misclassify the Samsung Agent as offline.
             let healthAPI = lastSuccessfulLocalAPI ?? verifiedVoWLANAPI()
             let health = try? await healthAPI?.health()
             guard ModuleConnectivityPolicy.shouldMarkOffline(
@@ -1131,8 +1130,8 @@ final class AppModel {
 
             guard !Task.isCancelled, generation == pollingGeneration else { return }
             if IPhoneCloudCallSession.shared.hasActiveCall || IPhoneCloudCallSession.shared.isRecovering {
-                // 已建立的公网媒体会话本身就是独立的云端在线证据。接听时 USB/ECM
-                // 路由短暂抖动不能把整台模块标成离线，也不能结束灵动岛状态。
+                // An established cloud media session is independent proof that cloud is online. Brief USB/ECM route jitter
+                // when answering must neither mark the module offline nor end the Dynamic Island activity.
                 consecutivePollFailures = 0
                 if isOnline { isOnline = false }
                 isReconnecting = true
@@ -1177,8 +1176,8 @@ final class AppModel {
                 isReconnecting = true
                 if let version = cloudStatus?.agentVersion, !version.isEmpty { agentVersion = version }
                 connectionMessage = cloudConnectionMessage(for: cloudStatus!)
-                // USB 本地控制不可达不等于模块离线。Relay 心跳新鲜时保留灵动岛待机，
-                // 来电仍可由 PushKit 唤醒并走公网 PCM。
+                // Unreachable local USB control does not mean the module is offline. Keep Dynamic Island standby while the Relay heartbeat is fresh;
+                // incoming calls can still wake via PushKit and use cloud PCM.
                 let lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
                 await liveActivity.update(
                     call: lifecycleCall,
@@ -1240,7 +1239,7 @@ final class AppModel {
                     api: pollingAPI
                 )
             } catch APIError.http(404, _) {
-                // 0.3.18 等旧 Agent 没有统一事件接口；保留兼容轮询直到模块升级。
+                // Older Agents (such as 0.3.18) lack the unified events endpoint; keep fallback polling until the module is upgraded.
                 eventStreamSupported = false
             }
         }
@@ -1317,7 +1316,7 @@ final class AppModel {
         }
     }
 
-    /// 蜂窝状态和版本不必跟随每秒通话轮询；独立刷新避免慢 AT 状态接口拖住来电检测。
+    /// Cellular status and version do not need to run on every 1s call poll; refreshing them independently prevents slow AT status queries from delaying incoming call detection.
     private func scheduleModuleMetadataRefresh(generation: Int, api: AirSIMAPI) {
         guard moduleMetadataTask == nil, Date() >= nextModuleMetadataRefresh else { return }
         nextModuleMetadataRefresh = Date().addingTimeInterval(10)
@@ -1393,7 +1392,7 @@ final class AppModel {
             endedAt: nil,
             missed: false
         )
-        debugDialLog(LocalModePreference.isEnabled() ? "本地模式直接呼出" : "开始提交 CallKit 系统呼出")
+        debugDialLog(LocalModePreference.isEnabled() ? "Placing direct outgoing call in local mode" : "Submitting CallKit outgoing call transaction")
         await perform {
             if LocalModePreference.isEnabled() {
                 try await self.callKitStart(number: number)
@@ -1401,12 +1400,12 @@ final class AppModel {
             }
             do {
                 try await self.callKit.startOutgoingCall(number: number)
-                debugDialLog("CallKit 呼出事务已提交")
+                debugDialLog("CallKit outgoing call transaction submitted")
             } catch CallKitBridgeError.unavailable {
-                // 受限签名或系统禁用 CallKit 时仍允许用户拨出，但不伪造系统 UUID。
-                // 仍复用标准路由选择，确保 VoWLAN 在线时控制与 PCM 都锁定到热点。
+                // Still allow dialing when CallKit is restricted or disabled by the system, without fabricating a system UUID.
+                // Reuse standard route selection so both control and PCM stay pinned to the hotspot when VoWLAN is online.
                 try await self.callKitStart(number: number)
-                debugDialLog("CallKit 不可用，已按当前传输路由直拨")
+                debugDialLog("CallKit unavailable; dialing directly over current transport route")
             }
         }
     }
@@ -1421,7 +1420,7 @@ final class AppModel {
                 do {
                     try await self.callKit.answerCurrentCall(presentInApp: true)
                 } catch CallKitBridgeError.staleSystemCall {
-                    // 系统界面重建期间仍复用标准路线选择，不能回退到 USB 默认地址。
+                    // Reuse standard route selection while system UI is rebuilding rather than falling back to the default USB address.
                     try await self.callKitAnswer(origin: .app)
                 }
             }
@@ -1439,8 +1438,8 @@ final class AppModel {
         callPresentationSurface = .app
     }
 
-    /// 正常情况下系统接听会停留在 CallKit。若 iOS、普通 APNs 或用户手势实际把
-    /// AirSIM 拉到前台，则必须展示同一通电话，而不是让用户掉回拨号/设置页面。
+    /// Answering from the system normally stays in CallKit. If iOS, a user notification, or a user gesture brings
+    /// AirSIM to the foreground, present the same call rather than dropping the user onto the Dial or Settings screen.
     private func presentManagedCallAfterForegroundTransition() {
         guard appIsActive,
               CallPresentationPolicy.shouldPresentWhenAppBecomesActive(
@@ -1532,7 +1531,7 @@ final class AppModel {
         await perform {
             if self.callKit.managesCurrentCall {
                 do {
-                    // App 内键盘与系统通话页共用 CallKit 事务，避免两边的 DTMF 顺序不一致。
+                    // In-app keypad and system call UI share CallKit transactions so DTMF ordering stays consistent.
                     try await self.callKit.playDTMF(digit)
                 } catch CallKitBridgeError.staleSystemCall {
                     try await self.sendDTMFUsingAvailableTransport(digit)
@@ -1561,7 +1560,7 @@ final class AppModel {
                 try await callKit.setMuted(target)
                 errorMessage = nil
             } catch {
-                // CallKit UUID 可能因系统重置而短暂失效；本地 PCM 仍可可靠控制麦克风。
+                // The CallKit UUID may become transiently invalid after a system reset; local PCM can still reliably control the microphone.
                 if case CallKitBridgeError.staleSystemCall = error {
                     isMuted = target
                     audio.setMuted(target)
@@ -1572,11 +1571,11 @@ final class AppModel {
             }
             return
         }
-        // 移动端上行语音由本地 PCM 管线产生，必须先本地静音，不能依赖模块 AT 命令成功。
+        // Mobile uplink voice is generated by the local PCM pipeline; mute locally first without depending on module AT command success.
         isMuted = target
         audio.setMuted(target)
-        // QDC507 部分固件不实现 AT+CMUT；本地 PCM 已经是移动端的权威静音状态，
-        // 后台同步失败不能阻断通话或弹出误导性的“麦克风已静音”错误。
+        // Some QDC507 firmware versions do not implement AT+CMUT; local PCM is already the authoritative mute state on mobile,
+        // so background sync failures must not interrupt the call or show a misleading mute error.
         if let localAPI = reachableLocalAPI {
             Task { try? await localAPI.setAudioMuted(target) }
         }
@@ -1584,8 +1583,8 @@ final class AppModel {
     }
 
     func toggleSpeaker() {
-        // 扬声器切换只作用于当前系统音频会话；如果 CallKit 尚未完成激活，
-        // AudioSessionController 会保留请求并短暂重试，不弹出 OSStatus -50。
+        // Speaker toggling applies only to the current system audio session; if CallKit has not finished activating yet,
+        // AudioSessionController preserves the request and retries briefly without surfacing OSStatus -50.
         audio.toggleSpeakerRoute()
         errorMessage = nil
     }
@@ -1623,7 +1622,7 @@ final class AppModel {
         }
     }
 
-    /// 真机联调阶段输出拨号链路，不记录电话号码；Release 构建会完全移除。
+    /// Logs the dial path during device debugging without recording phone numbers; compiled out in Release builds.
     private func debugDialLog(_ message: String) {
 #if DEBUG
         print("[AirSIM Dial] \(message)")
@@ -1680,7 +1679,7 @@ final class AppModel {
         }
     }
 
-    /// URC 已经让 Agent 读取了单条短信；事件路径只取交付队列，不再触发全量 CMGL。
+    /// URC already prompted the Agent to read the single SMS; the event path fetches only the delivery queue without triggering a full CMGL scan.
     func loadMessagesFromAgent(
         silently: Bool = false,
         notifyIfBackground: Bool = false,
@@ -1724,7 +1723,7 @@ final class AppModel {
         errorMessage = nil
     }
 
-    /// foreach.md：分组与排序只在消息集合变化时重算；由 messages.didSet 触发。
+    /// foreach.md: grouping and sorting recompute only when the message collection changes, triggered by messages.didSet.
     private func rebuildConversations() {
         conversations = Dictionary(grouping: messages, by: \.sender)
             .map { ($0.key, $0.value.sorted { $0.timestamp < $1.timestamp }) }
@@ -1813,7 +1812,7 @@ final class AppModel {
         restoreLocalHistory()
     }
 
-    /// 将磁盘副本并入当前内存，只增加或更新记录，绝不以空读取清掉界面数据。
+    /// Merges the disk copy into in-memory state, adding or updating records while never wiping UI data with an empty read.
     private func restoreLocalHistory() {
         let storedCalls = historyStore.loadCallHistory()
         if !storedCalls.isEmpty {
@@ -1837,7 +1836,7 @@ final class AppModel {
         }
     }
 
-    /// 远端列表可能因模块重启、自动清理或离线而变短，因此只做并集，不删除手机副本。
+    /// The remote list may shrink after module reboot, auto-cleanup, or offline state, so perform a union merge without deleting local phone records.
     private func mergeCallHistory(
         _ remote: [CallRecord], acknowledgingOn source: AirSIMAPI? = nil
     ) async -> [CallRecord] {
@@ -1846,7 +1845,7 @@ final class AppModel {
             deletedIDs: historyStore.loadDeletedCallIDs(), limit: maxCallHistoryCount
         )
         if !remote.isEmpty, historyStore.saveCallHistory(merged) {
-            // 只有手机副本写入成功才确认模块，断线时模块仍会保留未交付队列。
+            // Acknowledge to the module only after the local phone copy is saved so the module retains its undelivered queue across disconnects.
             let persistedIDs = Set(merged.map(\.id))
             let acknowledgedIDs = remote.map(\.id).filter { persistedIDs.contains($0) }
             if let source, !acknowledgedIDs.isEmpty {
@@ -1866,7 +1865,7 @@ final class AppModel {
         var byID: [String: SMSMessage] = [:]
         for message in messages { byID[message.id] = message }
         for var message in remote {
-            // 旧版模块没有 delivery_id 时保留手机已有标识，避免新旧版本来回覆盖。
+            // Preserve the existing local identifier when an older module omits delivery_id to avoid flip-flopping across versions.
             if message.deliveryID == nil { message.deliveryID = byID[message.id]?.deliveryID }
             byID[message.id] = message
         }
@@ -1881,7 +1880,7 @@ final class AppModel {
         return merged
     }
 
-    /// 模块不会在收件箱接口回传已发送短信，因此发送成功后立即写入手机本地历史。
+    /// The module inbox endpoint does not echo sent SMS messages, so write them to local phone history immediately after sending.
     private func saveSentMessage(recipient: String, content: String) {
         let updatedMessages = SMSHistoryPolicy.appendingSentMessage(
             recipient: recipient,
@@ -1966,7 +1965,7 @@ final class AppModel {
             let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
             let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
             let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
-            // 先完成麦克风授权和 WebRTC 启动，再登记音频主机。
+            // Complete microphone authorization and WebRTC startup before registering the audio host.
             let outcome = try await LocalCallAudioStartupCoordinator.start(
                 activatePhoneAudio: { [audio] in
                     await audio.activateForCall(
@@ -2019,8 +2018,8 @@ final class AppModel {
                 .vowlan(endpoint: endpoint, credential: credential)
             )
         }
-        // PushKit 可在后台先于 Bonjour 浏览器恢复。最近一次成功轮询若明确来自
-        // VoWLAN，就复用同一已鉴权端点；绝不能把通用 isOnline 误当成 USB ECM。
+        // PushKit may resume in the background before the Bonjour browser. If the latest successful poll came from VoWLAN,
+        // reuse that authenticated endpoint; never mistake the generic isOnline flag for USB ECM.
         guard isOnline, !isReconnecting, let cached = lastSuccessfulLocalAPI,
               case let .vowlan(endpoint, credential) = cached.route,
               permitsVoWLANEndpoint(endpoint) else { return nil }
@@ -2039,7 +2038,7 @@ final class AppModel {
             transport: transport,
             generation: callLifecycleSnapshot.generation
         )
-        // 取消仍绑定旧 USB 路由的长轮询，让 active 状态立即从 VoWLAN 返回。
+        // Cancel any long-poll still bound to the legacy USB route so the active state returns immediately from VoWLAN.
         restartPolling()
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
@@ -2073,7 +2072,7 @@ final class AppModel {
         try? await callKit.endCurrentCall()
     }
 
-    /// 仅允许电话网络常见字符，防止意外把 AT 控制字符传入模块代理。
+    /// Allows only standard telephony characters to prevent accidental AT control characters from reaching the module Agent.
     private static func validatedNumber(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowed = CharacterSet(charactersIn: "+*#0123456789")
@@ -2242,8 +2241,8 @@ enum CallAudioRegistrationCoordinator {
             try await service.setAudioHostEnabled(true)
             return .registered
         } catch APIError.http(409, _) {
-            // 通话事件与媒体注册是两个请求。旧 Agent 在其间完成 CLCC 刷新时，
-            // 重新读取状态，避免把短暂竞争当成致命拨号错误。
+            // Call events and media registration are separate requests. If an older Agent finishes a CLCC refresh in between,
+            // re-read status so a brief race is not treated as a fatal dial error.
             let latest = try await service.callStatus()
             guard latest.active?.state == "active" else {
                 return .callNoLongerActive
@@ -2255,8 +2254,8 @@ enum CallAudioRegistrationCoordinator {
                 try await service.setAudioHostEnabled(true)
                 return .registered
             } catch APIError.http(409, _) {
-                // 0.3.39 的 DSCI 与 CLCC 会在接通瞬间短暂交错。此时保持
-                // CallKit 通话并交给下一轮事件重试，不能把媒体尚未就绪显示成拨号失败。
+                // In 0.3.39, DSCI and CLCC can briefly interleave at the moment a call connects. Keep the CallKit call alive
+                // and let the next event poll retry rather than surfacing unready media as a dial failure.
                 return .temporarilyUnavailable
             }
         }
@@ -2328,8 +2327,8 @@ extension OutgoingCallRouteResult: Equatable where CloudResult: Equatable {}
 enum OutgoingCallFallbackPolicy {
     static func permitsCloudFallback(after error: Error, cloudModeEnabled: Bool) -> Bool {
         guard cloudModeEnabled, !(error is CancellationError) else { return false }
-        // 收到 Agent HTTP 响应说明命令已到达执行边界。拨号是非幂等操作，
-        // 明确拒绝或返回业务错误时不能再经 Relay 重放。
+        // Receiving an Agent HTTP response means the command reached the execution boundary. Dialing is non-idempotent,
+        // so explicit rejections or domain errors must never be replayed via the Relay.
         if error is APIError { return false }
         return true
     }
@@ -2593,8 +2592,8 @@ extension AppModel: CallKitActionHandling {
         }
         if currentCallTransport == .vowlan,
            case .unavailable = vowlan.availability {
-            // 三星端在热点接口消失时直接通过 Telecom 结束所属通话；这里让
-            // CallKit 事务立即成功，避免因已断开的控制 socket 把系统界面卡住。
+            // The Samsung Agent ends its call directly via Telecom when the hotspot interface disappears; fulfill the
+            // CallKit transaction immediately here so a disconnected control socket cannot stall the system UI.
             clearLockedTransport()
             backgroundStandby.resumeAfterCall()
             return
@@ -2626,7 +2625,7 @@ extension AppModel: CallKitActionHandling {
         }
         audio.setMuted(muted)
         IPhoneCloudCallSession.shared.setMuted(muted)
-        // CallKit 的静音动作直接作用于本地 PCM 编码器；模块 AT+CMUT 失败不应影响双向音频。
+        // CallKit mute actions apply directly to the local PCM encoder; module AT+CMUT failures must not affect bidirectional audio.
         if currentCallTransport != .cloud {
             if let localAPI = reachableLocalAPI {
                 Task { try? await localAPI.setAudioMuted(muted) }
@@ -2676,8 +2675,8 @@ extension AppModel: CallKitActionHandling {
 
     func callKitProviderDidReset() async {
         beginCallTransitionProtection()
-        // CXProvider reset 只代表系统通话界面失效，绝不等于用户挂断真实模块通话。
-        // 清理本地音频后交给下一轮状态同步按 App 内通话模式自动恢复。
+        // CXProvider reset only means the system call UI was invalidated, never that the user hung up the real module call.
+        // Clean up local audio and let the next status sync recover automatically in in-app call mode.
         let wasVirtual = VirtualCallTTSController.shared.isPrepared
         if wasVirtual {
             VirtualCallTTSController.shared.stop()
@@ -2716,17 +2715,17 @@ extension AppModel: CallKitActionHandling {
             traceID: "pushkit-\(call.uuid.uuidString.lowercased())", failure: nil
         )) else { return }
         remoteCall = Self.remoteCallRecord(from: call, state: "incoming")
-        // 后台 PushKit 来电由系统界面接管；只有 App 本来就在前台时才准备 App 内来电页。
+        // Background PushKit incoming calls are handled by the system UI; prepare the in-app incoming call view only when the app is already in the foreground.
         callPresentationSurface = appIsActive ? .app : .system
     }
 
     func callKitCallDidEnd() {
         recordings.finishCall(callLifecycleSnapshot.callID)
         outgoingAttemptID = UUID()
-        // 远端挂断、系统通话页挂断以及 Provider 主动结束都会走这里。
-        // Agent 已拥有唯一的通话结束媒体清理权；App 不再重复关闭 Audio Host。
+        // Remote hangup, system call screen hangup, and provider-initiated termination all pass through here.
+        // The Agent is the sole owner of call-end media teardown; the app no longer closes the Audio Host redundantly.
         beginCallTransitionProtection()
-        // CallKit 本地 UI 已结束不等于模块已挂机；最终 ended/failed 只能由 Agent/Relay 回执推进。
+        // Local CallKit UI dismissal does not mean the module has hung up; final ended/failed state may only advance from Agent/Relay receipts.
         applyCurrentCallIntent(.ending, source: .callKit)
         remoteCall = nil
         pendingOutgoingCall = nil

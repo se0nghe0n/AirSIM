@@ -41,16 +41,16 @@ func TestCloudPCMMilestoneDurationsDescribeStartupBoundaries(t *testing.T) {
 
 func TestCloudPCMTimeoutPolicyGivesWarmRouteOneSoftRetryBeforeRebuild(t *testing.T) {
 	if got := cloudPCMRecoveryForTimeout(1); got != cloudPCMReconnectOnly {
-		t.Fatalf("首次 PCM 超时恢复=%q，期望只重连本地 PCM", got)
+		t.Fatalf("first PCM timeout recovery=%q, want local PCM reconnect only", got)
 	}
 	if got := cloudPCMRecoveryForTimeout(2); got != cloudPCMRebuildVoiceRoute {
-		t.Fatalf("连续第二次 PCM 超时恢复=%q，期望重建语音路由", got)
+		t.Fatalf("second consecutive PCM timeout recovery=%q, want voice route rebuild", got)
 	}
 }
 
 func TestCloudPCMHealthPolicyDoesNotRestartModuleRouteForMissingRemoteUplink(t *testing.T) {
 	if got := cloudPCMRecoveryForHealth(cloudMediaRebuildUplinkStalled); got != cloudPCMKeepVoiceRoute {
-		t.Fatalf("远端上行停顿恢复=%q，期望保留模块语音路由", got)
+		t.Fatalf("remote uplink stall recovery=%q, want module voice route kept", got)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestCloudPCMStatsCarryNegotiatedMediaProtocol(t *testing.T) {
 	health.setMediaProtocol(cloudPCMProtocolFramedV1)
 	stats := cloudPCMTransmissionStatsFromHealth(health.snapshot())
 	if stats.MediaProtocol != cloudPCMProtocolFramedV1 {
-		t.Fatalf("媒体统计协议=%q，期望 %q", stats.MediaProtocol, cloudPCMProtocolFramedV1)
+		t.Fatalf("media stats protocol=%q, want %q", stats.MediaProtocol, cloudPCMProtocolFramedV1)
 	}
 }
 
@@ -93,26 +93,26 @@ func TestCloudMediaHealthRebuildsAfterSixSecondsAndStopsAtThree(t *testing.T) {
 	tracker.beginMedia(startedAt)
 	tracker.observeDownlink(make([]byte, 320), startedAt, 0)
 	if got := tracker.evaluate(startedAt.Add(5990 * time.Millisecond)); got != cloudMediaHealthy {
-		t.Fatalf("6 秒前健康决策=%q，期望 %q", got, cloudMediaHealthy)
+		t.Fatalf("health decision before 6 seconds=%q, want %q", got, cloudMediaHealthy)
 	}
 	for attempt := 1; attempt <= 3; attempt++ {
 		now := startedAt.Add(time.Duration(attempt) * 6100 * time.Millisecond)
 		if got := tracker.evaluate(now); got != cloudMediaRebuildDownlinkStalled {
-			t.Fatalf("第 %d 次重建决策=%q，期望 %q", attempt, got, cloudMediaRebuildDownlinkStalled)
+			t.Fatalf("rebuild decision %d=%q, want %q", attempt, got, cloudMediaRebuildDownlinkStalled)
 		}
 		if !tracker.beginRebuild(cloudMediaRebuildDownlinkStalled, now) {
-			t.Fatalf("第 %d 次重建应被允许", attempt)
+			t.Fatalf("rebuild %d should be allowed", attempt)
 		}
 		tracker.observeDownlink(make([]byte, 320), now, 0)
 	}
 	if got := tracker.evaluate(startedAt.Add(24400 * time.Millisecond)); got != cloudMediaRebuildExhausted {
-		t.Fatalf("预算耗尽决策=%q，期望 %q", got, cloudMediaRebuildExhausted)
+		t.Fatalf("budget exhausted decision=%q, want %q", got, cloudMediaRebuildExhausted)
 	}
 	if tracker.beginRebuild(cloudMediaRebuildDownlinkStalled, startedAt.Add(24400*time.Millisecond)) {
-		t.Fatal("每通电话不得执行第 4 次媒体重建")
+		t.Fatal("a call must not perform a 4th media rebuild")
 	}
 	if snapshot := tracker.snapshot(); snapshot.RebuildCount != 3 {
-		t.Fatalf("重建次数=%d，期望 3", snapshot.RebuildCount)
+		t.Fatalf("rebuild count=%d, want 3", snapshot.RebuildCount)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestCloudMediaHealthTreatsValidSilenceAsHealthyAndDetectsStalledUplink(t *t
 		silent.observeDownlink(frame, startedAt.Add(time.Duration(index)*20*time.Millisecond), 2)
 	}
 	if got := silent.evaluate(startedAt.Add(time.Second)); got != cloudMediaHealthy {
-		t.Fatalf("有效静音决策=%q，期望 %q", got, cloudMediaHealthy)
+		t.Fatalf("valid silence decision=%q, want %q", got, cloudMediaHealthy)
 	}
 
 	uplink := newCloudMediaHealthTracker(startedAt, cloudCallDescriptor{})
@@ -168,7 +168,7 @@ func TestCloudMediaHealthTreatsValidSilenceAsHealthyAndDetectsStalledUplink(t *t
 	nonSilent[0], nonSilent[1] = 0x60, 0x09
 	uplink.observeDownlink(nonSilent, startedAt.Add(6*time.Second), 1)
 	if got := uplink.evaluate(startedAt.Add(6100 * time.Millisecond)); got != cloudMediaRebuildUplinkStalled {
-		t.Fatalf("上行卡死决策=%q，期望 %q", got, cloudMediaRebuildUplinkStalled)
+		t.Fatalf("uplink stall decision=%q, want %q", got, cloudMediaRebuildUplinkStalled)
 	}
 }
 
@@ -186,20 +186,20 @@ func TestECMWatchdogFieldsCarryCurrentCallIdentity(t *testing.T) {
 		"generation": "7", "state": "missing",
 	} {
 		if got := fields[key]; got != want {
-			t.Fatalf("字段 %s=%q，期望 %q", key, got, want)
+			t.Fatalf("field %s=%q, want %q", key, got, want)
 		}
 	}
 }
 
 func TestCloudMediaTransportRejectsAnythingExceptWebRTC(t *testing.T) {
 	if got := resolveCloudMediaTransport("webrtc", []string{"webrtc"}, false); got != "webrtc" {
-		t.Fatalf("双方支持 WebRTC 时传输=%q，期望 webrtc", got)
+		t.Fatalf("transport=%q when both sides support WebRTC, want webrtc", got)
 	}
 	if got := resolveCloudMediaTransport("", []string{"webrtc"}, false); got != "" {
-		t.Fatalf("缺少请求时传输=%q，期望拒绝", got)
+		t.Fatalf("transport=%q when the request is missing, want rejection", got)
 	}
 	if got := resolveCloudMediaTransport("webrtc", []string{"webrtc"}, true); got != "" {
-		t.Fatalf("强制回退时传输=%q，期望拒绝", got)
+		t.Fatalf("transport=%q when fallback is forced, want rejection", got)
 	}
 }
 

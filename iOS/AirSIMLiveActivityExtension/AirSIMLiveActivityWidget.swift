@@ -10,7 +10,7 @@ struct AirSIMLiveActivityBundle: WidgetBundle {
     }
 }
 
-/// 待机态保持极简，展开与锁屏态再呈现网络详情和通话动作。
+/// Keeps the compact standby state minimal while showing network details and call actions in expanded and lock-screen presentations.
 struct AirSIMLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AirSIMCallActivityAttributes.self) { context in
@@ -166,9 +166,9 @@ struct AirSIMLiveActivityWidget: Widget {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        // ActivityKit 在锁屏上已经提供系统级 Live Activity 容器。iOS 26 再给
-        // 根内容叠加 glassEffect 会生成第二个采样层，真机上可能只显示空玻璃壳。
-        // 透明 activityBackgroundTint 负责启用宿主 Liquid Glass，正文保持普通布局。
+        // ActivityKit already provides a system Live Activity container on the lock screen. Adding glassEffect
+        // to the root content on iOS 26 creates a second sampling layer that can render as an empty glass shell on device.
+        // A clear activityBackgroundTint enables host Liquid Glass while the body keeps standard layout.
     }
 
     @ViewBuilder
@@ -218,8 +218,8 @@ struct AirSIMLiveActivityWidget: Widget {
         }
     }
 
-    /// 展开态的设备名和连接状态已在顶部呈现；底部只保留一行补充信息，
-    /// 避免在系统限制的灵动岛高度里重复卡片并裁掉最后一行。
+    /// Device name and connection status are already shown at the top of the expanded presentation; keep only a single
+    /// supplementary line at the bottom to avoid duplicating cards and clipping the last line within Dynamic Island height limits.
     private func expandedAgentDetail(
         _ state: AirSIMCallActivityAttributes.ContentState
     ) -> some View {
@@ -537,7 +537,7 @@ struct AirSIMLiveActivityWidget: Widget {
         for state: AirSIMCallActivityAttributes.ContentState
     ) -> Color {
         if #available(iOSApplicationExtension 26.0, *) {
-            // 所有阶段让锁屏壁纸成为系统 Liquid Glass 的采样背景。
+            // Let the lock-screen wallpaper serve as the sampling backdrop for system Liquid Glass across all phases.
             return .clear
         }
         return Color(red: 0.012, green: 0.028, blue: 0.065)
@@ -637,7 +637,7 @@ private struct LiveActivityGlassButtonStyle: ViewModifier {
     }
 }
 
-/// 灵动岛外壳由系统绘制且不透明；渐变只作用于岛内的原生玻璃信息条。
+/// The Dynamic Island shell is drawn opaquely by the system; gradients apply only to the native glass info bar inside the island.
 private struct ProgressiveIslandGlassSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {

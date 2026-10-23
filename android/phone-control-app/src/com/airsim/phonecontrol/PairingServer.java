@@ -127,8 +127,9 @@ public final class PairingServer implements Closeable {
             registration.put("android_model", android.os.Build.MODEL);
             registration.put("android_phone_number", AndroidAgentIdentity.phoneNumber(context));
             registration.put("android_agent_kind", RuntimeMode.isStandalone(context) ? "standalone" : "avf");
-            // VoWLAN HMAC 密钥只属于 Android 热点网关。Linux Agent 的 Push
-            // 注册结构使用严格 JSON 解码，且无须接触该密钥，因此转发前必须移除。
+            // The VoWLAN HMAC secret belongs only to the Android hotspot gateway. The Linux
+            // Agent push-registration struct uses strict JSON decoding and does not need
+            // that secret, so it must be removed before forwarding.
             registration.remove("vowlan_secret");
             String agentResponse = new AgentClient(context).registerPairing(registration.toString());
             agentResponse = new JSONObject(agentResponse)
@@ -146,8 +147,9 @@ public final class PairingServer implements Closeable {
     private void advertise(int port, PairingSession created) {
         NsdManager manager = context.getSystemService(NsdManager.class);
         NsdServiceInfo info = new NsdServiceInfo();
-        // Android NSD 的注销是异步的；用户快速重开窗口时固定服务名可能仍被
-        // 系统占用并返回 ALREADY_ACTIVE。会话短 ID 保证每个一次性窗口唯一。
+        // Android NSD unregistration is asynchronous. If the user reopens the window
+        // quickly, a fixed service name may still be held by the system and return
+        // ALREADY_ACTIVE. A short session ID keeps each one-time window unique.
         info.setServiceName("AirSIM-Samsung-" + created.id().substring(0, 8));
         info.setServiceType("_airsim-pair._tcp.");
         info.setPort(port);

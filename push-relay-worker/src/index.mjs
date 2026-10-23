@@ -1181,7 +1181,7 @@ export class CallMediaSession {
       if (!owner) this.claimOwner(socket, role);
       return true;
     }
-    // 未接听时任一系统界面都可以拒接；接通后只有媒体所有者可以挂断。
+    // Before the call is answered, any system UI may reject it; after it is answered, only the media owner may hang up.
     if (action === "reject") return !owner || owner === role;
     if (action === "end") return owner === role;
     return owner === role;
@@ -1561,7 +1561,7 @@ async function receiveCall(request, env) {
         await writeRelayState(env, activityDedupeKey, "1", 180);
         activityPushed = true;
       } catch (error) {
-        // Live Activity 是来电展示增强，token 失效不能反向破坏已经成功的 VoIP/CallKit。
+        // Live Activity is an incoming-call presentation enhancement. An invalid token must not undo a VoIP/CallKit push that already succeeded.
         if (isUpdate) {
           await deleteRelayState(env, `liveactivity:current:${authenticated.device.device_id}`);
         }
@@ -2017,7 +2017,7 @@ function liveActivityPayload({ event, callID, number, displayName, phase, starte
     number,
     displayName,
     phase,
-    // Swift Codable 的 Date 默认使用 2001-01-01 reference date 秒数。
+    // Swift Codable Date defaults to seconds since the 2001-01-01 reference date.
     startedAt: (Number.isFinite(parsedStartedAt) ? parsedStartedAt : Date.now()) / 1000 - 978307200,
   };
   const aps = {
@@ -2026,7 +2026,7 @@ function liveActivityPayload({ event, callID, number, displayName, phase, starte
     "content-state": contentState,
   };
   if (event === "start") {
-    // iOS 18+ 要求显式请求该活动自己的 update token；App 随后会回传 Relay。
+    // iOS 18+ requires an explicit request for this activity's own update token; the app then reports it back to the Relay.
     aps["input-push-token"] = 1;
     aps["attributes-type"] = "AirSIMCallActivityAttributes";
     aps.attributes = { moduleName: "AirSIM" };

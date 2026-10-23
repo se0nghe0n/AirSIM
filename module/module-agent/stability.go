@@ -90,7 +90,7 @@ func rejectBusy(response http.ResponseWriter) {
 	writeError(response, http.StatusServiceUnavailable, "Agent is protecting call control; try again later")
 }
 
-// operationFlight 让同一控制操作的并发请求等待同一结果，避免重复发送 AT 命令。
+// operationFlight makes concurrent requests for the same control operation wait on one result, so AT commands are not sent twice.
 type operationFlight struct {
 	mu   sync.Mutex
 	call *operationCall
@@ -133,7 +133,7 @@ func startRuntimeMonitor(logger *log.Logger) {
 		runtime.ReadMemStats(&memory)
 		goroutines := runtime.NumGoroutine()
 		if memory.HeapAlloc >= 16<<20 || goroutines >= 256 {
-			logger.Printf("运行压力告警 goroutines=%d heap=%d limit=%d，主动回收", goroutines, memory.HeapAlloc, agentMemoryLimitBytes)
+			logger.Printf("runtime pressure warning goroutines=%d heap=%d limit=%d, forcing GC", goroutines, memory.HeapAlloc, agentMemoryLimitBytes)
 			runtime.GC()
 		}
 	}

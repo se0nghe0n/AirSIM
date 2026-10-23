@@ -728,20 +728,20 @@ struct AirSIMTests {
     @Test func `Local reject keeps observed agent during reconnect`() {
         #expect(LocalCallControlTarget.select(
             locked: Optional<String>.none,
-            observed: (callID: "call-on-samsung", service: "三星"),
-            fallback: "小米",
+            observed: (callID: "call-on-samsung", service: "Samsung"),
+            fallback: "Xiaomi",
             targetCallID: "call-on-samsung"
-        ) == "三星")
+        ) == "Samsung")
         #expect(LocalCallControlTarget.select(
             locked: Optional<String>.none,
-            observed: (callID: "call-on-samsung", service: "三星"),
-            fallback: "小米",
+            observed: (callID: "call-on-samsung", service: "Samsung"),
+            fallback: "Xiaomi",
             targetCallID: nil
         ) == nil)
         #expect(LocalCallControlTarget.select(
             locked: Optional<String>.none,
-            observed: (callID: "old-call", service: "三星"),
-            fallback: "小米",
+            observed: (callID: "old-call", service: "Samsung"),
+            fallback: "Xiaomi",
             targetCallID: "new-call"
         ) == nil)
     }
@@ -873,19 +873,19 @@ struct AirSIMTests {
     }
 
     @Test func `SMS fetch uses reporting agent after discovery switches phones`() async throws {
-        let samsung = AgentSMSInboxProbe(name: "三星", inbox: [SMSMessage(
-            sender: "10086", content: "来自三星", code: nil,
+        let samsung = AgentSMSInboxProbe(name: "Samsung", inbox: [SMSMessage(
+            sender: "10086", content: "From Samsung", code: nil,
             timestamp: Date(timeIntervalSince1970: 1_791_448_212),
             deliveryID: "samsung-sms-1", direction: .incoming
         )])
-        let xiaomi = AgentSMSInboxProbe(name: "小米", inbox: [])
+        let xiaomi = AgentSMSInboxProbe(name: "Xiaomi", inbox: [])
 
         let fetched = try await AgentSMSInboxFetch.fetch(
             reportingAgent: samsung, discoveredAgent: xiaomi
         )
 
-        #expect(fetched.messages.map(\.content) == ["来自三星"])
-        #expect(fetched.agent.name == "三星")
+        #expect(fetched.messages.map(\.content) == ["From Samsung"])
+        #expect(fetched.agent.name == "Samsung")
     }
 
     @Test func `VoWLAN control carries offer not PCM`() throws {
@@ -928,11 +928,11 @@ struct AirSIMTests {
             "event": "incoming_sms",
             "delivery_id": "sms-nano-1",
             "sender": "10086",
-            "content": "短信正文",
+            "content": "SMS body",
             "timestamp": "2026-10-08T08:30:12.123456789Z",
         ])
         #expect(pushed.deliveryID == "sms-nano-1")
-        #expect(pushed.message.content == "短信正文")
+        #expect(pushed.message.content == "SMS body")
         #expect(abs(pushed.timestamp.timeIntervalSince1970 - 1_791_448_212.123456789) <= 0.001)
     }
 
@@ -941,7 +941,7 @@ struct AirSIMTests {
             "event": "incoming_sms",
             "delivery_id": "sms-second-1",
             "sender": "10086",
-            "content": "短信正文",
+            "content": "SMS body",
             "timestamp": "2026-10-08T08:30:12Z",
         ])
         #expect(pushed.deliveryID == "sms-second-1")
@@ -958,12 +958,12 @@ struct AirSIMTests {
 
     @Test func `SMS delivery ID deduplicates push and agent copies`() {
         let pushed = SMSMessage(
-            sender: "10086", content: "短信正文", code: nil,
+            sender: "10086", content: "SMS body", code: nil,
             timestamp: Date(timeIntervalSince1970: 1_791_448_212),
             deliveryID: "sms-stable-1", direction: .incoming
         )
         let synchronized = SMSMessage(
-            sender: "10086", content: "短信正文", code: nil,
+            sender: "10086", content: "SMS body", code: nil,
             timestamp: Date(timeIntervalSince1970: 1_791_448_212.123456789),
             deliveryID: "sms-stable-1", direction: .incoming
         )
@@ -1056,7 +1056,7 @@ struct AirSIMTests {
             _ = try await AirSIMAPI().health()
         }
         guard case APIError.disabledLegacyRoute? = error else {
-            Issue.record("预期得到旧路线已停用错误，实际为 \(String(describing: error))")
+            Issue.record("Expected legacy route retired error, got \(String(describing: error))")
             return
         }
     }
@@ -1064,7 +1064,7 @@ struct AirSIMTests {
     @Test func `Legacy module PCM handshake is rejected`() {
         let error = #expect(throws: APIError.self) { _ = try PCMRoute.moduleLocal.handshake() }
         guard case APIError.disabledLegacyRoute? = error else {
-            Issue.record("预期旧模块 PCM 被拦截，实际为 \(String(describing: error))")
+            Issue.record("Expected legacy module PCM to be blocked, got \(String(describing: error))")
             return
         }
     }
@@ -1318,7 +1318,7 @@ struct AirSIMTests {
     @Test @MainActor
     func `VoWLAN agent rejection does not replay dial through cloud`() async {
         let local = OutgoingCallServiceProbe(
-            dialError: APIError.http(502, "Android Telecom 拒绝拨号")
+            dialError: APIError.http(502, "Android Telecom rejected dial")
         )
         var cloudAttempts = 0
 
@@ -1335,7 +1335,7 @@ struct AirSIMTests {
         if case APIError.http(let status, _)? = error {
             #expect(status == 502)
         } else {
-            Issue.record("预期保留 Agent HTTP 错误，实际为 \(String(describing: error))")
+            Issue.record("Expected Agent HTTP error to be preserved, got \(String(describing: error))")
         }
 
         #expect(cloudAttempts == 0)
@@ -1441,12 +1441,12 @@ struct AirSIMTests {
         #expect(report.steps.map(\.id) == Array(CloudSelfTestStepID.allCases))
 
         for id in CloudSelfTestStepID.allCases {
-            report.update(id, state: .passed, detail: "通过")
+            report.update(id, state: .passed, detail: "Passed")
         }
         report.completedAt = Date()
         #expect(report.allPassed)
 
-        report.update(.agentHeartbeat, state: .failed, detail: "无心跳")
+        report.update(.agentHeartbeat, state: .failed, detail: "No heartbeat")
         #expect(!report.allPassed)
     }
 
@@ -1475,7 +1475,7 @@ struct AirSIMTests {
     @Test func `VoWLAN recovery retries after temporary VPN route loss`() {
         var recovery = VoWLANRecoveryGate()
         let start = Date(timeIntervalSince1970: 1_800_000_000)
-        let unavailable = VoWLANAvailability.unavailable("VPN 路由切换")
+        let unavailable = VoWLANAvailability.unavailable("VPN route switch")
 
         // shouldAttempt() mutates the gate, so each result is captured before asserting.
         var attempted = recovery.shouldAttempt(for: unavailable, at: start)
@@ -1500,7 +1500,7 @@ struct AirSIMTests {
         let state = AirSIMCallActivityAttributes.ContentState(
             callID: "",
             number: "",
-            displayName: "等待模块来电",
+            displayName: "Waiting for module call",
             phase: .standby,
             startedAt: Date(timeIntervalSince1970: 1),
             transport: .vowlan
@@ -1632,7 +1632,7 @@ struct RecentCallTimeFormatterTests {
         calendar.date(from: DateComponents(year: 2026, month: 3, day: 15, hour: hour, minute: minute))!
     }
 
-    // 12 小时制地区（en_US）必须保留 AM/PM；系统可能在 PM 前插入窄不换行空格（U+202F）。
+    // 12-hour regions (en_US) must retain AM/PM; the system may insert a narrow no-break space (U+202F) before PM.
     @Test func `Today shows meridiem in twelve hour locale`() {
         let text = RecentCallTimeFormatter.string(
             for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),

@@ -97,7 +97,7 @@ public final class AppConfig {
 				}
 			}
 		} catch (Exception error) {
-			// VM 启动过程中接口可能短暂不存在；保留最后保存的地址作为回退。
+			// The interface may be briefly absent while the VM is starting; keep the last saved address as a fallback.
 			BridgeLog.debug("avf_endpoint_discovery_failed error=" + error.getClass().getSimpleName());
 		}
 		return "";

@@ -445,8 +445,8 @@ struct CloudPCMPlaybackRateController {
 }
 
 enum CloudCallRetryPolicy {
-    /// CallKit 激活音频会话与 AVAudioEngine 可用之间会有短暂竞争；覆盖约 12 秒，
-    /// 同时限制重试次数，避免真实权限错误形成后台空转。
+    /// A brief race can occur between CallKit activating the audio session and AVAudioEngine becoming ready; cover ~12 seconds
+    /// while bounding the retry count so genuine permission errors do not spin in the background.
     static let audioDelays: [TimeInterval] = [0, 0.35, 0.8, 1.5, 3, 6]
     static let reconnectDelays: [TimeInterval] = [0.4, 1, 2, 4]
 
@@ -482,7 +482,7 @@ enum CloudCallRecoveryCoordinator {
 }
 
 enum CloudCallAnswerPolicy {
-    // Agent 的 ATA 最长会等待约 5 秒；重发间隔不能形成高频控制帧风暴。
+    // Agent ATA waits up to ~5 seconds; retry intervals must not create a high-frequency control-frame storm.
     static let confirmationDelays: [TimeInterval] = [0, 3, 3, 4, 5]
 
     static func isAcknowledged(status: String) -> Bool {
@@ -794,8 +794,8 @@ enum CloudCallControlClient {
     }
 }
 
-/// iPhone 公网通话会话。PushKit 媒体密钥只保存在内存中；
-/// CallKit 激活 AVAudioSession 后才启动 WebRTC，控制 WebSocket 可提前接听模块来电。
+/// iPhone cloud call session. PushKit media keys are kept in memory only;
+/// WebRTC starts only after CallKit activates AVAudioSession, while the control WebSocket can answer module calls early.
 @MainActor
 final class IPhoneCloudCallSession {
     static let shared = IPhoneCloudCallSession()
@@ -979,8 +979,8 @@ final class IPhoneCloudCallSession {
             do {
                 try await media.connect(to: url, secret: secret)
             } catch {
-                // 系统接听动作不能因为第一次 WebSocket 建连抖动而直接失败。
-                // 保留同一通话并在后台有界重连，成功后再补发 answer 控制帧。
+                // System answer actions must not fail outright due to initial WebSocket connection jitter.
+                // Retain the same call and perform bounded background reconnection, then resend the answer control frame upon success.
                 guard call?.uuid == incoming.uuid, answered else { return }
                 requestMediaRebuild(.connectionLost)
                 scheduleAnswerConfirmation(for: incoming)
@@ -1530,7 +1530,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP])
         try session.setPreferredSampleRate(48_000)
         try session.setPreferredIOBufferDuration(0.02)
-        // 每通电话从听筒开始；用户随后可在通话页切换扬声器。
+        // Every call starts on the receiver; the user can switch to speaker on the call screen afterward.
         try session.overrideOutputAudioPort(.none)
     }
 

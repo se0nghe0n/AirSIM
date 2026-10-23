@@ -10,8 +10,8 @@ enum RecentCallTimeFormatter {
     ) -> String {
         let day = calendar.dateComponents([.year, .month, .day], from: date)
         let currentDay = calendar.dateComponents([.year, .month, .day], from: now)
-        // localization.md：时间与日期展示改用 FormatStyle，按用户语言环境输出；
-        // 12 小时制地区（如 en_US）输出 "2:30 PM" 不再丢失 AM/PM，24 小时制地区仍为 "14:30"。
+        // localization.md: use FormatStyle for time and date display so output follows the user locale;
+        // 12-hour regions (e.g., en_US) output "2:30 PM" without dropping AM/PM, while 24-hour regions remain "14:30".
         if day == currentDay {
             return date.formatted(
                 Date.FormatStyle(date: .omitted, time: .shortened, locale: locale, calendar: calendar)
@@ -24,13 +24,13 @@ enum RecentCallTimeFormatter {
         if day.year == currentDay.year {
             return date.formatted(.dateTime.month(.twoDigits).day(.twoDigits))
         }
-        // 跨年日期改为随语言环境排序（en 从 yyyy/MM/dd 变为 MM/dd/yyyy）。
+        // Cross-year dates follow locale field ordering (e.g., MM/dd/yyyy in English instead of yyyy/MM/dd).
         return date.formatted(.dateTime.year().month(.twoDigits).day(.twoDigits))
     }
 }
 
-/// 联系人可能重复保存同一号码；在选择与拨号场景中重复行完全可互换，
-/// 因此按号码去重，保证 `ForEach(phones, id: \.self)` 的身份唯一（foreach.md）。
+/// A contact may store duplicate entries for the same phone number; since duplicate rows are interchangeable
+/// during selection and dialing, deduplicate by number so `ForEach(phones, id: \.self)` has unique IDs (foreach.md).
 enum ContactPhoneListPolicy {
     static func displayPhones(for phones: [String]) -> [String] {
         var seen = Set<String>()
@@ -138,7 +138,7 @@ private struct DialPadLayoutMetrics {
     }
 }
 
-// MARK: - 拨号
+// MARK: - Dial
 
 struct DialPadView: View {
     @Environment(AppModel.self) private var model
@@ -170,7 +170,7 @@ struct DialPadView: View {
 
                 VStack(spacing: metrics.sectionSpacing) {
                     VStack(spacing: 2) {
-                        Text(model.numberInput.isEmpty ? L10n.t("输入号码") : model.numberInput)
+                        Text(model.numberInput.isEmpty ? L10n.t("Enter number") : model.numberInput)
                             .font(.system(
                                 size: metrics.numberFontSize,
                                 weight: .light,
@@ -278,8 +278,8 @@ struct DialPadView: View {
                 .gesture(deleteGesture)
                 .allowsHitTesting(!model.numberInput.isEmpty)
                 .opacity(model.numberInput.isEmpty ? 0.4 : 1)
-                .accessibilityLabel(L10n.t("删除"))
-                .accessibilityHint(L10n.t("轻点删除一位，长按连续删除"))
+                .accessibilityLabel(L10n.t("Delete"))
+                .accessibilityHint(L10n.t("Tap to delete one digit; hold to keep deleting"))
                 .accessibilityAddTraits(.isButton)
         }
         .frame(width: metrics.keypadWidth)
@@ -319,8 +319,8 @@ struct DialPadView: View {
     }
 }
 
-/// 拨号键盘独立成子视图：输入数字只应使号码文本与拨号按钮失效，
-/// 不再重建 12 个按键的 Liquid Glass 子树（structure.md 失效边界）。
+/// Isolated subview for the dial keypad: typing digits invalidates only the number text and call button
+/// without rebuilding the 12-key Liquid Glass subtree (structure.md invalidation boundary).
 private struct DialPadKeyGrid: View {
     @Environment(AppModel.self) private var model
     @State private var zeroWasLongPressed = false
@@ -335,7 +335,7 @@ private struct DialPadKeyGrid: View {
     @ViewBuilder
     private var dialKeyGrid: some View {
         if #available(iOS 26.0, *) {
-            // 融合距离必须明显小于按键的真实间距，否则 Liquid Glass 会把相邻圆键吸成一体。
+            // The glass merge distance must be noticeably smaller than the actual key spacing so Liquid Glass does not fuse adjacent circular keys.
             GlassEffectContainer(spacing: 6) {
                 dialKeyRows
             }
@@ -346,8 +346,8 @@ private struct DialPadKeyGrid: View {
 
     private var dialKeyRows: some View {
         VStack(spacing: metrics.rowSpacing) {
-            // rows 是常量布局表，每行首个数字互不相同；用它做内容身份，
-            // 替代 foreach.md 禁止的 offset/id 位置身份。
+            // rows is a constant layout table where each row starts with a distinct digit; use it as content identity
+            // instead of positional offset/id identity discouraged by foreach.md.
             ForEach(rows, id: \.first?.0) { row in
                 HStack(spacing: metrics.keySpacing) {
                     ForEach(row, id: \.0) { digit, letters in
@@ -542,7 +542,7 @@ private struct PairedAndroidAgentsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.t("完成")) { dismiss() }
+                    Button(L10n.t("Done")) { dismiss() }
                 }
             }
         }
@@ -550,14 +550,14 @@ private struct PairedAndroidAgentsView: View {
     }
 }
 
-/// 使用系统输入点击音，不启动新的音频会话，避免干扰 CallKit 路由。
+/// Uses the system input click sound without starting a new audio session so CallKit routing is not disturbed.
 private final class DialKeyFeedback {
     func play() {
         UIDevice.current.playInputClick()
     }
 }
 
-// MARK: - 最近通话
+// MARK: - Recents
 
 struct RecentsView: View {
     @Environment(AppModel.self) private var model
@@ -574,7 +574,7 @@ struct RecentsView: View {
                     if model.callHistory.isEmpty {
                         ScrollView {
                             EmptyStateView(
-                                title: L10n.t("暂无通话记录"),
+                                title: L10n.t("No Recents"),
                                 systemImage: "phone.arrow.up.right"
                             )
                             .frame(maxWidth: .infinity, minHeight: 300)
@@ -625,15 +625,15 @@ struct RecentsView: View {
                                 Button(role: .destructive) {
                                     model.deleteCallHistory(ids: [call.id])
                                 } label: {
-                                    Label(L10n.t("删除"), systemImage: "trash")
+                                    Label(L10n.t("Delete"), systemImage: "trash")
                                 }
                                 if let number = call.number {
                                     Button { onMessage(number) } label: {
-                                        Label(L10n.t("短信"), systemImage: "message.fill")
+                                        Label(L10n.t("Messages"), systemImage: "message.fill")
                                     }
                                     .tint(.blue)
                                     Button { onCall(number) } label: {
-                                        Label(L10n.t("拨号"), systemImage: "phone.fill")
+                                        Label(L10n.t("Dial"), systemImage: "phone.fill")
                                     }
                                     .tint(.green)
                                 }
@@ -646,7 +646,7 @@ struct RecentsView: View {
                     }
                 }
                 .background(PhoneBackdrop())
-                .navigationTitle(L10n.t("最近通话"))
+                .navigationTitle(L10n.t("Recents"))
                 .refreshable { await model.refreshCallHistory() }
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -711,8 +711,8 @@ struct RecentsView: View {
         }
     }
 
-    /// 通话详情浮层独立成子视图：通话记录刷新等无效化不再重建浮层内容
-    /// （structure.md 失效边界）。
+    /// Isolated subview for the call detail sheet: call history refreshes and other invalidations do not rebuild sheet content
+    /// (structure.md invalidation boundary).
     private struct RecentCallDetailsCard: View {
         @Environment(ContactStore.self) private var contacts
         let call: CallRecord
@@ -749,7 +749,7 @@ struct RecentsView: View {
                     onDismiss()
                     onCall(number)
                 } label: {
-                    Label(L10n.t("回拨"), systemImage: "phone.fill")
+                    Label(L10n.t("Call Back"), systemImage: "phone.fill")
                         .frame(maxWidth: .infinity, minHeight: 32)
                 }
                 .buttonStyle(.borderedProminent)
@@ -760,7 +760,7 @@ struct RecentsView: View {
                     onDismiss()
                     onMessage(number)
                 } label: {
-                    Label(L10n.t("发短信"), systemImage: "message.fill")
+                    Label(L10n.t("Send Message"), systemImage: "message.fill")
                         .frame(maxWidth: .infinity, minHeight: 32)
                 }
                 .buttonStyle(.bordered)
@@ -770,13 +770,13 @@ struct RecentsView: View {
                     onDismiss()
                     onDelete()
                 } label: {
-                    Label(L10n.t("删除通话记录"), systemImage: "trash")
+                    Label(L10n.t("Delete Call Record"), systemImage: "trash")
                         .frame(maxWidth: .infinity, minHeight: 32)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
-                Button(L10n.t("取消"), action: onDismiss)
+                Button(L10n.t("Cancel"), action: onDismiss)
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .frame(minHeight: 34)
@@ -808,7 +808,7 @@ struct RecentsView: View {
                     HStack(spacing: 4) {
                         Image(systemName: call.direction == "incoming" ? "arrow.down.left" : "arrow.up.right")
                             .font(.caption2.weight(.semibold))
-                        Text(call.missed ? L10n.t("未接") : "AirSIM Audio")
+                        Text(call.missed ? L10n.t("Missed") : "AirSIM Audio")
                     }
                     .font(.subheadline)
                     .foregroundStyle(call.missed ? .red : .secondary)
@@ -834,7 +834,7 @@ struct RecentsView: View {
     }
 }
 
-// MARK: - 短信
+// MARK: - Messages
 
 struct MessagesView: View {
     @Environment(AppModel.self) private var model
@@ -848,7 +848,7 @@ struct MessagesView: View {
         NavigationStack(path: $conversationPath) {
             List {
                 if model.conversations.isEmpty {
-                    EmptyStateView(title: L10n.t("暂无短信"), systemImage: "message")
+                    EmptyStateView(title: L10n.t("No Messages"), systemImage: "message")
                         .listRowBackground(Color.clear)
                 } else {
                     ForEach(model.conversations, id: \.sender) { conversation in
@@ -874,7 +874,7 @@ struct MessagesView: View {
             .environment(\.defaultMinListRowHeight, PhoneListMetrics.rowHeight)
             .phoneReportsTabBarCompactState()
             .background(PhoneBackdrop())
-            .navigationTitle(L10n.t("短信"))
+            .navigationTitle(L10n.t("Messages"))
             .navigationDestination(for: String.self) { sender in
                 MessageThreadView(sender: sender)
             }
@@ -882,10 +882,10 @@ struct MessagesView: View {
                 phoneMorphingToolbarItem(placement: .topBarLeading, id: "top-action-leading-more") {
                     Menu {
                         Button { Task { await model.refreshMessages() } } label: {
-                            Label(L10n.t("刷新"), systemImage: "arrow.clockwise")
+                            Label(L10n.t("Refresh"), systemImage: "arrow.clockwise")
                         }
                         Button(role: .destructive) { showingClearConfirmation = true } label: {
-                            Label(L10n.t("清空全部短信"), systemImage: "trash")
+                            Label(L10n.t("Clear all SMS"), systemImage: "trash")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -897,7 +897,7 @@ struct MessagesView: View {
                     Button { showingComposer = true } label: {
                         Image(systemName: "square.and.pencil")
                     }
-                    .accessibilityLabel(L10n.t("新信息"))
+                    .accessibilityLabel(L10n.t("New Message"))
                 }
             }
             .task {
@@ -913,14 +913,14 @@ struct MessagesView: View {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
-            .confirmationDialog(L10n.t("清空全部短信"), isPresented: $showingClearConfirmation, titleVisibility: .visible) {
-                Button(L10n.t("删除"), role: .destructive) {
+            .confirmationDialog(L10n.t("Clear all SMS"), isPresented: $showingClearConfirmation, titleVisibility: .visible) {
+                Button(L10n.t("Delete"), role: .destructive) {
                     Task {
                         try? await model.api.clearModuleSMS()
                         model.clearLocalMessages()
                     }
                 }
-                Button(L10n.t("取消"), role: .cancel) {}
+                Button(L10n.t("Cancel"), role: .cancel) {}
             } message: {
                 Text("This permanently deletes local messages and undelivered module messages.")
             }
@@ -982,7 +982,7 @@ private struct MessageThreadView: View {
     @Environment(AppModel.self) private var model
     let sender: String
     @State private var reply = ""
-    // foreach.md：会话内过滤与排序只在消息集合变化时重算。
+    // foreach.md: in-thread filtering and sorting are recomputed only when the message collection changes.
     @State private var messages: [SMSMessage] = []
 
     var body: some View {
@@ -1008,7 +1008,7 @@ private struct MessageThreadView: View {
                                         )
                                         .foregroundStyle(message.isOutgoing ? .white : .primary)
                                     if message.isOutgoing {
-                                        Text(L10n.t("已发送"))
+                                        Text(L10n.t("Sent"))
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }
@@ -1020,8 +1020,8 @@ private struct MessageThreadView: View {
                     }
                     .padding()
                 }
-                // review round 2 #3：首帧 messages 仍为空时 onAppear 的 scrollTo 无行可滚；
-                // iOS 17 defaultScrollAnchor(.bottom) 让会话打开即定位到最新消息。
+                // review round 2 #3: when messages is still empty on the first frame, scrollTo in onAppear has no row to target;
+                // iOS 17 defaultScrollAnchor(.bottom) anchors the conversation to the latest message immediately on open.
                 .defaultScrollAnchor(.bottom)
                 .onAppear { if let id = messages.last?.id { proxy.scrollTo(id) } }
             }
@@ -1032,7 +1032,7 @@ private struct MessageThreadView: View {
             }
             Divider()
             HStack(spacing: 10) {
-                TextField(L10n.t("短信内容"), text: $reply, axis: .vertical)
+                TextField(L10n.t("Message"), text: $reply, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                 Button {
                     let body = reply
@@ -1097,14 +1097,14 @@ private struct MessageComposer: View {
                 messageInputBar
             }
             .background(PhoneBackdrop())
-            .navigationTitle(L10n.t("新信息"))
+            .navigationTitle(L10n.t("New Message"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.t("取消")) { dismiss() }
+                    Button(L10n.t("Cancel")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.t("发送"), action: sendNow)
+                    Button(L10n.t("Send"), action: sendNow)
                         .disabled(!canSend)
                 }
             }
@@ -1128,12 +1128,12 @@ private struct MessageComposer: View {
                     .font(.title2)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(L10n.t("从通讯录选择"))
+            .accessibilityLabel(L10n.t("Choose from Contacts"))
 
-            Text(L10n.t("收件人："))
+            Text(L10n.t("To:"))
                 .foregroundStyle(.secondary)
 
-            TextField(L10n.t("输入号码或姓名"), text: $recipient)
+            TextField(L10n.t("Enter number or name"), text: $recipient)
                 .textFieldStyle(.plain)
                 .keyboardType(.phonePad)
                 .textContentType(.telephoneNumber)
@@ -1192,7 +1192,7 @@ private struct MessageComposer: View {
     private var messageInputBar: some View {
         VStack(spacing: 5) {
             HStack(alignment: .bottom, spacing: 9) {
-                TextField(L10n.t("短信内容"), text: $content, axis: .vertical)
+                TextField(L10n.t("Message"), text: $content, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .padding(.horizontal, 13)
@@ -1214,10 +1214,10 @@ private struct MessageComposer: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!canSend)
-                .accessibilityLabel(L10n.t("发送"))
+                .accessibilityLabel(L10n.t("Send"))
             }
 
-            Text(L10n.t("短信将通过 4G 模块发送"))
+            Text(L10n.t("Messages are sent through the 4G module"))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -1256,14 +1256,14 @@ private struct MessageContactPicker: View {
             Group {
                 if !model.contacts.isAuthorized {
                     EmptyStateView(
-                        title: L10n.t("授权访问通讯录"),
+                        title: L10n.t("Allow Contacts Access"),
                         systemImage: "person.crop.circle.badge.questionmark",
-                        actionTitle: L10n.t("授权访问通讯录")
+                        actionTitle: L10n.t("Allow Contacts Access")
                     ) {
                         Task { await model.contacts.requestAccessAndLoad() }
                     }
                 } else if filteredContacts.isEmpty {
-                    EmptyStateView(title: L10n.t("通讯录为空"), systemImage: "person.2")
+                    EmptyStateView(title: L10n.t("No contacts"), systemImage: "person.2")
                 } else {
                     List(filteredContacts) { contact in
                         ForEach(ContactPhoneListPolicy.displayPhones(for: contact.phones), id: \.self) { phone in
@@ -1294,12 +1294,12 @@ private struct MessageContactPicker: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle(L10n.t("选择联系人"))
+            .navigationTitle(L10n.t("Choose Contact"))
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $search, prompt: L10n.t("搜索姓名或号码"))
+            .searchable(text: $search, prompt: L10n.t("Search name or number"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.t("取消")) { dismiss() }
+                    Button(L10n.t("Cancel")) { dismiss() }
                 }
             }
             .task { await model.contacts.loadIfAuthorized() }
@@ -1309,7 +1309,7 @@ private struct MessageContactPicker: View {
     }
 }
 
-// MARK: - 通讯录
+// MARK: - Contacts
 
 struct ContactsView: View {
     @Environment(AppModel.self) private var model
@@ -1332,11 +1332,11 @@ struct ContactsView: View {
                     EmptyStateView(
                         title: model.contacts.authorizationState == .denied
                             ? "Contacts access is disabled"
-                            : L10n.t("授权访问通讯录"),
+                            : L10n.t("Allow Contacts Access"),
                         systemImage: "person.crop.circle.badge.questionmark",
                         actionTitle: model.contacts.authorizationState == .denied
                             ? "Open Settings"
-                            : L10n.t("授权访问通讯录")
+                            : L10n.t("Allow Contacts Access")
                     ) {
                         if model.contacts.authorizationState == .denied {
                             openURL(URL(string: UIApplication.openSettingsURLString)!)
@@ -1345,7 +1345,7 @@ struct ContactsView: View {
                         }
                     }
                 } else if filtered.isEmpty {
-                    EmptyStateView(title: L10n.t("通讯录为空"), systemImage: "person.2")
+                    EmptyStateView(title: L10n.t("No contacts"), systemImage: "person.2")
                 } else {
                     List(filtered) { contact in
                         NavigationLink {
@@ -1389,11 +1389,11 @@ struct ContactsView: View {
                 }
             }
             .background(PhoneBackdrop())
-            .navigationTitle("\(L10n.t("通讯录")) · \(model.contacts.contacts.count)")
+            .navigationTitle("\(L10n.t("Contacts")) · \(model.contacts.contacts.count)")
             .searchable(
                 text: $search,
                 placement: .navigationBarDrawer(displayMode: .always),
-                prompt: L10n.t("搜索姓名或号码")
+                prompt: L10n.t("Search name or number")
             )
             .refreshable { await model.contacts.requestAccessAndLoad() }
             .task { await model.contacts.loadIfAuthorized() }
@@ -1444,7 +1444,7 @@ private struct ContactDetailView: View {
                                     .background(Color.blue.opacity(0.12), in: Circle())
                             }
                             .buttonStyle(.borderless)
-                            .accessibilityLabel(L10n.t("发短信"))
+                            .accessibilityLabel(L10n.t("Send Message"))
 
                             Button { onCall(phone) } label: {
                                 Image(systemName: "phone.fill")
@@ -1453,7 +1453,7 @@ private struct ContactDetailView: View {
                                     .background(Color.green.opacity(0.12), in: Circle())
                             }
                             .buttonStyle(.borderless)
-                            .accessibilityLabel(L10n.t("拨号"))
+                            .accessibilityLabel(L10n.t("Dial"))
                         }
                     }
                 }
@@ -1559,7 +1559,7 @@ struct InitialAvatar: View {
     }
 }
 
-/// 使用系统原生 ContentUnavailableView 展示空状态。
+/// Uses native system ContentUnavailableView to present empty states.
 private struct EmptyStateView: View {
     let title: String
     let systemImage: String
@@ -1589,7 +1589,7 @@ private struct EmptyStateView: View {
     }
 }
 
-// MARK: - 通话覆盖层
+// MARK: - Call Overlay
 
 enum CallSurfacePhase: Equatable {
     case incoming
@@ -1667,8 +1667,8 @@ struct ActiveCallView: View {
                 .padding(.vertical, isCompact ? 18 : 26)
             }
         }
-        // 来电提醒与接通后的通话都是聚焦型全屏任务。保持固定画布，避免
-        // ScrollView 的拖动/回弹，也避免手势误触影响接听和挂断。
+        // Incoming call alerts and active calls are focused full-screen tasks. Keep a fixed canvas to avoid
+        // ScrollView drag/bounce and prevent accidental gestures from interfering with answer or hangup.
         .contentShape(Rectangle())
         .sheet(isPresented: $showingKeypad) { DTMFKeypadView() }
         .environment(\.colorScheme, .dark)
@@ -1709,7 +1709,7 @@ struct ActiveCallView: View {
                         .textSelection(.enabled)
                 }
 
-                Text(L10n.t("等待接听"))
+                Text(L10n.t("Waiting"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.white.opacity(0.62))
             }
@@ -1722,7 +1722,7 @@ struct ActiveCallView: View {
 
             HStack {
                 CallDecisionButton(
-                    title: L10n.t("拒接"),
+                    title: L10n.t("Decline"),
                     icon: "phone.down.fill",
                     color: .red
                 ) {
@@ -1732,7 +1732,7 @@ struct ActiveCallView: View {
                 Spacer(minLength: 56)
 
                 CallDecisionButton(
-                    title: L10n.t("接听"),
+                    title: L10n.t("Accept"),
                     icon: "phone.fill",
                     color: .green
                 ) {
@@ -1798,7 +1798,7 @@ struct ActiveCallView: View {
 
             HStack(spacing: isCompact ? 20 : 34) {
                 CallCircleButton(
-                    title: model.isMuted ? L10n.t("取消静音") : L10n.t("静音"),
+                    title: model.isMuted ? L10n.t("Unmute") : L10n.t("Mute"),
                     icon: model.isMuted ? "mic.slash.fill" : "mic.fill",
                     color: model.isMuted ? .orange : nil,
                     foregroundColor: .white,
@@ -1824,7 +1824,7 @@ struct ActiveCallView: View {
             .frame(maxWidth: 430)
 
             CallDecisionButton(
-                title: L10n.t("挂断"),
+                title: L10n.t("End"),
                 icon: "phone.down.fill",
                 color: .red
             ) {
@@ -1862,7 +1862,7 @@ struct ActiveCallView: View {
                 .callControlGlass(tint: model.isRecording ? .red.opacity(0.16) : nil)
                 .disabled(!model.canToggleRecording)
                 .opacity(model.canToggleRecording ? 1 : 0.45)
-                .accessibilityLabel(model.isRecording ? L10n.t("停止录音") : L10n.t("录音"))
+                .accessibilityLabel(model.isRecording ? L10n.t("Stop Recording") : L10n.t("Record"))
             }
         }
         .font(.subheadline.weight(.semibold))
@@ -1927,8 +1927,8 @@ struct ActiveCallView: View {
 
     private func durationText(at date: Date) -> String {
         let total = max(0, Int(date.timeIntervalSince(call.startedAt)))
-        // localization.md：用 FormatStyle 取代 String(format:)；补零与 en 现状完全一致，
-        // 分钟数超过 59 时也保持原有的 mm:ss 形态而不是切换到小时。
+        // localization.md: use FormatStyle instead of String(format:); zero-padding matches existing English output
+        // and preserves the mm:ss format even when minutes exceed 59 rather than switching to hours.
         return Duration.seconds(total)
             .formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2)))
     }
@@ -1948,7 +1948,7 @@ private struct SpeakerRouteButton: View {
 
     var body: some View {
         CallCircleButton(
-            title: L10n.t("扬声器"),
+            title: L10n.t("Speaker"),
             icon: audio.speakerEnabled ? "speaker.wave.2.fill" : "speaker.fill",
             color: audio.speakerEnabled ? .blue : nil,
             foregroundColor: .white,
@@ -2098,7 +2098,7 @@ private struct DTMFKeypadView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(24)
             .navigationTitle("Call Keypad")
-            .toolbar { Button(L10n.t("取消")) { dismiss() } }
+            .toolbar { Button(L10n.t("Cancel")) { dismiss() } }
         }
         .presentationDetents([.medium])
         .presentationDragIndicator(.hidden)
@@ -2106,10 +2106,10 @@ private struct DTMFKeypadView: View {
 
     private var keypad: some View {
         VStack(spacing: 16) {
-            // rows 是常量布局表且各行内容互不相同；[String] 可哈希，直接用 \.self。
+            // rows is a constant layout table with distinct row contents; [String] is Hashable so \.self is used directly.
             ForEach(rows, id: \.self) { row in
                 HStack(spacing: 24) {
-                    // 每行数字唯一且恒定，内容身份稳定（foreach.md）。
+                    // Each digit in a row is unique and constant, providing stable content identity (foreach.md).
                     ForEach(row, id: \.self) { digit in
                         Button {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -2147,3 +2147,124 @@ private struct DTMFGlassButtonStyle: ButtonStyle {
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
+
+#Preview("Dial Pad") {
+    let model = AppModel()
+    model.numberInput = "+1 202 555 0100"
+    return DialPadView()
+        .environment(model)
+        .environment(model.contacts)
+        .environment(model.audio)
+}
+
+#Preview("Recents") {
+    let model = AppModel()
+    model.callHistory = [
+        CallRecord(
+            id: "preview-call-1",
+            index: 1,
+            direction: "incoming",
+            state: "ended",
+            number: "+1 202 555 0100",
+            startedAt: Date().addingTimeInterval(-900),
+            updatedAt: Date().addingTimeInterval(-840),
+            endedAt: Date().addingTimeInterval(-840),
+            missed: false
+        ),
+        CallRecord(
+            id: "preview-call-2",
+            index: 2,
+            direction: "incoming",
+            state: "ended",
+            number: "+1 202 555 0199",
+            startedAt: Date().addingTimeInterval(-7200),
+            updatedAt: Date().addingTimeInterval(-7200),
+            endedAt: Date().addingTimeInterval(-7200),
+            missed: true
+        ),
+    ]
+    return RecentsView(onCall: { _ in }, onMessage: { _ in })
+        .environment(model)
+        .environment(model.contacts)
+}
+
+#Preview("Messages") {
+    @Previewable @State var pendingRecipient: String? = nil
+    @Previewable @State var pendingConversation: String? = nil
+    let model = AppModel()
+    model.messages = [
+        SMSMessage(
+            sender: "+1 202 555 0100",
+            content: "Your verification code is 482910.",
+            code: "482910",
+            timestamp: Date().addingTimeInterval(-300),
+            deliveryID: "preview-sms-1",
+            direction: .incoming
+        ),
+        SMSMessage(
+            sender: "+1 202 555 0100",
+            content: "Got it, thanks!",
+            code: nil,
+            timestamp: Date().addingTimeInterval(-120),
+            deliveryID: "preview-sms-2",
+            direction: .outgoing
+        ),
+    ]
+    return MessagesView(
+        pendingRecipient: $pendingRecipient,
+        pendingConversation: $pendingConversation
+    )
+    .environment(model)
+    .environment(model.contacts)
+}
+
+#Preview("Contacts") {
+    let model = AppModel()
+    return ContactsView(onCall: { _ in }, onMessage: { _ in })
+        .environment(model)
+        .environment(model.contacts)
+}
+
+#Preview("Active Call · Incoming") {
+    let model = AppModel()
+    let call = CallRecord(
+        id: "preview-incoming",
+        index: 1,
+        direction: "incoming",
+        state: "incoming",
+        number: "+1 202 555 0100",
+        startedAt: Date(),
+        updatedAt: Date(),
+        endedAt: nil,
+        missed: false
+    )
+    return ActiveCallView(call: call)
+        .environment(model)
+        .environment(model.contacts)
+        .environment(model.audio)
+}
+
+#Preview("Active Call · Connected") {
+    let model = AppModel()
+    let call = CallRecord(
+        id: "preview-active",
+        index: 1,
+        direction: "outgoing",
+        state: "active",
+        number: "+1 202 555 0100",
+        startedAt: Date().addingTimeInterval(-85),
+        updatedAt: Date(),
+        endedAt: nil,
+        missed: false
+    )
+    return ActiveCallView(call: call)
+        .environment(model)
+        .environment(model.contacts)
+        .environment(model.audio)
+}
+
+#Preview("DTMF Keypad") {
+    DTMFKeypadView()
+        .environment(AppModel())
+}
+

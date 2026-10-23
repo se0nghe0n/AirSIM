@@ -59,6 +59,14 @@ public final class PhoneAudioBridge {
         }
     }
 
+    /** 4 KB hint, matching the WebRTC peer. 8 kHz PCM16 is 16 KB/s. */
+    static final int LOOPBACK_SOCKET_BYTES = 4096;
+
+    /** Keep an 80 ms floor, and never go under the platform minimum. */
+    static int deviceBufferBytes(int minimumBytes) {
+        return Math.max(minimumBytes, BridgeProtocol.FRAME_BYTES * 4);
+    }
+
     static int captureSource() {
         return 3;
     }
@@ -158,6 +166,8 @@ public final class PhoneAudioBridge {
         try (client) {
             client.setKeepAlive(true);
             client.setTcpNoDelay(true);
+            client.setReceiveBufferSize(LOOPBACK_SOCKET_BYTES);
+            client.setSendBufferSize(LOOPBACK_SOCKET_BYTES);
             BridgeProtocol.acceptHandshake(client.getInputStream(), client.getOutputStream());
             emit(started, "client_ready", Map.of("result", "ok"));
             streamCallAudio(client, started, stats);
@@ -173,15 +183,17 @@ public final class PhoneAudioBridge {
 
     private static void streamCallAudio(Socket client, long started, BridgeStats stats)
             throws Exception {
-        int recordBufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_IN, ENCODING);
-        int trackBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_OUT, ENCODING);
-        if (recordBufferSize <= 0 || trackBufferSize <= 0) {
+        int recordMinimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_IN, ENCODING);
+        int trackMinimum = AudioTrack.getMinBufferSize(SAMPLE_RATE, CHANNEL_OUT, ENCODING);
+        if (recordMinimum <= 0 || trackMinimum <= 0) {
             throw new IllegalStateException("invalid Android audio buffer sizes");
         }
+        int recordBufferSize = deviceBufferBytes(recordMinimum);
+        int trackBufferSize = deviceBufferBytes(trackMinimum);
 
         AudioRecord recorder = new AudioRecord(
             captureSource(), SAMPLE_RATE, CHANNEL_IN, ENCODING,
-            Math.max(recordBufferSize, BridgeProtocol.FRAME_BYTES * 10));
+            recordBufferSize);
         AudioAttributes.Builder attributeBuilder = new AudioAttributes.Builder()
             .setUsage(playbackUsage())
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH);
@@ -201,7 +213,7 @@ public final class PhoneAudioBridge {
                 .setSampleRate(SAMPLE_RATE)
                 .setChannelMask(CHANNEL_OUT)
                 .build())
-            .setBufferSizeInBytes(Math.max(trackBufferSize, BridgeProtocol.FRAME_BYTES * 10))
+            .setBufferSizeInBytes(trackBufferSize)
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build();
         try {

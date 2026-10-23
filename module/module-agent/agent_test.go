@@ -25,15 +25,15 @@ func TestRequestAdmissionReservesCallControlCapacity(t *testing.T) {
 	admission := newRequestAdmission(1, 1, 1)
 	release, ok := admission.acquire(context.Background(), "/api/status")
 	if !ok {
-		t.Fatal("第一个普通状态请求应获准")
+		t.Fatal("the first ordinary status request should be admitted")
 	}
 	defer release()
 	if _, ok := admission.acquire(context.Background(), "/api/router/status"); ok {
-		t.Fatal("普通请求通道饱和时应快速拒绝")
+		t.Fatal("an ordinary request should be rejected quickly when its channel is saturated")
 	}
 	criticalRelease, ok := admission.acquire(context.Background(), "/api/calls/hangup")
 	if !ok {
-		t.Fatal("普通请求饱和不应阻塞挂断控制")
+		t.Fatal("saturated ordinary requests must not block hangup control")
 	}
 	criticalRelease()
 }
@@ -65,12 +65,12 @@ func TestRequestAdmissionSeparatesLongPolls(t *testing.T) {
 	admission := newRequestAdmission(1, 1, 1)
 	release, ok := admission.acquire(context.Background(), "/api/events")
 	if !ok {
-		t.Fatal("首个长轮询应获准")
+		t.Fatal("the first long poll should be admitted")
 	}
 	defer release()
 	normalRelease, ok := admission.acquire(context.Background(), "/api/status")
 	if !ok {
-		t.Fatal("长轮询不应占用普通状态请求通道")
+		t.Fatal("a long poll must not occupy the ordinary status channel")
 	}
 	normalRelease()
 }
@@ -79,18 +79,18 @@ func TestAndroidCommandPollHasReservedAdmission(t *testing.T) {
 	admission := newRequestAdmission(1, 1, 2)
 	firstRelease, ok := admission.acquire(context.Background(), "/api/events")
 	if !ok {
-		t.Fatal("首个 iPhone 事件长轮询应获准")
+		t.Fatal("the first iPhone event long poll should be admitted")
 	}
 	defer firstRelease()
 	secondRelease, ok := admission.acquire(context.Background(), "/api/calls/events")
 	if !ok {
-		t.Fatal("第二个 iPhone 事件长轮询应获准")
+		t.Fatal("the second iPhone event long poll should be admitted")
 	}
 	defer secondRelease()
 
 	androidRelease, ok := admission.acquire(context.Background(), "/api/android/commands/next")
 	if !ok {
-		t.Fatal("iPhone 长轮询饱和时必须为 Android 命令轮询保留容量")
+		t.Fatal("Android command polling must keep reserved capacity when iPhone long polls are saturated")
 	}
 	androidRelease()
 
@@ -117,18 +117,18 @@ func TestOperationFlightCoalescesConcurrentHangups(t *testing.T) {
 	go func() { results <- flight.Do(operation) }()
 	<-started
 	go func() { results <- flight.Do(operation) }()
-	// 给第二个请求进入已存在 flight 的机会；首个操作仍被 finish 门锁住。
+	// Give the second request time to join the existing flight; the first operation stays blocked on finish.
 	time.Sleep(10 * time.Millisecond)
 	close(finish)
 	for range 2 {
 		if err := <-results; err != nil {
-			t.Fatalf("合并挂断返回错误: %v", err)
+			t.Fatalf("coalesced hangup returned an error: %v", err)
 		}
 	}
 	mu.Lock()
 	defer mu.Unlock()
 	if runs != 1 {
-		t.Fatalf("并发挂断实际执行 %d 次，期望 1 次", runs)
+		t.Fatalf("concurrent hangup ran %d times, want 1", runs)
 	}
 }
 
@@ -144,14 +144,14 @@ func TestVoiceRuntimeValidatorCachesStreamingValidation(t *testing.T) {
 	var validator voiceRuntimeValidator
 	installed, err := validator.validate(directory, files)
 	if err != nil || !installed {
-		t.Fatalf("初次流式校验失败: installed=%v err=%v", installed, err)
+		t.Fatalf("initial streaming validation failed: installed=%v err=%v", installed, err)
 	}
 	if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	installed, err = validator.validate(directory, files)
 	if err != nil || !installed {
-		t.Fatalf("同一进程内应复用已通过的校验结果: installed=%v err=%v", installed, err)
+		t.Fatalf("a passed validation result should be reused in the same process: installed=%v err=%v", installed, err)
 	}
 }
 
@@ -172,7 +172,7 @@ func TestAllowedRemote(t *testing.T) {
 	}
 	for _, test := range tests {
 		if got := allowedRemote(test.remote); got != test.want {
-			t.Errorf("allowedRemote(%q)=%v，期望 %v", test.remote, got, test.want)
+			t.Errorf("allowedRemote(%q)=%v, want %v", test.remote, got, test.want)
 		}
 	}
 }
@@ -220,7 +220,7 @@ func TestCompareModuleVersions(t *testing.T) {
 	}
 	for _, test := range tests {
 		if got := compareModuleVersions(test.left, test.right); got != test.want {
-			t.Errorf("compareModuleVersions(%q,%q)=%d，期望 %d", test.left, test.right, got, test.want)
+			t.Errorf("compareModuleVersions(%q,%q)=%d, want %d", test.left, test.right, got, test.want)
 		}
 	}
 }
@@ -239,11 +239,11 @@ func TestValidateModuleUpdateManifestRejectsIncompleteOrWrongTarget(t *testing.T
 		Files:         validFiles,
 	}
 	if err := validateModuleUpdateManifest(manifest); err != nil {
-		t.Fatalf("合法更新清单被拒绝: %v", err)
+		t.Fatalf("valid update manifest was rejected: %v", err)
 	}
 	manifest.Files[0].Target = "bin/unsafe"
 	if err := validateModuleUpdateManifest(manifest); err == nil {
-		t.Fatal("更新清单中的越界目标未被拒绝")
+		t.Fatal("an out-of-bounds target in the update manifest was not rejected")
 	}
 }
 
@@ -253,14 +253,14 @@ func TestWriteVoiceMediaRoutePreservesCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := writeVoiceMediaRoute(path, "S\n"); err != nil {
-		t.Fatalf("写入语音启动命令失败: %v", err)
+		t.Fatalf("failed to write the voice start command: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "S\n" {
-		t.Fatalf("语音启动命令=%q，期望 %q", data, "S\\n")
+		t.Fatalf("voice start command=%q, want %q", data, "S\\n")
 	}
 }
 
@@ -268,14 +268,14 @@ func TestVoiceHelperChecksumMatchesBuiltArtifact(t *testing.T) {
 	path := filepath.Join("pcm-bridge", voiceHelperName)
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		t.Skip("尚未构建 PCM helper")
+		t.Skip("PCM helper has not been built yet")
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	digest := sha256.Sum256(data)
 	if actual := hex.EncodeToString(digest[:]); actual != voiceHelperSHA256 {
-		t.Fatalf("PCM helper SHA-256=%s，Agent 白名单=%s", actual, voiceHelperSHA256)
+		t.Fatalf("PCM helper SHA-256=%s, Agent allowlist=%s", actual, voiceHelperSHA256)
 	}
 }
 
@@ -284,10 +284,10 @@ func TestParseCLCC(t *testing.T) {
 		"+CLCC: 2,0,0,1,0,\"data\",129\r\nOK\r\n"
 	calls := parseCLCC(response)
 	if len(calls) != 1 {
-		t.Fatalf("语音通话数量=%d，期望 1", len(calls))
+		t.Fatalf("voice call count=%d, want 1", len(calls))
 	}
 	if calls[0].Direction != "incoming" || calls[0].State != "incoming" || calls[0].Number != "+8613800138000" {
-		t.Fatalf("通话解析错误: %#v", calls[0])
+		t.Fatalf("call parse mismatch: %#v", calls[0])
 	}
 }
 
@@ -295,14 +295,14 @@ func TestParseDSCIIncomingAndEnd(t *testing.T) {
 	call, ended, ok := parseDSCI(`^DSCI: 1,1,4,0,13022100000,129,0`)
 	if !ok || ended || call.Index != 1 || call.Direction != "incoming" ||
 		call.State != "incoming" || call.Number != "13022100000" {
-		t.Fatalf("来电 DSCI 解析错误: call=%#v ended=%v ok=%v", call, ended, ok)
+		t.Fatalf("incoming DSCI parse mismatch: call=%#v ended=%v ok=%v", call, ended, ok)
 	}
 	_, ended, ok = parseDSCI(`^DSCI: 1,1,6,0,13022100000,129,0`)
 	if !ok || !ended {
-		t.Fatalf("结束 DSCI 解析错误: ended=%v ok=%v", ended, ok)
+		t.Fatalf("ended DSCI parse mismatch: ended=%v ok=%v", ended, ok)
 	}
 	if _, _, ok := parseDSCI(`^DSCI: 1,1,4,1,data,129,0`); ok {
-		t.Fatal("PS 会话不应被解析为语音通话")
+		t.Fatal("a PS session must not be parsed as a voice call")
 	}
 }
 
@@ -313,17 +313,17 @@ func TestATPortDispatchesChunkedURCWithoutTreatingResponsesAsEvents(t *testing.T
 	pending := port.dispatchCompleteURCLines(nil, []byte("\r\n^DSCI: 1,1,"))
 	pending = port.dispatchCompleteURCLines(pending, []byte("4,0,10086,129,0\r\n+CLCC: 1,1,4,0,0\r\n"))
 	if len(pending) != 0 {
-		t.Fatalf("URC 分块后仍有残留: %q", pending)
+		t.Fatalf("URC chunking left a remainder: %q", pending)
 	}
 	if len(lines) != 1 || lines[0] != "^DSCI: 1,1,4,0,10086,129,0" {
-		t.Fatalf("URC 分发结果错误: %#v", lines)
+		t.Fatalf("URC dispatch mismatch: %#v", lines)
 	}
 }
 
 func TestParseSMSStorageURC(t *testing.T) {
 	notice, ok := parseSMSStorageURC(`+CMTI: "SM",7`)
 	if !ok || notice.Memory != "SM" || notice.Index != 7 {
-		t.Fatalf("短信存储 URC 解析错误: notice=%#v ok=%v", notice, ok)
+		t.Fatalf("SMS storage URC parse mismatch: notice=%#v ok=%v", notice, ok)
 	}
 }
 
@@ -333,10 +333,10 @@ func TestApplyCallPollRecordsMissedCall(t *testing.T) {
 	a.applyCallPoll([]parsedCall{{Index: 1, Direction: "incoming", State: "incoming", Number: "10086"}}, started)
 	a.applyCallPoll(nil, started.Add(3*time.Second))
 	if a.calls.Active != nil || len(a.calls.History) != 1 {
-		t.Fatalf("通话结束状态错误: active=%#v history=%d", a.calls.Active, len(a.calls.History))
+		t.Fatalf("call end state mismatch: active=%#v history=%d", a.calls.Active, len(a.calls.History))
 	}
 	if !a.calls.History[0].Missed || a.calls.History[0].EndedAt == nil {
-		t.Fatalf("未接来电记录错误: %#v", a.calls.History[0])
+		t.Fatalf("missed-call record mismatch: %#v", a.calls.History[0])
 	}
 }
 
@@ -346,40 +346,40 @@ func TestEndedDSCIRejectsStaleCLCCResurrection(t *testing.T) {
 	incoming := parsedCall{Index: 1, Direction: "incoming", State: "incoming", Number: "10086"}
 	a.applyCallPoll([]parsedCall{incoming}, started)
 	if a.calls.Active == nil {
-		t.Fatal("来电没有进入 active tracker")
+		t.Fatal("incoming call did not enter the active tracker")
 	}
 	originalID := a.calls.Active.ID
 
-	// 基带先通过 URC 明确通知通话结束，但紧邻的一次 AT+CLCC 仍可能返回旧缓存。
+	// The baseband first reports call end through a URC, but the immediately following AT+CLCC may still return a stale cache.
 	a.handleURC(`^DSCI: 1,1,6,0,10086,129,0`)
 	a.applyCallPoll([]parsedCall{incoming}, started.Add(1500*time.Millisecond))
 
 	if a.calls.Active != nil {
-		t.Fatalf("陈旧 CLCC 重新创建了来电: %#v", a.calls.Active)
+		t.Fatalf("stale CLCC recreated the incoming call: %#v", a.calls.Active)
 	}
 	if len(a.calls.History) != 1 || a.calls.History[0].ID != originalID {
-		t.Fatalf("结束记录被重复或替换: %#v", a.calls.History)
+		t.Fatalf("end record was duplicated or replaced: %#v", a.calls.History)
 	}
 }
 
 func TestUSBSoftwareReconnectRequiresIdleECMOnlyProfile(t *testing.T) {
 	if err := validateUSBSoftwareReconnect(false, false, "diag,ecm,ffs"); err != nil {
-		t.Fatalf("空闲 ECM 组合应允许软件重连: %v", err)
+		t.Fatalf("an idle ECM composition should allow a software reconnect: %v", err)
 	}
 	for name, test := range map[string]struct {
 		callActive  bool
 		voiceActive bool
 		functions   string
 	}{
-		"通话中":     {callActive: true, functions: "diag,ecm,ffs"},
-		"媒体路由运行":  {voiceActive: true, functions: "diag,ecm,ffs"},
-		"缺少ECM":   {functions: "diag,ffs"},
-		"包含串口":    {functions: "diag,serial,ecm,ffs"},
-		"包含USB音频": {functions: "diag,ecm,ffs,audio"},
+		"call active":         {callActive: true, functions: "diag,ecm,ffs"},
+		"media route running": {voiceActive: true, functions: "diag,ecm,ffs"},
+		"missing ECM":         {functions: "diag,ffs"},
+		"includes serial":     {functions: "diag,serial,ecm,ffs"},
+		"includes USB audio":  {functions: "diag,ecm,ffs,audio"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateUSBSoftwareReconnect(test.callActive, test.voiceActive, test.functions); err == nil {
-				t.Fatal("危险状态不应允许 USB 软件重连")
+				t.Fatal("a dangerous state must not allow USB software reconnect")
 			}
 		})
 	}
@@ -391,55 +391,55 @@ func TestCallHistoryAckRemovesOnlyConfirmedRecords(t *testing.T) {
 	response := httptest.NewRecorder()
 	a.callHistoryAck(response, request)
 	if response.Code != 200 {
-		t.Fatalf("确认接口状态=%d，响应=%s", response.Code, response.Body.String())
+		t.Fatalf("ack API status=%d, body=%s", response.Code, response.Body.String())
 	}
 	if len(a.calls.History) != 1 || a.calls.History[0].ID != "keep" {
-		t.Fatalf("确认后通话队列错误: %#v", a.calls.History)
+		t.Fatalf("call queue mismatch after ack: %#v", a.calls.History)
 	}
 }
 
 func TestUCS2RoundTripAndSplit(t *testing.T) {
-	value := "验证码 123456，测试🙂"
+	value := "Verification code 123456, test🙂"
 	encoded := encodeUCS2(value)
 	if decoded := decodeMaybeUCS2(encoded); decoded != value {
-		t.Fatalf("UCS2 往返=%q，期望 %q", decoded, value)
+		t.Fatalf("UCS2 round trip=%q, want %q", decoded, value)
 	}
 	segments := splitUCS2("A🙂B", 2)
 	if len(segments) != 3 || segments[0] != "A" || segments[1] != "🙂" || segments[2] != "B" {
-		t.Fatalf("代理对拆分错误: %#v", segments)
+		t.Fatalf("surrogate-pair split mismatch: %#v", segments)
 	}
 }
 
 func TestParseTextModeSMS(t *testing.T) {
 	response := "+CMGL: 7,\"REC READ\",\"002B0038003600310033003800300030003100330038003000300030\",,\"26/08/15,12:34:56+32\"\r\n" +
-		"9A8C8BC17801662F003100320033003400350036\r\nOK\r\n"
+		"0056006500720069006600690063006100740069006F006E00200063006F006400650020006900730020003100320033003400350036\r\nOK\r\n"
 	items := parseTextModeSMS(response, "ME")
 	if len(items) != 1 {
-		t.Fatalf("短信数量=%d，期望 1", len(items))
+		t.Fatalf("SMS count=%d, want 1", len(items))
 	}
 	message := items[0].Message
-	if message.Sender != "+8613800138000" || message.Content != "验证码是123456" || message.Code != "123456" {
-		t.Fatalf("短信解析错误: %#v", message)
+	if message.Sender != "+8613800138000" || message.Content != "Verification code is 123456" || message.Code != "123456" {
+		t.Fatalf("SMS parse mismatch: %#v", message)
 	}
 	_, offset := message.Timestamp.Zone()
 	if offset != 8*60*60 {
-		t.Fatalf("短信时区偏移=%d，期望 28800", offset)
+		t.Fatalf("SMS timezone offset=%d, want 28800", offset)
 	}
 	if message.DeliveryID == "" || !containsStoredSMS(items, items[0]) {
-		t.Fatalf("短信交付标识或去重状态错误: %#v", items[0])
+		t.Fatalf("SMS delivery id or dedup state mismatch: %#v", items[0])
 	}
 }
 
 func TestParseModemFields(t *testing.T) {
 	if got := parseSignalDBM("+CSQ: 29,99\r\nOK"); got == nil || *got != -55 {
-		t.Fatalf("信号解析=%v，期望 -55", got)
+		t.Fatalf("signal parse=%v, want -55", got)
 	}
 	mode, band := parseNetworkInfo(`+QNWINFO: "FDD LTE","46001","LTE BAND 3",1650`)
 	if mode != "FDD LTE" || band != "BAND 3" {
-		t.Fatalf("网络解析 mode=%q band=%q", mode, band)
+		t.Fatalf("network parse mode=%q band=%q", mode, band)
 	}
 	if got := normalizeOperator("CHN-UNICOM"); got != "China Unicom" {
-		t.Fatalf("运营商规范化=%q", got)
+		t.Fatalf("normalized operator=%q", got)
 	}
 }
 
@@ -458,14 +458,14 @@ func TestGPSRefreshExecutesQGPSLOCWhenEnabled(t *testing.T) {
 	a.gpsRefresh(response, request)
 
 	if response.Code != http.StatusOK {
-		t.Fatalf("GPS 刷新状态=%d，响应=%s", response.Code, response.Body.String())
+		t.Fatalf("GPS refresh status=%d, body=%s", response.Code, response.Body.String())
 	}
 	if len(commands) != 1 || commands[0] != "AT+QGPSLOC=2" {
-		t.Fatalf("GPS 刷新 AT 指令=%#v，期望 [AT+QGPSLOC=2]", commands)
+		t.Fatalf("GPS refresh AT command=%#v, want [AT+QGPSLOC=2]", commands)
 	}
 	for _, expected := range []string{`"latitude":"22.7261"`, `"longitude":"113.8420"`, `"satellites":"12"`} {
 		if !strings.Contains(response.Body.String(), expected) {
-			t.Fatalf("GPS 刷新响应缺少 %s: %s", expected, response.Body.String())
+			t.Fatalf("GPS refresh response missing %s: %s", expected, response.Body.String())
 		}
 	}
 }
@@ -483,10 +483,10 @@ func TestGPSRefreshPersistsNoFixError(t *testing.T) {
 	a.gpsRefresh(response, request)
 
 	if response.Code != http.StatusServiceUnavailable {
-		t.Fatalf("GPS 无定位状态=%d，期望 %d", response.Code, http.StatusServiceUnavailable)
+		t.Fatalf("GPS no-fix status=%d, want %d", response.Code, http.StatusServiceUnavailable)
 	}
 	if a.gps.LastError != "Location unavailable; move near a window or outdoors and try again" {
-		t.Fatalf("GPS 无定位错误未写入状态: %q", a.gps.LastError)
+		t.Fatalf("GPS no-fix error was not stored: %q", a.gps.LastError)
 	}
 }
 
@@ -494,10 +494,10 @@ func TestParseUSBConfigurationRefusesMalformedInput(t *testing.T) {
 	valid := `+QCFG: "usbcfg",0x2C7C,0x0125,1,1,1,1,1,1,1` + "\r\nOK"
 	configuration, err := parseUSBConfiguration(valid)
 	if err != nil || !configuration.uacEnabled() {
-		t.Fatalf("合法 USBCFG 解析失败: config=%#v err=%v", configuration, err)
+		t.Fatalf("valid USBCFG failed to parse: config=%#v err=%v", configuration, err)
 	}
 	if _, err := parseUSBConfiguration(`+QCFG: "usbcfg",0x2C7C,0x0125,1`); err == nil {
-		t.Fatal("畸形 USBCFG 未被拒绝")
+		t.Fatal("malformed USBCFG was not rejected")
 	}
 }
 
@@ -516,15 +516,15 @@ func TestInferQDC507USBConfigurationFromGadget(t *testing.T) {
 	}
 	configuration, raw, err := inferQDC507USBConfiguration(readFile)
 	if err != nil || configuration.uacEnabled() || raw != "gadget functions=diag,ecm,ffs" {
-		t.Fatalf("移动模式推断错误: config=%#v raw=%q err=%v", configuration, raw, err)
+		t.Fatalf("mobile-mode inference mismatch: config=%#v raw=%q err=%v", configuration, raw, err)
 	}
 	if got := configuration.withUAC(true); got != `AT+QCFG="usbcfg",0x2C7C,0x0125,1,1,1,1,1,1,1` {
-		t.Fatalf("Mac 模式命令=%q", got)
+		t.Fatalf("Mac mode command=%q", got)
 	}
 	files[usbGadgetPath+"/functions"] = "diag,serial,ecm,ffs,audio\n"
 	configuration, _, err = inferQDC507USBConfiguration(readFile)
 	if err != nil || !configuration.uacEnabled() {
-		t.Fatalf("Mac 模式推断错误: config=%#v err=%v", configuration, err)
+		t.Fatalf("Mac mode inference mismatch: config=%#v err=%v", configuration, err)
 	}
 }
 
@@ -538,23 +538,23 @@ func TestInferQDC507USBConfigurationRejectsUnknownHardware(t *testing.T) {
 		return []byte(values[path]), nil
 	}
 	if _, _, err := inferQDC507USBConfiguration(readFile); err == nil {
-		t.Fatal("未知硬件不应使用固定 USBCFG 回退")
+		t.Fatal("unknown hardware must not use the fixed USBCFG fallback")
 	}
 }
 
 func TestPersistUSBModeMarkerTracksExplicitMacSelection(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "usb-mode-mac")
 	if changed, err := persistUSBModeMarker(marker, "mac"); err != nil || !changed {
-		t.Fatalf("写入 Mac 模式标记失败: %v", err)
+		t.Fatalf("failed to write the Mac mode marker: %v", err)
 	}
 	if data, err := os.ReadFile(marker); err != nil || string(data) != "mac\n" {
-		t.Fatalf("Mac 模式标记=%q err=%v", data, err)
+		t.Fatalf("Mac mode marker=%q err=%v", data, err)
 	}
 	if changed, err := persistUSBModeMarker(marker, "mobile"); err != nil || !changed {
-		t.Fatalf("删除 Mac 模式标记失败: %v", err)
+		t.Fatalf("failed to delete the Mac mode marker: %v", err)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("手机模式仍保留 Mac 标记: %v", err)
+		t.Fatalf("phone mode still kept the Mac marker: %v", err)
 	}
 }
 
@@ -565,7 +565,7 @@ func TestRoutesRejectPublicRemote(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	a.routes(testLogger()).ServeHTTP(recorder, request)
 	if recorder.Code != 403 {
-		t.Fatalf("公网访问状态码=%d，期望 403", recorder.Code)
+		t.Fatalf("public access status=%d, want 403", recorder.Code)
 	}
 }
 
@@ -619,7 +619,7 @@ func TestDebugEndpointCapturesHTTPInputAndOutput(t *testing.T) {
 	platformResponse := httptest.NewRecorder()
 	handler.ServeHTTP(platformResponse, platformRequest)
 	if platformResponse.Code != http.StatusOK {
-		t.Fatalf("平台接口状态=%d", platformResponse.Code)
+		t.Fatalf("platform API status=%d", platformResponse.Code)
 	}
 
 	debugRequest := httptest.NewRequest("GET", "/?limit=50", nil)
@@ -627,12 +627,12 @@ func TestDebugEndpointCapturesHTTPInputAndOutput(t *testing.T) {
 	debugResponse := httptest.NewRecorder()
 	handler.ServeHTTP(debugResponse, debugRequest)
 	if debugResponse.Code != http.StatusOK {
-		t.Fatalf("Debug 接口状态=%d，响应=%s", debugResponse.Code, debugResponse.Body.String())
+		t.Fatalf("debug API status=%d, body=%s", debugResponse.Code, debugResponse.Body.String())
 	}
 	body := debugResponse.Body.String()
 	for _, expected := range []string{`"events"`, `GET /api/platform`, `"category":"http"`, `"trace_id":"trace-http-platform"`, `"version":"` + agentVersion + `"`} {
 		if !strings.Contains(body, expected) {
-			t.Fatalf("Debug 响应缺少 %q: %s", expected, body)
+			t.Fatalf("debug response missing %q: %s", expected, body)
 		}
 	}
 }
@@ -649,7 +649,7 @@ func TestCallEventsWaitIsReleasedByMeaningfulCallChange(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("长轮询在通话状态变化前提前返回")
+		t.Fatal("long poll returned before the call state changed")
 	case <-time.After(20 * time.Millisecond):
 	}
 
@@ -657,7 +657,7 @@ func TestCallEventsWaitIsReleasedByMeaningfulCallChange(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(300 * time.Millisecond):
-		t.Fatal("通话状态变化没有唤醒长轮询")
+		t.Fatal("call state change did not wake the long poll")
 	}
 
 	if response.Code != http.StatusOK {
@@ -687,7 +687,7 @@ func TestAgentEventsWaitIsReleasedByNewSMS(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("统一事件等待在新短信到达前提前返回")
+		t.Fatal("unified event wait returned before the new SMS arrived")
 	case <-time.After(20 * time.Millisecond):
 	}
 
@@ -695,7 +695,7 @@ func TestAgentEventsWaitIsReleasedByNewSMS(t *testing.T) {
 		Index:  7,
 		Memory: "SM",
 		Message: smsMessage{
-			Sender: "+8610010", Content: "测试短信", Timestamp: time.Now(), DeliveryID: "SM-7-test",
+			Sender: "+8610010", Content: "Test SMS", Timestamp: time.Now(), DeliveryID: "SM-7-test",
 		},
 	}
 	a.mergeSMS([]storedSMS{message})
@@ -703,11 +703,11 @@ func TestAgentEventsWaitIsReleasedByNewSMS(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(300 * time.Millisecond):
-		t.Fatal("新短信没有唤醒统一事件等待")
+		t.Fatal("new SMS did not wake the unified event wait")
 	}
 
 	if response.Code != http.StatusOK {
-		t.Fatalf("统一事件状态=%d，响应=%s", response.Code, response.Body.String())
+		t.Fatalf("unified event status=%d, body=%s", response.Code, response.Body.String())
 	}
 	var payload struct {
 		Revision    uint64 `json:"revision"`
@@ -718,7 +718,7 @@ func TestAgentEventsWaitIsReleasedByNewSMS(t *testing.T) {
 		t.Fatal(err)
 	}
 	if payload.Revision == 0 || payload.SMSRevision == 0 || payload.SMSPending != 1 {
-		t.Fatalf("统一短信事件载荷错误: %+v", payload)
+		t.Fatalf("unified SMS event payload mismatch: %+v", payload)
 	}
 }
 
@@ -728,7 +728,7 @@ func TestDuplicateSMSDoesNotProduceAnotherEvent(t *testing.T) {
 		Index:  7,
 		Memory: "SM",
 		Message: smsMessage{
-			Sender: "+8610010", Content: "测试短信", Timestamp: time.Now(), DeliveryID: "SM-7-test",
+			Sender: "+8610010", Content: "Test SMS", Timestamp: time.Now(), DeliveryID: "SM-7-test",
 		},
 	}
 	a.mergeSMS([]storedSMS{message})
@@ -739,7 +739,7 @@ func TestDuplicateSMSDoesNotProduceAnotherEvent(t *testing.T) {
 
 	if a.eventRevision != firstEventRevision || a.smsRevision != firstSMSRevision {
 		t.Fatalf(
-			"重复短信错误地产生事件: event=%d->%d sms=%d->%d",
+			"duplicate SMS incorrectly produced an event: event=%d->%d sms=%d->%d",
 			firstEventRevision, a.eventRevision, firstSMSRevision, a.smsRevision,
 		)
 	}
@@ -747,13 +747,13 @@ func TestDuplicateSMSDoesNotProduceAnotherEvent(t *testing.T) {
 
 func TestCallPollIntervalUsesURCAndActiveState(t *testing.T) {
 	if got := callPollInterval(true, false); got != 30*time.Second {
-		t.Fatalf("URC 空闲校准间隔=%s，期望 30s", got)
+		t.Fatalf("idle calibration interval with URC=%s, want 30s", got)
 	}
 	if got := callPollInterval(false, false); got != 5*time.Second {
-		t.Fatalf("无 URC 空闲兜底间隔=%s，期望 5s", got)
+		t.Fatalf("idle fallback interval without URC=%s, want 5s", got)
 	}
 	if got := callPollInterval(true, true); got != 2*time.Second {
-		t.Fatalf("通话期间校准间隔=%s，期望 2s", got)
+		t.Fatalf("calibration interval during a call=%s, want 2s", got)
 	}
 }
 
@@ -762,7 +762,7 @@ func TestATKeepaliveRetriesOnceAfterIdlePortTimeout(t *testing.T) {
 	err := probeATWithRecovery(func(command string, timeout time.Duration) (string, error) {
 		attempts++
 		if command != "AT" {
-			t.Fatalf("保活指令=%q，期望 AT", command)
+			t.Fatalf("keepalive command=%q, want AT", command)
 		}
 		if attempts == 1 {
 			return "", errors.New("Timed out waiting for AT response")
@@ -771,10 +771,10 @@ func TestATKeepaliveRetriesOnceAfterIdlePortTimeout(t *testing.T) {
 	})
 
 	if err != nil {
-		t.Fatalf("端口重开后的第二次探测应恢复: %v", err)
+		t.Fatalf("the second probe should recover after the port is reopened: %v", err)
 	}
 	if attempts != 2 {
-		t.Fatalf("AT 恢复尝试次数=%d，期望 2", attempts)
+		t.Fatalf("AT recovery attempts=%d, want 2", attempts)
 	}
 }
 
@@ -786,7 +786,7 @@ func TestATKeepaliveDoesNotRepeatHealthyProbe(t *testing.T) {
 	})
 
 	if err != nil || attempts != 1 {
-		t.Fatalf("健康 AT 探测不应重复: attempts=%d err=%v", attempts, err)
+		t.Fatalf("a healthy AT probe must not be repeated: attempts=%d err=%v", attempts, err)
 	}
 }
 
@@ -798,7 +798,7 @@ func TestSMSNoticeOverflowRequestsFullRescan(t *testing.T) {
 	a.enqueueSMSNotice(smsStorageRef{Memory: "SM", Index: 99})
 
 	if !a.smsRescanRequested {
-		t.Fatal("短信 URC 队列溢出后没有请求全量校准")
+		t.Fatal("SMS URC queue overflow did not request a full rescan")
 	}
 }
 
@@ -810,13 +810,13 @@ func TestDebugLogBoundsPayloadAndEventCount(t *testing.T) {
 	}
 	events, latest, storedBytes := log.snapshot(0, debugMaxEvents)
 	if len(events) == 0 || len(events) > debugMaxEvents {
-		t.Fatalf("环形日志事件数=%d", len(events))
+		t.Fatalf("ring log event count=%d", len(events))
 	}
 	if latest != debugMaxEvents+20 || storedBytes > debugMaxStoredBytes {
-		t.Fatalf("环形日志边界错误: latest=%d bytes=%d", latest, storedBytes)
+		t.Fatalf("ring log boundary mismatch: latest=%d bytes=%d", latest, storedBytes)
 	}
 	if !strings.Contains(events[len(events)-1].Payload, "[truncated]") {
-		t.Fatal("超长调试载荷未标记截断")
+		t.Fatal("oversized debug payload was not marked truncated")
 	}
 }
 
@@ -827,10 +827,10 @@ func testLogger() *log.Logger {
 func TestNormalizeKnownEUICCAID(t *testing.T) {
 	got, err := normalizeKnownEUICCAID("a06573746b6d65ffff4953442d522031")
 	if err != nil || got != "A06573746B6D65FFFF4953442D522031" {
-		t.Fatalf("eUICC 2 AID 规范化失败: got=%q err=%v", got, err)
+		t.Fatalf("eUICC 2 AID normalization failed: got=%q err=%v", got, err)
 	}
 	if _, err := normalizeKnownEUICCAID("A000000001"); err == nil {
-		t.Fatal("未验证的 AID 未被拒绝")
+		t.Fatal("unverified AID was not rejected")
 	}
 }
 
@@ -838,7 +838,7 @@ func TestCGLAResponsePattern(t *testing.T) {
 	response := `AT+CGLA=1,10,"80E2910000"` + "\r\n+CGLA: 4,\"9000\"\r\nOK"
 	match := cglaResponsePattern.FindStringSubmatch(response)
 	if len(match) != 2 || match[1] != "9000" {
-		t.Fatalf("CGLA 响应解析错误: %#v", match)
+		t.Fatalf("CGLA response parse mismatch: %#v", match)
 	}
 }
 
@@ -848,10 +848,10 @@ func TestPhysicalSIMESIMProbeError(t *testing.T) {
 	}
 	err := errors.New("未发现任何 eUICC: 打开 eUICC logical channel 失败: AT 指令失败: ERROR")
 	if !isPhysicalSIMESIMProbeError(err) {
-		t.Fatal("实体 SIM 的 CCHO ERROR 应识别为卡片类型结果")
+		t.Fatal("a physical SIM CCHO ERROR must be recognized as a card-type result")
 	}
-	if isPhysicalSIMESIMProbeError(errors.New("读取 eUICC 超时")) {
-		t.Fatal("普通通信错误不得误识别为实体 SIM")
+	if isPhysicalSIMESIMProbeError(errors.New("eUICC read timed out")) {
+		t.Fatal("an ordinary communication error must not be mistaken for a physical SIM")
 	}
 }
 
@@ -868,7 +868,7 @@ func TestProfilePayloadKeepsEUICCState(t *testing.T) {
 		ProfileClass:        sgp22.ProfileClassOperational,
 	})
 	if payload.ICCID != "8944305293607172968" || payload.State != 1 || payload.StateText != "Enabled" {
-		t.Fatalf("Profile 映射错误: %#v", payload)
+		t.Fatalf("profile mapping mismatch: %#v", payload)
 	}
 }
 
@@ -880,14 +880,14 @@ func TestParseVoicePCMStatsUsesLatestCompleteLine(t *testing.T) {
 	)
 	stats, ok := parseVoicePCMStats(logData)
 	if !ok {
-		t.Fatal("未解析到语音 PCM 统计")
+		t.Fatal("voice PCM stats were not parsed")
 	}
 	if stats.UplinkBytes != 960 || stats.UplinkFrames != 3 || stats.UplinkPeak != 1234 {
-		t.Fatalf("上行统计解析错误: %#v", stats)
+		t.Fatalf("uplink stats parse mismatch: %#v", stats)
 	}
 	if stats.DownlinkBytes != 1280 || stats.DownlinkFrames != 4 ||
 		stats.DownlinkPeak != 2345 || stats.DownlinkDroppedFrame != 2 {
-		t.Fatalf("下行统计解析错误: %#v", stats)
+		t.Fatalf("downlink stats parse mismatch: %#v", stats)
 	}
 }
 
@@ -896,11 +896,11 @@ func TestVoiceRouteMarkersRequireD4AndNetworkBridge(t *testing.T) {
 		"mavo-pcm-bridge[info]: network PCM client connected\n" +
 		"mavo-pcm-bridge[info]: bridge active on 192.168.225.1:7580\n")
 	if voiceRouteLogReady(data) {
-		t.Fatal("缺少 D4 route session 的日志不应被判定为完整路由")
+		t.Fatal("a log missing the D4 route session must not be treated as a complete route")
 	}
 	data = append(data, []byte("mavo-pcm-bridge[info]: VoLTE route session active on hw:0,4\n")...)
 	if !voiceRouteLogReady(data) {
-		t.Fatal("D4 route session 与网络桥标记齐全时应判定为完整路由")
+		t.Fatal("a log with both the D4 route session and the network bridge marker should be treated as a complete route")
 	}
 }
 
@@ -922,9 +922,9 @@ func TestVoiceRoutePhaseSeparatesListenerFromClient(t *testing.T) {
 }
 
 func TestVoiceListenerReadyTimeoutAllowsHelperStartup(t *testing.T) {
-	// 这里只等待 helper 建立监听，不再等待未来才会执行的客户端连接。
+	// Wait only for the helper to start listening, not for a client connection that runs later.
 	if voiceListenerReadyTimeout < 5*time.Second {
-		t.Fatalf("网络 PCM 监听等待时间=%s，至少需要 5s", voiceListenerReadyTimeout)
+		t.Fatalf("network PCM listen wait=%s, need at least 5s", voiceListenerReadyTimeout)
 	}
 }
 
@@ -932,7 +932,7 @@ func TestVoiceRouteStartLeaseDoesNotBlockStateSnapshots(t *testing.T) {
 	tracker := voiceTracker{}
 	release, started := tracker.beginRouteStart(time.Now())
 	if !started {
-		t.Fatal("首次语音桥启动应取得生命周期租约")
+		t.Fatal("the first voice bridge start should take the lifecycle lease")
 	}
 	defer release()
 
@@ -941,10 +941,10 @@ func TestVoiceRouteStartLeaseDoesNotBlockStateSnapshots(t *testing.T) {
 	select {
 	case snapshot := <-done:
 		if !snapshot.Starting {
-			t.Fatal("冷启动期间快照应显示 starting")
+			t.Fatal("the snapshot should show starting during a cold start")
 		}
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("语音桥冷启动不得阻塞状态和诊断查询")
+		t.Fatal("voice bridge cold start must not block status and diagnostic queries")
 	}
 }
 
@@ -952,11 +952,11 @@ func TestVoiceRouteStartLeaseSerializesConcurrentStarts(t *testing.T) {
 	tracker := voiceTracker{}
 	release, started := tracker.beginRouteStart(time.Now())
 	if !started {
-		t.Fatal("首次语音桥启动应成功")
+		t.Fatal("the first voice bridge start should succeed")
 	}
 	defer release()
 	if _, duplicate := tracker.beginRouteStart(time.Now()); duplicate {
-		t.Fatal("已有冷启动进行时不得再启动第二套 D4/D5/D6 路由")
+		t.Fatal("a second D4/D5/D6 route must not start while a cold start is already in progress")
 	}
 }
 
@@ -970,7 +970,7 @@ func TestStopVoiceRouteIsIdempotentWhileCleanupIsRunning(t *testing.T) {
 	stillStopping := a.voice.stopping
 	a.voice.mu.Unlock()
 	if !stillStopping {
-		t.Fatal("并发的第二次语音清理不得接管或提前结束第一次清理")
+		t.Fatal("a concurrent second voice cleanup must not take over or finish the first cleanup early")
 	}
 }
 
@@ -983,17 +983,17 @@ func TestSamsungStopVoiceRouteNeverTouchesQDC507Media(t *testing.T) {
 	withoutPCM := &agent{}
 	withoutPCM.stopVoiceRoute()
 	if stops != 0 {
-		t.Fatalf("未启动 PCM 的拒接路径不应清理媒体，实际=%d", stops)
+		t.Fatalf("a reject path that never started PCM should not clean up media, got=%d", stops)
 	}
 
 	withPCM := &agent{voiceBackend: voiceBackendConfig{kind: voiceBackendSamsungAndroid}}
 	withPCM.voice.mediaRouteStarted = true
 	withPCM.stopVoiceRoute()
 	if stops != 0 {
-		t.Fatalf("三星 PCM 停止时不得执行 QDC507 媒体清理，实际=%d", stops)
+		t.Fatalf("stopping Samsung PCM must not run QDC507 media cleanup, got=%d", stops)
 	}
 	if withPCM.voice.mediaRouteStarted {
-		t.Fatal("清理后 mediaRouteStarted 必须复位")
+		t.Fatal("mediaRouteStarted must be reset after cleanup")
 	}
 }
 
@@ -1046,7 +1046,7 @@ func TestModuleUpdateStateUsesStableWireFields(t *testing.T) {
 	encoded, err := json.Marshal(moduleUpdateState{
 		OperationID: "update-1", Mode: "repair", Phase: "installing",
 		InstalledVersion: "0.3.38", TargetVersion: "0.3.39",
-		Progress: 55, Message: "正在安装", UpdatedAt: time.Unix(1, 0).UTC(),
+		Progress: 55, Message: "Installing", UpdatedAt: time.Unix(1, 0).UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1065,11 +1065,11 @@ func TestModuleUpdateStateUsesStableWireFields(t *testing.T) {
 func TestModuleUpdateLogOmitsEmptyErrorField(t *testing.T) {
 	success := formatModuleUpdateLogLine("completed", 100, "New Agent passed health check", "")
 	if strings.Contains(success, "error=") {
-		t.Fatalf("成功日志不应包含空 error 字段：%q", success)
+		t.Fatalf("success log must not contain an empty error field: %q", success)
 	}
-	failure := formatModuleUpdateLogLine("failed", 100, "安装失败", "no space left on device")
+	failure := formatModuleUpdateLogLine("failed", 100, "Installation failed", "no space left on device")
 	if !strings.Contains(failure, "error=no space left on device") {
-		t.Fatalf("失败日志必须保留真实错误：%q", failure)
+		t.Fatalf("failure log must keep the real error: %q", failure)
 	}
 }
 
@@ -1086,10 +1086,10 @@ func TestModuleUpdateCompletionRecoversAfterStartupRemovedPendingMarker(t *testi
 
 	completed, ok := completedModuleUpdateState(state, "0.3.42", false)
 	if !ok {
-		t.Fatal("新 Agent 已健康运行且版本匹配时，即使启动脚本先清除了 pending 标记也应完成安装状态")
+		t.Fatal("install state should complete when the new Agent is healthy and the version matches, even if the startup script already cleared the pending marker")
 	}
 	if completed.Phase != "completed" || completed.Progress != 100 {
-		t.Fatalf("完成状态=%+v，期望 completed/100", completed)
+		t.Fatalf("completion state=%+v, want completed/100", completed)
 	}
 }
 
@@ -1105,7 +1105,7 @@ func TestModuleUpdateCompletionWaitsForStartupToRemovePendingMarker(t *testing.T
 	}
 
 	if _, ok := completedModuleUpdateState(state, "0.3.43", true); ok {
-		t.Fatal("启动脚本仍保留 pending 回滚标记时，不能仅凭版本号误报安装完成")
+		t.Fatal("install must not be reported complete from the version alone while the startup script still holds the pending rollback marker")
 	}
 }
 
@@ -1118,7 +1118,7 @@ func TestModuleUpdateCompletionDoesNotConfirmDifferentRunningVersion(t *testing.
 	}
 
 	if _, ok := completedModuleUpdateState(state, "0.3.41", false); ok {
-		t.Fatal("运行中的 Agent 版本与目标版本不一致时不能误报安装完成")
+		t.Fatal("install must not be reported complete when the running Agent version differs from the target version")
 	}
 }
 

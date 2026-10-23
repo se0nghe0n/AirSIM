@@ -205,7 +205,7 @@ func TestAndroidProfileSMSSendUsesTelephonyInsteadOfATPort(t *testing.T) {
 		err      error
 	}, 1)
 	go func() {
-		segments, err := a.sendSMSMessage("+86 13800138000", "第一段\n第二段")
+		segments, err := a.sendSMSMessage("+86 13800138000", "First part\nSecond part")
 		resultChannel <- struct {
 			segments int
 			err      error
@@ -213,7 +213,7 @@ func TestAndroidProfileSMSSendUsesTelephonyInsteadOfATPort(t *testing.T) {
 	}()
 
 	command, ok := a.android.next(context.Background(), time.Second)
-	if !ok || command.Action != "send_sms" || command.Number != "+8613800138000" || command.Message != "第一段\n第二段" {
+	if !ok || command.Action != "send_sms" || command.Number != "+8613800138000" || command.Message != "First part\nSecond part" {
 		t.Fatalf("Android SMS was not routed to Telephony: ok=%v command=%#v", ok, command)
 	}
 	if err := a.android.complete(androidCommandResult{ID: command.ID, Success: true, Segments: 2}); err != nil {
@@ -234,7 +234,7 @@ func TestAndroidIncomingSMSEventFeedsSharedQueueAndDeduplicates(t *testing.T) {
 	handler := a.routes(testLogger())
 	body := `{
 		"event_id":"sms-event-7","delivery_id":"android-sms-7",
-		"sender":"10010","content":"验证码 246810",
+		"sender":"10010","content":"Verification code 246810",
 		"timestamp":"2026-09-23T10:20:30.123Z"
 	}`
 	postAndroidJSON(t, handler, "/api/android/sms/event", body)
@@ -242,7 +242,7 @@ func TestAndroidIncomingSMSEventFeedsSharedQueueAndDeduplicates(t *testing.T) {
 	a.mu.RLock()
 	if len(a.messages) != 1 || a.messages[0].Memory != "ANDROID" ||
 		a.messages[0].Message.Sender != "10010" ||
-		a.messages[0].Message.Content != "验证码 246810" ||
+		a.messages[0].Message.Content != "Verification code 246810" ||
 		a.messages[0].Message.Code != "246810" ||
 		a.messages[0].Message.DeliveryID != "android-sms-7" {
 		t.Fatalf("unexpected Android SMS queue: %#v", a.messages)

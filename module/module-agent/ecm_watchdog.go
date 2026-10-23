@@ -50,5 +50,5 @@ func (a *agent) recordECMWatchdogEvent(state ecmLinkState, phase, reason string)
 	fields := ecmWatchdogFields(
 		state, phase, reason, "qcom_ecm", "ecm0", functions, descriptorPointer,
 	)
-	a.debug.add("ecm-watchdog", "event", "ECM 状态变化", reason, fields)
+	a.debug.add("ecm-watchdog", "event", "ECM state changed", reason, fields)
 }

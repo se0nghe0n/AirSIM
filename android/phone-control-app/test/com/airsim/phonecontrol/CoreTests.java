@@ -94,9 +94,9 @@ public final class CoreTests {
 				invokeOptionalInboxPermissions(false, false));
 		assertArrayEquals(new String[0], invokeOptionalInboxPermissions(true, false));
 		assertArrayEquals(new String[0], invokeOptionalInboxPermissions(false, true));
-		String expectedSMSID = "android-sms-56ade2bc830c126252281aee319d5eda590b56518ebcbec623697999554c5b00";
-		assertEquals(expectedSMSID, invokeSMSIdentity("+8613800000000", "验证码 123456", 1_000L));
-		assertTrue(!expectedSMSID.equals(invokeSMSIdentity("+8613800000000", "验证码 123456", 2_000L)));
+		String expectedSMSID = "android-sms-f50f6422425c2136f6732e6e5d469e780dc4a4ce4fcbc85645480531e263e8db";
+		assertEquals(expectedSMSID, invokeSMSIdentity("+8613800000000", "Verification code 123456", 1_000L));
+		assertTrue(!expectedSMSID.equals(invokeSMSIdentity("+8613800000000", "Verification code 123456", 2_000L)));
 		assertEquals(1_000L, invokeProviderTimestamp(1_000L, 1_100L));
 		assertEquals(1_100L, invokeProviderTimestamp(0L, 1_100L));
 		assertRecentSMSIDsRetainBoundedDeliveryHistory();
@@ -163,7 +163,7 @@ public final class CoreTests {
 		com.sun.net.httpserver.HttpServer upstream = com.sun.net.httpserver.HttpServer.create(
 				new java.net.InetSocketAddress("127.0.0.1", 0), 0);
 		upstream.createContext("/api/calls/audio/host/warmup", exchange -> {
-			byte[] payload = "{\"error\":\"当前没有进行中的通话\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			byte[] payload = "{\"error\":\"No call is in progress\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
 			exchange.sendResponseHeaders(409, payload.length);
 			try (java.io.OutputStream output = exchange.getResponseBody()) { output.write(payload); }
 		});
@@ -180,7 +180,7 @@ public final class CoreTests {
 			AgentClient.ForwardResponse response = client.forwardVoWLAN(
 					"POST", "/api/calls/audio/host/warmup", "{}");
 			assertEquals(409, response.status());
-			assertContains(response.payload(), "当前没有进行中的通话");
+			assertContains(response.payload(), "No call is in progress");
 		} finally {
 			upstream.stop(0);
 		}
@@ -287,10 +287,10 @@ public final class CoreTests {
         assertTrue(command.isSupported());
         assertTrue(!AgentCommand.parse("{\"id\":\"x\",\"action\":\"wipe\"}").isSupported());
 		AgentCommand smsCommand = AgentCommand.parse(
-				"{\"id\":\"sms-7\",\"action\":\"send_sms\",\"number\":\"+8613800138000\",\"message\":\"你好\\n世界\"}");
+				"{\"id\":\"sms-7\",\"action\":\"send_sms\",\"number\":\"+8613800138000\",\"message\":\"Hello\\nworld\"}");
 		assertTrue(smsCommand.isSupported());
 		assertEquals("+8613800138000", smsCommand.number);
-		assertEquals("你好\n世界", smsCommand.message);
+		assertEquals("Hello\nworld", smsCommand.message);
 		java.util.concurrent.atomic.AtomicInteger telecomRuns = new java.util.concurrent.atomic.AtomicInteger();
 		java.util.concurrent.atomic.AtomicInteger smsRuns = new java.util.concurrent.atomic.AtomicInteger();
 		AgentCommandDispatcher.Result smsResult = AgentCommandDispatcher.execute(
@@ -309,7 +309,7 @@ public final class CoreTests {
 		assertEquals(1, smsRuns.get());
 		assertTrue(SMSPayloadPolicy.validDestination("+86 13800138000"));
 		assertTrue(!SMSPayloadPolicy.validDestination("tel:13800138000"));
-		assertTrue(SMSPayloadPolicy.validBody("测试短信"));
+		assertTrue(SMSPayloadPolicy.validBody("Test SMS"));
 		assertTrue(!SMSPayloadPolicy.validBody("   \n"));
 		SMSConfirmation confirmation = new SMSConfirmation(2);
 		confirmation.record(0, -1);
@@ -333,11 +333,11 @@ public final class CoreTests {
 		cancelledConfirmation.record(0, 0);
 		assertTrue(!cancelledConfirmation.await(1).success());
 		String smsEvent = WireJson.smsEvent(
-				"event-7", "android-sms-7", "10010", "验证码 \"246810\"", "2026-09-23T10:20:30Z");
+				"event-7", "android-sms-7", "10010", "Verification code \"246810\"", "2026-09-23T10:20:30Z");
 		assertContains(smsEvent, "\"delivery_id\":\"android-sms-7\"");
-		assertContains(smsEvent, "\"content\":\"验证码 \\\"246810\\\"\"");
+		assertContains(smsEvent, "\"content\":\"Verification code \\\"246810\\\"\"");
 		assertContains(WireJson.smsEvent("event-8", "android-sms-8", "  ",
-				"运营商提醒", "2026-10-12T06:00:00Z"), "\"sender\":\"Unknown number\"");
+				"Carrier reminder", "2026-10-12T06:00:00Z"), "\"sender\":\"Unknown number\"");
 
         assertEquals(1000L, RetryPolicy.delayMillis(0));
         assertEquals(8000L, RetryPolicy.delayMillis(3));
@@ -530,9 +530,9 @@ public final class CoreTests {
 		}
 		assertEquals("266 145", MainScreenPresentation.formatPairingCode("266145"));
 		assertEquals(
-				"22:45 VoWLAN 健康检查通过\n22:43 VoWLAN 广播已发现",
+				"22:45 VoWLAN health check passed\n22:43 VoWLAN broadcast discovered",
 				MainScreenPresentation.recentLogLines(
-						"22:42 Agent 心跳正常\n22:43 VoWLAN 广播已发现\n22:44 PCM bridge ready\n22:45 VoWLAN 健康检查通过",
+						"22:42 Agent heartbeat normal\n22:43 VoWLAN broadcast discovered\n22:44 PCM bridge ready\n22:45 VoWLAN health check passed",
 						"VoWLAN",
 						2));
 		assertEquals("Linux Agent status returned HTTP 200",
@@ -563,7 +563,7 @@ public final class CoreTests {
 		assertEquals("Cloud mode", MainScreenPresentation.connectionModeTitle(
 				false, true, true, ""));
 		assertEquals("Cloud connection error", MainScreenPresentation.connectionModeTitle(
-				false, true, true, "推送中继返回 HTTP 401"));
+				false, true, true, "Push relay returned HTTP 401"));
 		assertEquals("Cloud Relay configured; waiting for Agent heartbeat verification",
 				MainScreenPresentation.connectionModeDetail(false, true, true, ""));
 		assertEquals("vowlan_state paired=true pcm_ready=false",

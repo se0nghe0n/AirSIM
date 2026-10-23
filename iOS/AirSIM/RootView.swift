@@ -27,11 +27,11 @@ enum SystemCommunicationURL {
 }
 
 enum PhoneTab: String, CaseIterable, Identifiable {
-    case dial = "拨号"
-    case recents = "最近通话"
-    case messages = "短信"
-    case contacts = "通讯录"
-    case settings = "设置"
+    case dial = "Dial"
+    case recents = "Recents"
+    case messages = "Messages"
+    case contacts = "Contacts"
+    case settings = "Settings"
 
     var id: String { rawValue }
 
@@ -54,8 +54,8 @@ enum PhoneTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// 五个主要目的地使用系统 TabView；iOS 26 原生标签栏负责 Liquid Glass、
-/// 长按放大与选中态交互，避免分页手势和自绘按钮争抢横向滑动。
+/// Uses the system TabView for the five main destinations; the native iOS 26 tab bar handles
+/// Liquid Glass, long-press zoom, and selection state, avoiding conflicts between paging gestures and custom buttons.
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppSettings.self) private var settings
@@ -139,7 +139,7 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .airsimOpenIncomingCall)) { _ in
             model.presentCurrentCallInApp()
         }
-        .alert(L10n.t("错误"), isPresented: errorBinding) {
+        .alert(L10n.t("Error"), isPresented: errorBinding) {
             Button("OK") { model.errorMessage = nil }
         } message: {
             Text(model.errorMessage ?? "")
@@ -220,7 +220,7 @@ struct RootView: View {
     }
 }
 
-/// 浅色模式使用系统电话式纯白底；深色模式才绘制深蓝黑底部环境光。
+/// Uses a pure white background like the system Phone app in light mode; draws a dark blue-black ambient bottom glow only in dark mode.
 struct PhoneBackdrop: View {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -245,7 +245,7 @@ struct PhoneBackdrop: View {
     }
 }
 
-/// 关键内容表面使用系统原生 Liquid Glass，旧系统回退为系统材质。
+/// Uses native system Liquid Glass for key content surfaces, falling back to system materials on older OS versions.
 struct PhoneCard: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -298,7 +298,7 @@ struct PhoneGlassSurface: ViewModifier {
     }
 }
 
-/// 自定义工具栏材质仅用于隐藏了系统共享背景的 ToolbarItem，确保始终只有一层玻璃。
+/// Custom toolbar material used only on ToolbarItems with hidden system shared backgrounds so there is always a single glass layer.
 private struct PhoneToolbarGlassMorph: ViewModifier {
     let id: String
     @Namespace private var glassNamespace
@@ -323,8 +323,8 @@ private struct PhoneToolbarGlassMorph: ViewModifier {
     }
 }
 
-/// iOS 26 隐藏导航栏自动生成的共享按钮背景，再使用上面的单层可变形玻璃；
-/// 旧系统继续交给 ToolbarItem 使用平台默认样式。
+/// Hides the navigation bar's auto-generated shared button background on iOS 26 and applies the single-layer morphing glass above;
+/// older OS versions continue using the platform default style on ToolbarItem.
 @ToolbarContentBuilder
 func phoneMorphingToolbarItem<Content: View>(
     placement: ToolbarItemPlacement,
@@ -412,4 +412,14 @@ extension View {
     func phoneReportsTabBarCompactState() -> some View {
         modifier(PhoneTabBarCompactScrollReporter())
     }
+}
+
+#Preview("Root View") {
+    let model = AppModel()
+    UserDefaults.standard.set(true, forKey: "airsim.first-connection-complete")
+    return RootView()
+        .environment(model)
+        .environment(model.contacts)
+        .environment(model.audio)
+        .environment(AppSettings())
 }

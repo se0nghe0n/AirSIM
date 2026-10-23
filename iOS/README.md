@@ -15,7 +15,7 @@ iOS/AirSIM.xcodeproj
 Main targets:
 
 - `AirSIM`: main iPhone / iPad app
-- `AirSIMWatchApp`：Apple Watch App
+- `AirSIMWatchApp`: Apple Watch App
 - `AirSIMLiveActivityExtension`: Lock Screen and Dynamic Island Live Activities
 - `AirSIMTests`: transport selection and protocol-boundary tests
 
@@ -29,7 +29,7 @@ Main targets:
 - Apple Watch dialing, answering, and call media
 - SMS list, sending, notifications, and contact integration
 - VoWLAN and cloud Relay transport selection. Automatic mode selects only actually available dialing routes, with fixed priority VoWLAN, then cloud.
-- Cloud PCM uses bounded adaptive buffering, brief gap concealment, and a 20 ms send/receive cadence. Old states are prevented from reopening the call UI after hang-up. In the recorded device-call round, the user reported no recurrence and steadier audio; see [cloud PCM jitter mitigation](../docs/cloud-pcm-resilience.md) for the strategy and TCP limitations. This is bounded mitigation, not proof that every audio-quality cause is resolved.
+- Cloud call audio uses native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. The older PCM jitter buffer and time-pitch node are not on this path. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
 - Settings show current VoWLAN/cloud mode and Agent heartbeat status.
 - Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
 - Four-stage cloud diagnostics: local push credentials, Relay identity, device registration, and Agent heartbeat

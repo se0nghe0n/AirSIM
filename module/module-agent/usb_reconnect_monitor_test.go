@@ -24,7 +24,7 @@ func TestECMLinkPowerCycleDoesNotDisconnectUSBDevice(t *testing.T) {
 	}
 	want := []string{"ifconfig ecm0 down", "ifconfig ecm0 up"}
 	if !reflect.DeepEqual(commands, want) {
-		t.Fatalf("系统命令=%#v，期望 %#v；不得切换整个 USB gadget", commands, want)
+		t.Fatalf("system commands=%#v, want %#v; must not switch the whole USB gadget", commands, want)
 	}
 }
 
@@ -39,7 +39,7 @@ func TestMissingECMRecoveryRebindsOnlyExistingGadgetFunctions(t *testing.T) {
 		return nil
 	}, func(time.Duration) {})
 	if err != nil {
-		t.Fatalf("ECM gadget 重绑失败: %v", err)
+		t.Fatalf("ECM gadget rebind failed: %v", err)
 	}
 	want := []write{
 		{path: usbGadgetPath + "/enable", value: "0\n"},
@@ -47,7 +47,7 @@ func TestMissingECMRecoveryRebindsOnlyExistingGadgetFunctions(t *testing.T) {
 		{path: usbGadgetPath + "/enable", value: "1\n"},
 	}
 	if !reflect.DeepEqual(writes, want) {
-		t.Fatalf("gadget 写入=%#v，期望 %#v", writes, want)
+		t.Fatalf("gadget writes=%#v, want %#v", writes, want)
 	}
 }
 
@@ -58,10 +58,10 @@ func TestMissingECMRecoveryRefusesFunctionSetWithoutECM(t *testing.T) {
 		return nil
 	}, func(time.Duration) {})
 	if err == nil {
-		t.Fatal("functions 不含 ECM 时必须拒绝自动重绑")
+		t.Fatal("automatic rebind must be rejected when functions do not include ECM")
 	}
 	if writes != 0 {
-		t.Fatalf("拒绝恢复前不应修改 gadget，写入次数=%d", writes)
+		t.Fatalf("gadget must not be modified before recovery is rejected, write count=%d", writes)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestMissingECMGadgetRecoveryAllowsExistingCompositeAfterCallIsIdle(t *testi
 		false,
 		"diag,serial,ecm,ffs,audio",
 	); err != nil {
-		t.Fatalf("ECM 已消失且通话已结束时，应允许原组合重载: %v", err)
+		t.Fatalf("original composition reload should be allowed after ECM is gone and the call has ended: %v", err)
 	}
 
 	if err := validateMissingECMGadgetRecovery(
@@ -79,11 +79,11 @@ func TestMissingECMGadgetRecoveryAllowsExistingCompositeAfterCallIsIdle(t *testi
 		false,
 		"diag,serial,ecm,ffs,audio",
 	); err == nil {
-		t.Fatal("通话仍进行时不得重载整个 USB 组合")
+		t.Fatal("the whole USB composition must not be reloaded while a call is still active")
 	}
 
 	if err := validateMissingECMGadgetRecovery(false, false, "diag,serial,ffs,audio"); err == nil {
-		t.Fatal("原组合不含 ECM 时不得执行 ECM 恢复")
+		t.Fatal("ECM recovery must not run when the original composition has no ECM")
 	}
 }
 
@@ -104,7 +104,7 @@ func TestUSBReconnectRequiresContinuousCarrierOutage(t *testing.T) {
 	debouncer.carrierChanged(false)
 	select {
 	case <-recovered:
-		t.Fatal("短于门槛且已经恢复的 ECM 断线不应触发 USB 下电重启")
+		t.Fatal("an ECM outage shorter than the threshold that already recovered must not power-cycle USB")
 	case <-time.After(90 * time.Millisecond):
 	}
 
@@ -112,7 +112,7 @@ func TestUSBReconnectRequiresContinuousCarrierOutage(t *testing.T) {
 	select {
 	case <-recovered:
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("连续超过门槛的 ECM 断线没有触发 USB 下电重启")
+		t.Fatal("an ECM outage past the threshold did not power-cycle USB")
 	}
 }
 
@@ -132,10 +132,10 @@ func TestUSBReconnectUsesMissingInterfaceRecovery(t *testing.T) {
 	select {
 	case state := <-recovered:
 		if state != ecmLinkMissing {
-			t.Fatalf("恢复状态=%v，期望 missing", state)
+			t.Fatalf("recovery state=%v, want missing", state)
 		}
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("ecm0 整个消失时没有触发恢复")
+		t.Fatal("recovery was not triggered when ecm0 disappeared entirely")
 	}
 }
 
@@ -162,11 +162,11 @@ func TestPollECMCarrierReportsChangesWithoutNetlink(t *testing.T) {
 		case state := <-states:
 			got = append(got, state)
 		case <-deadline:
-			t.Fatalf("轮询未报告 ECM 状态变化，已收到 %#v", got)
+			t.Fatalf("poll did not report an ECM state change, received %#v", got)
 		}
 	}
 	if !got[0] || got[1] {
-		t.Fatalf("ECM 状态变化=%#v，期望 [断开, 恢复]", got)
+		t.Fatalf("ECM state change=%#v, want [down, recovered]", got)
 	}
 }
 
@@ -197,16 +197,16 @@ func TestPollECMLinkStateReportsMissingInterface(t *testing.T) {
 		case state := <-states:
 			got = append(got, state)
 		case <-deadline:
-			t.Fatalf("ECM 接口消失未被报告，已收到 %#v", got)
+			t.Fatalf("ECM interface disappearance was not reported, received %#v", got)
 		}
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("ECM 状态变化=%#v，期望 %#v", got, want)
+		t.Fatalf("ECM state change=%#v, want %#v", got, want)
 	}
 }
 
 func TestDetectECMLinkStateKeepsTransientReadErrorsUnknown(t *testing.T) {
 	if got := detectECMLinkState(nil, errors.New("temporary I/O error")); got != ecmLinkUnknown {
-		t.Fatalf("暂时读取错误状态=%v，期望 unknown", got)
+		t.Fatalf("transient read error state=%v, want unknown", got)
 	}
 }

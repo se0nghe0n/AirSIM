@@ -69,7 +69,7 @@ enum SpeakerRoutePolicy {
     }
 }
 
-/// 管理 iPhone/iPad 内置麦克风、扬声器与模块 ECM 网络 PCM 之间的双向通话音频。
+/// Manages bidirectional call audio between the iPhone/iPad built-in microphone, speaker, and module ECM network PCM.
 @MainActor
 @Observable
 final class AudioSessionController {
@@ -95,7 +95,7 @@ final class AudioSessionController {
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
 
     init() {
-        // CallKit、蓝牙或系统控制中心都可能改变输出路由，按钮状态必须跟随真实会话。
+        // CallKit, Bluetooth, or Control Center may change the output route; button state must follow the actual audio session.
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
@@ -140,7 +140,7 @@ final class AudioSessionController {
             if !sessionAlreadyActive {
                 try session.setActive(true, options: .notifyOthersOnDeactivation)
             }
-            // 每次通话默认使用听筒；仅在用户主动开启扬声器后覆盖输出路由。
+            // Default to the receiver for every call; override the output route only after the user explicitly enables the speaker.
             try session.overrideOutputAudioPort(requestedSpeakerOverride ? .speaker : .none)
             refreshRouteDescription()
             switch route {
@@ -225,7 +225,7 @@ final class AudioSessionController {
         peer.offer()
     }
 
-    /// CallKit 执行动作前先声明语音类别，真正激活由系统随后回调 didActivate。
+    /// Declares the voice category before CallKit executes an action; actual activation happens when the system invokes didActivate.
     func prepareForCallKit() throws {
         resetSpeakerPreferenceForNewCall()
         try configureCallAudioSession()
@@ -239,14 +239,14 @@ final class AudioSessionController {
         vowlanPeer?.setMuted(muted)
     }
 
-    /// 根据模块通话状态播放来电铃声或呼出等待音，接通后立即让位给网络 PCM。
+    /// Plays the incoming ringtone or outgoing ringback tone based on module call state, yielding immediately to network PCM once connected.
     func updateCallTone(for call: CallRecord?) {
         guard !active else {
             stopCallTone()
             return
         }
         guard let call else {
-            // 设置页试听不属于通话状态，空闲轮询不能提前将它停止。
+            // Settings ringtone preview is not part of call state; idle polling must not stop it early.
             if case .preview? = currentCallTone { return }
             stopCallTone()
             return
@@ -262,7 +262,7 @@ final class AudioSessionController {
         }
     }
 
-    /// 设置页只试听一遍，不能像真实来电一样无限循环。
+    /// Previews the ringtone once in Settings rather than looping indefinitely like a real incoming call.
     func previewRingtone(named ringtone: String) {
         guard !active else { return }
         playCallTone(.preview(ringtone), looping: false)
@@ -278,8 +278,8 @@ final class AudioSessionController {
         callTonePlayer?.stop()
         callTonePlayer = nil
         currentCallTone = nil
-        // 空闲轮询会反复调用本方法；没有铃声时绝不能停用后台待机正在使用的会话。
-        // CallKit 的 didActivate 回调之后，音频会话也只能由系统释放。
+        // Idle polling calls this method repeatedly; never deactivate the session used by background standby when no ringtone is playing.
+        // After CallKit invokes didActivate, the audio session may only be deactivated by the system.
         guard hadTone, deactivateSession, !active, !sessionActivationManagedByCallKit else { return }
         try? AVAudioSession.sharedInstance().setActive(
             false,
@@ -287,7 +287,7 @@ final class AudioSessionController {
         )
     }
 
-    /// 切换当前通话的输出路由；关闭扬声器时交还给系统选择听筒或已连接的蓝牙设备。
+    /// Toggles the output route for the current call; turning off the speaker hands routing back to the system to select the receiver or connected Bluetooth device.
     func setSpeakerEnabled(_ enabled: Bool) {
         requestedSpeakerOverride = enabled
         speakerRoutePending = !SpeakerRoutePolicy.routeMatches(
@@ -313,8 +313,8 @@ final class AudioSessionController {
         refreshRouteDescription()
     }
 
-    /// CallKit 的 didActivate 与 AVAudioEngine 真正启动之间存在短暂窗口。
-    /// 在窗口内切换会得到 OSStatus -50，因此把用户选择保留并做有界重试。
+    /// A brief window exists between CallKit didActivate and AVAudioEngine actually starting.
+    /// Switching routes during this window returns OSStatus -50, so preserve the user selection and retry with a bounded count.
     func retryRequestedSpeakerRoute() {
         let requested = requestedSpeakerOverride
         speakerRouteRetryTask?.cancel()
@@ -334,8 +334,8 @@ final class AudioSessionController {
                     try AVAudioSession.sharedInstance().overrideOutputAudioPort(
                         requested ? .speaker : .none
                     )
-                    // API 返回只表示系统接受了请求；currentRoute 的切换是异步的。
-                    // 等待一个很短的确认窗口，再以真实输出端口决定按钮高亮。
+                    // API return only indicates the system accepted the request; currentRoute updates asynchronously.
+                    // Wait for a brief confirmation window before updating button highlight from the actual output port.
                     try? await Task.sleep(for: .seconds(SpeakerRoutePolicy.routeVerificationDelay))
                     guard !Task.isCancelled, requestedSpeakerOverride == requested else { return }
                     refreshRouteDescription()
@@ -346,14 +346,14 @@ final class AudioSessionController {
                         return
                     }
                 } catch {
-                    // 音频会话还没由 CallKit 激活时保留选择，等待下一次短重试。
+                    // Preserve the selection while the audio session has not yet been activated by CallKit and wait for the next short retry.
                 }
             }
             refreshRouteDescription()
         }
     }
 
-    /// 合并模块侧 D5/D6 统计，避免把 TCP 连通误判为实际存在语音。
+    /// Merges module-side D5/D6 statistics to avoid mistaking TCP connectivity for actual voice presence.
     func updateModuleDiagnostics(_ config: MaVoAudioHostConfig) {
         var details: [String] = []
         if let routeError = config.routeError, !routeError.isEmpty {
@@ -368,11 +368,11 @@ final class AudioSessionController {
         } else if config.routeRunning == true {
             details.append("Module PCM started, waiting for statistics")
         }
-        // 只显示最后一条日志，保留真正的启动失败原因，同时避免通话页被日志刷屏。
+        // Show only the last log line to preserve the root startup failure reason without flooding the call screen.
         if let lastLog = config.logTail?.last, !lastLog.isEmpty {
             details.append("Log: \(lastLog)")
         }
-        moduleDiagnosticDescription = details.joined(separator: "；")
+        moduleDiagnosticDescription = details.joined(separator: "; ")
     }
 
     func deactivate() {
@@ -396,7 +396,7 @@ final class AudioSessionController {
         engine = nil
         do {
             let session = AVAudioSession.sharedInstance()
-            // 清除本次通话的外放覆盖，避免影响下一次通话或其他 App。
+            // Clear the speaker override for this call so it does not affect the next call or other apps.
             try session.overrideOutputAudioPort(.none)
             if !callKitManagedSession {
                 try session.setActive(
@@ -421,7 +421,7 @@ final class AudioSessionController {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            // 模块来电属于电话提醒，使用 playback 确保手机静音时仍能听到，并压低其他音频。
+            // Module incoming calls are phone alerts; use .playback so they remain audible in silent mode and duck other audio.
             try session.setCategory(.playback, mode: .default, options: [.duckOthers])
             try session.setActive(true)
             let player = try AVAudioPlayer(data: SynthesizedCallTone.wavData(for: tone))
@@ -440,7 +440,7 @@ final class AudioSessionController {
 
     private func configureCallAudioSession() throws {
         let session = AVAudioSession.sharedInstance()
-        // voiceChat 使用 VoiceProcessingIO，为听筒和扬声器通话提供系统回声消除。
+        // .voiceChat uses VoiceProcessingIO to provide system echo cancellation for both receiver and speaker calls.
         try session.setCategory(
             .playAndRecord,
             mode: .voiceChat,
@@ -530,7 +530,7 @@ struct PCMFrameAccumulator {
     }
 }
 
-/// 通话等待阶段使用的声音类型；关联值同时用于检测用户是否切换了来电铃声。
+/// Tone type used during call waiting; the associated value also detects whether the user switched the incoming ringtone.
 private enum CallTone: Equatable {
     case incoming(String)
     case outgoingWaiting
@@ -551,7 +551,7 @@ private enum CallTone: Equatable {
     }
 }
 
-/// 运行时合成短促、无版权依赖的 PCM 铃声，并封装为 AVAudioPlayer 可读取的 WAV。
+/// Synthesizes short, royalty-free PCM ringtones at runtime and wraps them as WAV data readable by AVAudioPlayer.
 private enum SynthesizedCallTone {
     private struct Segment {
         let frequencies: [Double]
@@ -582,7 +582,7 @@ private enum SynthesizedCallTone {
                 let wave = segment.frequencies.reduce(0.0) {
                     $0 + sin(2 * .pi * $1 * time)
                 } / Double(segment.frequencies.count)
-                // 每段两端加入 10 ms 淡入淡出，避免波形截断产生爆音。
+                // Apply a 10 ms fade-in/fade-out at both ends of each segment to avoid clicks from waveform truncation.
                 let edge = min(index, sampleCount - index - 1)
                 let envelope = envelopeSamples > 0
                     ? min(1, Double(edge) / Double(envelopeSamples))
@@ -596,7 +596,7 @@ private enum SynthesizedCallTone {
 
     private static func pattern(for tone: CallTone) -> [Segment] {
         if case .outgoingWaiting = tone {
-            // 425 Hz、1 秒响 4 秒停，接近国内常见呼叫等待节奏。
+            // 425 Hz, 1s on and 4s off, matching standard ringback cadence.
             return [
                 Segment(frequencies: [425], duration: 1.0, amplitude: 0.34),
                 .silence(4.0),
@@ -616,7 +616,7 @@ private enum SynthesizedCallTone {
                 Segment(frequencies: [659, 988], duration: 0.32, amplitude: 0.38), .silence(0.16),
                 Segment(frequencies: [784, 1_046], duration: 0.48, amplitude: 0.34), .silence(1.5),
             ]
-        case "系统默认":
+        case "System Default":
             return [
                 Segment(frequencies: [440, 480], duration: 0.8, amplitude: 0.38), .silence(0.35),
                 Segment(frequencies: [440, 480], duration: 0.8, amplitude: 0.38), .silence(2.0),
@@ -658,7 +658,7 @@ private enum SynthesizedCallTone {
 }
 
 
-/// 对麦克风做语音带限与线性降采样，输出模块需要的 8 kHz PCM16LE。
+/// Applies voice band-limiting and linear downsampling to microphone input, outputting 8 kHz PCM16LE required by the module.
 final class VoicePCMEncoder: @unchecked Sendable {
     private let lock = NSLock()
     private var conditioner = VoiceCaptureConditioner()
@@ -710,7 +710,7 @@ final class VoicePCMEncoder: @unchecked Sendable {
     }
 }
 
-/// 两级低通避免降采样混叠，高通去除直流与桌面低频振动。
+/// Two-stage low-pass filtering prevents downsampling aliasing, while high-pass filtering removes DC offset and low-frequency desk rumble.
 private struct VoiceCaptureConditioner {
     private var sampleRate = 0.0
     private var previousInput: Float = 0

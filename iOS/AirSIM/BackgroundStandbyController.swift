@@ -16,7 +16,7 @@ extension Notification.Name {
     static let airsimOpenIncomingCall = Notification.Name("AirSIMOpenIncomingCall")
 }
 
-/// 锁屏来电通知使用的稳定标识；动作不要求设备解锁，也不会强制打开 App 界面。
+/// Stable identifiers used by lock-screen incoming call notifications; actions do not require device unlock or force the app UI open.
 enum IncomingCallNotification {
     static let categoryIdentifier = "AIRSIM_INCOMING_CALL"
     static let mirrorCategoryIdentifier = "AIRSIM_INCOMING_CALL_MIRROR"
@@ -70,7 +70,7 @@ enum IncomingCallPresentationRequest {
     }
 }
 
-/// 通知点开后 SwiftUI 首屏可能尚未订阅事件；只保存发件人，不持久化短信正文。
+/// When a notification is tapped, the initial SwiftUI screen may not have subscribed to events yet; store only the sender without persisting SMS body text.
 enum IncomingSMSPresentationRequest {
     static let key = "airsim.pending-sms-sender"
 
@@ -85,7 +85,7 @@ enum IncomingSMSPresentationRequest {
     }
 }
 
-/// 接收锁屏通知动作，并在系统授予的后台执行时间内直接控制模块通话。
+/// Handles lock-screen notification actions and controls module calls directly within the system-granted background execution window.
 @MainActor
 final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
     private let coldLaunchCallHandler = ColdLaunchCallKitHandler()
@@ -103,8 +103,8 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
         if policy.usesCallKit, CallKitController.shared.handler == nil {
             CallKitController.shared.handler = coldLaunchCallHandler
         }
-		// Watch token 与跨设备接听所有权必须在冷启动阶段就可接收，不能等待
-		// SwiftUI 首屏 onAppear（锁屏 PushKit 唤醒时首屏可能永远不出现）。
+		// Watch tokens and cross-device answer ownership must be receivable during cold launch rather than waiting for
+		// SwiftUI onAppear (which may never fire on a lock-screen PushKit wakeup).
 		WatchCallCoordinator.shared.start()
         if policy.startsCloud {
             VoIPPushController.shared.start()
@@ -112,14 +112,14 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
         }
 #if DEBUG
         print(!policy.startsCloud
-            ? "[AirSIM Local] 已跳过 APNs 与 PushKit 注册"
-            : "[AirSIM APNs] 已启动普通通知与 PushKit 注册")
+            ? "[AirSIM Local] Skipped APNs and PushKit registration"
+            : "[AirSIM APNs] Started user notification and PushKit registration")
 #endif
         return true
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
-        // 首次授权弹窗可能晚于 didFinishLaunching 返回；回到前台时重新登记是幂等的。
+        // The initial authorization prompt may return after didFinishLaunching; re-registering on foreground entry is idempotent.
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.start()
         application.registerForRemoteNotifications()
@@ -133,7 +133,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.storeAlertToken(deviceToken)
 #if DEBUG
-        print("[AirSIM APNs] 普通通知 token 已更新；字节数=\(deviceToken.count)")
+        print("[AirSIM APNs] User notification token updated; bytes=\(deviceToken.count)")
 #endif
     }
 
@@ -144,7 +144,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.clearAlertToken()
 #if DEBUG
-        print("[AirSIM APNs] 普通通知 token 注册失败：\(error.localizedDescription)")
+        print("[AirSIM APNs] User notification token registration failed: \(error.localizedDescription)")
 #endif
     }
 
@@ -182,7 +182,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
             completionHandler(.noData)
         } catch {
 #if DEBUG
-            print("[AirSIM APNs] 短信推送解析失败：\(error.localizedDescription)")
+            print("[AirSIM APNs] Failed to parse SMS push payload: \(error.localizedDescription)")
 #endif
             completionHandler(.failed)
         }
@@ -249,7 +249,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
                     throw CallKitBridgeError.noReachableTransport
                 }
                 let status = try await api.callStatus()
-                // 必须匹配仍在振铃的同一通电话，防止用户点击过期通知误操作新通话。
+                // Must match the same call that is still ringing so tapping a stale notification cannot affect a new call.
                 guard status.active?.id == callID,
                       status.active?.direction == "incoming",
                       let state = status.active?.state,
@@ -281,7 +281,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
     }
 
     private func persistRemoteSMS(_ pushed: IncomingRemoteSMS) -> Bool {
-        // 超长内容在 APNs payload 中只带预览，等待下次与 Agent 同步完整正文，避免本地出现两条。
+        // Long messages carry only a preview in the APNs payload; wait for the next Agent sync to fetch the full body and avoid duplicate local entries.
         guard !pushed.contentTruncated else { return false }
         var messages = historyStore.loadMessages()
         guard !messages.contains(where: { $0.deliveryID == pushed.deliveryID }) else { return false }
@@ -294,7 +294,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
     }
 }
 
-/// SwiftUI 状态中心尚未建立时也能响应系统接听/拒接；AppModel 启动后会接管 handler。
+/// Responds to system answer/reject actions before the SwiftUI state model is initialized; AppModel takes over the handler once started.
 @MainActor
 private final class ColdLaunchCallKitHandler: CallKitActionHandling {
     private let vowlan = VoWLANController()
@@ -387,7 +387,7 @@ private final class ColdLaunchCallKitHandler: CallKitActionHandling {
     func callKitDidFail(_ message: String) {}
 }
 
-/// 个人侧载模式下维持静音播放，让 iOS 在熄屏后继续执行模块来电轮询。
+/// Maintains silent audio playback in personal sideload mode so iOS continues polling module calls after the screen turns off.
 @MainActor
 final class BackgroundStandbyController {
     private let engine = AVAudioEngine()
@@ -450,7 +450,7 @@ final class BackgroundStandbyController {
         }
     }
 
-    /// 在即将退到后台时预启动，回到前台后立即释放音频硬件。
+    /// Pre-starts when about to enter the background and releases audio hardware immediately upon returning to the foreground.
     func setApplicationIsBackground(_ isBackground: Bool) {
         if isBackground {
             prepareForBackground()
@@ -460,14 +460,14 @@ final class BackgroundStandbyController {
         }
     }
 
-    /// scene 进入 inactive 时仍有前台执行资格，必须在这一刻预启动音频。
-    /// 真正收到 background 回调后再启动，系统可能已经决定挂起进程。
+    /// The scene still has foreground execution privileges when entering .inactive, so audio must be pre-started at this moment.
+    /// Waiting until the .background callback may be too late if the system has already decided to suspend the process.
     func prepareForBackground() {
         appIsBackground = true
         ensureRunning()
     }
 
-    /// 回到前台或后台音频被系统中断后重新确认静音播放仍在运行。
+    /// Re-verifies that silent playback is still running after returning to the foreground or after a system audio interruption.
     func ensureRunning() {
         guard enabled, appIsBackground, !suspendedForCall else { return }
         retryTask?.cancel()
@@ -492,7 +492,7 @@ final class BackgroundStandbyController {
         }
     }
 
-    /// 通话 PCM 必须独占 voiceChat 会话，不能与后台静音播放同时争用输出节点。
+    /// Call PCM must exclusively own the voiceChat session and must not contend with background silent playback for the output node.
     func suspendForCall() {
         guard BackgroundStandbySuspensionPolicy.shouldStopAudio(
             isAlreadySuspended: suspendedForCall
@@ -541,7 +541,7 @@ final class BackgroundStandbyController {
     }
 }
 
-/// App 在后台检测到模块来电后发送本地通知；不依赖 APNs 或远程服务器。
+/// Posts a local notification when the app detects an incoming module call in the background, without relying on APNs or remote servers.
 @MainActor
 final class IncomingCallNotifier {
     private var notifiedCallIDs: [String] = []
@@ -551,9 +551,9 @@ final class IncomingCallNotifier {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
 #if DEBUG
             if let error {
-                print("[AirSIM APNs] 通知授权失败：\(error.localizedDescription)")
+                print("[AirSIM APNs] Notification authorization failed: \(error.localizedDescription)")
             } else {
-                print("[AirSIM APNs] 通知授权状态：\(granted ? "已允许" : "未允许")")
+                print("[AirSIM APNs] Notification authorization status: \(granted ? "granted" : "denied")")
             }
 #endif
             Task { @MainActor in
@@ -580,7 +580,7 @@ final class IncomingCallNotifier {
         let number = call.number?.isEmpty == false ? call.number! : "Unknown Number"
         let displayName = callerName?.isEmpty == false ? callerName! : number
         content.title = "AirSIM Incoming Call"
-        // 同时保留姓名和号码，用户可以在锁屏直接确认来电者。
+        // Include both name and phone number so the user can identify the caller directly on the lock screen.
         content.body = displayName == number ? number : "\(displayName) · \(number)"
         content.sound = .default
         content.interruptionLevel = .timeSensitive
@@ -595,7 +595,7 @@ final class IncomingCallNotifier {
     }
 }
 
-/// 新短信已经由 Agent 的 +CMTI URC 单条读取；App 在后台时补发系统通知。
+/// New SMS messages are read individually by the Agent via +CMTI URC; posts a system notification when the app is in the background.
 @MainActor
 final class IncomingSMSNotifier {
     private var notifiedMessageIDs: [String] = []

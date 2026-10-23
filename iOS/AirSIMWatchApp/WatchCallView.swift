@@ -178,8 +178,8 @@ struct WatchCallView: View {
     }
 }
 
-/// 通话控制按钮独立成子视图：只读取 phase 与 isSendingAction，状态文本等
-/// 其他会话属性变化时不再重建整个通话页（structure.md 失效边界）。
+/// Isolated subview for call control buttons: reads only phase and isSendingAction so changes to status text
+/// or other session properties do not rebuild the entire call view (structure.md invalidation boundary).
 private struct WatchCallControls: View {
     @Environment(WatchCallSession.self) private var session
 

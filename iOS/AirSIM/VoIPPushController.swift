@@ -30,7 +30,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
     let number: String?
     let callerName: String?
     let expiresAt: Date?
-    /// Dashboard 虚拟来电仅使用本机 TTS，不触发模块 AT 或公网 PCM。
+    /// Dashboard virtual incoming calls use local TTS only and do not trigger module AT commands or cloud PCM.
     let isVirtual: Bool
     let isOutgoing: Bool
     let ttsText: String?
@@ -70,7 +70,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
             }
             ttsText = candidateTTS
         } else {
-            // 普通来电绝不执行推送中夹带的文字，防止真实电话路径被意外播报。
+            // Regular incoming calls never speak text carried in push payloads, preventing accidental TTS on real calls.
             ttsText = nil
         }
         authenticatedMediaURL = Self.authenticatedMediaURL(from: userInfo)
@@ -707,7 +707,7 @@ struct AgentPushStatus: Decodable, Sendable {
     }
 }
 
-/// 只向设置页暴露可诊断的凭据状态，不泄露设备密钥或完整 Push token。
+/// Exposes only diagnosable credential status to Settings without leaking device secrets or full push tokens.
 struct PushRegistrationReadiness: Equatable, Sendable {
     let deviceIdentityReady: Bool
     let voIPTokenReady: Bool
@@ -761,7 +761,7 @@ struct IncomingRemoteSMS: Equatable, Sendable {
     }
 
     private static func parseTimestamp(_ value: String) -> Date? {
-        // Agent 使用 RFC3339Nano；Foundation 的默认 ISO8601 格式不接受小数秒。
+        // Agent uses RFC3339Nano; Foundation default ISO8601 formatting does not accept fractional seconds.
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: value) { return date }
@@ -788,7 +788,7 @@ struct IncomingRemoteSMS: Equatable, Sendable {
     }
 }
 
-/// PushKit 是被系统挂起或终止后恢复 CallKit 的入口；模块 USB 长轮询仍作为前台兜底。
+/// PushKit is the entry point for waking CallKit after the app is suspended or terminated; module USB long-polling remains the foreground fallback.
 @MainActor
 final class VoIPPushController: NSObject {
     static let shared = VoIPPushController()
@@ -824,10 +824,10 @@ final class VoIPPushController: NSObject {
         guard !LocalModePreference.isEnabled() else { return }
         startActivityKitRegistration()
         if let registry {
-            // 重新赋值会让系统在授权或网络状态变化后再次核对现有凭据。
+            // Reassigning prompts the system to re-verify existing credentials after authorization or network changes.
             registry.desiredPushTypes = [.voIP]
 #if DEBUG
-            print("[AirSIM PushKit] 已刷新 VoIP token 注册")
+            print("[AirSIM PushKit] Refreshed VoIP token registration")
 #endif
             return
         }
@@ -836,7 +836,7 @@ final class VoIPPushController: NSObject {
         registry.desiredPushTypes = [.voIP]
         self.registry = registry
 #if DEBUG
-        print("[AirSIM PushKit] 已创建 VoIP token 注册")
+        print("[AirSIM PushKit] Created VoIP token registration")
 #endif
     }
 
@@ -857,7 +857,7 @@ final class VoIPPushController: NSObject {
             UIApplication.shared.unregisterForRemoteNotifications()
             Task { await IPhoneCloudCallSession.shared.end() }
 #if DEBUG
-            print("[AirSIM Local] 已停用 PushKit、APNs 与 Relay 注册")
+            print("[AirSIM Local] Disabled PushKit, APNs, and Relay registration")
 #endif
         } else {
             start()
@@ -1052,8 +1052,8 @@ final class VoIPPushController: NSObject {
         }
 #if DEBUG
         print(
-            "[AirSIM PushKit] 开始同步 Agent；VoIP=有，通知=\(registration.alertToken.isEmpty ? "无" : "有")，" +
-            "环境=\(registration.environment)，Relay=\(registration.relayURL.isEmpty ? "未配置" : "已配置")"
+            "[AirSIM PushKit] Synchronizing with Agent; VoIP=present, alert=\(registration.alertToken.isEmpty ? "none" : "present"), " +
+            "env=\(registration.environment), Relay=\(registration.relayURL.isEmpty ? "unconfigured" : "configured")"
         )
 #endif
         if !agentRegistered, pairingGate.beginAgentWrite() {
@@ -1070,25 +1070,25 @@ final class VoIPPushController: NSObject {
                 lastRegisteredRoute = api.route
                 agentRegistered = true
 #if DEBUG
-                print("[AirSIM PushKit] Agent 已接收设备注册")
+                print("[AirSIM PushKit] Agent accepted device registration")
                 Task {
                     try? await Task.sleep(for: .seconds(8))
                     do {
                         let status = try await api.pushStatus()
                         print(
-                            "[AirSIM PushKit] Agent 状态；配置=\(status.configured)，" +
-                            "来电=\(status.callPushReady)，短信=\(status.messagePushReady)，" +
-                            "错误=\(status.lastError?.isEmpty == false ? status.lastError! : "无")"
+                            "[AirSIM PushKit] Agent status; configured=\(status.configured), " +
+                            "callPush=\(status.callPushReady), smsPush=\(status.messagePushReady), " +
+                            "error=\(status.lastError?.isEmpty == false ? status.lastError! : "none")"
                         )
                     } catch {
-                        print("[AirSIM PushKit] 读取 Agent 推送状态失败：\(error.localizedDescription)")
+                        print("[AirSIM PushKit] Failed to read Agent push status: \(error.localizedDescription)")
                     }
                 }
 #endif
                 }
             } catch {
 #if DEBUG
-                print("[AirSIM PushKit] 向模块注册 token 失败：\(error.localizedDescription)")
+                print("[AirSIM PushKit] Failed to register token with module: \(error.localizedDescription)")
 #endif
             }
         }
@@ -1102,18 +1102,18 @@ final class VoIPPushController: NSObject {
                 relayRegistered = true
                 nextRelayRegistrationAttempt = .distantPast
 #if DEBUG
-                print("[AirSIM PushKit] Relay 已直接接收设备注册")
+                print("[AirSIM PushKit] Relay accepted direct device registration")
 #endif
             } catch {
                 if case CloudAgentStatusError.requestLimitExceeded = error {
                     nextRelayRegistrationAttempt = PushRegistrationRetryPolicy.quotaRetryDate(now: Date())
                 }
 #if DEBUG
-                print("[AirSIM PushKit] 直接同步 Relay 失败：\(error.localizedDescription)")
+                print("[AirSIM PushKit] Direct Relay sync failed: \(error.localizedDescription)")
 #endif
             }
         }
-        // Relay 成功但本地 Agent 仍不可达时继续低频重试，确保模块恢复后也持有同一组凭据。
+        // Continue low-frequency retries when Relay succeeds but local Agent is unreachable so the module receives the same credentials once back online.
         let needsRetry = PushRegistrationRetryPolicy.needsRetry(
             agentRegistered: agentRegistered,
             relayRegistered: relayRegistered
@@ -1135,7 +1135,7 @@ final class VoIPPushController: NSObject {
         }
     }
 
-    /// 忽略本次进程内的注册指纹缓存，供用户主动执行云端修复。
+    /// Ignores the in-process registration fingerprint cache when the user manually triggers cloud repair.
     func forceRegistrationSync(with api: AirSIMAPI = AirSIMAPI()) async {
         resetRegistrationBackoff()
         await syncRegistration(with: api)
@@ -1157,7 +1157,7 @@ final class VoIPPushController: NSObject {
         )
     }
 
-    /// 只验证控制面，不发起电话或短信：本机凭据 → Relay 身份 → 注册鉴权 → Agent 心跳。
+    /// Verifies the control plane only without placing calls or sending SMS: local credentials -> Relay identity -> registration auth -> Agent heartbeat.
     func runCloudSelfTest(
         onUpdate: @MainActor @escaping (CloudSelfTestReport) -> Void = { _ in }
     ) async -> CloudSelfTestReport {
@@ -1245,9 +1245,9 @@ final class VoIPPushController: NSObject {
         guard !LocalModePreference.isEnabled() else { return }
         resetRegistrationBackoff()
         WatchCallCoordinator.shared.refreshMediaPolicy()
-        // PushKit、CallKit 与 APNs 是本地 USB 模式的通知控制面，不能跟随
-        // 公网 PCM 开关一起关闭。Agent 始终保持通知中继注册；偏好值只控制
-        // 云端状态查询与网络 PCM 媒体通道。
+        // PushKit, CallKit, and APNs form the notification control plane for local USB mode and must not be turned off
+        // with the cloud PCM toggle. The Agent stays registered with the notification relay; the preference controls only
+        // cloud status polling and network PCM media channels.
         try? await api.setPushCloudEnabled(true)
         if !enabled {
             await IPhoneCloudCallSession.shared.end()
@@ -1255,8 +1255,8 @@ final class VoIPPushController: NSObject {
         await syncRegistration(with: api)
     }
 
-    /// 本地 USB/ECM 不可达时，通过 Relay 最近心跳判断 Agent 是否仍在公网在线。
-    /// 请求体中的设备密钥仅在内存中编码，并使用不落盘的临时 URLSession。
+    /// Checks whether the Agent is still online via the latest Relay heartbeat when local USB/ECM is unreachable.
+    /// Device secrets in the request body are encoded in memory only using an ephemeral URLSession that never writes to disk.
     func fetchCloudAgentStatus() async throws -> CloudAgentStatus {
         guard CloudModePreference.isEnabled() else {
             throw CloudAgentStatusError.unavailable
@@ -1264,7 +1264,7 @@ final class VoIPPushController: NSObject {
         return try await fetchCloudAgentStatusForDiagnostics()
     }
 
-    /// 检查单即使在公网 PCM 关闭时也需要读取心跳，避免用户无法判断开启条件。
+    /// The self-check reads the heartbeat even when cloud PCM is disabled so the user can still evaluate readiness.
     func fetchCloudAgentStatusForDiagnostics() async throws -> CloudAgentStatus {
         guard let registration = currentRegistration() else {
             throw CloudAgentStatusError.unavailable
@@ -1453,7 +1453,7 @@ final class VoIPPushController: NSObject {
         return decoded
     }
 
-    /// 验证当前 iPhone 到 Relay 的 HTTPS 控制面，不携带设备密钥。
+    /// Verifies the HTTPS control plane from this iPhone to the Relay without sending device secrets.
     func relayHealthReachable() async -> Bool {
         guard let registration = currentRegistration(),
               (try? await fetchRelayHealthVersion(registration: registration)) != nil else { return false }
@@ -1565,14 +1565,14 @@ final class VoIPPushController: NSObject {
         guard allowLocalMode || !LocalModePreference.isEnabled() else { return nil }
         guard let token = UserDefaults.standard.string(forKey: Keys.token), !token.isEmpty else {
 #if DEBUG
-            print("[AirSIM PushKit] 暂无 VoIP token，跳过同步")
+            print("[AirSIM PushKit] No VoIP token yet, skipping sync")
 #endif
             return nil
         }
         let defaults = UserDefaults.standard
         guard let secret = Self.loadOrCreateDeviceSecret() else {
 #if DEBUG
-            print("[AirSIM PushKit] 无法创建设备密钥，跳过同步")
+            print("[AirSIM PushKit] Unable to create device secret, skipping sync")
 #endif
             return nil
         }
@@ -1645,7 +1645,7 @@ extension VoIPPushController: PKPushRegistryDelegate {
         let token = VoIPPushToken.hex(pushCredentials.token)
         Task { @MainActor [weak self] in
 #if DEBUG
-            print("[AirSIM PushKit] VoIP token 已更新；字节数=\(pushCredentials.token.count)")
+            print("[AirSIM PushKit] VoIP token updated; bytes=\(pushCredentials.token.count)")
 #endif
             self?.store(token: token)
         }
@@ -1658,7 +1658,7 @@ extension VoIPPushController: PKPushRegistryDelegate {
         guard type == .voIP else { return }
         Task { @MainActor [weak self] in
 #if DEBUG
-            print("[AirSIM PushKit] VoIP token 已失效")
+            print("[AirSIM PushKit] VoIP token invalidated")
 #endif
             UserDefaults.standard.removeObject(forKey: Keys.token)
             self?.resetRegistrationBackoff()
@@ -1697,7 +1697,7 @@ extension VoIPPushController: PKPushRegistryDelegate {
                 }
             } catch {
 #if DEBUG
-                print("[AirSIM PushKit] 丢弃无效来电推送：\(error.localizedDescription)")
+                print("[AirSIM PushKit] Dropping invalid incoming call push: \(error.localizedDescription)")
 #endif
                 completion()
             }

@@ -359,7 +359,7 @@ final class CallRecordingStore {
     private(set) var errorMessage: String? {
         didSet { if let errorMessage { onErrorMessage?(errorMessage) } }
     }
-    /// AppModel 把录音错误转发进自己的全局横幅；回调属于桥接管线，不参与 observation。
+    /// AppModel forwards recording errors to its own global banner; the callback is part of the bridging pipeline and does not participate in observation.
     @ObservationIgnored var onErrorMessage: ((String) -> Void)?
     @ObservationIgnored private(set) var currentCallID: String?
     @ObservationIgnored private let recorder: CallAudioRecorder

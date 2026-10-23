@@ -348,6 +348,14 @@ struct CloudWebRTCTests {
         #expect(control.role == "agent")
     }
 
+    @Test func `NetEq caps delay at one second and accelerates the backlog`() {
+        let config = RTCConfiguration()
+        CloudWebRTCPeer.configurePlayout(config)
+        #expect(config.audioJitterBufferMaxPackets == 50)
+        #expect(config.audioJitterBufferFastAccelerate)
+        #expect(CloudWebRTCPeer.jitterBufferMaxPackets == 50)
+    }
+
     @Test func `Voice SDP forces mono Opus and twenty millisecond frames`() {
         let input = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111 0\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 minptime=10;useinbandfec=1\r\na=rtpmap:0 PCMU/8000\r\n"
         let output = CloudWebRTCPeer.voiceSDP(input)

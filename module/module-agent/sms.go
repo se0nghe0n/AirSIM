@@ -145,7 +145,7 @@ func (a *agent) refreshStoredSMS(notice smsStorageRef) {
 		a.setSMSError(err)
 		return
 	}
-	// CMGR 与 CMGL 的字段布局仅相差记录索引，复用经过验证的文本模式解析器。
+	// CMGR and CMGL differ only by the record index, so both reuse the proven text-mode parser.
 	response = strings.Replace(response, "+CMGR:", fmt.Sprintf("+CMGL: %d,", notice.Index), 1)
 	a.mergeSMS(parseTextModeSMS(response, notice.Memory))
 }
@@ -160,7 +160,7 @@ func (a *agent) setSMSError(err error) {
 	a.mu.Unlock()
 }
 
-// containsStoredSMS 防止后台校准把同一条模块存储记录重复加入交付队列。
+// containsStoredSMS stops background calibration from enqueueing the same module-stored record twice.
 func containsStoredSMS(messages []storedSMS, candidate storedSMS) bool {
 	for _, message := range messages {
 		if message.Memory == candidate.Memory && message.Index == candidate.Index &&
@@ -247,7 +247,7 @@ func parseTextModeSMS(response, memory string) []storedSMS {
 		message := smsMessage{
 			Sender: sender, Content: body, Code: code, Timestamp: timestamp,
 		}
-		// 交付 ID 只用于手机落盘后的确认，不参与用户可见的短信去重。
+		// The delivery ID is only for acknowledgement after the phone writes the message. It is not part of user-visible SMS deduplication.
 		digest := sha256.Sum256([]byte(sender + "\x00" + body))
 		message.DeliveryID = fmt.Sprintf("%s-%d-%x", memory, messageIndex, digest[:8])
 		items = append(items, storedSMS{Index: messageIndex, Memory: memory, Message: message})
@@ -433,7 +433,7 @@ func (a *agent) smsRefresh(response http.ResponseWriter, request *http.Request) 
 	writeJSON(response, http.StatusAccepted, map[string]any{"accepted": true, "count": count})
 }
 
-// smsAck 在手机确认本地 JSON 已原子写入后，才删除对应的 SIM/ME 短信和内存交付项。
+// smsAck deletes the matching SIM/ME message and in-memory delivery only after the phone confirms the local JSON was written atomically.
 func (a *agent) smsAck(response http.ResponseWriter, request *http.Request) {
 	if !requireMethod(response, request, http.MethodPost) {
 		return
@@ -512,7 +512,7 @@ func (a *agent) smsSettings(response http.ResponseWriter, request *http.Request)
 		writeError(response, http.StatusBadRequest, "auto_cleanup_me is required")
 		return
 	}
-	// 新协议始终在手机确认落盘后清理，旧客户端的开关请求只保留兼容响应。
+	// The new protocol always cleans up after the phone confirms the write. A toggle request from an old client only keeps a compatibility response.
 	a.mu.Lock()
 	a.smsAuto = true
 	a.mu.Unlock()

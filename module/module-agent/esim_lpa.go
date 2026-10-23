@@ -16,8 +16,8 @@ import (
 
 var cglaResponsePattern = regexp.MustCompile(`\+CGLA:\s*\d+\s*,\s*"?([0-9A-Fa-f]+)"?`)
 
-// moduleLPAChannel 把 euicc-go 的 SmartCardChannel 接口桥接到模块本机 SMD AT 端口。
-// AT 端口自身负责全局串行化；这里的锁只保护单个逻辑通道的生命周期。
+// moduleLPAChannel bridges euicc-go's SmartCardChannel interface to the module's local SMD AT port.
+// The AT port itself serializes access globally. This lock only protects one logical channel's lifetime.
 type moduleLPAChannel struct {
 	at      *atPort
 	channel byte
@@ -133,7 +133,7 @@ func (a *agent) newLPAClient(aidHex string) (*lpa.Client, error) {
 	})
 }
 
-// safeListProfiles 隔离第三方 BER-TLV 解码器对非标准 Profile 数据的 panic。
+// safeListProfiles isolates panics from the third-party BER-TLV decoder on nonstandard Profile data.
 func safeListProfiles(client *lpa.Client, filter any) (profiles []*sgp22.ProfileInfo, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -162,7 +162,7 @@ func profilePayload(profile *sgp22.ProfileInfo) moduleESIMProfile {
 	}
 }
 
-// readESIMOverview 逐个扫描 ISD-R AID，并按 EID 去重；eSTK Max 的 SE0/SE1 会保留为两个分组。
+// readESIMOverview scans ISD-R AIDs one by one and deduplicates by EID. eSTK Max SE0/SE1 stay as two groups.
 func (a *agent) readESIMOverview() (moduleESIMOverview, error) {
 	overview := moduleESIMOverview{
 		CardType: "esim",
@@ -174,27 +174,27 @@ func (a *agent) readESIMOverview() (moduleESIMOverview, error) {
 	var lastError error
 
 	for index, aidHex := range euiccAIDs {
-		// eSTK Max 的 SE0/SE1 都要探测；命中任意一个后不再打开可能映射到重复芯片的通用 AID。
+		// Probe both eSTK Max SE0 and SE1. After either one matches, do not open the generic AID that may map to the same chip.
 		if index >= 2 && len(overview.ChipInfo.EIDs) > 0 {
 			break
 		}
-		log.Printf("eSIM 探针: 打开 AID=%s", aidHex)
+		log.Printf("eSIM probe: opening AID=%s", aidHex)
 		client, err := a.newLPAClient(aidHex)
 		if err != nil {
-			log.Printf("eSIM 探针: 打开失败 AID=%s err=%v", aidHex, err)
+			log.Printf("eSIM probe: open failed AID=%s err=%v", aidHex, err)
 			lastError = err
 			continue
 		}
-		log.Printf("eSIM 探针: 读取 EID AID=%s", aidHex)
+		log.Printf("eSIM probe: reading EID AID=%s", aidHex)
 		eidBytes, eidErr := client.EID()
 		if eidErr != nil {
-			log.Printf("eSIM 探针: EID 失败 AID=%s err=%v", aidHex, eidErr)
+			log.Printf("eSIM probe: EID failed AID=%s err=%v", aidHex, eidErr)
 			lastError = eidErr
 			_ = client.Close()
 			continue
 		}
 		eid := strings.ToUpper(hex.EncodeToString(eidBytes))
-		log.Printf("eSIM 探针: EID 成功 AID=%s EID=%s", aidHex, eid)
+		log.Printf("eSIM probe: EID ok AID=%s EID=%s", aidHex, eid)
 		if seenEIDs[eid] {
 			_ = client.Close()
 			continue
@@ -203,14 +203,14 @@ func (a *agent) readESIMOverview() (moduleESIMOverview, error) {
 
 		info := moduleEUICCInfo{AID: aidHex, EID: eid, SpecGuess: "sgp22_compatible"}
 		group := moduleESIMProfileGroup{EID: eid, AIDHex: aidHex, Profiles: []moduleESIMProfile{}}
-		log.Printf("eSIM 探针: 读取 Profile AID=%s", aidHex)
+		log.Printf("eSIM probe: reading profiles AID=%s", aidHex)
 		profiles, profileErr := safeListProfiles(client, nil)
 		if profileErr != nil {
-			log.Printf("eSIM 探针: Profile 失败 AID=%s err=%v", aidHex, profileErr)
+			log.Printf("eSIM probe: profiles failed AID=%s err=%v", aidHex, profileErr)
 			info.InfoError = profileErr.Error()
 			lastError = profileErr
 		} else {
-			log.Printf("eSIM 探针: Profile 成功 AID=%s count=%d", aidHex, len(profiles))
+			log.Printf("eSIM probe: profiles ok AID=%s count=%d", aidHex, len(profiles))
 			for _, profile := range profiles {
 				if profile != nil {
 					group.Profiles = append(group.Profiles, profilePayload(profile))
@@ -244,7 +244,7 @@ func normalizeKnownEUICCAID(value string) (string, error) {
 	return "", fmt.Errorf("AID is not in the verified eUICC list: %s", normalized)
 }
 
-// resolveProfileTarget 同时验证 ICCID 与 AID 的归属，防止跨 eUICC 误操作同名参数。
+// resolveProfileTarget checks that both the ICCID and the AID belong together, so the same parameter cannot act on the wrong eUICC.
 func (a *agent) resolveProfileTarget(iccidText string, requestedAID string) (string, *sgp22.ProfileInfo, error) {
 	iccid, err := sgp22.NewICCID(strings.TrimSpace(iccidText))
 	if err != nil {

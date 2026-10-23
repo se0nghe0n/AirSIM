@@ -152,6 +152,8 @@ final class WebRTCCloudPeer implements Closeable {
                 hostAnswerReady = false; hostGatheringComplete = false; hostAnswerOwner = null; hostAnswerSession = "";
                 if (hostOnly && iceServers == null) iceServers = List.of();
                 PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(iceServers);
+                config.audioJitterBufferMaxPackets = WebRTCPlayout.JITTER_BUFFER_MAX_PACKETS;
+                config.audioJitterBufferFastAccelerate = WebRTCPlayout.FAST_ACCELERATE;
                 config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
                 config.continualGatheringPolicy = hostOnly
                         ? PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
@@ -242,7 +244,13 @@ final class WebRTCCloudPeer implements Closeable {
                             for (RTCStats stat : report.getStatsMap().values()) {
                                 entries.put(stat.getId(), new WebRTCStatistics.Entry(stat.getId(), stat.getType(), stat.getMembers()));
                             }
+                            long pcmDrops = capture.drops() + playback.drops();
+                            long pcmUnderruns = capture.underruns();
                             for (Map<String, Object> fields : statistics.sample(entries)) {
+                                if ("inbound".equals(fields.get("direction"))) {
+                                    fields.put("pcm_drop_total", pcmDrops);
+                                    fields.put("pcm_underrun_total", pcmUnderruns);
+                                }
                                 BridgeLog.info("standalone_webrtc_stats session_id=" + id + " " + fields);
                             }
                         } catch (Exception | LinkageError ignored) { /* Optional telemetry only. */ }
@@ -348,6 +356,8 @@ final class WebRTCCloudPeer implements Closeable {
             Socket connection = new Socket(); socket = connection;
             try {
                 if (closed.get()) { connection.close(); return; }
+                connection.setReceiveBufferSize(WebRTCPcmBuffer.LOOPBACK_SOCKET_BYTES);
+                connection.setSendBufferSize(WebRTCPcmBuffer.LOOPBACK_SOCKET_BYTES);
                 connection.connect(new InetSocketAddress("127.0.0.1", 7580), 2000);
                 connection.setTcpNoDelay(true); connection.setSoTimeout(5000);
                 OutputStream output = connection.getOutputStream();

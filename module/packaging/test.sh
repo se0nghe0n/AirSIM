@@ -96,7 +96,7 @@ bootstrap_output=$(PATH="$script_dir/test-fixtures/fake-bin:$PATH" \
     AIRSIM_BOOTSTRAP_APT_LOG="$test_root/apt.log" \
     AIRSIM_RELEASE_BASE_URL="file://$test_root/dist" \
     "$test_root/dist/install-avf.sh")
-printf '%s\n' "$bootstrap_output" | grep -q '检测到已安装的 Agent'
+printf '%s\n' "$bootstrap_output" | grep -q 'detected an already installed Agent'
 printf '%s\n' "$bootstrap_output" | grep -q 'test pairing completed'
 grep -qx 'unchanged second run' "$test_root/apt.log"
 
@@ -114,7 +114,7 @@ then
     printf 'broken Debian dependencies were accepted\n' >&2
     exit 1
 fi
-grep -q '未满足的系统包依赖' "$test_root/broken-output.log"
+grep -q 'unmet system package dependencies' "$test_root/broken-output.log"
 grep -qx 'check' "$test_root/broken-apt.log"
 test ! -e "$broken_root/var/lib/airsim-installerd/packages/current.deb"
 

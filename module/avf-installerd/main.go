@@ -19,11 +19,11 @@ func main() {
 	tokenPath := environment("AIRSIM_INSTALLER_TOKEN_FILE", "/var/lib/airsim/control.token")
 	tokenData, err := os.ReadFile(tokenPath)
 	if err != nil {
-		log.Fatalf("读取 installer token 失败: %v", err)
+		log.Fatalf("failed to read installer token: %v", err)
 	}
 	publicKey, err := decodePublicKey(releasePublicKeyBase64)
 	if err != nil {
-		log.Fatalf("发行公钥无效: %v", err)
+		log.Fatalf("release public key is invalid: %v", err)
 	}
 	stateDirectory := environment("AIRSIM_INSTALLER_STATE_DIR", "/var/lib/airsim-installerd")
 	server := &http.Server{
@@ -38,7 +38,7 @@ func main() {
 		IdleTimeout:       30 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
-	log.Printf("AirSIM installerd 监听 %s", server.Addr)
+	log.Printf("AirSIM installerd listening on %s", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

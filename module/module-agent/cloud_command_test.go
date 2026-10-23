@@ -44,11 +44,11 @@ func TestHangupConfirmationWaitsForFreshCLCCIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	if attempts != 2 || lastCLCC != "OK" {
-		t.Fatalf("确认结果 attempts=%d last=%q", attempts, lastCLCC)
+		t.Fatalf("confirmation result attempts=%d last=%q", attempts, lastCLCC)
 	}
 	want := []string{"ATH", "AT+CLCC", "AT+CLCC"}
 	if strings.Join(commands, ",") != strings.Join(want, ",") {
-		t.Fatalf("命令链=%v，期望=%v", commands, want)
+		t.Fatalf("command sequence=%v, want=%v", commands, want)
 	}
 }
 
@@ -71,13 +71,13 @@ func TestHangupConfirmationFallsBackToCHUPAndRejectsPersistentCall(t *testing.T)
 		[]time.Duration{time.Millisecond, time.Millisecond, time.Millisecond},
 	)
 	if err == nil || !strings.Contains(err.Error(), "CLCC") {
-		t.Fatalf("持续通话必须失败，err=%v", err)
+		t.Fatalf("a call that stays up must fail, err=%v", err)
 	}
 	if attempts != 3 || !strings.Contains(lastCLCC, "+CLCC:") {
-		t.Fatalf("失败证据 attempts=%d last=%q", attempts, lastCLCC)
+		t.Fatalf("failure evidence attempts=%d last=%q", attempts, lastCLCC)
 	}
 	if len(commands) < 2 || commands[0] != "ATH" || commands[1] != "AT+CHUP" {
-		t.Fatalf("未执行 ATH -> AT+CHUP 回退：%v", commands)
+		t.Fatalf("ATH -> AT+CHUP fallback was not executed: %v", commands)
 	}
 }
 
@@ -109,13 +109,13 @@ func TestCloudHangupCommandIsConfirmedAndIdempotent(t *testing.T) {
 	first := agent.executeCloudCommand(command)
 	second := agent.executeCloudCommand(command)
 	if first.Status != "completed" || first.Result["modem_confirmed"] != true {
-		t.Fatalf("首次结果=%#v", first)
+		t.Fatalf("first result=%#v", first)
 	}
 	if second.Status != first.Status || second.Result["modem_confirmed"] != true {
-		t.Fatalf("重放结果不一致：first=%#v second=%#v", first, second)
+		t.Fatalf("replay result mismatch: first=%#v second=%#v", first, second)
 	}
 	if atCalls != 2 {
-		t.Fatalf("同一 command_id 应只执行一次 ATH + CLCC，实际 AT 次数=%d", atCalls)
+		t.Fatalf("the same command_id should run ATH + CLCC only once, AT calls=%d", atCalls)
 	}
 }
 
@@ -145,10 +145,10 @@ func TestCloudHangupCommandRejectsStaleGenerationBeforeAT(t *testing.T) {
 				},
 			})
 			if result.Status != "failed" || !strings.Contains(result.Error, "generation") {
-				t.Fatalf("旧代次结果=%#v", result)
+				t.Fatalf("old-generation result=%#v", result)
 			}
 			if atCalls != 0 {
-				t.Fatalf("旧 generation 不得执行 AT，实际=%d", atCalls)
+				t.Fatalf("old generation must not run AT, calls=%d", atCalls)
 			}
 		})
 	}
@@ -163,7 +163,7 @@ func TestExpiredCloudCommandCacheEntryDoesNotMaskFreshExecution(t *testing.T) {
 	atCalls := 0
 	agent := &agent{
 		cloudCommandResults: map[string]cloudCommandResult{
-			commandID: {CommandID: commandID, Status: "failed", Error: "旧结果"},
+			commandID: {CommandID: commandID, Status: "failed", Error: "stale result"},
 		},
 		cloudCommandExpiry: map[string]time.Time{commandID: time.Now().Add(-time.Second)},
 		cloudCallCurrent:   &descriptor,
@@ -184,10 +184,10 @@ func TestExpiredCloudCommandCacheEntryDoesNotMaskFreshExecution(t *testing.T) {
 		},
 	})
 	if result.Status != "completed" || result.Result["modem_confirmed"] != true {
-		t.Fatalf("过期缓存未被替换：%#v", result)
+		t.Fatalf("expired cache entry was not replaced: %#v", result)
 	}
 	if atCalls != 2 {
-		t.Fatalf("过期缓存后应重新执行 ATH + CLCC，实际 AT 次数=%d", atCalls)
+		t.Fatalf("ATH + CLCC should run again after the cache expires, AT calls=%d", atCalls)
 	}
 }
 
@@ -231,7 +231,7 @@ func TestHeartbeatPullExecutesRescueAndPostsFinalResult(t *testing.T) {
 				t.Fatal(err)
 			}
 			if body.DeviceID == "" || body.DeviceSecret == "" {
-				t.Fatal("命令完成回写缺少设备凭据")
+				t.Fatal("command completion writeback is missing the device credential")
 			}
 			completion = body.cloudCommandResult
 			response.WriteHeader(http.StatusAccepted)
@@ -261,11 +261,11 @@ func TestHeartbeatPullExecutesRescueAndPostsFinalResult(t *testing.T) {
 	requestMu.Lock()
 	defer requestMu.Unlock()
 	if strings.Join(requests, ",") != "/v1/commands/pull,/v1/commands/complete" {
-		t.Fatalf("HTTP 补漏链路=%v", requests)
+		t.Fatalf("HTTP catch-up path=%v", requests)
 	}
 	if completion.CommandID != commandID || completion.Status != "completed" ||
 		completion.Result["modem_confirmed"] != true {
-		t.Fatalf("救援完成回写=%#v", completion)
+		t.Fatalf("rescue completion writeback=%#v", completion)
 	}
 }
 
@@ -297,15 +297,15 @@ func TestConfirmedHangupRetiresDescriptorBeforeARescueCanTargetIt(t *testing.T) 
 	base.CommandID = "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145"
 	base.Action = "end"
 	if result := agent.executeCloudCommand(base); result.Status != "completed" {
-		t.Fatalf("原挂断失败: %#v", result)
+		t.Fatalf("original hangup failed: %#v", result)
 	}
 	base.CommandID = "a1a2a3a4-b5b6-47c8-89d0-e1e2e3e4e5e6"
 	base.Action = "rescue_hangup"
 	rescue := agent.executeCloudCommand(base)
 	if rescue.Status != "failed" || !strings.Contains(rescue.Error, "No controllable cloud call") {
-		t.Fatalf("已结束通话的救援必须被拒绝: %#v", rescue)
+		t.Fatalf("rescue of an already ended call must be rejected: %#v", rescue)
 	}
 	if atCalls != 2 {
-		t.Fatalf("救援不得再次执行 AT，实际=%d", atCalls)
+		t.Fatalf("rescue must not run AT again, calls=%d", atCalls)
 	}
 }

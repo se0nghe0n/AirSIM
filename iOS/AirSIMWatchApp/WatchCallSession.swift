@@ -4,11 +4,11 @@ import Foundation
 import PushKit
 import WatchConnectivity
 
-/// Apple Watch 注册 VoIP Push 并上报 CallKit。拨号和接听控制走 WCSession。
-/// 云端音频留在 iPhone 的 WebRTC peer；手表不打开 PCM WebSocket，也不发送 PCM 上行。
-/// 本地 VoWLAN 音频由 iPhone 的 WebRTC peer 承载。
-/// 观察机制替换 ObservableObject；CallKit/WCSession 回调线程保持原样，
-/// 因此不加 @MainActor（WCSessionDelegate 会在非主队列回调并写 pushStatus）。
+/// Apple Watch registers for VoIP push and reports calls to CallKit. Dialing and answer controls run over WCSession.
+/// Cloud audio stays on the iPhone WebRTC peer; the Watch neither opens a PCM WebSocket nor sends PCM uplink.
+/// Local VoWLAN audio is also carried by the iPhone WebRTC peer.
+/// Uses @Observable in place of ObservableObject while keeping CallKit/WCSession callback threading unchanged,
+/// so @MainActor is omitted (WCSessionDelegate callbacks run off the main queue and write pushStatus).
 @Observable
 final class WatchCallSession: NSObject {
     private(set) var call = WatchCallPayload(
@@ -291,7 +291,7 @@ final class WatchCallSession: NSObject {
                 }
             }
             if let ownCall = voIPCall, payload.callID == ownCall.callID {
-                // Watch 呼出由自己的 CallKit/媒体会话管理，iPhone 状态镜像不能提前结束它。
+                // Watch outgoing calls are managed by its own CallKit/media session; iPhone state mirroring must not end them early.
                 if ownCall.isOutgoing, payload.phase != .ended { return }
                 if payload.phase == .active, !answered, !answering {
                     provider.reportCall(with: ownCall.uuid, endedAt: Date(), reason: .answeredElsewhere)
@@ -312,7 +312,7 @@ final class WatchCallSession: NSObject {
 		pendingWatchToken = token
 		pushStatus = "Watch VoIP registered. Syncing with iPhone…"
 #if DEBUG
-		print("[AirSIM Watch PushKit] token 已生成；字节数=\(token.count)，WC=\(connectivity?.activationState.rawValue ?? -1)")
+		print("[AirSIM Watch PushKit] Token generated; bytes=\(token.count), WC=\(connectivity?.activationState.rawValue ?? -1)")
 #endif
         notifyCompanion(event: "watch_voip_registration", extra: [
             "watch_voip_token": token.map { String(format: "%02x", $0) }.joined(),
@@ -323,7 +323,7 @@ final class WatchCallSession: NSObject {
     private func notifyCompanion(event: String, extra: [String: Any]) {
 		guard let connectivity, connectivity.activationState == .activated else {
 #if DEBUG
-			print("[AirSIM Watch WC] 等待激活；event=\(event)")
+			print("[AirSIM Watch WC] Waiting for activation; event=\(event)")
 #endif
 			return
 		}
@@ -333,7 +333,7 @@ final class WatchCallSession: NSObject {
 			try connectivity.updateApplicationContext(payload)
 		} catch {
 #if DEBUG
-			print("[AirSIM Watch WC] updateApplicationContext 失败：\(error.localizedDescription)")
+			print("[AirSIM Watch WC] updateApplicationContext failed: \(error.localizedDescription)")
 #endif
 		}
 		connectivity.transferUserInfo(payload)
@@ -344,7 +344,7 @@ final class WatchCallSession: NSObject {
 			pushStatus = "Watch VoIP synced"
 		}
 #if DEBUG
-		print("[AirSIM Watch WC] 已发送；event=\(event)，reachable=\(connectivity.isReachable)，queued=\(connectivity.outstandingUserInfoTransfers.count)")
+		print("[AirSIM Watch WC] Sent; event=\(event), reachable=\(connectivity.isReachable), queued=\(connectivity.outstandingUserInfoTransfers.count)")
 #endif
     }
 
@@ -701,7 +701,7 @@ extension WatchCallSession: WCSessionDelegate {
         if activationState == .activated {
 			let token = pendingWatchToken ?? pushRegistry.pushToken(for: .voIP)
 #if DEBUG
-			print("[AirSIM Watch WC] 激活完成；token=\(token == nil ? "无" : "有") error=\(error?.localizedDescription ?? "无")")
+			print("[AirSIM Watch WC] Activation completed; token=\(token == nil ? "none" : "present") error=\(error?.localizedDescription ?? "none")")
 #endif
 			if let token { sendWatchToken(token) }
             if !session.receivedApplicationContext.isEmpty { receiveMirror(session.receivedApplicationContext) }

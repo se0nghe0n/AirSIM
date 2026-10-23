@@ -58,9 +58,9 @@ The [protocol contract](webrtc-implementation-contract.md) defines call/session 
 ## Latency and stability diagnostics
 
 Keep Cloudflare for control, APNs, and optional TURN. In WebRTC mode, the
-selected ICE path carries audio and the existing PCM jitter/time-pitch path is
-not applied a second time. Buffer or codec changes should follow measurements
-from that path rather than the legacy WebSocket timing alone.
+selected ICE path carries audio. NetEq on both peers holds at most 50 Opus
+packets (one second at 20 ms) and fast-accelerates when that buffer grows.
+The legacy PCM jitter buffer and time-pitch node are not applied on top.
 
 iOS records `webrtc_stats`; Android records `standalone_webrtc_stats`. Samples
 are taken approximately every five seconds and belong to one negotiation.
@@ -76,6 +76,7 @@ candidate strings, SDP, and TURN credentials are excluded from these records.
 | `rx_buffer_ms` | Mean receive jitter-buffer residence during the latest sample interval |
 | `rx_lost_packets` | Change in the receive loss estimate; may be negative when late packets correct earlier loss |
 | `rx_concealed_samples`, `rx_concealment_pct` | Concealed audio samples and their share of received samples during the interval |
+| `pcm_drop_total`, `pcm_underrun_total` | Android only. Cumulative telephony frames discarded by the 60 ms/80 ms loopback cap, and silent 10 ms pulls. These are outside the RTP loss count |
 
 The buffer mean uses the change in `jitterBufferDelay` divided by the change in
 `jitterBufferEmittedCount`, following the [WebRTC statistics specification](https://www.w3.org/TR/webrtc-stats/).
@@ -86,11 +87,13 @@ not zero. Unselected candidate pairs must not influence the displayed RTT.
 Compare both endpoints: increasing RTT/jitter/loss points to transport trouble;
 stable path metrics with increasing receive-buffer residence points to local
 playout accumulation. These are diagnostic clues, not proof of the precise
-source of delay. Rooted PCM socket buffering, AudioTrack/device latency, and
-acoustic output are outside the WebRTC receive-buffer measurement. In
-particular, a stalled Android AudioTrack can retain queued PCM in the local TCP
-path even when the application's PCM queue remains small. A physical-device
-stall/recovery measurement is needed before changing that buffering policy.
+source of delay. The telephony loopback is outside that receive-buffer
+measurement. Its app queue holds at most 60 ms and drops audio older than
+80 ms. The device buffer keeps an 80 ms floor when that is above the platform
+minimum, and both socket ends hint a 4 KB send and receive buffer so a stall
+cannot leave seconds of PCM in the kernel. Acoustic output and a platform
+minimum larger than 80 ms remain outside this cap. This bound is not a
+listening-quality result.
 
 ## Validation
 

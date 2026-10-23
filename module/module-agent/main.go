@@ -22,9 +22,9 @@ import (
 var agentVersion = "0.4.6"
 
 const (
-	// 监听所有本机接口以容忍 ECM 地址晚于 init 服务出现；请求层仍只放行 USB 私网与环回。
+	// Listen on every local interface so a late ECM address can appear after init. The request layer still allows only the USB private network and loopback.
 	listenAddress = "0.0.0.0:8575"
-	// DATA11 桥与原厂 DATA1 完全分离，禁止重新使用 ql_manager_server 占用的 /dev/smd7。
+	// The DATA11 bridge stays fully separate from factory DATA1. Do not reuse /dev/smd7, which ql_manager_server owns.
 	atDevice = "/dev/airsim_data11"
 )
 
@@ -105,14 +105,14 @@ func newAgent(atPath string) *agent {
 	})
 	service.debug.add("system", "", "agent initialized", "", map[string]string{"version": agentVersion})
 	if voiceBackendErr != nil {
-		service.debug.add("voice-backend", "error", "语音后端配置无效", voiceBackendErr.Error(), nil)
+		service.debug.add("voice-backend", "error", "invalid voice backend configuration", voiceBackendErr.Error(), nil)
 	} else {
-		service.debug.add("voice-backend", "configured", "语音后端已选择", "", map[string]string{
+		service.debug.add("voice-backend", "configured", "voice backend selected", "", map[string]string{
 			"backend": string(voiceBackend.kind),
 		})
 	}
 	if androidTokenErr != nil {
-		service.debug.add("android-telecom", "error", "Android 控制令牌读取失败", androidTokenErr.Error(), nil)
+		service.debug.add("android-telecom", "error", "failed to read Android control token", androidTokenErr.Error(), nil)
 	}
 	return service
 }
@@ -134,14 +134,14 @@ func (a *agent) handleATReopen() {
 func main() {
 	configureRuntimeStability()
 	if len(os.Args) > 1 && os.Args[1] == "--startup-probe" {
-		// 使用最早可见标记，区分包初始化崩溃与 main 内部崩溃。
-		fmt.Println("启动探针标记: main-entry")
+		// Emit the earliest visible marker so a package-init crash is distinct from a crash inside main.
+		fmt.Println("startup probe marker: main-entry")
 	}
 	logger := log.New(os.Stdout, "airsim-agent: ", log.LstdFlags|log.LUTC)
 	go startRuntimeMonitor(logger)
 	probed, err := runStartupProbe(logger)
 	if err != nil {
-		logger.Fatalf("启动探针失败: %v", err)
+		logger.Fatalf("startup probe failed: %v", err)
 	}
 	if probed {
 		return
@@ -149,39 +149,39 @@ func main() {
 
 	service := newAgent(atDevice)
 	if !service.profile.AndroidTelecom {
-		logger.Fatal("AirSIM 仅支持 android-avf 运行配置，不启动 QDC507 模块模式")
+		logger.Fatal("AirSIM only supports the android-avf runtime profile and does not start QDC507 module mode")
 	}
 	if service.voiceBackendErr != nil || service.voiceBackend.kind != voiceBackendSamsungAndroid {
-		logger.Fatalf("AirSIM 需要有效的三星私网 PCM 地址: %v", service.voiceBackendErr)
+		logger.Fatalf("AirSIM requires a valid Samsung private-network PCM address: %v", service.voiceBackendErr)
 	}
 	modemAvailable := false
 	if modemAvailable {
 		defer service.at.close()
 		service.at.startURCMonitor()
-		// USB 音频门若为网络 PCM 所需，只在 Agent 启动阶段设置一次；通话
-		// 接听与挂断期间保持不变，避免 ECM 与 f_audio 同组合时重新枚举。
+		// If network PCM needs the USB audio gate, set it once at Agent startup.
+		// Leave it unchanged across answer and hangup so ECM and f_audio are not re-enumerated while composed together.
 		service.initializeVoiceAudioGateAtStartup()
 
 		service.rxStart, service.txStart, _ = readInterfaceCounters("ecm0")
-		// 原厂服务刚释放 SMD 端口时，首轮 AT 查询可能需要几十秒。
-		// 先启动 HTTP 服务，再由轮询协程刷新状态，避免 iPad 把慢启动误判成代理离线。
+		// The first AT query can take tens of seconds just after the factory service releases the SMD port.
+		// Start HTTP first and let the poll goroutine refresh state, so the iPad does not treat a slow start as an offline agent.
 		go service.pollLoop()
 		go service.atKeepaliveLoop()
 		go service.router.monitorLoop(context.Background(), func(summary, detail string) {
 			service.debug.add("router", "event", summary, detail, nil)
 		})
-		// 由内核 RTM_NEWLINK/RTM_DELLINK 事件驱动 ECM 恢复；1 秒轮询作为
-		// netlink 丢事件时的兜底，并覆盖 ecm0 整个从 sysfs 消失的情况。
+		// Kernel RTM_NEWLINK and RTM_DELLINK events drive ECM recovery. A 1-second
+		// poll is the fallback when netlink drops an event, including when ecm0 disappears from sysfs entirely.
 		startUSBLinkMonitor(service, logger)
-		// 监听器建立后落一份基线，后续即使 ECM 失联，也能在模块本地对比
-		// Agent PID 与 ql_manager_server PID 是否发生变化。
+		// Record a baseline after the listener is up. Later, even if ECM is lost,
+		// the module can still compare whether the Agent PID and the ql_manager_server PID changed.
 		go func() {
 			time.Sleep(2 * time.Second)
 			service.recordUSBFault("agent-start", "startup", "startup baseline")
 		}()
 	}
-	// Push/Relay 属于 Agent 控制面。Android AVF 没有直通 AT 端口，但仍须
-	// 保持公网心跳和命令通道，由 Android Telecom 执行运营商通话动作。
+	// Push and Relay belong to the Agent control plane. Android AVF has no direct
+	// AT port, but it still keeps the public heartbeat and command channel. Android Telecom performs the carrier call actions.
 	go service.cloudHeartbeatLoop()
 	go service.cloudCommandLoop()
 
@@ -199,19 +199,19 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
-		// 给正在返回结果的控制请求留出短暂完成时间。
+		// Leave a short window for in-flight control requests to finish their responses.
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	}()
 
-	logger.Printf("监听 %s，版本 %s", listenAddress, agentVersion)
+	logger.Printf("listening on %s, version %s", listenAddress, agentVersion)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Fatalf("HTTP 服务退出: %v", err)
+		logger.Fatalf("HTTP server exited: %v", err)
 	}
 }
 
-// runStartupProbe 分阶段验证启动路径，不发送 AT 指令，也不改变模块网络状态。
+// runStartupProbe checks the startup path in stages. It does not send AT commands or change module network state.
 func runStartupProbe(logger *log.Logger) (bool, error) {
 	if len(os.Args) == 1 || os.Args[1] != "--startup-probe" {
 		return false, nil
@@ -220,17 +220,17 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		return true, errors.New("Usage: --startup-probe runtime|routes|listen|voice-backend|at-open|esim-read")
 	}
 
-	fmt.Println("启动探针标记: stage-entry")
+	fmt.Println("startup probe marker: stage-entry")
 	service := newAgent(atDevice)
-	fmt.Println("启动探针标记: service-created")
+	fmt.Println("startup probe marker: service-created")
 	switch os.Args[2] {
 	case "runtime":
-		// 部署器据此核对 Agent 内嵌白名单与同批 helper，阻止错配产物提交。
+		// The deployer uses this to check the Agent's embedded allowlist against the helper from the same build, and to block a mismatched artifact.
 		fmt.Printf("__VOICE_HELPER_SHA256__%s\n", voiceHelperSHA256)
-		logger.Printf("启动探针通过: runtime")
+		logger.Printf("startup probe passed: runtime")
 	case "routes":
 		_ = service.routes(logger)
-		logger.Printf("启动探针通过: routes")
+		logger.Printf("startup probe passed: routes")
 	case "listen":
 		listener, err := net.Listen("tcp", listenAddress)
 		if err != nil {
@@ -239,7 +239,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		if err := listener.Close(); err != nil {
 			return true, fmt.Errorf("Failed to close probe listener: %w", err)
 		}
-		logger.Printf("启动探针通过: listen")
+		logger.Printf("startup probe passed: listen")
 	case "voice-backend":
 		endpoint, err := service.voicePCMEndpoint()
 		if err != nil {
@@ -250,7 +250,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		}); err != nil {
 			return true, fmt.Errorf("Samsung PCM backend handshake failed: %w", err)
 		}
-		logger.Printf("启动探针通过: voice-backend")
+		logger.Printf("startup probe passed: voice-backend")
 	case "at-open":
 		if err := service.at.open(); err != nil {
 			return true, err
@@ -258,9 +258,9 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		if err := service.at.close(); err != nil {
 			return true, err
 		}
-		logger.Printf("启动探针通过: at-open")
+		logger.Printf("startup probe passed: at-open")
 	case "esim-read":
-		// 直接读取 LPA，避免 HTTP 服务的通话/短信轮询与 eUICC APDU 争用同一 AT 端口。
+		// Read LPA directly so HTTP call and SMS polling does not contend with eUICC APDUs on the same AT port.
 		if err := service.at.open(); err != nil {
 			return true, err
 		}
@@ -274,7 +274,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 			return true, fmt.Errorf("Failed to encode eSIM overview: %w", err)
 		}
 		fmt.Printf("__ESIM_OVERVIEW__%s\n", encoded)
-		logger.Printf("启动探针通过: esim-read")
+		logger.Printf("startup probe passed: esim-read")
 	default:
 		return true, fmt.Errorf("Unknown startup probe stage: %s", os.Args[2])
 	}
@@ -424,7 +424,7 @@ func installerServiceRequired(response http.ResponseWriter, _ *http.Request) {
 	writeError(response, http.StatusGone, "Agent self-update is disabled; connect to AVF installerd on port 8576 using the Android app")
 }
 
-// allowedRemote 把控制面限制在模块自身和 CDC ECM 子网。
+// allowedRemote limits the control plane to the module itself and the CDC ECM subnet.
 func allowedRemote(remote string) bool {
 	return allowedRemoteWithNetworks(remote, runtimeProfileFrom("qdc507"), nil)
 }
@@ -509,7 +509,7 @@ func (a *agent) pollLoop() {
 	defer voiceTicker.Stop()
 	for {
 		<-voiceTicker.C
-		// 通话过程中语音桥可能因内核设备短暂不可用而退出；只要通话仍在，下一轮主动恢复媒体链路。
+		// During a call the voice bridge can exit if a kernel device is briefly unavailable. While the call is still up, the next round restores the media path.
 		a.maintainVoiceRoute()
 	}
 }

@@ -192,7 +192,7 @@ func parseQPNPVADCResult(text string) *float64 {
 	return nil
 }
 
-// QDC507 的 3.18 内核直接返回摄氏度；常规 sysfs/hwmon 则返回毫摄氏度。
+// The QDC507 3.18 kernel returns degrees Celsius directly. Ordinary sysfs/hwmon returns millidegrees Celsius.
 func readTemperature(path string) *float64 {
 	value := readScaledFloat(path, 1)
 	if value == nil {

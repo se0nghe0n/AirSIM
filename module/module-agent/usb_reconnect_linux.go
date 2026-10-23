@@ -24,7 +24,7 @@ func startUSBLinkMonitor(agent *agent, logger *log.Logger) {
 		for {
 			if err := monitorUSBLinkEvents(debouncer); err != nil {
 				agent.debug.add("usb", "event", "netlink monitor restarting", "", map[string]string{"error": err.Error()})
-				logger.Printf("ecm0 netlink 监听恢复中: %v", err)
+				logger.Printf("ecm0 netlink monitor recovering: %v", err)
 				time.Sleep(2 * time.Second)
 			}
 		}

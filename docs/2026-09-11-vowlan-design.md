@@ -132,13 +132,13 @@ The disconnect reason is preserved in iOS, Android, and Agent diagnostics with a
 
 Settings display a VoWLAN row with these states:
 
-- `未配对`;
-- `正在发现`;
-- `已发现，正在验证`;
-- `VoWLAN 就绪`;
-- `通话中（VoWLAN）`;
-- `热点已断开`;
-- `已回退云端（下一通）`.
+- `Not paired`;
+- `Discovering`;
+- `Discovered, verifying`;
+- `VoWLAN ready`;
+- `In call (VoWLAN)`;
+- `Hotspot disconnected`;
+- `Fell back to cloud (next call)`.
 
 The in-call diagnostics identify the locked transport as `VoWLAN`, `Cloud`, or `Module Local`. New structured logs use component names beginning with `vowlan` and include discovery, authentication, selection, gateway forwarding, PCM milestones, byte/frame/peak counters, and disconnect reason. Logs redact HMAC values, VoWLAN secrets, phone-number content where not already authorized for call history, and all PCM payloads.
 

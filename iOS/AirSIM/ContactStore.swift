@@ -27,7 +27,7 @@ enum ContactAccessPolicy {
     }
 }
 
-/// 非主线程联系人读取器，避免在 Swift 6 下跨线程持有 CNContactStore。
+/// Non-main-thread contact reader to avoid holding CNContactStore across threads in Swift 6.
 struct ContactFetcher: Sendable {
     func authorizationState() -> ContactAuthorizationState {
         let status = CNContactStore.authorizationStatus(for: .contacts)
@@ -121,7 +121,7 @@ final class ContactStore {
 
     init(fileManager: FileManager = .default) {
         cache = ContactCacheStore(fileManager: fileManager)
-        // 联系人属于手机数据。模块离线或系统联系人数据库暂不可读时，先展示本机副本。
+        // Contacts belong to phone data. Show the local copy first while the module is offline or the system contacts DB is temporarily unreadable.
         contacts = cache.load()
         let state = ContactFetcher().authorizationState()
         authorizationState = state
@@ -148,7 +148,7 @@ final class ContactStore {
 
     private func refresh(userInitiated: Bool) async {
         do {
-            // 手机重启后可能先在数据保护尚未解锁时读取到空数组；每次前台刷新都重试磁盘缓存。
+            // After a reboot, an empty array may be read before data protection unlocks; retry the disk cache on every foreground refresh.
             let cachedContacts = cache.load()
             if !cachedContacts.isEmpty {
                 contacts = cachedContacts
@@ -184,7 +184,7 @@ final class ContactStore {
             }
 
             isAuthorized = true
-            // 非用户主动刷新时优先使用已恢复的缓存，避免每次切换联系人页都完整枚举通讯录。
+            // Prefer the restored cache for non-user-initiated refreshes to avoid enumerating all contacts on every tab switch.
             guard userInitiated || contacts.isEmpty else {
                 errorMessage = nil
                 return
@@ -220,7 +220,7 @@ final class ContactStore {
     }
 }
 
-/// 通讯录缓存仅保存在 App 沙盒，不会上传到模块或 Push Relay。
+/// Contact cache is stored only inside the app sandbox and is never uploaded to the module or Push Relay.
 private final class ContactCacheStore {
     private let fileManager: FileManager
     private let fileURL: URL
@@ -244,7 +244,7 @@ private final class ContactCacheStore {
         do {
             return try JSONDecoder().decode([ContactStore.Contact].self, from: data)
         } catch {
-            Self.log("读取通讯录缓存失败：\(error.localizedDescription)")
+            Self.log("Failed to read contact cache: \(error.localizedDescription)")
             return []
         }
     }
@@ -256,7 +256,7 @@ private final class ContactCacheStore {
             try data.write(to: fileURL, options: [.atomic])
             return true
         } catch {
-            Self.log("保存通讯录缓存失败：\(error.localizedDescription)")
+            Self.log("Failed to save contact cache: \(error.localizedDescription)")
             return false
         }
     }

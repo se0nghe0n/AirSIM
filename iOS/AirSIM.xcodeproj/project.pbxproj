@@ -157,13 +157,13 @@
 		B30000000000000000000002 /* AirSIMTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirSIMTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB0000000000000000000001 /* CloudWebRTC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTC.swift; sourceTree = "<group>"; };
 		BB0000000000000000000003 /* CloudWebRTCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTCTests.swift; sourceTree = "<group>"; };
+		BB0000000000000000000004 /* WebRTC-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-LICENSE"; path = WebRTCDependency/LICENSE; sourceTree = SOURCE_ROOT; };
+		BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-THIRD-PARTY-NOTICES"; path = WebRTCDependency/THIRD_PARTY_NOTICES.txt; sourceTree = SOURCE_ROOT; };
+		BB0000000000000000000006 /* WebRTC-PATENTS */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-PATENTS"; path = WebRTCDependency/PATENTS; sourceTree = SOURCE_ROOT; };
 		BB0000000000000000000010 /* CallRecordingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingStore.swift; sourceTree = "<group>"; };
 		BB0000000000000000000011 /* CallRecordingWebRTCAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingWebRTCAudio.swift; sourceTree = "<group>"; };
 		BB0000000000000000000012 /* CallRecordingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingsView.swift; sourceTree = "<group>"; };
 		BB0000000000000000000013 /* CallRecordingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingTests.swift; sourceTree = "<group>"; };
-		BB0000000000000000000004 /* WebRTC-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-LICENSE"; path = WebRTCDependency/LICENSE; sourceTree = SOURCE_ROOT; };
-		BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-THIRD-PARTY-NOTICES"; path = WebRTCDependency/THIRD_PARTY_NOTICES.txt; sourceTree = SOURCE_ROOT; };
-		BB0000000000000000000006 /* WebRTC-PATENTS */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-PATENTS"; path = WebRTCDependency/PATENTS; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */

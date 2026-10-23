@@ -18,15 +18,15 @@ public final class DiagnosticFileTests {
             BridgeLog.initialize(context);
             equal("No debug logs", BridgeLog.read());
             Files.write(directory.resolve("airsim-debug.previous.log"),
-                    "旧日志：蓝牙\n".getBytes(StandardCharsets.UTF_8));
+                    "Old log: Bluetooth\n".getBytes(StandardCharsets.UTF_8));
             Files.write(directory.resolve("airsim-debug.log"),
-                    "新日志：已连接\n".getBytes(StandardCharsets.UTF_8));
-            equal("旧日志：蓝牙\n新日志：已连接\n", BridgeLog.read());
-            CrashReportStore.write(directory.toFile(), "异常：测试\n");
-            equal("异常：测试\n", CrashReportStore.read(directory.toFile()));
+                    "New log: connected\n".getBytes(StandardCharsets.UTF_8));
+            equal("Old log: Bluetooth\nNew log: connected\n", BridgeLog.read());
+            CrashReportStore.write(directory.toFile(), "Exception: test\n");
+            equal("Exception: test\n", CrashReportStore.read(directory.toFile()));
             BridgeLog.clear();
             equal("No debug logs", BridgeLog.read());
-            equal("异常：测试\n", CrashReportStore.read(directory.toFile()));
+            equal("Exception: test\n", CrashReportStore.read(directory.toFile()));
         } finally {
             try (var paths = Files.walk(directory)) {
                 for (Path path : paths.sorted(Comparator.reverseOrder()).toList()) Files.delete(path);

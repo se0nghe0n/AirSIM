@@ -113,9 +113,10 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 		writeError(response, http.StatusConflict, "Cannot update module while a call or voice bridge is active")
 		return
 	}
-	// 自动升级和手动修复都可能接在一次失败安装之后。先删除仅由更新器创建的
-	// 上传缓存、暂存目录和已失效备份，避免 App 还没开始写新包就被旧残留占满。
-	// update-pending 指向的有效回滚点会由 cleanup 函数保留。
+	// Automatic upgrades and manual repairs can both follow a failed install. First
+	// delete the upload cache, staging directory, and stale backups created only
+	// by the updater, so leftovers do not fill the disk before the App writes a new package.
+	// cleanup keeps a valid rollback point referenced by update-pending.
 	before := filesystemFreeBytes(agentDataDirectory)
 	if err := cleanupStaleModuleUpdateArtifacts(agentDataDirectory, "/data/local/tmp", moduleUpdateMarker); err != nil {
 		appendModuleUpdateLog("low-space cleanup warning: " + err.Error())

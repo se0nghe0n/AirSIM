@@ -162,9 +162,9 @@ type pushManager struct {
 
 var pushTokenPattern = regexp.MustCompile(`^[0-9a-fA-F]{16,512}$`)
 
-// QDC507 固件经常把 resolv.conf 留空，并把 Go 系统解析器指向不可用的
-// [::1]:53。模块实机上 1.1.1.1/8.8.8.8 的 IPv4 DNS 可达性更稳定；阿里
-// DNS 保留为中国大陆网络的第三兜底。
+// QDC507 firmware often leaves resolv.conf empty and points the Go system
+// resolver at an unusable [::1]:53. On the module, IPv4 DNS at 1.1.1.1 and
+// 8.8.8.8 is more reliable; AliDNS stays as the third fallback for mainland China.
 var pushDNSServers = []string{"1.1.1.1:53", "8.8.8.8:53", "223.5.5.5:53"}
 
 func newPushManager(configPath string) *pushManager {
@@ -200,8 +200,9 @@ func newPushHTTPClient() *http.Client {
 	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 		return dialPushAddress(ctx, baseDialer, network, address)
 	}
-	// 蜂窝链路实测 RTT 会短时达到 1.4 秒并伴随丢包。心跳复用 keep-alive 后
-	// 不会每 30 秒重新握手；首次连接则给 DNS/TCP/TLS 足够恢复窗口。
+	// Measured cellular RTT can briefly reach 1.4 seconds with packet loss. After
+	// heartbeats reuse keep-alive they do not handshake again every 30 seconds;
+	// the first connection gets a window long enough for DNS, TCP, and TLS to recover.
 	transport.TLSHandshakeTimeout = 15 * time.Second
 	transport.ResponseHeaderTimeout = 15 * time.Second
 	transport.IdleConnTimeout = 90 * time.Second
@@ -225,8 +226,9 @@ func dialPushAddress(ctx context.Context, baseDialer *net.Dialer, network, addre
 		fallbackErr = dialErr
 	}
 
-	// 公网 DNS 被网络侧拦截时再尝试系统解析器；在 QDC507 的空 resolv.conf
-	// 场景中，自定义 IPv4 DNS 会先成功，避免被 ::1 和不可达 AAAA 记录拖慢。
+	// If public DNS is intercepted, try the system resolver next. With QDC507's
+	// empty resolv.conf, custom IPv4 DNS succeeds first and is not slowed by
+	// ::1 or unreachable AAAA records.
 	connection, systemErr := baseDialer.DialContext(ctx, network, address)
 	if systemErr == nil {
 		return connection, nil

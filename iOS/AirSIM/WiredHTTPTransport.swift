@@ -2,13 +2,13 @@ import Foundation
 import Network
 import Darwin
 
-/// 模块 HTTP 响应；传输层只保留上层解码和错误处理真正需要的字段。
+/// Module HTTP response; the transport layer retains only the fields needed for upper-layer decoding and error handling.
 struct WiredHTTPResponse: Sendable {
     let statusCode: Int
     let body: Data
 }
 
-/// 使用 Network.framework 将模块控制请求固定到 USB ECM，避免 Wi-Fi 或 VPN 抢走私网路由。
+/// Uses Network.framework to pin module control requests to USB ECM so Wi-Fi or VPN cannot hijack private subnet routing.
 final class WiredHTTPTransport: @unchecked Sendable {
     enum Policy: Sendable {
         case moduleLocal
@@ -141,8 +141,8 @@ struct NetworkInterfaceAddress: Equatable, Sendable {
     let address: String
 }
 
-/// 从本机 192.168.225.x 地址反查模块 USB ECM 接口。通过接口名精确绑定后，
-/// 即使 VPN 改写默认路由，发往模块的请求也不会误入 utun 或 Wi-Fi。
+/// Looks up the module USB ECM interface from the local 192.168.225.x address. By binding to the exact interface name,
+/// requests to the module will not leak into utun or Wi-Fi even if a VPN rewrites the default route.
 enum ModuleUSBInterfaceResolver {
     private static let monitorQueue = DispatchQueue(label: "com.jieden.airsim.usb-interface")
 
@@ -241,7 +241,7 @@ private enum WiredHTTPBody {
     }
 }
 
-/// 单次请求使用独立 TCP 连接和 `Connection: close`，避免熄屏恢复后复用已失效的 Wi-Fi 路径。
+/// Uses a dedicated TCP connection with `Connection: close` per request to avoid reusing stale Wi-Fi paths after wake.
 private final class WiredHTTPRequestOperation: @unchecked Sendable {
     private static let maximumResponseBytes = 32 * 1_024 * 1_024
     private static let uploadChunkBytes = 64 * 1_024
@@ -282,7 +282,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 5
         let parameters = NWParameters(tls: nil, tcp: tcp)
-        // 优先绑定实际 USB ECM 接口；找不到接口名时才按接口类型约束。
+        // Prefer binding to the actual USB ECM interface; fall back to interface type constraints only when the interface name is not found.
         switch route {
         case let .exact(interface): parameters.requiredInterface = interface
         case let .type(type): parameters.requiredInterfaceType = type
@@ -291,7 +291,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
     }
 
     func start() {
-        // NWConnection 的回调使用弱引用；请求结束前由操作自持有，避免局部变量离开作用域后提前释放。
+        // NWConnection callbacks use weak references; the operation retains itself until the request finishes to prevent premature deallocation.
         keepAlive = self
 #if DEBUG
         connection.pathUpdateHandler = { [weak self] path in
@@ -326,7 +326,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         }
         connection.start(queue: queue)
 
-        // 严格路径不匹配时连接可能一直 waiting；请求尚未发送，可安全交给上层决定是否回退。
+        // When strict path constraints do not match, the connection may stay waiting; the request has not been sent yet, so the caller can safely decide whether to fall back.
         queue.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self, !self.finished, !self.requestStarted else { return }
             self.finish(.failure(WiredHTTPError.wiredPathUnavailable))
@@ -346,9 +346,9 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
             connection.send(
                 content: header,
                 contentContext: .defaultStream,
-                // HTTP/1.1 已通过 Content-Length 声明请求体边界。这里不能把
-                // NWConnection stream 标记完成，否则 GET 会提前半关闭 TCP，
-                // Go 长轮询的 request.Context 会被取消并返回 200 空正文。
+                // HTTP/1.1 already declares the request body boundary via Content-Length. Do not mark
+                // the NWConnection stream complete here, otherwise GET will half-close TCP early
+                // and cancel the Go long-poll request.Context, returning an empty 200 body.
                 isComplete: false,
                 completion: .contentProcessed { [weak self] error in
                     guard let self else { return }
@@ -424,8 +424,8 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         do {
             let data = try uploadHandle.read(upToCount: Self.uploadChunkBytes) ?? Data()
             if data.isEmpty {
-                // 文件长度已通过 Content-Length 声明，不发送 TCP FIN；服务端仍可
-                // 在同一连接上返回更新结果。
+                // File length is already declared via Content-Length, so do not send TCP FIN; the server can still
+                // return the update result on the same connection.
                 send(Data())
             } else {
                 send(data) { [weak self] in self?.sendNextFileChunk() }
@@ -463,7 +463,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
                 self.responseData.append(data)
             }
             if let error {
-                // 模块执行 ATD 时偶尔用 RST 结束连接；若完整 HTTP 响应已经到达，应采用响应而非误报失败。
+                // The module occasionally closes the connection with RST when executing ATD; if a complete HTTP response has arrived, use it rather than reporting a false failure.
                 if let response = try? WiredHTTPResponseParser.parse(self.responseData) {
                     self.finish(.success(response))
                 } else {
@@ -494,7 +494,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
 
 }
 
-/// 独立解析 HTTP/1.1 响应，便于对 Go Agent 的定长和分块响应做无网络测试。
+/// Standalone HTTP/1.1 response parser for network-free testing of fixed-length and chunked responses from the Go Agent.
 enum WiredHTTPResponseParser {
     static func parse(_ data: Data) throws -> WiredHTTPResponse {
         let separator = Data("\r\n\r\n".utf8)

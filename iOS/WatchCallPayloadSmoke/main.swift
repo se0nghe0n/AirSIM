@@ -52,9 +52,9 @@ check(notification?.title == "AirSIM Incoming Call", "Expected an English notifi
 check(notification?.body == "Incoming call on the module", "Expected an English fallback body")
 let namedCall = WatchCallPayload(
     callID: "named", callUUID: nil, phase: .incoming, number: "10086",
-    callerName: "联系人", updatedAt: notificationDate
+    callerName: "Contact", updatedAt: notificationDate
 )
 check(
-    WatchIncomingNotificationPlan(payload: namedCall, now: notificationDate)?.body == "联系人 · 10086",
+    WatchIncomingNotificationPlan(payload: namedCall, now: notificationDate)?.body == "Contact · 10086",
     "Caller-provided text must not be translated"
 )

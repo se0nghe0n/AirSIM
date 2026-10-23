@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// modemStatus 只暴露 iPad 客户端需要的稳定字段，原始 AT 响应不会写入日志或网络。
+// modemStatus exposes only the stable fields the iPad client needs. Raw AT responses are not written to logs or the network.
 type modemStatus struct {
 	IMEI             string `json:"imei,omitempty"`
 	Firmware         string `json:"firmware,omitempty"`
@@ -33,7 +33,7 @@ var (
 	digitsPattern  = regexp.MustCompile(`^[0-9]{5,22}$`)
 )
 
-// refreshModem 保留完整刷新入口，后台调度会把静态和动态字段分开执行。
+// refreshModem remains the full refresh entry point. Background scheduling runs static and dynamic fields separately.
 func (a *agent) refreshModem() {
 	a.refreshModemStatic()
 	a.refreshModemDynamic()
@@ -54,7 +54,7 @@ func (a *agent) refreshModemStatic() {
 	iccid := run("AT+QCCID")
 	imsi := run("AT+CIMI")
 	imei := run("AT+CGSN")
-	// 注册状态 URC 只影响当前会话；失败时继续保留轮询兼容路径。
+	// Registration-status URCs affect only the current session. On failure, the polling compatibility path stays in place.
 	_, _ = a.at.command("AT+CEREG=1", 3*time.Second)
 
 	a.mu.Lock()
@@ -76,7 +76,7 @@ func (a *agent) refreshModemStatic() {
 	a.mu.Unlock()
 }
 
-// refreshModemDynamic 只刷新会变化的无线状态，避免反复读取身份与固件信息。
+// refreshModemDynamic refreshes only radio state that can change, so identity and firmware are not read again.
 func (a *agent) refreshModemDynamic() {
 	var failures []string
 	run := func(command string) (string, bool) {

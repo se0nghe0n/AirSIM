@@ -48,8 +48,8 @@ enum LiveActivityStateBuilder {
         downloadBytesPerSecond: Double? = nil,
         uploadBytesPerSecond: Double? = nil
     ) -> AirSIMCallActivityAttributes.ContentState {
-        // 只有本地控制与 Relay 心跳同时不可达才显示离线；云端心跳新鲜时使用
-        // 独立待机态，避免把 USB ECM 中断误报成整个模块离线。
+        // Show offline only when both local control and Relay heartbeat are unreachable; use a dedicated
+        // cloud standby state while the cloud heartbeat is fresh to avoid misreporting a USB ECM disconnect as full module offline.
         guard moduleOnline || cloudOnline else {
             return .init(
                 callID: "",
@@ -118,7 +118,7 @@ enum LiveActivityStateBuilder {
     }
 }
 
-/// 主 App 负责预启动并持续同步灵动岛；后台只能更新已经存在的 Live Activity。
+/// The main app pre-starts and continuously syncs the Dynamic Island; background execution can only update an existing Live Activity.
 @MainActor
 final class LiveActivityController {
     private var activity: Activity<AirSIMCallActivityAttributes>?
@@ -127,7 +127,7 @@ final class LiveActivityController {
     private var enabled = true
     private var visibilityRevision = 0
 
-    /// 用户关闭开关时立即清理系统活动；重新开启后由下一轮模块状态同步按需创建。
+    /// Immediately ends system activities when turned off by the user; recreated on demand by the next module status sync when re-enabled.
     func setEnabled(_ enabled: Bool) {
         self.enabled = enabled
         visibilityRevision &+= 1
@@ -161,8 +161,8 @@ final class LiveActivityController {
 #endif
 
         if activity == nil {
-            // iOS 不保证后台能本地创建活动。前台离线时也允许创建，以替换升级安装后
-            // 系统仍显示、但 Activity.activities 已无法返回句柄的孤立活动。
+            // iOS does not guarantee local activity creation in the background. Allow creation while offline in the foreground
+            // to replace orphaned activities still displayed by the system after an app upgrade when Activity.activities no longer returns handles.
             guard LiveActivityCreationPolicy.shouldCreate(
                       appIsActive: appIsActive,
                       moduleOnline: moduleOnline,
@@ -218,7 +218,7 @@ final class LiveActivityController {
                 downloadBytesPerSecond: downloadBytesPerSecond,
                 uploadBytesPerSecond: uploadBytesPerSecond
             )
-            // 在线/离线由真实模块请求决定；不以 ActivityKit stale 代替连通性探测。
+            // Online/offline state is determined by actual module requests; do not use ActivityKit stale as a connectivity probe.
             guard nextState != lastState else { return }
             await activity.update(
                 ActivityContent(

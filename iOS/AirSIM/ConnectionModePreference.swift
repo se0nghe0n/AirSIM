@@ -1,6 +1,6 @@
 import Foundation
 
-/// 用户明确选择的连接方式。只有 `automatic` 可以跨传输回退。
+/// User-selected connection mode. Only `automatic` is allowed to fall back across transports.
 enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable {
     case vowlan
     case cloud
@@ -8,7 +8,7 @@ enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable
 
     var id: String { rawValue }
 
-    /// localization.md：面向用户的选项文案用 LocalizedStringResource 延迟解析。
+    /// localization.md: user-facing option labels use LocalizedStringResource for deferred resolution.
     var title: LocalizedStringResource {
         switch self {
         case .vowlan: return "VoWLAN"
@@ -34,7 +34,7 @@ enum ConnectionModePreference {
             if rawValue == "bluetooth" { return .automatic }
             if let mode = AirSIMConnectionMode(rawValue: rawValue) { return mode }
         }
-        // 兼容升级前的两个布尔开关；不在读取时改写，避免测试套件和扩展进程副作用。
+        // Compatible with the two pre-upgrade boolean toggles; do not rewrite on read to avoid side effects in tests and extensions.
         if defaults.bool(forKey: LocalModePreference.key) { return .vowlan }
         if defaults.object(forKey: CloudModePreference.key) != nil,
            !defaults.bool(forKey: CloudModePreference.key) {
@@ -138,12 +138,12 @@ struct ConnectionModeRuntimePolicy: Equatable, Sendable {
     var startsCloud: Bool { mode == .cloud || mode == .automatic }
     var allowsCrossModeFallback: Bool { mode == .automatic }
 
-    /// 蓝牙来电同样依赖系统通话界面；仅传统 VoWLAN 本地模式关闭 CallKit。
+    /// Bluetooth incoming calls also rely on the system call UI; CallKit is disabled only in legacy local VoWLAN mode.
     var usesCallKit: Bool { mode != .vowlan }
 }
 
-/// 统一拨号路由选择。显式模式绝不借用其他链路；
-/// 自动模式只在通话建立前按 VoWLAN、云端顺序选择。
+/// Unified dial route selection. Explicit modes never borrow another transport;
+/// automatic mode chooses between VoWLAN and cloud in order before call setup.
 enum DialRouteSelector {
     static func preferred(
         mode: AirSIMConnectionMode,

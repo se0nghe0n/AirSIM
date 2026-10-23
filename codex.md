@@ -1,70 +1,70 @@
-# AirSIM 全项目 Codex 部署辅助
+# AirSIM whole-project Codex deployment guide
 
-本文为 AI 编码代理提供 AirSIM 全仓库的事实来源、构建顺序、部署边界和安全约束。开始任务前先阅读根目录 `README.md`，再阅读所修改组件的 README 和实际源码。涉及 AVF 安装、配对或恢复时，还要阅读 `docs/AVF_INSTALL_GUIDE.md` 和 `LLM.txt`。源码与测试是协议事实来源；本文不能替代它们。
+This document gives AI coding agents the source of truth, build order, deployment boundaries, and security constraints for the whole AirSIM repository. Before starting a task, read the root `README.md`, then the README and actual source of the component being changed. For AVF install, pairing, or recovery, also read `docs/AVF_INSTALL_GUIDE.md` and `LLM.txt`. Source and tests are the protocol source of truth; this document does not replace them.
 
-当前发布基线（2026-10-14）：Apps `v0.9.7.1`，Android `0.9.7.1 (81)`，iOS `0.9.7 (81)`；Android 10–13 修复版推荐安装 Standalone。兼容用 AVF Agent 保持 `v0.4.6`（Debian `0.4.6-1`），Relay 协议 `0.2.1`。GitHub IPA 为 unsigned 重签包；维护者通过 Xcode 单独上传 TestFlight，上传、处理和审核状态不能混为一谈。维护者 AirSIM Relay 为 `https://airsim-push.remotepilot.site`；DJOneHub 的 `https://push.remotepilot.site` 不得用于 AirSIM。历史 Release 文档中的旧版本号属于归档事实，不能机械替换。
+Current release baseline (2026-10-14): Apps `v0.9.7.1`, Android `0.9.7.1 (81)`, iOS `0.9.7 (81)`. For the Android 10–13 fix, installing Standalone is recommended. The compatible AVF Agent stays at `v0.4.6` (Debian `0.4.6-1`), and the Relay protocol stays at `0.2.1`. The GitHub IPA is an unsigned package meant for re-signing. The maintainer uploads TestFlight separately through Xcode; upload, processing, and review status must not be conflated. The maintainer AirSIM Relay is `https://airsim-push.remotepilot.site`. DJOneHub's `https://push.remotepilot.site` must not be used for AirSIM. Old version numbers in historical Release documents are archival facts and must not be mechanically replaced.
 
-本版改动：iOS「配对安卓手机」的本地配对开关仅控制本次配置包，不写全局模式；Agent 自动注册须保护该本地配置，配对与在途 Agent 写入串行化。Android API 29+ 兼容分支见共享 README；旧 AVF 恢复在 API 34 以下采用可点击通知，不调用新 ActivityOptions 方法。云端挂断代际隔离与 PCM 抖动优化见 `docs/cloud-pcm-resilience.md`，用户已反馈本轮真机挂断 UI 不再重现、声音更稳；不代表全机型/弱网/Watch 验收。
+Changes in this version: the local pairing switch on iOS “Pair Android phone” controls only the current configuration package and does not write the global mode. Agent auto-registration must protect that local configuration, and pairing must be serialized with in-flight Agent writes. The Android API 29+ compatibility branch is described in the shared README. Legacy AVF recovery below API 34 uses a tappable notification and does not call the newer ActivityOptions methods. Cloud hang-up generation isolation and PCM jitter improvements are in `docs/cloud-pcm-resilience.md`. Users have reported that, on devices this round, the hang-up UI no longer reproduces and audio is more stable. That does not constitute acceptance across all device models, weak networks, or Watch.
 
-## 1. 项目目标
+## 1. Project goals
 
-AirSIM 以 Android 手机作为蜂窝电话与短信终端：
+AirSIM uses an Android phone as the cellular phone and SMS endpoint:
 
-- 推荐的 Android Standalone APK 对接 Android Telecom、短信、Shizuku 音频桥，并在前台服务中内置 Agent。
-- 内置 Agent 维护设备状态、命令编排、Relay 会话与媒体状态，不使用 AVF、Terminal、Debian、`8575/8576` 或 `airsim-installerd`。
-- 旧 Android AVF Agent 与 `airsim-installerd` 仅用于兼容和回退。
-- iPhone 与 Apple Watch 通过 VoWLAN 或 Cloudflare Relay 使用通话和短信能力。
-- Cloudflare Relay 负责公网事件、APNs、命令队列、Dashboard 与媒体中继。
+- The recommended Android Standalone APK talks to Android Telecom, SMS, and the Shizuku audio bridge, and runs a built-in Agent in a foreground service.
+- The built-in Agent maintains device state, command orchestration, Relay sessions, and media state. It does not use AVF, Terminal, Debian, `8575/8576`, or `airsim-installerd`.
+- The older Android AVF Agent and `airsim-installerd` are only for compatibility and fallback.
+- iPhone and Apple Watch use calling and SMS over VoWLAN or Cloudflare Relay.
+- Cloudflare Relay handles public-network events, APNs, the command queue, the Dashboard, and media relay.
 
-不要把 AirSIM 描述为软 SIM、运营商替代品或紧急呼叫服务。不要恢复历史品牌、历史硬件模块方案或与当前三星 Android 架构不一致的说明。
+Do not describe AirSIM as a soft SIM, a carrier replacement, or an emergency-call service. Do not restore historical brands, historical hardware-module designs, or descriptions that disagree with the current Samsung Android architecture.
 
-AirSIM 使用 `PolyForm-Noncommercial-1.0.0`，属于源码可见项目而不是 OSI 开源软件。只协助个人学习、研究、实验及许可证列明的其他非商业用途；商业使用、收费服务、商业产品集成和预期商业应用需要版权所有者单独书面授权。修改或分发时必须保留 `LICENSE`、`NOTICE` 和第三方声明。
+AirSIM uses `PolyForm-Noncommercial-1.0.0`. It is a source-available project, not OSI open-source software. Assist only with personal study, research, experimentation, and the other noncommercial uses named in the license. Commercial use, paid services, commercial-product integration, and expected commercial applications require a separate written authorization from the copyright holder. Modifications and distribution must keep `LICENSE`, `NOTICE`, and third-party notices.
 
-## 2. 组件地图与事实来源
+## 2. Component map and sources of truth
 
-| 范围 | 先读 | 核心入口 | 验证命令 |
+| Scope | Read first | Core entry | Verification command |
 | --- | --- | --- | --- |
-| Android Standalone | `android-standalone/README.md` | `android-standalone/`、`android/phone-control-app/src/` | `./android-standalone/test.sh` |
-| 三星控制 App | `android/phone-control-app/README.md` | `android/phone-control-app/src/`、`build.sh` | `./android/phone-control-app/test.sh` |
-| 三星音频桥 | `android/phone-audio-bridge/README.md` | `android/phone-audio-bridge/src/`、`run-device-bridge.sh` | `./android/phone-audio-bridge/build.sh` |
-| AVF Agent | `module/module-agent/README.md` | `module/module-agent/main.go`、`router.go` | `(cd module/module-agent && go test ./...)` |
+| Android Standalone | `android-standalone/README.md` | `android-standalone/`, `android/phone-control-app/src/` | `./android-standalone/test.sh` |
+| Samsung control app | `android/phone-control-app/README.md` | `android/phone-control-app/src/`, `build.sh` | `./android/phone-control-app/test.sh` |
+| Samsung audio bridge | `android/phone-audio-bridge/README.md` | `android/phone-audio-bridge/src/`, `run-device-bridge.sh` | `./android/phone-audio-bridge/build.sh` |
+| AVF Agent | `module/module-agent/README.md` | `module/module-agent/main.go`, `router.go` | `(cd module/module-agent && go test ./...)` |
 | AVF Installer | `module/packaging/README.md` | `module/avf-installerd/` | `(cd module/avf-installerd && go test ./...)` |
-| Debian 发布 | `module/packaging/README.md` | `module/packaging/build-avf-deb.sh` | `./module/packaging/test.sh` |
-| iOS / watchOS | `iOS/README.md` | `iOS/AirSIM.xcodeproj`、`iOS/AirSIM/` | `xcodebuild ... build-for-testing` |
+| Debian release | `module/packaging/README.md` | `module/packaging/build-avf-deb.sh` | `./module/packaging/test.sh` |
+| iOS / watchOS | `iOS/README.md` | `iOS/AirSIM.xcodeproj`, `iOS/AirSIM/` | `xcodebuild ... build-for-testing` |
 | Cloudflare Relay | `push-relay-worker/README.md` | `push-relay-worker/src/index.mjs` | `(cd push-relay-worker && npm test && npm run check)` |
-| 协议 | `docs/` | VoWLAN 与三星热点配对文档 | 对照双方实现与测试 |
+| Protocol | `docs/` | VoWLAN and Samsung hotspot pairing docs | Cross-check both implementations and tests |
 
-修改跨组件协议时，必须同时搜索所有生产者、消费者、模型、持久化字段、测试和文档。不要只修改一端。
+When changing a cross-component protocol, search every producer, consumer, model, persisted field, test, and document. Do not change only one side.
 
-## 3. 不可破坏的架构契约
+## 3. Architecture contracts that must not be broken
 
-1. Android 端面向三星 Android 与系统电话能力，紧急呼叫交回系统电话 App。
-2. AVF Linux 只发布一个 `airsim-avf-agent_<version>-<release>_arm64.deb`；硬件差异由 Android App 的能力探测与适配层处理。
-3. 主 Agent 不自更新。Android App 调用独立 `airsim-installerd` 完成检查、安装、修复和回滚。
-4. Installer 只接受包名 `airsim-avf-agent`、架构 `arm64` 且 Ed25519 签名有效的 Debian 包，不能执行任意 shell。
-5. AVF 控制和 PCM 服务只监听内部私网或 loopback，不得暴露到通用 Wi-Fi、热点、蜂窝或公网接口。
-6. VoWLAN 控制面必须执行路由白名单、时间戳、nonce、HMAC 和消息大小校验。
-7. 通话建立时确定 VoWLAN 或 Relay 传输；本次通话结束前不得静默切换路径。
-8. PCM 只在内存与网络中处理；仅用户主动开启的 iPhone 通话录音可写入受保护、排除备份的本地文件。不得上传录音或将 PCM 写入诊断日志。
-9. iOS/watchOS 工程中的 `com.example.airsim` 是占位符。部署者必须使用自己的 Apple Team、唯一 Bundle ID、证书和 provisioning profile。
-10. Relay 的 `ALLOWED_BUNDLE_ID` 必须等于重新签名后的主 iOS App Bundle ID。
-11. AirSIM 与 DJOneHub 必须使用不同 hostname、Worker、KV、Durable Objects 和 Dashboard token。维护者 AirSIM hostname 是 `airsim-push.remotepilot.site`；`push.remotepilot.site` 属于 DJOneHub，不得由 AirSIM 接管。
+1. The Android side targets Samsung Android and the system phone capability. Emergency calls are handed back to the system phone app.
+2. AVF Linux publishes only one `airsim-avf-agent_<version>-<release>_arm64.deb`. Hardware differences are handled by the Android app's capability detection and adaptation layer.
+3. The main Agent does not update itself. The Android app calls the independent `airsim-installerd` for checks, installs, repairs, and rollbacks.
+4. The installer accepts only Debian packages named `airsim-avf-agent`, architecture `arm64`, with a valid Ed25519 signature. It cannot run an arbitrary shell.
+5. AVF control and PCM services listen only on an internal private network or loopback. They must not be exposed on general Wi-Fi, a hotspot, cellular, or a public interface.
+6. The VoWLAN control plane must enforce the route allowlist, timestamps, nonces, HMAC, and message-size checks.
+7. The call chooses VoWLAN or Relay transport when it is set up. The path must not switch silently before that call ends.
+8. PCM is handled only in memory and on the network. Only an iPhone call recording the user explicitly turns on may be written to a protected local file excluded from backup. Do not upload recordings or write PCM into diagnostic logs.
+9. `com.example.airsim` in the iOS/watchOS project is a placeholder. The deployer must use their own Apple Team, unique Bundle ID, certificates, and provisioning profile.
+10. Relay `ALLOWED_BUNDLE_ID` must equal the main iOS app Bundle ID after re-signing.
+11. AirSIM and DJOneHub must use different hostnames, Workers, KV, Durable Objects, and Dashboard tokens. The maintainer AirSIM hostname is `airsim-push.remotepilot.site`. `push.remotepilot.site` belongs to DJOneHub and must not be taken over by AirSIM.
 
-## 4. 安全与 Secret 规则
+## 4. Security and Secret rules
 
-以下内容绝不能提交、输出到日志或写入示例配置的明文值：
+The following must never be committed, written to logs, or placed as plaintext values in example configuration:
 
-- Apple APNs `.p8` 私钥与 `APNS_P8`
+- Apple APNs `.p8` private keys and `APNS_P8`
 - `DASHBOARD_TOKEN`
-- Cloudflare API token
-- Agent bearer token、设备 Secret、配对密钥与 HMAC
-- AVF Debian 发布私钥
-- Android keystore、Apple 签名身份和 provisioning profile
-- 真实号码、完整短信、Push token 与 PCM 数据
+- Cloudflare API tokens
+- Agent bearer tokens, device Secrets, pairing keys, and HMAC material
+- The AVF Debian release private key
+- The Android keystore, Apple signing identities, and provisioning profiles
+- Real phone numbers, full SMS bodies, Push tokens, and PCM data
 
-Relay 的 `APNS_P8` 和 `DASHBOARD_TOKEN` 是必需的 Cloudflare Worker Secret。`wrangler.example.toml` 只能声明名称；生产值使用 `wrangler secret put`、versions secret 流程或 CI Secret Store 提供。不要把 Secret 放入 `[vars]`。
+Relay `APNS_P8` and `DASHBOARD_TOKEN` are required Cloudflare Worker Secrets. `wrangler.example.toml` may declare names only. Production values come from `wrangler secret put`, the versions secret flow, or a CI Secret Store. Do not put Secrets in `[vars]`.
 
-任何部署操作前都要检查：
+Before any deployment operation, check:
 
 ```sh
 git status --short
@@ -72,22 +72,22 @@ git diff --check
 git grep -nE 'BEGIN (EC |)PRIVATE KEY|APNS_P8[[:space:]]*=|DASHBOARD_TOKEN[[:space:]]*=' -- ':!push-relay-worker/README.md' ':!push-relay-worker/wrangler.example.toml'
 ```
 
-示例命令中的占位文本不等于真实 Secret；如果扫描命中，必须逐项判断且不得在回复中回显敏感值。
+Placeholder text in example commands is not a real Secret. If a scan hits, judge each hit individually and do not echo sensitive values in the reply.
 
-## 5. 推荐工作顺序
+## 5. Recommended work order
 
-1. 阅读根 README、目标组件 README、源码和现有测试。
-2. 检查 `git status --short`，保留用户已有改动；不得重置、覆盖或清理无关文件。
-3. 用 `rg` 定位协议字段、环境变量、Bundle ID、端口和所有消费者。
-4. 先修改最小必要范围，再同步测试与文档。
-5. 先运行目标组件验证，再按跨组件影响扩大验证范围。
-6. 涉及安装流程、端口、版本或恢复方式时，同步更新相关组件 README、`docs/AVF_INSTALL_GUIDE.md`、`LLM.txt`、`codex.md` 与 `claude.md`；不要只改 App 文案或脚本一端。
-7. 部署前做 Secret、占位符、Bundle ID、Cloudflare 资源和目标环境检查。
-8. 最终报告列出已改文件、验证结果、未执行的真机/生产步骤和剩余风险。
+1. Read the root README, the target component README, the source, and the existing tests.
+2. Check `git status --short` and keep the user's existing changes. Do not reset, overwrite, or clean unrelated files.
+3. Use `rg` to locate protocol fields, environment variables, Bundle IDs, ports, and every consumer.
+4. Change the smallest necessary range first, then update tests and docs.
+5. Run the target component's verification first, then widen verification according to cross-component impact.
+6. When the change involves install flow, ports, versions, or recovery, update the related component READMEs, `docs/AVF_INSTALL_GUIDE.md`, `LLM.txt`, `codex.md`, and `claude.md`. Do not change only app copy or only one side of a script.
+7. Before deployment, check Secrets, placeholders, Bundle IDs, Cloudflare resources, and the target environment.
+8. The final report lists changed files, verification results, on-device or production steps not run, and remaining risk.
 
-未经用户明确要求，不执行 Cloudflare 生产部署、Apple 发布、GitHub Release、真实设备安装、远程推送或 Git push。即使用户要求部署，也必须使用其明确指定的账户、设备、域名和签名身份，不得猜测。
+Do not run a Cloudflare production deploy, an Apple release, a GitHub Release, a real-device install, a remote push, or a Git push unless the user explicitly asks. Even when the user asks for a deployment, use only the account, device, domain, and signing identity they explicitly name. Do not guess.
 
-## 6. 构建与验证
+## 6. Build and verification
 
 ### Android
 
@@ -98,9 +98,9 @@ git grep -nE 'BEGIN (EC |)PRIVATE KEY|APNS_P8[[:space:]]*=|DASHBOARD_TOKEN[[:spa
 sh ./android/phone-control-app/verify-apk.sh
 ```
 
-APK 路径以组件 README 和构建脚本输出为准。真实通话验收还需检查默认电话角色、Shizuku、AVF 私网、拨号、接听、挂断、短信、双向音频和重启恢复。
+APK paths follow the component README and the build script output. Real-call acceptance also requires checking the default phone role, Shizuku, the AVF private network, dial, answer, hang-up, SMS, bidirectional audio, and reboot recovery.
 
-### AVF Agent、Installer 与 Debian 包
+### AVF Agent, installer, and Debian package
 
 ```sh
 (cd module/module-agent && go test ./...)
@@ -108,9 +108,9 @@ APK 路径以组件 README 和构建脚本输出为准。真实通话验收还�
 ./module/packaging/test.sh
 ```
 
-正式构建需要仓库外的 Ed25519 私钥与对应公钥。无私钥构建只能视为开发产物，不能声称通过生产 installerd 验签。
+A release build needs the Ed25519 private key stored outside the repository and the matching public key. A build without the private key is only a development artifact. It cannot be described as having passed production installerd signature verification.
 
-v0.4.5 启用新的发行公钥；旧 v0.4.4 私钥未留存。已安装 `0.4.4-1` 的设备不能通过旧 installerd 直接升级，须按 `docs/AVF_INSTALL_GUIDE.md` 在 AVF Terminal 执行一次性 `rotate-avf-key.sh`，验签、保留旧包并做健康检查。新私钥仅在仓库外保存，并备份为 GitHub Actions Secret `AIRSIM_RELEASE_PRIVATE_KEY_PEM`；发布包必须用本地受限私钥或经授权的 CI 签名，不能从 Secret 导出私钥。不得用旧签名配新包或跳过验签。
+v0.4.5 enables a new release public key. The old v0.4.4 private key was not retained. A device that has `0.4.4-1` installed cannot upgrade directly through the old installerd. Follow `docs/AVF_INSTALL_GUIDE.md` and run the one-time `rotate-avf-key.sh` in the AVF Terminal, verify the signature, keep the old package, and run the health check. The new private key is stored only outside the repository and is backed up as the GitHub Actions Secret `AIRSIM_RELEASE_PRIVATE_KEY_PEM`. Release packages must be signed with the local restricted private key or by authorized CI. Do not export the private key from the Secret. Do not pair an old signature with a new package or skip signature verification.
 
 ### iOS / watchOS
 
@@ -122,11 +122,11 @@ xcodebuild -project iOS/AirSIM.xcodeproj \
   build-for-testing
 ```
 
-模拟器构建不能验证 PushKit、CallKit 真机生命周期、APNs、Watch 配套安装、蜂窝通话或通话音频。真机安装前必须完成 Bundle ID、Team、capabilities、entitlements 和 provisioning profile 的整套替换。
+A simulator build cannot verify the PushKit or CallKit on-device lifecycle, APNs, Watch companion install, cellular calling, or call audio. Before installing on a device, replace the full set of Bundle ID, Team, capabilities, entitlements, and provisioning profile.
 
 ### Cloudflare Relay
 
-维护者生产事实（截至 2026-10-08）：Worker 名为 `airsim-push-relay`，hostname 为 `https://airsim-push.remotepilot.site`，只允许 `com.eric3u.airsim`。它与 `https://push.remotepilot.site` 上的 DJOneHub Worker 完全隔离，不是供任意重签 Bundle ID 使用的公共 Relay。已验证两边 `/healthz`、AirSIM Dashboard 匿名 `401` 与正确凭据 `200`；AirSIM 环境当前没有设备注册，不能声称真实 APNs、Agent 心跳或云端 PCM 已验收。
+Maintainer production facts (as of 2026-10-08): the Worker name is `airsim-push-relay`, the hostname is `https://airsim-push.remotepilot.site`, and it allows only `com.eric3u.airsim`. It is fully isolated from the DJOneHub Worker at `https://push.remotepilot.site`. It is not a public Relay for arbitrary re-signed Bundle IDs. Both `/healthz` endpoints have been verified, as have AirSIM Dashboard anonymous `401` and correct-credential `200`. The AirSIM environment currently has no device registrations, so real APNs, Agent heartbeats, or cloud PCM cannot be claimed as accepted.
 
 ```sh
 cd push-relay-worker
@@ -136,40 +136,40 @@ npm run check
 npx wrangler deploy --dry-run --config wrangler.toml
 ```
 
-`wrangler.toml` 是本地/生产配置并被忽略；从 `wrangler.example.toml` 创建。生产部署前必须确认 KV ID、Durable Object migrations、`ALLOWED_BUNDLE_ID`、APNs Team/Key ID、自定义域名以及两个必需 Secret。
+`wrangler.toml` is local/production configuration and is ignored. Create it from `wrangler.example.toml`. Before a production deploy, confirm the KV ID, Durable Object migrations, `ALLOWED_BUNDLE_ID`, APNs Team/Key ID, custom domain, and the two required Secrets.
 
-## 7. 部署清单
+## 7. Deployment checklist
 
-### 三星 Android 与 AVF
+### Samsung Android and AVF
 
-- AirSIM APK 已构建、签名并安装。
-- AirSIM 已设为默认电话 App；Shizuku 已运行并授权。
-- AVF Linux 已启动，首次安装脚本的来源和签名公钥已核对。
-- Android App 保存了正确的 AVF 私网地址和控制 token。
-- `airsim-agent` 与 `airsim-installerd` 分别在 8575、8576 通过设备侧检查，并核对 Agent `/api/health` 的 `product=airsim`。已有 DJOneHub 可保留在 7575；旧 AirSIM Release 仍占用 7575，未发布端口迁移版前不得在共存设备执行旧在线安装命令。Agent 健康成功不能替代 installerd、控制令牌和真实通话验收；AVF 网段会动态变化。
-- `cannot create runner / VM is not in stopped state` 是 Android Terminal 启动状态问题，不能直接清除 Linux 数据或当作 Debian 安装失败；按 `docs/AVF_INSTALL_GUIDE.md` 无损排障。
-- App 的“一键安装”入口仅复制命令，不会在 AVF Debian 内自动执行。若 Agent `8575` 在线而 installerd `8576` 离线，先按指南检查并恢复已有服务；修复版引导脚本能复用保留的 `current.deb`，旧 Release 仍可能拒绝重复安装。不得删除回滚包来绕过检查，未获明确发布授权不得把源码修复称为线上已生效。
-- 若 Debian 提示 `udev` / `libudev1` 版本不匹配，先看 `apt-cache policy udev libudev1` 与 `sudo apt-get -s -f install`；AirSIM 包无直接 `libudev1` 依赖。引导脚本应提前 `apt-get check` 并停止，不自动修复系统包、移除组件或降级。
-- Agent、installerd 与音频桥健康；外部网络无法访问内部端口。
-- 拨号、接听、拒接、挂断、DTMF、短信、双向 PCM 和重启恢复已验证。
+- The AirSIM APK is built, signed, and installed.
+- AirSIM is set as the default phone app. Shizuku is running and authorized.
+- AVF Linux is started. The source and signing public key of the first-install script have been checked.
+- The Android app has saved the correct AVF private-network address and control token.
+- `airsim-agent` and `airsim-installerd` pass device-side checks on 8575 and 8576 respectively, and Agent `/api/health` shows `product=airsim`. Existing DJOneHub may stay on 7575. Older AirSIM Releases still occupy 7575. Until a port-migration release is published, do not run the old online install command on a coexistence device. A successful Agent health check does not replace installerd, control-token, and real-call acceptance. The AVF subnet changes dynamically.
+- `cannot create runner / VM is not in stopped state` is an Android Terminal startup-state problem. Do not clear Linux data for it, and do not treat it as a Debian install failure. Follow `docs/AVF_INSTALL_GUIDE.md` for non-destructive troubleshooting.
+- The app's “one-tap install” entry only copies the command. It does not execute it automatically inside AVF Debian. If Agent `8575` is online and installerd `8576` is offline, follow the guide and restore the existing service first. A fixed bootstrap script can reuse a retained `current.deb`. An old Release may still refuse a repeated install. Do not delete the rollback package to bypass the check. Without explicit release authorization, do not describe a source-tree fix as already in effect online.
+- If Debian reports a `udev` / `libudev1` version mismatch, first look at `apt-cache policy udev libudev1` and `sudo apt-get -s -f install`. The AirSIM package has no direct `libudev1` dependency. The bootstrap script should run `apt-get check` first and stop. It does not automatically repair system packages, remove components, or downgrade.
+- Agent, installerd, and the audio bridge are healthy. External networks cannot reach the internal ports.
+- Dial, answer, reject, hang-up, DTMF, SMS, bidirectional PCM, and reboot recovery have been verified.
 
-### iPhone 与 Apple Watch
+### iPhone and Apple Watch
 
-- 主 App、Watch App、Live Activity、测试 Target 的 Bundle ID 关系正确。
-- Team、证书、provisioning profile、capabilities 和最终签名 entitlement 正确。
-- Relay `ALLOWED_BUNDLE_ID` 与主 App 完全一致。
-- sandbox 和 production token 未混用。
-- VoWLAN 配对、CallKit、PushKit、Watch、Live Activity 和媒体已在真机验证。
+- Bundle ID relationships among the main app, Watch App, Live Activity, and test target are correct.
+- Team, certificates, provisioning profile, capabilities, and the final signed entitlements are correct.
+- Relay `ALLOWED_BUNDLE_ID` matches the main app exactly.
+- Sandbox and production tokens are not mixed.
+- VoWLAN pairing, CallKit, PushKit, Watch, Live Activity, and media have been verified on device.
 
 ### Relay
 
-- 使用部署者自己的 Cloudflare 账户、KV、Durable Objects 和域名。
-- AirSIM hostname 不得复用或覆盖 DJOneHub 的 `push.remotepilot.site`；维护者部署使用 `airsim-push.remotepilot.site`。
-- `APNS_P8` 与 `DASHBOARD_TOKEN` 仅存在于 Secret Store。
-- 测试、语法检查和 dry-run 通过。
-- `/healthz`、Dashboard 鉴权、设备注册、Agent 心跳、APNs 和 WebSocket 已验证。
-- 发布后使用 `wrangler tail` 观察错误，但日志不显示敏感内容。
+- Use the deployer's own Cloudflare account, KV, Durable Objects, and domain.
+- The AirSIM hostname must not reuse or overwrite DJOneHub's `push.remotepilot.site`. The maintainer deployment uses `airsim-push.remotepilot.site`.
+- `APNS_P8` and `DASHBOARD_TOKEN` exist only in the Secret Store.
+- Tests, syntax checks, and the dry-run pass.
+- `/healthz`, Dashboard authentication, device registration, Agent heartbeats, APNs, and WebSocket have been verified.
+- After release, use `wrangler tail` to watch errors, but logs must not show sensitive content.
 
-## 8. 完成标准
+## 8. Done criteria
 
-“构建通过”只说明本地编译或测试成功；“部署完成”必须有目标环境的部署结果；“真机可用”必须有实际三星 Android、iPhone/Apple Watch、AVF 和网络链路证据。不能把未执行的步骤写成已完成。
+“Build passed” means only that the local compile or tests succeeded. “Deployment complete” requires a deployment result from the target environment. “Works on device” requires evidence from an actual Samsung Android phone, iPhone/Apple Watch, AVF, and the network path. A step that was not run must not be written as complete.

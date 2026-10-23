@@ -10,18 +10,18 @@ import (
 func TestUSBRecoveryRetriesWhenRebindCooldownHasNotExpired(t *testing.T) {
 	outcome := usbCooldownOutcome(1_000, 900, 5*time.Minute)
 	if !outcome.Retry {
-		t.Fatal("命中重绑冷却时必须保留后续恢复任务")
+		t.Fatal("a later recovery task must be kept when the rebind cooldown is active")
 	}
 	if outcome.RetryAfter != 200*time.Second {
-		t.Fatalf("冷却剩余时间=%s，期望 200s", outcome.RetryAfter)
+		t.Fatalf("cooldown remaining=%s, want 200s", outcome.RetryAfter)
 	}
 }
 
 func TestUSBRecoveryRetriesTemporarySafetyBlocks(t *testing.T) {
-	for _, reason := range []string{"Call in progress", "Media route running", "USB 组合暂不可重绑"} {
+	for _, reason := range []string{"Call in progress", "Media route running", "USB composition cannot be rebound yet"} {
 		outcome := usbBlockedOutcome(reason)
 		if !outcome.Retry || outcome.RetryAfter <= 0 {
-			t.Fatalf("临时阻塞 %q 不应永久放弃恢复: %#v", reason, outcome)
+			t.Fatalf("temporary block %q must not permanently give up recovery: %#v", reason, outcome)
 		}
 	}
 }
@@ -38,10 +38,10 @@ func TestUSBFaultStorePersistsBoundedHistoryAcrossRestart(t *testing.T) {
 	reloaded := newUSBFaultStore(path, 2)
 	records := reloaded.records()
 	if len(records) != 2 {
-		t.Fatalf("持久快照数量=%d，期望 2", len(records))
+		t.Fatalf("persisted snapshot count=%d, want 2", len(records))
 	}
 	if records[0].Phase != "rebind-start" || records[1].Phase != "rebind-complete" {
-		t.Fatalf("持久快照顺序或裁剪错误: %#v", records)
+		t.Fatalf("persisted snapshot order or trim mismatch: %#v", records)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestUSBFaultStoreCoalescesRepeatedIdenticalFaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := len(store.records()); got != 1 {
-		t.Fatalf("相同故障在一分钟内应合并，实际记录=%d", got)
+		t.Fatalf("identical faults within one minute should be coalesced, records=%d", got)
 	}
 
 	changed := second
@@ -77,7 +77,7 @@ func TestUSBFaultStoreCoalescesRepeatedIdenticalFaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := len(store.records()); got != 2 {
-		t.Fatalf("故障原因变化必须立即记录，实际记录=%d", got)
+		t.Fatalf("a changed fault reason must be recorded immediately, records=%d", got)
 	}
 }
 
@@ -95,13 +95,13 @@ func TestUSBFaultStoreRollsBackMemoryWhenPersistenceFails(t *testing.T) {
 		FactoryPID: "12",
 	})
 	if err == nil {
-		t.Fatal("不可写路径必须返回持久化错误")
+		t.Fatal("an unwritable path must return a persistence error")
 	}
 	if got := len(store.records()); got != 0 {
-		t.Fatalf("持久化失败后内存状态必须回滚，实际记录=%d", got)
+		t.Fatalf("in-memory state must roll back after persistence failure, records=%d", got)
 	}
 	if got := store.previousFactoryPID(); got != "" {
-		t.Fatalf("持久化失败后原厂 PID 基线必须回滚，实际=%q", got)
+		t.Fatalf("factory PID baseline must roll back after persistence failure, got=%q", got)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestClassifyUSBFaultMatchesFieldDiagnosticTree(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if got := classifyUSBFault(test.in); got != test.want {
-				t.Fatalf("分类=%q，期望 %q", got, test.want)
+				t.Fatalf("classification=%q, want %q", got, test.want)
 			}
 		})
 	}
@@ -133,9 +133,9 @@ func TestSelectPushWANInterfaceAvoidsECMDefaultRoute(t *testing.T) {
 		"ecm0\t00000000\t0168A8C0\t0003\t0\t0\t0\t00000000\n" +
 		"rmnet_data0\t00000000\t00000000\t0003\t0\t0\t100\t00000000\n"
 	if got := selectPushWANInterface(strings.NewReader(routes)); got != "rmnet_data0" {
-		t.Fatalf("公网推送接口=%q，期望 rmnet_data0", got)
+		t.Fatalf("public push interface=%q, want rmnet_data0", got)
 	}
 	if got := selectPushWANInterface(strings.NewReader(strings.Split(routes, "rmnet_data0")[0])); got != "" {
-		t.Fatalf("只有 ECM 时不应强绑公网推送接口: %q", got)
+		t.Fatalf("public push interface must not be forced when only ECM is present: %q", got)
 	}
 }

@@ -18,11 +18,11 @@ func TestPushHTTPClientToleratesSlowCellularTLS(t *testing.T) {
 	client := newPushHTTPClient()
 	transport, ok := client.Transport.(*http.Transport)
 	if !ok {
-		t.Fatalf("推送客户端 Transport 类型=%T", client.Transport)
+		t.Fatalf("push client Transport type=%T", client.Transport)
 	}
 	if client.Timeout < 25*time.Second || transport.TLSHandshakeTimeout < 15*time.Second {
 		t.Fatalf(
-			"蜂窝 HTTPS 超时过短: client=%s tls=%s",
+			"cellular HTTPS timeout is too short: client=%s tls=%s",
 			client.Timeout, transport.TLSHandshakeTimeout,
 		)
 	}
@@ -30,14 +30,14 @@ func TestPushHTTPClientToleratesSlowCellularTLS(t *testing.T) {
 
 func TestPushDNSFallbackPrefersReliableIPv4Resolvers(t *testing.T) {
 	if len(pushDNSServers) < 2 || pushDNSServers[0] != "1.1.1.1:53" || pushDNSServers[1] != "8.8.8.8:53" {
-		t.Fatalf("公网 DNS 顺序不可靠: %#v", pushDNSServers)
+		t.Fatalf("public DNS order is unreliable: %#v", pushDNSServers)
 	}
 	addresses := pushIPv4Addresses([]net.IPAddr{
 		{IP: net.ParseIP("2606:4700:3037::6815:1e0")},
 		{IP: net.ParseIP("104.21.1.224")},
 	})
 	if len(addresses) != 1 || addresses[0].String() != "104.21.1.224" {
-		t.Fatalf("公网推送必须过滤不可达 IPv6: %#v", addresses)
+		t.Fatalf("public push must filter unreachable IPv6: %#v", addresses)
 	}
 }
 
@@ -54,11 +54,11 @@ func testPushRegistration(relayURL string) pushRegistration {
 func TestValidatePushRegistrationRequiresHTTPSRelay(t *testing.T) {
 	registration := testPushRegistration("http://push.example.com")
 	if err := validatePushRegistration(registration); err == nil {
-		t.Fatal("公网推送中继使用明文 HTTP 时应被拒绝")
+		t.Fatal("public push relay must be rejected when it uses cleartext HTTP")
 	}
 	registration.RelayURL = "https://push.example.com"
 	if err := validatePushRegistration(registration); err != nil {
-		t.Fatalf("合法推送注册被拒绝: %v", err)
+		t.Fatalf("valid push registration was rejected: %v", err)
 	}
 }
 
@@ -66,18 +66,18 @@ func TestPushRegistrationAcceptsEitherTokenButNotNeither(t *testing.T) {
 	registration := testPushRegistration("https://push.example.com")
 	registration.AlertToken = ""
 	if err := validatePushRegistration(registration); err != nil {
-		t.Fatalf("仅 VoIP token 应可注册: %v", err)
+		t.Fatalf("VoIP token alone should be allowed to register: %v", err)
 	}
 	registration.VoIPToken = ""
 	registration.AlertToken = strings.Repeat("b", 64)
 	if err := validatePushRegistration(registration); err != nil {
-		t.Fatalf("仅 alert token 应可注册: %v", err)
+		t.Fatalf("alert token alone should be allowed to register: %v", err)
 	}
 	registration.AlertToken = ""
 	registration.WatchVoIPToken = ""
 	registration.WatchBundleID = ""
 	if err := validatePushRegistration(registration); err == nil {
-		t.Fatal("没有任何 APNs token 的注册应被拒绝")
+		t.Fatal("registration with no APNs token must be rejected")
 	}
 }
 
@@ -85,13 +85,13 @@ func TestLocalModeRegistrationNeedsNoRelayOrAPNsToken(t *testing.T) {
 	disabled := false
 	registration := pushRegistration{LocalMode: true, CloudEnabled: &disabled}
 	if err := validatePushRegistration(registration); err != nil {
-		t.Fatalf("本地模式注册不应依赖云端参数: %v", err)
+		t.Fatalf("local-mode registration must not depend on cloud parameters: %v", err)
 	}
 
 	enabled := true
 	registration.CloudEnabled = &enabled
 	if err := validatePushRegistration(registration); err == nil {
-		t.Fatal("本地模式不能同时启用云端模式")
+		t.Fatal("local mode must not enable cloud mode at the same time")
 	}
 }
 
@@ -104,7 +104,7 @@ func TestLocalModeStatusIsConfiguredButCloudDisabled(t *testing.T) {
 	}
 	status := manager.status()
 	if !status.Configured || status.CloudEnabled || status.CallPushReady || status.MessagePushReady {
-		t.Fatalf("本地模式状态不匹配: %#v", status)
+		t.Fatalf("local-mode status mismatch: %#v", status)
 	}
 }
 
@@ -118,12 +118,12 @@ func TestPushRegistrationPersistsWithoutLeakingTokensOrSecretInStatus(t *testing
 
 	status := newPushManager(path).status()
 	if !status.Configured || !status.CallPushReady || !status.MessagePushReady {
-		t.Fatalf("持久化后状态不匹配: %#v", status)
+		t.Fatalf("status mismatch after persistence: %#v", status)
 	}
 	encoded, _ := json.Marshal(status)
 	for _, secret := range []string{registration.DeviceSecret, registration.VoIPToken, registration.AlertToken} {
 		if strings.Contains(string(encoded), secret) {
-			t.Fatalf("状态接口泄漏了推送凭据: %s", encoded)
+			t.Fatalf("status API leaked push credentials: %s", encoded)
 		}
 	}
 }
@@ -140,10 +140,10 @@ func TestPushManagerRestoresLastGoodRegistrationWhenPrimaryIsTruncated(t *testin
 
 	restored := newPushManager(path).status()
 	if !restored.Configured || !restored.CallPushReady || !restored.MessagePushReady {
-		t.Fatalf("主配置被截断后没有恢复最近有效注册: %#v", restored)
+		t.Fatalf("truncated primary config did not restore the last valid registration: %#v", restored)
 	}
 	if restored.LastError != "" {
-		t.Fatalf("成功恢复后不应继续显示配置错误: %q", restored.LastError)
+		t.Fatalf("config error must not remain after a successful restore: %q", restored.LastError)
 	}
 }
 
@@ -160,17 +160,17 @@ func TestWritePushConfigDataSyncFailurePreservesPublishedFile(t *testing.T) {
 		func(string) error { return nil },
 	)
 	if !errors.Is(err, wantError) {
-		t.Fatalf("数据尚未稳定落盘时必须阻止发布: %v", err)
+		t.Fatalf("publish must be blocked before data is durably flushed: %v", err)
 	}
 	data, readErr := os.ReadFile(path)
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
 	if string(data) != `{"device_id":"old"}` {
-		t.Fatalf("同步失败却覆盖了已发布配置: %s", data)
+		t.Fatalf("sync failure overwrote the published config: %s", data)
 	}
 	if _, statErr := os.Stat(path + ".tmp"); !os.IsNotExist(statErr) {
-		t.Fatalf("同步失败后临时文件没有清理: %v", statErr)
+		t.Fatalf("temporary file was not cleaned up after sync failure: %v", statErr)
 	}
 }
 
@@ -184,7 +184,7 @@ func TestWritePushConfigDirectorySyncFailureIsReported(t *testing.T) {
 		func(string) error { return wantError },
 	)
 	if !errors.Is(err, wantError) {
-		t.Fatalf("目录项未确认稳定落盘时不得报告成功: %v", err)
+		t.Fatalf("success must not be reported before the directory entry is durably flushed: %v", err)
 	}
 }
 
@@ -197,7 +197,7 @@ func TestIncomingCallRelayUsesStableUUIDAndDeduplicates(t *testing.T) {
 	var received []payload
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/events/call" {
-			t.Fatalf("请求路径=%q", request.URL.Path)
+			t.Fatalf("request path=%q", request.URL.Path)
 		}
 		var value payload
 		if err := json.NewDecoder(request.Body).Decode(&value); err != nil {
@@ -215,14 +215,14 @@ func TestIncomingCallRelayUsesStableUUIDAndDeduplicates(t *testing.T) {
 	}
 	call := callRecord{ID: "call-9", Direction: "incoming", State: "incoming", Number: "10086"}
 	if sent, err := manager.sendIncoming(call, time.Now()); err != nil || !sent {
-		t.Fatalf("首次来电没有发送: sent=%v err=%v", sent, err)
+		t.Fatalf("first incoming call was not sent: sent=%v err=%v", sent, err)
 	}
 	if sent, err := manager.sendIncoming(call, time.Now()); err != nil || sent {
-		t.Fatalf("重复来电不应再次发送: sent=%v err=%v", sent, err)
+		t.Fatalf("duplicate incoming call must not be sent again: sent=%v err=%v", sent, err)
 	}
 	if len(received) != 1 || received[0].CallID != call.ID || received[0].CallUUID == "" ||
 		len(received[0].CallSecret) < 24 {
-		t.Fatalf("中继载荷错误: %#v", received)
+		t.Fatalf("relay payload mismatch: %#v", received)
 	}
 }
 
@@ -230,11 +230,11 @@ func TestPushRegistrationValidatesWatchVoIPIdentity(t *testing.T) {
 	registration := testPushRegistration("https://push.example.com")
 	registration.WatchBundleID = "com.attacker.watch"
 	if err := validatePushRegistration(registration); err == nil {
-		t.Fatal("Watch VoIP token 不得绑定到其他 App ID")
+		t.Fatal("Watch VoIP token must not be bound to a different App ID")
 	}
 	registration.WatchBundleID = ""
 	if err := validatePushRegistration(registration); err == nil {
-		t.Fatal("存在 Watch token 时必须提供 Watch bundle id")
+		t.Fatal("Watch bundle id is required when a Watch token is present")
 	}
 }
 
@@ -248,10 +248,10 @@ func TestCloudMediaURLRequiresTLSAndCarriesAgentRole(t *testing.T) {
 	}
 	want := "wss://push.airsim.example/v1/calls/d9b59660-05bb-4ea8-9aeb-4505b35c93f9/connect?role=agent&token=call-secret-0123456789abcdef"
 	if got != want {
-		t.Fatalf("媒体地址=%q，期望 %q", got, want)
+		t.Fatalf("media address=%q, want %q", got, want)
 	}
 	if _, err := cloudMediaURL("http://push.example.com", "call", "secret"); err == nil {
-		t.Fatal("明文 Relay 不得生成媒体地址")
+		t.Fatal("cleartext Relay must not produce a media address")
 	}
 }
 
@@ -263,13 +263,13 @@ func TestDecodeCloudCallActionAllowsOnlyBoundCall(t *testing.T) {
 		}
 	}
 	if _, err := decodeCloudCallAction([]byte(`{"action":"answer","call_id":"call-9","owner":"attacker"}`), "call-9"); err == nil {
-		t.Fatal("公网控制不得伪造未知媒体所有者")
+		t.Fatal("public control must not forge an unknown media owner")
 	}
 	if _, err := decodeCloudCallAction([]byte(`{"action":"answer","call_id":"old"}`), "call-9"); err == nil {
-		t.Fatal("旧通话控制不应被执行")
+		t.Fatal("stale call control must not be executed")
 	}
 	if _, err := decodeCloudCallAction([]byte(`{"action":"dial","call_id":"call-9"}`), "call-9"); err == nil {
-		t.Fatal("公网媒体控制不得执行任意动作")
+		t.Fatal("public media control must not execute an arbitrary action")
 	}
 }
 
@@ -288,13 +288,13 @@ func TestDecodeCloudCallActionCarriesStableTraceIdentity(t *testing.T) {
 	fields := cloudCallTraceFields(descriptor, value)
 	if fields["call_uuid"] != descriptor.CallUUID || fields["generation"] != "7" ||
 		fields["command_id"] != value.CommandID || fields["trace_id"] != "9f9dc60b" {
-		t.Fatalf("链路字段未完整保留: %#v", fields)
+		t.Fatalf("link fields were not fully preserved: %#v", fields)
 	}
 	if _, err := decodeCloudCallActionForDescriptor(
 		[]byte(`{"action":"end","call_id":"call-9","generation":6,"owner":"iphone"}`),
 		descriptor,
 	); err == nil {
-		t.Fatal("旧 generation 的控制命令必须被拒绝")
+		t.Fatal("control command from an old generation must be rejected")
 	}
 }
 
@@ -305,7 +305,7 @@ func TestCloudCommandURLKeepsPersistentSecretOutOfURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(endpoint, "/v1/devices/") || strings.Contains(endpoint, registration.DeviceSecret) {
-		t.Fatalf("公网命令地址泄露设备密钥或路径错误: %q", endpoint)
+		t.Fatalf("public command address leaked the device secret or has the wrong path: %q", endpoint)
 	}
 }
 
@@ -320,16 +320,16 @@ func TestExpiredCloudCommandIsRejectedAndDeduplicatedBeforeAT(t *testing.T) {
 	second := agent.executeCloudCommand(command)
 	if first.Status != "failed" || first.Error != "Cloud command expired" ||
 		second.Status != first.Status || second.Error != first.Error {
-		t.Fatalf("过期命令结果不稳定: first=%#v second=%#v", first, second)
+		t.Fatalf("expired command result is unstable: first=%#v second=%#v", first, second)
 	}
 }
 
 func TestCloudPCMReadTimeoutTriggersVoiceRouteRecovery(t *testing.T) {
 	if !shouldRecoverCloudPCM(&net.OpError{Op: "read", Err: timeoutError{}}, 0) {
-		t.Fatal("PCM 连接已建立但持续没有下行字节时必须重启语音桥")
+		t.Fatal("voice bridge must restart when a PCM connection stays up with no downlink bytes")
 	}
 	if shouldRecoverCloudPCM(io.EOF, 12_800) {
-		t.Fatal("已经传输过下行的普通 EOF 应交给连接重试，不应立即重置媒体路由")
+		t.Fatal("a normal EOF after downlink has flowed should be left to connection retry and must not reset the media route immediately")
 	}
 }
 
@@ -343,7 +343,7 @@ func TestCallOwnershipPreservesAuthenticatedIPhoneOwner(t *testing.T) {
 	var received callOwnerPushEvent
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/events/call-owner" {
-			t.Fatalf("请求路径=%q", request.URL.Path)
+			t.Fatalf("request path=%q", request.URL.Path)
 		}
 		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
 			t.Fatal(err)
@@ -360,7 +360,7 @@ func TestCallOwnershipPreservesAuthenticatedIPhoneOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if received.Owner != "iphone" || received.Phase != "active" || received.DeviceSecret == "" {
-		t.Fatalf("所有权载荷错误: %#v", received)
+		t.Fatalf("ownership payload mismatch: %#v", received)
 	}
 }
 
@@ -388,7 +388,7 @@ func TestPushManagerSendsActivityStateWithOriginalCallUUID(t *testing.T) {
 	}
 	if received.CallUUID != manager.lastUUID || received.Phase != "ringing" ||
 		received.Generation != 7 || received.Source != "agent" || received.Timestamp == "" {
-		t.Fatalf("通话状态事件错误: %#v", received)
+		t.Fatalf("call-state event mismatch: %#v", received)
 	}
 }
 
@@ -396,7 +396,7 @@ func TestIncomingSMSUsesAlertEndpointAndDeduplicates(t *testing.T) {
 	var received []incomingSMSPushEvent
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/events/sms" {
-			t.Fatalf("请求路径=%q", request.URL.Path)
+			t.Fatalf("request path=%q", request.URL.Path)
 		}
 		var value incomingSMSPushEvent
 		if err := json.NewDecoder(request.Body).Decode(&value); err != nil {
@@ -413,16 +413,16 @@ func TestIncomingSMSUsesAlertEndpointAndDeduplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := smsMessage{
-		Sender: "10010", Content: "余额提醒", Timestamp: time.Now(), DeliveryID: "SM-7-test",
+		Sender: "10010", Content: "Balance reminder", Timestamp: time.Now(), DeliveryID: "SM-7-test",
 	}
 	if sent, err := manager.sendSMS(message); err != nil || !sent {
-		t.Fatalf("首次短信没有发送: sent=%v err=%v", sent, err)
+		t.Fatalf("first SMS was not sent: sent=%v err=%v", sent, err)
 	}
 	if sent, err := manager.sendSMS(message); err != nil || sent {
-		t.Fatalf("重复短信不应再次发送: sent=%v err=%v", sent, err)
+		t.Fatalf("duplicate SMS must not be sent again: sent=%v err=%v", sent, err)
 	}
 	if len(received) != 1 || received[0].DeliveryID != message.DeliveryID || received[0].Content != message.Content {
-		t.Fatalf("短信中继载荷错误: %#v", received)
+		t.Fatalf("SMS relay payload mismatch: %#v", received)
 	}
 }
 
@@ -430,7 +430,7 @@ func TestAgentHeartbeatReportsCellularStateWithoutSecrets(t *testing.T) {
 	var received agentHeartbeatEvent
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/events/heartbeat" {
-			t.Fatalf("请求路径=%q", request.URL.Path)
+			t.Fatalf("request path=%q", request.URL.Path)
 		}
 		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
 			t.Fatal(err)
@@ -451,10 +451,10 @@ func TestAgentHeartbeatReportsCellularStateWithoutSecrets(t *testing.T) {
 	}
 	if received.Event != "agent_heartbeat" || received.CellularState != "searching" ||
 		received.DeviceSecret == "" || received.SignalDBM == nil || *received.SignalDBM != -91 {
-		t.Fatalf("心跳载荷错误: %#v", received)
+		t.Fatalf("heartbeat payload mismatch: %#v", received)
 	}
 	if len(received.AgentMediaCapabilities) != 1 || received.AgentMediaCapabilities[0] != "webrtc" {
-		t.Fatalf("心跳媒体能力=%v，期望 [webrtc]", received.AgentMediaCapabilities)
+		t.Fatalf("heartbeat media capabilities=%v, want [webrtc]", received.AgentMediaCapabilities)
 	}
 }
 
@@ -462,7 +462,7 @@ func TestSendRegistrationAdvertisesOnlyWebRTC(t *testing.T) {
 	var received pushRegistration
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/devices/register" {
-			t.Fatalf("请求路径=%q", request.URL.Path)
+			t.Fatalf("request path=%q", request.URL.Path)
 		}
 		if err := json.NewDecoder(request.Body).Decode(&received); err != nil {
 			t.Fatal(err)
@@ -481,10 +481,10 @@ func TestSendRegistrationAdvertisesOnlyWebRTC(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(received.AgentMediaCapabilities) != 1 || received.AgentMediaCapabilities[0] != "webrtc" {
-		t.Fatalf("注册媒体能力=%v，期望 [webrtc]", received.AgentMediaCapabilities)
+		t.Fatalf("registration media capabilities=%v, want [webrtc]", received.AgentMediaCapabilities)
 	}
 	if received.MediaTransport != "webrtc" {
-		t.Fatalf("注册传输=%q，期望 webrtc", received.MediaTransport)
+		t.Fatalf("registration transport=%q, want webrtc", received.MediaTransport)
 	}
 }
 
@@ -507,15 +507,15 @@ func TestPushManagerCloudModeDisablesPublicEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sent, err := manager.sendSMS(smsMessage{
-		Sender: "10010", Content: "余额提醒", Timestamp: time.Now(), DeliveryID: "disabled-sms",
+		Sender: "10010", Content: "Balance reminder", Timestamp: time.Now(), DeliveryID: "disabled-sms",
 	}); err != nil || sent {
-		t.Fatalf("云端模式关闭后不应发送短信中继: sent=%v err=%v", sent, err)
+		t.Fatalf("SMS relay must not be sent after cloud mode is disabled: sent=%v err=%v", sent, err)
 	}
 	if requests != 0 {
-		t.Fatalf("云端模式关闭后仍产生 %d 个公网请求", requests)
+		t.Fatalf("public requests were still made after cloud mode was disabled: %d", requests)
 	}
 	if manager.status().CloudEnabled {
-		t.Fatal("状态仍报告云端模式开启")
+		t.Fatal("status still reports cloud mode enabled")
 	}
 }
 
@@ -528,7 +528,7 @@ func TestNonRingingCallsNeverProduceVoIPPush(t *testing.T) {
 		{ID: "active", Direction: "incoming", State: "active"},
 	} {
 		if sent, err := manager.sendIncoming(call, time.Now()); err != nil || sent {
-			t.Fatalf("非振铃呼入不应发送 VoIP Push: call=%#v sent=%v err=%v", call, sent, err)
+			t.Fatalf("non-ringing incoming call must not send a VoIP push: call=%#v sent=%v err=%v", call, sent, err)
 		}
 	}
 }

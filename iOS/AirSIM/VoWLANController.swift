@@ -87,8 +87,8 @@ enum VoWLANAvailability: Equatable, Sendable {
         return false
     }
 
-    /// 拨号动作会在真正发起前重新执行签名健康检查，因此 UI 只需确认该端点
-    /// 曾验证成功；不能用 10 秒的严格建链时效永久禁用拨号按钮。
+    /// Dial actions re-run a signed health check right before dialing, so the UI only needs to confirm
+    /// the endpoint was previously verified; do not permanently disable the dial button using a strict 10s window.
     var allowsCallAttempt: Bool { isOnlineForDisplay }
 }
 
@@ -96,10 +96,10 @@ enum ConnectionStatusHeadline {
     static func title(summary: ModuleConnectionSummary, vowlanOnline: Bool) -> String {
         if vowlanOnline { return "VoWLAN Online" }
         switch summary {
-        case .localOnline: return L10n.t("在线")
+        case .localOnline: return L10n.t("Online")
         case .localOnlineNoService: return "Online · No Cellular Service"
         case .cloudOnly: return "Cloud Online · Reconnecting USB"
-        case .offline: return L10n.t("离线")
+        case .offline: return L10n.t("Offline")
         }
     }
 }
@@ -179,7 +179,7 @@ enum VoWLANStatusCopy {
         case .discovered: return "Discovered, verifying"
         case .verified: return "VoWLAN Ready"
         case let .unavailable(reason):
-            return (reason.contains("局域网已断开") || reason.contains("VoWLAN disconnected")) ? "LAN Disconnected · Cloud for Next Call" : reason
+            return reason.contains("VoWLAN disconnected") ? "LAN Disconnected · Cloud for Next Call" : reason
         }
     }
 }

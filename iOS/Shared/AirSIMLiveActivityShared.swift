@@ -2,7 +2,7 @@ import ActivityKit
 import AppIntents
 import Foundation
 
-/// 主 App 与灵动岛扩展共享的活动数据，字段必须保持精简且可编码。
+/// Shared Live Activity payload between the main app and the Dynamic Island extension; fields must stay compact and Codable.
 struct AirSIMCallActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         enum Transport: String, Codable, Hashable {
@@ -33,15 +33,15 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
         let phase: Phase
         let startedAt: Date
         let transport: Transport?
-        /// 模块 SIM 的蜂窝状态；只在待机状态显示，离线与通话状态不携带旧快照。
+        /// Cellular state of the module SIM; shown only in standby so offline and call states do not carry stale snapshots.
         let signalDBM: Int?
         let operatorName: String?
         let networkMode: String?
         let radioBand: String?
         let downloadBytesPerSecond: Double?
         let uploadBytesPerSecond: Double?
-        /// 当前用于拨号和媒体路由的 Android Agent。字段保持可选，以兼容旧版 Relay
-        /// 推送的 ContentState，并避免升级时让已存在的 Live Activity 解码失败。
+        /// Android Agent currently used for dialing and media routing. Kept optional for backward compatibility with
+        /// ContentState payloads pushed by older Relays and to prevent existing Live Activities from failing to decode across upgrades.
         let agentDeviceName: String?
         let agentPhoneNumber: String?
         let agentKind: String?
@@ -117,8 +117,8 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
 }
 
 extension AirSIMCallActivityAttributes.ContentState {
-    /// ActivityKit 的 stale 只表示主 App 暂时没有提交新内容，不能证明 USB 模块离线。
-    /// 模块离线由主 App 的真实 HTTP 探测失败显式写入 `.offline`。
+    /// ActivityKit staleness only means the main app has not submitted new content recently; it does not prove the USB module is offline.
+    /// Module offline state is explicitly written as `.offline` by the main app after actual HTTP probe failures.
     func liveActivityDisplayState(isStale: Bool) -> Self {
         self
     }
@@ -193,7 +193,7 @@ enum AirSIMLiveActivityActionURL {
     }
 }
 
-/// 灵动岛动作使用最小化模块客户端，确保扩展无需启动主 App 也能走 USB ECM 控制通话。
+/// Dynamic Island actions use a minimal module client so the extension can control calls over USB ECM without launching the main app.
 private enum LiveActivityCallClient {
     enum Action {
         case answer
@@ -220,8 +220,8 @@ private enum LiveActivityCallClient {
     }
 
     static func perform(_ action: Action, callID: String) async throws {
-        // 空通话 ID（Shortcuts/Siri 的默认参数）绝不能匹配待机/离线岛的 callID ""，
-        // 否则没有通话时运行意图会结束常驻待机活动。
+        // An empty call ID (default parameter from Shortcuts/Siri) must never match the "" callID of a standby/offline island,
+        // otherwise running the intent with no active call would end the persistent standby activity.
         guard !callID.isEmpty else { throw LiveActivityCallError.staleCall }
         let transport = WiredHTTPTransport()
         let statusResponse = try await transport.send(request(method: "GET", path: "api/calls/status"))
@@ -235,12 +235,12 @@ private enum LiveActivityCallClient {
             throw LiveActivityCallError.invalidResponse
         }
 
-        // perform() 可能被系统从头重跑（App Intents execution-model）：POST 是唯一
-        // 不可逆副作用，放在状态检查之后，让重放幂等。POST body 携带 call_id，
-        // 由 Agent 原子校验（requireActiveCallID）；客户端 GET 检查只是快速路径，
-        // 不能保证检查与执行之间通话不变。
-        // 已接通的 answer 与已结束（或已被新通话取代）的 reject/hangup 直接成功，
-        // 不再重复 POST，也不再报令人困惑的状态错误。
+        // perform() may be re-run from the beginning by the system (App Intents execution model): POST is the only
+        // irreversible side effect and is placed after the state check to keep replays idempotent. The POST body carries call_id,
+        // which the Agent validates atomically (requireActiveCallID); the client GET check is only a fast path
+        // and cannot guarantee the call does not change between check and execution.
+        // An already-active answer or an already-ended (or superseded) reject/hangup succeeds immediately
+        // without repeating the POST or reporting confusing state errors.
         guard let active = status.active, active.id == callID else {
             try await finishStaleCall(action, callID: callID)
             return
@@ -248,7 +248,7 @@ private enum LiveActivityCallClient {
 
         switch action {
         case .answer:
-            // 已接通的重试不重复 POST，避免双答。
+            // Do not repeat POST on retry when already active to avoid double-answering.
             guard active.state != "active" else {
                 await synchronizeActivities(after: action, callID: callID)
                 return
@@ -268,9 +268,9 @@ private enum LiveActivityCallClient {
 
         let response = try await transport.send(request(method: "POST", path: action.endpoint, callID: callID))
         if response.statusCode == 502, isStaleCallRejection(response.body) {
-            // GET 检查之后通话被取代时，Agent 的 call_id 校验会以 502 拒绝且未执行
-            // 动作；按 stale 分支收尾，而不是报 HTTP 错误。真实的动作失败同样返回
-            // 502，但 error 文本不同，仍按失败上报。
+            // If the call is superseded after the GET check, the Agent call_id check rejects with 502 without executing
+            // the action; finish via the stale branch rather than reporting an HTTP error. Genuine action failures also return
+            // 502 with a different error message and are still reported as failures.
             try await finishStaleCall(action, callID: callID)
             return
         }
@@ -280,9 +280,9 @@ private enum LiveActivityCallClient {
         await synchronizeActivities(after: action, callID: callID)
     }
 
-    /// 模块端点已无匹配通话：answer 报 stale；reject/hangup 收尾结束对应活动。
-    /// 但模块端点不管辖 VoWLAN/云端通话，端点没有匹配通话不能证明通话已结束，
-    /// 此时保留岛并报 stale。
+    /// No matching call remains on the module endpoint: answer throws stale; reject/hangup cleans up the corresponding activity.
+    /// However, the module endpoint does not govern VoWLAN/cloud calls, so an absent call on the endpoint does not prove the call ended;
+    /// keep the island and throw stale in that case.
     private static func finishStaleCall(_ action: Action, callID: String) async throws {
         guard action != .answer else { throw LiveActivityCallError.staleCall }
         for activity in Activity<AirSIMCallActivityAttributes>.activities
@@ -297,9 +297,9 @@ private enum LiveActivityCallClient {
         await synchronizeActivities(after: action, callID: callID)
     }
 
-    /// Agent 对失效 call_id 的拒绝固定返回该错误文本（module-agent 的
-    /// requireActiveCallID / answerCallForID / executeAndroidCallCommandForID），
-    /// 用于区分「通话已被取代」与同样返回 502 的真实动作失败。
+    /// The Agent returns this fixed error string when rejecting a stale call_id (module-agent
+    /// requireActiveCallID / answerCallForID / executeAndroidCallCommandForID),
+    /// distinguishing a superseded call from a genuine action failure that also returns HTTP 502.
     private static func isStaleCallRejection(_ body: Data) -> Bool {
         struct Payload: Decodable { let error: String? }
         return (try? JSONDecoder().decode(Payload.self, from: body))?.error == "Call ID is no longer valid"
@@ -311,7 +311,7 @@ private enum LiveActivityCallClient {
         request.timeoutInterval = 8
         if method == "POST" {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // 与主 App LocalCallControlBody 相同的 call_id 字段。
+            // Same call_id field as the main app LocalCallControlBody.
             request.httpBody = try? JSONEncoder().encode(["call_id": callID])
         }
         return request
@@ -328,7 +328,7 @@ private enum LiveActivityCallClient {
                     number: previous.number,
                     displayName: previous.displayName,
                     phase: .active,
-                    // 重试同步不应重置通话计时：已处于 active 就沿用原起始时间。
+                    // Retry synchronization must not reset the call timer: keep the original start time if already active.
                     startedAt: previous.phase == .active ? previous.startedAt : Date(),
                     transport: previous.transport,
                     agentDeviceName: previous.agentDeviceName,
@@ -349,8 +349,8 @@ private enum LiveActivityCallClient {
 
 struct AnswerAirSIMCallIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Answer Module Call"
-    // openAppWhenRun 在 iOS 26.0 废弃。supportedModes iOS 26.0+ 可用，按部署目标
-    // 17.0 做可用性门控；iOS 17–25 沿用框架默认（等价 openAppWhenRun = false）。
+    // openAppWhenRun is deprecated in iOS 26.0. Gate supportedModes on iOS 26.0+ for the iOS 17.0
+    // deployment target; iOS 17-25 uses the framework default (equivalent to openAppWhenRun = false).
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
 
@@ -367,7 +367,7 @@ struct AnswerAirSIMCallIntent: LiveActivityIntent {
 
 struct RejectAirSIMCallIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Decline Module Call"
-    // 与 AnswerAirSIMCallIntent 相同的 supportedModes 门控。
+    // Same supportedModes availability gating as AnswerAirSIMCallIntent.
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
 
@@ -384,7 +384,7 @@ struct RejectAirSIMCallIntent: LiveActivityIntent {
 
 struct HangUpAirSIMCallIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "End Module Call"
-    // 与 AnswerAirSIMCallIntent 相同的 supportedModes 门控。
+    // Same supportedModes availability gating as AnswerAirSIMCallIntent.
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
 
@@ -399,8 +399,8 @@ struct HangUpAirSIMCallIntent: LiveActivityIntent {
     }
 }
 
-/// 只有 CustomLocalizedStringResourceConvertible 错误才会把真实消息呈现给
-/// Siri/Shortcuts；LocalizedError 不被 App Intents 框架读取。
+/// Only CustomLocalizedStringResourceConvertible errors surface their actual message to
+/// Siri/Shortcuts; LocalizedError is not read by the App Intents framework.
 private enum LiveActivityCallError: Error, CustomLocalizedStringResourceConvertible {
     case staleCall
     case invalidState

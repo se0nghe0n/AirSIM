@@ -231,9 +231,10 @@ func completedModuleUpdateState(state moduleUpdateState, runningVersion string, 
 	if state.Phase != "restarting" && state.Phase != "verifying_health" {
 		return state, false
 	}
-	// update-pending 是启动脚本持有的回滚锁。只有启动脚本确认新 Agent 的
-	// HTTP 控制面持续可达并移除该锁后，状态接口才允许把重启阶段提升为完成。
-	// 仅凭新进程报告的版本号不能证明监督器仍然存活。
+	// update-pending is the rollback lock held by the startup script. The status
+	// API may mark the restart phase complete only after that script confirms
+	// the new Agent HTTP control plane stays reachable and removes the lock.
+	// A version reported by the new process alone does not prove the supervisor is still alive.
 	if pendingMarkerPresent || strings.TrimSpace(state.OperationID) == "" {
 		return state, false
 	}

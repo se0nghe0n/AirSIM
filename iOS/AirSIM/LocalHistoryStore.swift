@@ -17,7 +17,7 @@ enum CallHistoryPolicy {
     }
 }
 
-/// 负责保存手机本地的通话记录和短信，不依赖模块是否在线。
+/// Persists local call history and SMS on the phone independent of whether the module is online.
 final class LocalHistoryStore {
     private let fileManager: FileManager
     private let directoryURL: URL
@@ -48,8 +48,8 @@ final class LocalHistoryStore {
                 attributes: nil
             )
         } catch {
-            // 本地缓存不能阻塞通话和短信；后续写入失败时仍会继续记录日志。
-            Self.log("创建本地历史目录失败：\(error.localizedDescription)")
+            // Local caching must not block calls or SMS; subsequent write failures will still be logged.
+            Self.log("Failed to create local history directory: \(error.localizedDescription)")
         }
     }
 
@@ -89,7 +89,7 @@ final class LocalHistoryStore {
         } catch CocoaError.fileReadNoSuchFile {
             return nil
         } catch {
-            Self.log("读取本地历史失败（\(url.lastPathComponent)）：\(error.localizedDescription)")
+            Self.log("Failed to read local history (\(url.lastPathComponent)): \(error.localizedDescription)")
             return nil
         }
     }
@@ -99,11 +99,11 @@ final class LocalHistoryStore {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try encoder.encode(records)
-            // 原子写入先生成临时文件再替换目标，避免断电留下半个 JSON 文件。
+            // Atomic write creates a temporary file before replacing the target to avoid partial JSON on power loss.
             try data.write(to: url, options: [.atomic])
             return true
         } catch {
-            Self.log("写入本地历史失败（\(url.lastPathComponent)）：\(error.localizedDescription)")
+            Self.log("Failed to write local history (\(url.lastPathComponent)): \(error.localizedDescription)")
             return false
         }
     }

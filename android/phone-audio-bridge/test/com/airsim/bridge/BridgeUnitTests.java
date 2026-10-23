@@ -113,6 +113,9 @@ public final class BridgeUnitTests {
     }
 
     private static void testSamsungAudioContract() {
+        check(PhoneAudioBridge.deviceBufferBytes(640) == 1280, "device buffer keeps an 80 ms floor");
+        check(PhoneAudioBridge.deviceBufferBytes(4096) == 4096, "device buffer keeps a larger platform minimum");
+        check(PhoneAudioBridge.LOOPBACK_SOCKET_BYTES == 4096, "loopback socket hint is 4 KB");
         check(PhoneAudioBridge.captureSource() == 3, "VOICE_DOWNLINK capture source");
         check(PhoneAudioBridge.playbackUsage() == 2,
             "VOICE_TX uses voice communication usage");

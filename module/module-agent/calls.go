@@ -56,7 +56,7 @@ func (a *agent) applyAndroidCallEvent(event androidCallEvent, now time.Time) {
 		if a.push != nil {
 			go func() { _ = a.push.sendCallState(endedID, "ended") }()
 		}
-		appendVoiceDiagnosticEvent("Android 通话状态变更: " + previousState + " -> ended")
+		appendVoiceDiagnosticEvent("Android call state changed: " + previousState + " -> ended")
 		go func() {
 			time.Sleep(1500 * time.Millisecond)
 			a.mu.RLock()
@@ -213,7 +213,7 @@ func parseCLCC(response string) []parsedCall {
 	matches := clccPattern.FindAllStringSubmatch(response, -1)
 	calls := make([]parsedCall, 0, len(matches))
 	for _, match := range matches {
-		// CLCC mode 0 才是语音，数据会话不能伪装成电话。
+		// Only CLCC mode 0 is voice. A data session must not be presented as a phone call.
 		if match[4] != "0" {
 			continue
 		}
@@ -345,7 +345,7 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 		if age >= 0 && age <= endedCallTombstoneRetention &&
 			tombstone.Index == selected.Index && tombstone.Direction == selected.Direction && sameNumber {
 			a.mu.Unlock()
-			appendVoiceDiagnosticEvent("忽略挂断后陈旧 CLCC: " + selected.State)
+			appendVoiceDiagnosticEvent("ignoring stale CLCC after hangup: " + selected.State)
 			return
 		}
 		if age > endedCallTombstoneRetention || tombstone.Index != selected.Index ||
@@ -378,8 +378,8 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 		if a.push != nil {
 			go func() { _ = a.push.sendCallState(endedCallID, "ended") }()
 		}
-		appendVoiceDiagnosticEvent("通话状态变更: " + endedState + " -> ended")
-		// 等基带彻底结束通话后再回滚 UAC 路由，避免尾音被硬切断。
+		appendVoiceDiagnosticEvent("call state changed: " + endedState + " -> ended")
+		// Roll back the UAC route only after the baseband has fully ended the call, so the tail of the audio is not cut off.
 		go func() {
 			time.Sleep(1500 * time.Millisecond)
 			a.mu.RLock()
@@ -411,12 +411,12 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 				go func() { _ = a.push.sendCallState(callID, phase) }()
 			}
 		}
-		appendVoiceDiagnosticEvent("通话状态变更: idle -> " + selected.State)
+		appendVoiceDiagnosticEvent("call state changed: idle -> " + selected.State)
 		if selected.State == "active" {
 			go a.ensureVoiceRouteIfHostEnabled()
 		} else {
-			// 在响铃或拨号阶段提前完成驱动加载和 ACDB 校准；接通后只需建立
-			// D4/D5/D6 路由，避免把模块冷启动时间暴露给用户。
+			// Load drivers and run ACDB calibration during ringing or dialing. After
+			// connect, only the D4/D5/D6 route remains, so module cold-start time stays off the user path.
 			go a.ensureVoiceRuntimeWarm()
 		}
 		return
@@ -442,7 +442,7 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 		a.scheduleIncomingPush(callID)
 	}
 	if selected.State != previousState {
-		appendVoiceDiagnosticEvent("通话状态变更: " + previousState + " -> " + selected.State)
+		appendVoiceDiagnosticEvent("call state changed: " + previousState + " -> " + selected.State)
 		if a.push != nil {
 			if phase := lifecyclePhaseForModemState(selected.State); phase != "" {
 				go func() { _ = a.push.sendCallState(callID, phase) }()
@@ -600,7 +600,7 @@ func (a *agent) agentEvents(response http.ResponseWriter, request *http.Request)
 	writeJSON(response, http.StatusOK, a.agentEventSnapshot())
 }
 
-// callHistoryAck 仅删除已被手机原子写入成功的通话记录，未确认记录继续留在交付队列。
+// callHistoryAck deletes only call records the phone has atomically written. Unacknowledged records stay in the delivery queue.
 func (a *agent) callHistoryAck(response http.ResponseWriter, request *http.Request) {
 	if !requireMethod(response, request, http.MethodPost) {
 		return
@@ -695,7 +695,7 @@ func normalizeDialNumber(raw string) string {
 		case character >= '0' && character <= '9', character == '+', character == '*', character == '#':
 			result.WriteRune(character)
 		case character == ' ', character == '-', character == '(', character == ')':
-			// 仅忽略常见排版字符。
+			// Ignore only common formatting characters.
 		default:
 			return ""
 		}
@@ -1013,7 +1013,7 @@ func (a *agent) recording(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "action must be start or stop")
 		return
 	}
-	// 模块代理不能伪造录音成功；后续由语音桥输出双向 PCM 后才开放此接口。
+	// The module agent must not pretend recording succeeded. This endpoint opens only after the voice bridge emits bidirectional PCM.
 	a.unsupported(response, "Module-side bidirectional PCM recording is not supported yet")
 }
 
@@ -1048,8 +1048,8 @@ func (a *agent) audioHostRegister(response http.ResponseWriter, request *http.Re
 	writeJSON(response, http.StatusOK, map[string]bool{"enabled": body.Enabled})
 }
 
-// audioHostWarmup 只提前加载语音驱动和校准，不打开 D4/D5/D6 媒体路由。
-// 拨号或锁屏来电阶段可以安全执行，真正接通后仍由 audioHostRegister 启动完整 PCM 桥。
+// audioHostWarmup only preloads the voice driver and calibration. It does not open the D4/D5/D6 media route.
+// That is safe during dialing or a lock-screen incoming call. audioHostRegister still starts the full PCM bridge after the call connects.
 func (a *agent) audioHostWarmup(response http.ResponseWriter, request *http.Request) {
 	if !requireMethod(response, request, http.MethodPost) {
 		return

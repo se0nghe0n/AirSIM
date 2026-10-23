@@ -1,8 +1,8 @@
 import Foundation
 import WatchConnectivity
 
-/// 镜像 iPhone 通话状态，并为 Watch 发起的公网呼叫代理拨号。
-/// 拨号和接听控制留在 WCSession。云端和本地 VoWLAN 音频都由 iPhone 的 WebRTC peer 承载。
+/// Mirrors iPhone call state and proxies dialing for cloud calls initiated from Apple Watch.
+/// Dialing and answer controls stay on WCSession. Both cloud and local VoWLAN audio are carried by the iPhone WebRTC peer.
 final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     static let shared = WatchCallCoordinator()
 
@@ -47,7 +47,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             session.activate()
             self.session = session
 #if DEBUG
-			print("[AirSIM iPhone WC] 已请求激活；paired=\(session.isPaired) watchAppInstalled=\(session.isWatchAppInstalled)")
+			print("[AirSIM iPhone WC] Activation requested; paired=\(session.isPaired) watchAppInstalled=\(session.isWatchAppInstalled)")
 #endif
         }
     }
@@ -128,8 +128,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         if session.isReachable {
             session.sendMessage(dictionary, replyHandler: nil, errorHandler: nil)
         }
-        // 状态转移用后台队列保证手表 App 暂未运行时仍能在下次唤醒后收敛；
-        // 实时接听/拒接不使用队列，避免延迟动作误操作下一通电话。
+        // State transitions use background queueing so the Watch app converges on next wake even if not currently running;
+        // real-time answer/reject actions bypass the queue so delayed actions cannot affect the next call.
         session.transferUserInfo(dictionary)
     }
 
@@ -139,7 +139,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         error: Error?
     ) {
 #if DEBUG
-		print("[AirSIM iPhone WC] 激活完成；state=\(activationState.rawValue) context=\(session.receivedApplicationContext["event"] as? String ?? "无") error=\(error?.localizedDescription ?? "无")")
+		print("[AirSIM iPhone WC] Activation completed; state=\(activationState.rawValue) context=\(session.receivedApplicationContext["event"] as? String ?? "none") error=\(error?.localizedDescription ?? "none")")
 #endif
 		guard activationState == .activated,
 			  !session.receivedApplicationContext.isEmpty else { return }
@@ -294,7 +294,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                 replyHandler(["ok": false, "error": "Call canceled"])
                 return
             }
-            // 没有可验证的本地 VoWLAN 时，由 iPhone WebRTC peer 承载音频。
+            // When no verified local VoWLAN is available, audio is carried by the iPhone WebRTC peer.
             guard let requested = CloudMediaTransport(rawValue: WatchCloudAudioPlan.requestedTransport),
                   requested == .webRTC else {
                 replyHandler(["ok": false, "error": "Watch audio requires WebRTC"])
@@ -351,7 +351,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                     try await active.api.hangupCall(callID: active.callID)
                     if localWatchCall?.callID == active.callID { localWatchCall = nil }
                 } catch {
-                    NSLog("[AirSIM Watch Dial] VoWLAN 取消失败：%@", error.localizedDescription)
+                    NSLog("[AirSIM Watch Dial] VoWLAN cancel failed: %@", error.localizedDescription)
                 }
             }
         }
@@ -481,7 +481,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                 }
                 try? await Task.sleep(for: .milliseconds(500))
             }
-            NSLog("[AirSIM Watch] VoWLAN 音频主机注册超时；call=%@", callID)
+            NSLog("[AirSIM Watch] VoWLAN audio host registration timed out; call=%@", callID)
         }
     }
 
@@ -527,15 +527,15 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                         envelope: envelope, credentials: credentials
                     )
                     if final.status != "completed" || final.result?.ended != true {
-                        NSLog("[AirSIM Watch Dial] 模块未确认挂断：%@", final.error ?? final.status)
+                        NSLog("[AirSIM Watch Dial] Module did not confirm hangup: %@", final.error ?? final.status)
                     }
                 } catch {
-                    NSLog("[AirSIM Watch Dial] 等待模块挂断确认失败：%@", error.localizedDescription)
+                    NSLog("[AirSIM Watch Dial] Failed waiting for module hangup confirmation: %@", error.localizedDescription)
                 }
             }
         } catch {
-            // 已拨号但交接失败必须可诊断，不能悄悄遗留蜂窝通话。
-            NSLog("[AirSIM Watch Dial] 取消呼出失败：%@", error.localizedDescription)
+            // A dialed call whose handoff failed must remain diagnosable and never silently leave a cellular call behind.
+            NSLog("[AirSIM Watch Dial] Failed to cancel outgoing call: %@", error.localizedDescription)
         }
     }
 
@@ -599,7 +599,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
               !token.isEmpty, !bundleID.isEmpty else { return false }
         VoIPPushController.shared.storeWatchVoIPRegistration(token: token, bundleID: bundleID)
 #if DEBUG
-		print("[AirSIM iPhone WC] 已接收 Watch VoIP token；字符数=\(token.count)")
+		print("[AirSIM iPhone WC] Received Watch VoIP token; length=\(token.count)")
 #endif
         return true
     }

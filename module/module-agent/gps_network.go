@@ -225,7 +225,7 @@ func (a *agent) checkProxy(response http.ResponseWriter, request *http.Request) 
 	if !requireMethod(response, request, http.MethodPost) {
 		return
 	}
-	// iPad 直连版不再经过 Mac HTTP 代理，这里的“代理”即模块本地控制服务。
+	// The direct iPad build no longer goes through a Mac HTTP proxy. "Proxy" here means the module's local control service.
 	writeJSON(response, http.StatusOK, map[string]any{
 		"ok": true, "summary": "Module local control service working", "detail": "Direct mode does not require a Mac proxy; control service listens on 192.168.225.1:7575",
 	})
@@ -255,7 +255,7 @@ var qdc507KnownUSBFields = []string{"0x2C7C", "0x0125", "1", "1", "1", "1", "1",
 func parseUSBConfiguration(response string) (usbConfiguration, error) {
 	value := commandValue(response, `+QCFG: "usbcfg",`)
 	if value == "" {
-		// 某些固件在逗号前后加入空格，退回正则提取。
+		// Some firmware inserts spaces around commas, so fall back to regex extraction.
 		match := regexp.MustCompile(`(?i)\+QCFG:\s*"usbcfg"\s*,\s*([^\n]+)`).FindStringSubmatch(response)
 		if len(match) == 2 {
 			value = match[1]
@@ -292,7 +292,7 @@ func knownQDC507USBConfiguration(uacEnabled bool) usbConfiguration {
 }
 
 func inferQDC507USBConfiguration(readFile func(string) ([]byte, error)) (usbConfiguration, string, error) {
-	// 仅对实机验证过的 2c7c:0125 回退，绝不把固定 USBCFG 元组盲写到其他模块。
+	// Fall back only for the hardware-verified 2c7c:0125. Never blindly write a fixed USBCFG tuple to other modules.
 	vendor, vendorErr := readFile(usbGadgetPath + "/idVendor")
 	product, productErr := readFile(usbGadgetPath + "/idProduct")
 	functions, functionsErr := readFile(usbGadgetPath + "/functions")
@@ -404,11 +404,11 @@ func (a *agent) usbProfile(response http.ResponseWriter, request *http.Request) 
 	}
 	writeUSBProfile(response, configuration, configuration.withUAC(wantUAC), needsReconnect, message)
 	if needsReconnect {
-		// 先把成功响应交给客户端，再重启模块；否则预期中的 USB 断开会被 UI 误报为失败。
+		// Return the success response to the client before rebooting the module. Otherwise the UI reports the expected USB disconnect as a failure.
 		go func() {
 			time.Sleep(350 * time.Millisecond)
 			if _, rebootErr := a.at.command("AT+CFUN=1,1", 5*time.Second); rebootErr != nil {
-				log.Printf("切换 USB 模式后的模块重启失败: %v", rebootErr)
+				log.Printf("module reboot after USB mode switch failed: %v", rebootErr)
 			}
 		}()
 	}

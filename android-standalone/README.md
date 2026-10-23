@@ -13,7 +13,7 @@ Standalone reuses Telecom, SMS, VoWLAN, pairing, and Shizuku management from [`a
 - Relay device registration, 30-second heartbeats, WebSocket cloud commands, and HTTP fallback fetching;
 - Android Telecom dialing, answer, reject, hang-up, DTMF, and system SMS sending;
 - Incoming-call push, call lifecycle, and single-stream cloud PCM media orchestration;
-- Cloud PCM jitter mitigation separates capture from network send/receive, limits stale audio backlog, and restarts media after WebSocket reconnection. See [cloud PCM jitter mitigation](../docs/cloud-pcm-resilience.md) for the strategy and device-acceptance boundaries;
+- Cloud and VoWLAN call audio use native WebRTC. NetEq holds at most 50 packets and fast-accelerates excess delay. The telephony loopback drops PCM older than 80 ms and does not add a second jitter buffer. See [WebRTC calls](../docs/webrtc.md);
 - Local VoWLAN control and PCM links;
 - Local VoBLE control and encrypted G.711 μ-law bidirectional audio;
 - An in-process compatibility layer for the original Agent `/api/health`, `/api/android/status`, call, and audio-configuration APIs;
@@ -169,9 +169,10 @@ SDK's external audio buffer API; `WebRtcAudioTrack` is replaced with a small
 JNI-compatible external output adapter. Both directions use the rooted
 `AIRSIMPCM1`/`AIRSIMREADY` TCP bridge on loopback port 7580, at 8 kHz mono PCM16.
 The adapter runs at 10 ms; arbitrary bridge reads, including existing 20 ms
-frames, are split into bounded 10 ms units. Native Opus/NetEq owns network
-jitter, loss concealment and FEC; the legacy PCM jitter/time-scaling pump is not
-used. No physical Android microphone or speaker is opened by the WebRTC layer.
+frames, are split into bounded 10 ms units and discarded after 80 ms. Native
+Opus/NetEq owns network jitter, loss concealment and FEC, with a 50-packet cap
+and fast accelerate. The legacy PCM jitter/time-scaling pump is not used. No
+physical Android microphone or speaker is opened by the WebRTC layer.
 
 Builds verify the AAR SHA-256, package all four supplied ABIs, align shared
 libraries to 16 KB, and include dependency notices as APK assets. See

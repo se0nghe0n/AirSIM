@@ -159,8 +159,8 @@ enum WatchCloudAudioPlan {
     }
 }
 
-/// Watch 直接接听所需的完整 VoIP 会话。媒体密钥只保存在内存中，
-/// 不进入 WatchConnectivity 状态镜像或通知正文。
+/// Complete VoIP session required for direct answering on Apple Watch. Media keys are kept in memory only
+/// and never included in WatchConnectivity state mirroring or notification bodies.
 struct WatchVoIPCall: Equatable, Sendable {
     let callID: String
     let uuid: UUID
