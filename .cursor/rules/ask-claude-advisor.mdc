@@ -1,0 +1,11 @@
+---
+description: AskClaude advisor protocol (plan/debug/review checkpoints via ask_claude)
+alwaysApply: true
+---
+
+AskClaude advisor (Claude Opus 5.5 via the `ask_claude` tool; MCP server `ask_claude` locally, `AskClaude` in cloud agents). Use it at three checkpoints:
+- Plan (mode "plan"): before non-trivial work that is hard to undo (architecture, data model, migrations, multi-step plans). Send the draft plan and the alternatives you rejected.
+- Debug (mode "debug"): after 1–2 failed fix attempts. Send the symptom, exact errors, and what you tried.
+- Review (mode "review"): before declaring done on any non-trivial diff or PR. Pass the changed files, or paste the diff, and ask for correctness bugs, edge cases and risks, not style.
+Not for trivial work. At most ~3 calls per task. Verify Claude's claims against the code before acting. Never send secrets. If the tool fails, continue and say so. In the final report or PR description, add one line on what Claude flagged and what you changed (PR text in Korean).
+In cloud agents, `files` are read on the Mac mini (only under ~/Developer and ~/tools), so paste the diff or excerpt into `question` instead of passing paths.
