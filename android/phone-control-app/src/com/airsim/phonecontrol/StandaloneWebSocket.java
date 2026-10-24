@@ -17,6 +17,8 @@ import java.security.SecureRandom;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
@@ -28,6 +30,11 @@ final class StandaloneWebSocket implements Closeable {
 
     private static final String GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     private static final int MAX_FRAME = 64 * 1024;
+    private static final ExecutorService CLOSER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "airsim-websocket-close");
+        thread.setDaemon(true);
+        return thread;
+    });
     private final SSLSocket socket;
     private final BufferedInputStream input;
     private final OutputStream output;
@@ -177,6 +184,11 @@ final class StandaloneWebSocket implements Closeable {
         byte[] value = new byte[length];
         new DataInputStream(input).readFully(value);
         return value;
+    }
+
+    /** TLS close may write close_notify, so lifecycle callbacks must dispatch it off the main thread. */
+    void closeAsync() {
+        CLOSER.execute(this::close);
     }
 
     @Override public void close() {

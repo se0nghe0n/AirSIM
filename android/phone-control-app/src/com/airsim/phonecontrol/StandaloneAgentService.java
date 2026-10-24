@@ -85,7 +85,7 @@ public final class StandaloneAgentService extends Service {
                     value == null ? "" : value.optString("device_id"),
                     value == null ? "" : value.optString("device_secret"))) {
                 commandChannelConnected = false;
-                if (commandSocket != null) commandSocket.close();
+                if (commandSocket != null) commandSocket.closeAsync();
                 commandLock.notifyAll();
             }
             return new CommandRegistration(enabled ? value : null, commandRegistration.generation());
@@ -333,7 +333,7 @@ public final class StandaloneAgentService extends Service {
         preferences.unregisterOnSharedPreferenceChangeListener(registrationListener);
         synchronized (commandLock) {
             StandaloneWebSocket socket = commandSocket;
-            if (socket != null) socket.close();
+            if (socket != null) socket.closeAsync();
             commandLock.notifyAll();
         }
         worker.shutdownNow();

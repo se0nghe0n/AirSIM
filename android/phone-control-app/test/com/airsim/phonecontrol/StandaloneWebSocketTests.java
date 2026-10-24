@@ -58,7 +58,50 @@ public final class StandaloneWebSocketTests {
         check(Arrays.equals(readFrame(wire, 2), voice), "pong must not corrupt the media payload");
         check(Arrays.equals(readFrame(wire, 10), new byte[] {7}), "pong follows a complete media frame");
         check(wire.available() == 0 && writes.get() == 2, "one output write per WebSocket frame");
+        CountDownLatch closeStarted = new CountDownLatch(1);
+        CountDownLatch releaseClose = new CountDownLatch(1);
+        CountDownLatch closeFinished = new CountDownLatch(1);
+        AtomicReference<Thread> closeThread = new AtomicReference<>();
+        SSLSocket transport = new CloseTrackingSocket(() -> {
+            closeThread.set(Thread.currentThread());
+            closeStarted.countDown();
+            try { releaseClose.await(2, TimeUnit.SECONDS); }
+            catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            finally { closeFinished.countDown(); }
+        });
+        StandaloneWebSocket closing = constructor.newInstance(transport,
+                new BufferedInputStream(new ByteArrayInputStream(new byte[0])), new ByteArrayOutputStream());
+        closing.closeAsync();
+        check(closeStarted.await(2, TimeUnit.SECONDS), "TLS close starts");
+        check(closeThread.get() != Thread.currentThread(), "TLS close must not run on the lifecycle thread");
+        check(closeFinished.getCount() == 1, "caller returns while TLS close is blocked");
+        releaseClose.countDown();
+        check(closeFinished.await(2, TimeUnit.SECONDS), "TLS close finishes");
         System.out.println("StandaloneWebSocketTests passed (concurrent media/pong, no network)");
+    }
+
+    private static final class CloseTrackingSocket extends SSLSocket {
+        private final Runnable onClose;
+        CloseTrackingSocket(Runnable onClose) { this.onClose = onClose; }
+        @Override public void close() { onClose.run(); }
+        @Override public String[] getSupportedCipherSuites() { return new String[0]; }
+        @Override public String[] getEnabledCipherSuites() { return new String[0]; }
+        @Override public void setEnabledCipherSuites(String[] suites) {}
+        @Override public String[] getSupportedProtocols() { return new String[0]; }
+        @Override public String[] getEnabledProtocols() { return new String[0]; }
+        @Override public void setEnabledProtocols(String[] protocols) {}
+        @Override public javax.net.ssl.SSLSession getSession() { return null; }
+        @Override public void addHandshakeCompletedListener(javax.net.ssl.HandshakeCompletedListener listener) {}
+        @Override public void removeHandshakeCompletedListener(javax.net.ssl.HandshakeCompletedListener listener) {}
+        @Override public void startHandshake() {}
+        @Override public void setUseClientMode(boolean mode) {}
+        @Override public boolean getUseClientMode() { return true; }
+        @Override public void setNeedClientAuth(boolean need) {}
+        @Override public boolean getNeedClientAuth() { return false; }
+        @Override public void setWantClientAuth(boolean want) {}
+        @Override public boolean getWantClientAuth() { return false; }
+        @Override public void setEnableSessionCreation(boolean enabled) {}
+        @Override public boolean getEnableSessionCreation() { return true; }
     }
 
     private static byte[] readFrame(DataInputStream input, int opcode) throws Exception {
