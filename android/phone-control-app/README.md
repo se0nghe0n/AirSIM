@@ -1,4 +1,4 @@
-# AirSIM Samsung Android Control App
+# AirSIM Android Control App
 
 This directory contains the shared Android implementation and legacy AVF compatibility Manifest. New installations should use the root [Android Standalone APK](../../android-standalone/README.md), which includes the Agent in the same APK. Use this AVF build entry point only for legacy deployments.
 
@@ -26,7 +26,7 @@ Reading available SIMs needs the existing phone-state permission; number-display
 
 ## Requirements
 
-- A Samsung Android test phone; target SDK 35.
+- A compatible Android phone; the current Manifest requires Android 10 / API 29 or later and targets API 35. This fork is verified on Zinwa Q25 and Pixel 8 Pro; OEM call-audio support and other device/OS combinations require validation. See [compatibility scope](../../README.md#android-compatibility-and-verification).
 - AirSIM selected as the default phone app.
 - “Send SMS” permission granted and a default SMS SIM set on dual-SIM devices. Some Android versions grant this with the phone role; others require separate authorization.
 - Official Shizuku manager running, with AirSIM authorized.

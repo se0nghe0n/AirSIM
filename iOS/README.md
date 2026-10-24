@@ -1,6 +1,6 @@
 # AirSIM iOS and watchOS
 
-This directory contains the iPhone app, Apple Watch app, Live Activity, and shared models for a Samsung Android phone endpoint. Clients can connect directly over VoWLAN, or use a separately deployed Cloudflare Relay for remote calls and SMS.
+This directory contains the iPhone app, Apple Watch app, Live Activity, and shared models for a compatible Android phone endpoint. Clients can connect directly over VoWLAN, or use a separately deployed Cloudflare Relay for remote calls and SMS.
 
 The documented app build is `0.9.7 (81)`, supplied as an unsigned IPA with [Apps v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). The upstream maintainer separately uploads production builds through Xcode to TestFlight; upload, processing, and review must be checked separately. The companion AVF Agent is [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6). The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; changing the Bundle ID requires your own Relay and APNs credentials.
 
@@ -21,7 +21,7 @@ Main targets:
 
 ## Client capabilities
 
-- One-time encrypted pairing with a Samsung device
+- One-time encrypted pairing with an Android device; see the [verified hardware and compatibility scope](../README.md#android-compatibility-and-verification)
 - VoWLAN discovery, HMAC authentication, and health checks
 - CallKit dialing, incoming calls, answer, hang-up, mute, and DTMF
 - PushKit, notification APNs, and ActivityKit
