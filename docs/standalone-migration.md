@@ -27,6 +27,6 @@ Q25 and Pixel native carrier audio, background operation, repeated calls and Shi
 
 ## Apple transport cleanup
 
-iPhone local control uses authenticated Wi-Fi VoWLAN only. An unpaired/offline API has no URL and fails before starting a network request. The USB/QDC507 route and interface discovery have been removed. Live Activity buttons open the existing typed app link; the app rejects a mismatched call ID before calling answer, reject or hang-up. Old Live Activity transport strings decode as unavailable, preserving the rest of the payload. Existing pairing records, SMS history and recordings are unchanged.
+iPhone local control uses authenticated Wi-Fi VoWLAN only. An unpaired/offline API has no URL and fails before starting a network request. The USB/QDC507 route and interface discovery have been removed. Live Activity buttons use background `LiveActivityIntent` actions in the app process without opening the app. They dispatch to the current CallKit owner or authenticated VoWLAN call control and reject mismatched call IDs before answering, rejecting or hanging up. Typed app links remain compatible with older activities. Old Live Activity transport strings decode as unavailable, preserving the rest of the payload. Existing pairing records, SMS history and recordings are unchanged.
 
 Unused API wrappers and no-op PCM helpers are removed. WebRTC remains the only network-audio carrier; internal carrier samples and recording buffers remain. Legacy transport values still fail validation, and the older-Agent SMS polling fallback remains available.

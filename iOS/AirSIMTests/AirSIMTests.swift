@@ -2,6 +2,7 @@ import CryptoKit
 import CoreBluetooth
 import AVFoundation
 import Testing
+import AppIntents
 import Foundation
 @testable import AirSIM
 
@@ -1253,6 +1254,88 @@ struct RecentCallTimeFormatterTests {
             for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
             calendar: calendar, locale: Locale(identifier: "en_GB"))
         #expect(text == "14:30")
+    }
+}
+
+
+@Suite(.serialized)
+struct LiveActivityCallActionTests {
+    @Test @MainActor
+    func `Live Activity intents dispatch all actions without a URL handoff`() async throws {
+        let dispatcher = LiveActivityCallActionDispatcher.shared
+        let previous = dispatcher.handler
+        defer { dispatcher.handler = previous }
+        var actions: [AirSIMLiveActivityAction] = []
+        var targets: [String] = []
+        dispatcher.handler = { action, callID in
+            actions.append(action)
+            targets.append(callID)
+        }
+        _ = try await AnswerAirSIMCallIntent(callID: "current-call").perform()
+        _ = try await RejectAirSIMCallIntent(callID: "current-call").perform()
+        _ = try await HangUpAirSIMCallIntent(callID: "current-call").perform()
+        #expect(actions == [.answer, .reject, .hangup])
+        #expect(targets == ["current-call", "current-call", "current-call"])
+    }
+
+    @Test @MainActor
+    func `Empty and unavailable intent targets fail without sending a command`() async {
+        let dispatcher = LiveActivityCallActionDispatcher()
+        var sent = false
+        dispatcher.handler = { _, _ in sent = true }
+        await #expect(throws: LiveActivityCallError.self) {
+            try await dispatcher.perform(.answer, callID: "")
+        }
+        #expect(!sent)
+        dispatcher.handler = nil
+        await #expect(throws: LiveActivityCallError.self) {
+            try await dispatcher.perform(.hangup, callID: "current")
+        }
+    }
+
+    @Test @MainActor
+    func `Intent backend failures remain failures`() async {
+        let dispatcher = LiveActivityCallActionDispatcher()
+        dispatcher.handler = { _, _ in throw URLError(.notConnectedToInternet) }
+        await #expect(throws: LiveActivityCallError.self) {
+            try await dispatcher.perform(.reject, callID: "current")
+        }
+    }
+
+    @Test func `Live Activity cannot control a replacement or ended call`() {
+        for action in [AirSIMLiveActivityAction.answer, .reject, .hangup] {
+            for target: String? in [nil, "replacement"] {
+                #expect(throws: LiveActivityCallError.self) {
+                    try LiveActivityCallActionPolicy.shouldPerform(action, callID: "old",
+                        currentCallID: target, state: "incoming", direction: "incoming")
+                }
+            }
+            #expect(throws: LiveActivityCallError.self) {
+                try LiveActivityCallActionPolicy.shouldPerform(action, callID: "old",
+                    currentCallID: "old", state: "ended", direction: "incoming")
+            }
+        }
+    }
+
+    @Test func `Incoming buttons cannot answer outgoing calls or reject answered calls`() throws {
+        #expect(try LiveActivityCallActionPolicy.shouldPerform(.answer, callID: "current",
+            currentCallID: "current", state: "incoming", direction: "incoming"))
+        #expect(try LiveActivityCallActionPolicy.shouldPerform(.reject, callID: "current",
+            currentCallID: "current", state: "waiting", direction: "incoming"))
+        #expect(throws: LiveActivityCallError.self) {
+            try LiveActivityCallActionPolicy.shouldPerform(.answer, callID: "current",
+                currentCallID: "current", state: "dialing", direction: "outgoing")
+        }
+        #expect(throws: LiveActivityCallError.self) {
+            try LiveActivityCallActionPolicy.shouldPerform(.reject, callID: "current",
+                currentCallID: "current", state: "active", direction: "incoming")
+        }
+        for state in ["connecting", "active", "held"] {
+            #expect(try !LiveActivityCallActionPolicy.shouldPerform(.answer, callID: "current",
+                currentCallID: "current", state: state, direction: "incoming"))
+        }
+        #expect(try LiveActivityCallActionPolicy.shouldPerform(.hangup, callID: "current",
+            currentCallID: "current", state: "active", direction: "outgoing"))
     }
 }
 

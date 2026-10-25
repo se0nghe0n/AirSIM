@@ -15,6 +15,17 @@ struct AirSIMIPadApp: App {
     }
     private var model: AppModel { AppModelHolder.shared }
 
+    init() {
+        // Installing the closure is cheap; only a user action initializes the lazy model.
+        LiveActivityCallActionDispatcher.shared.handler = { action, callID in
+            if CallKitController.shared.managesCurrentCall {
+                try await CallKitController.shared.performLiveActivityAction(action, callID: callID)
+            } else {
+                try await AppModelHolder.shared.performLiveActivityAction(action, callID: callID)
+            }
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

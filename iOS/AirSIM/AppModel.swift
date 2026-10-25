@@ -1389,6 +1389,86 @@ final class AppModel {
         }
     }
 
+    /// Live Activity actions stay in the app process without opening its UI.
+    func performLiveActivityAction(_ action: AirSIMLiveActivityAction, callID: String) async throws {
+        guard !callID.isEmpty, !callLifecycleStore.suppressesPresentation(callID: callID) else {
+            throw LiveActivityCallError.staleCall
+        }
+        if callKit.managesCurrentCall {
+            // A background intent can initialize this model after PushKit reported the call.
+            if let push = callKit.currentIncomingPush, push.callID == callID,
+               callLifecycleSnapshot.callID == nil {
+                callKitDidReceiveIncoming(push)
+            }
+            try await callKit.performLiveActivityAction(action, callID: callID)
+            return
+        }
+
+        let cloud = IPhoneCloudCallSession.shared
+        if let call = cloud.call {
+            guard try LiveActivityCallActionPolicy.shouldPerform(action, callID: callID,
+                    currentCallID: call.callID, state: cloud.answered ? "active" : "incoming",
+                    direction: call.isOutgoing ? "outgoing" : "incoming") else { return }
+            switch action {
+            case .answer: throw LiveActivityCallError.unavailable
+            case .reject, .hangup:
+                applyCurrentCallIntent(.ending, source: .app)
+                await cloud.end()
+                if callLifecycleSnapshot.callID == callID { callKitCallDidEnd() }
+            }
+            return
+        }
+
+        // Local mode has no CallKit transaction. Resolve only a paired, authenticated
+        // route and freeze the backend call ID before any command is sent.
+        guard !callLifecycleSnapshot.state.representsCall || callLifecycleSnapshot.callID == callID else {
+            throw LiveActivityCallError.staleCall
+        }
+        let service: AirSIMAPI
+        if let current = localCallControlAPI { service = current }
+        else if let (discovered, _) = await readyVoWLANRoute() { service = discovered }
+        else { throw LiveActivityCallError.unavailable }
+        guard let observed = try await service.callStatus().active else { throw LiveActivityCallError.staleCall }
+        guard try LiveActivityCallActionPolicy.shouldPerform(action, callID: callID,
+                currentCallID: observed.id, state: observed.state, direction: observed.direction) else { return }
+        guard !callLifecycleStore.suppressesPresentation(callID: callID),
+              !callLifecycleSnapshot.state.representsCall || callLifecycleSnapshot.callID == callID,
+              callLifecycleSnapshot.state != .ending else { throw LiveActivityCallError.staleCall }
+        guard applyAgentCallRecord(observed) || callLifecycleSnapshot.callID == callID else {
+            throw LiveActivityCallError.staleCall
+        }
+        activeCall = observed
+        observedCallLocalAPI = (callID: callID, service: service)
+        beginCallTransitionProtection()
+        audio.stopCallTone()
+        switch action {
+        case .answer:
+            guard case let .vowlan(endpoint, credential) = service.route else {
+                throw LiveActivityCallError.unavailable
+            }
+            try audio.prepareForCallKit()
+            backgroundStandby.suspendForCall()
+            applyCurrentCallIntent(.connecting, source: .app)
+            do { try await service.answerCall(callID: callID) }
+            catch {
+                backgroundStandby.resumeAfterCall()
+                throw error
+            }
+            guard callLifecycleSnapshot.callID == callID, callLifecycleSnapshot.state != .ending else { return }
+            lockLocalTransport(.vowlan, api: service, webRTCRoute: .vowlan(endpoint: endpoint, credential: credential))
+            applyCurrentCallIntent(.active, source: .app)
+            await startCallAudioIfReady()
+        case .reject, .hangup:
+            // Keep the call retryable if the authenticated command fails.
+            if action == .reject { _ = try await service.rejectCall(callID: callID) }
+            else { try await service.hangupCall(callID: callID) }
+            guard callLifecycleSnapshot.callID == callID else { return }
+            applyCurrentCallIntent(.ending, source: .app)
+            audio.deactivate()
+            callKitCallDidEnd()
+        }
+    }
+
     func answer() async {
         beginCallTransitionProtection()
         audio.stopCallTone()
@@ -2352,6 +2432,7 @@ extension AppModel: CallKitActionHandling {
                     IPhoneCloudCallSession.shared.endUnadoptedOutgoing(outgoing)
                     return
                 }
+                callKit.bindOutgoingBackendCall(outgoing.callID)
                 try await IPhoneCloudCallSession.shared.answer(outgoing)
                 guard outgoingAttemptID == attempt, !Task.isCancelled,
                       !callLifecycleStore.suppressesPresentation(callID: outgoing.callID) else {

@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -339,9 +340,9 @@ struct AirSIMLiveActivityWidget: Widget {
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 HStack(spacing: IslandActionLayout.buttonSpacing) {
-                    callActionLink(.reject, callID: state.callID, icon: "phone.down.fill",
+                    callActionButton(RejectAirSIMCallIntent(callID: state.callID), icon: "phone.down.fill",
                                    title: "Decline Call", prominent: false, tint: Color.white.opacity(0.17))
-                    callActionLink(.answer, callID: state.callID, icon: "phone.fill",
+                    callActionButton(AnswerAirSIMCallIntent(callID: state.callID), icon: "phone.fill",
                                    title: "Answer Call", prominent: true, tint: .green)
                 }
                 .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
@@ -354,7 +355,7 @@ struct AirSIMLiveActivityWidget: Widget {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                callActionLink(.hangup, callID: state.callID, icon: "phone.down.fill",
+                callActionButton(HangUpAirSIMCallIntent(callID: state.callID), icon: "phone.down.fill",
                                title: "End Call", prominent: true, tint: .red)
                     .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
             }
@@ -363,18 +364,15 @@ struct AirSIMLiveActivityWidget: Widget {
         }
     }
 
-    @ViewBuilder
-    private func callActionLink(_ action: AirSIMLiveActivityAction, callID: String,
+    private func callActionButton<Intent: AppIntent>(_ intent: Intent,
                                 icon: String, title: String, prominent: Bool, tint: Color) -> some View {
-        if let url = AirSIMLiveActivityActionURL.make(action: action, callID: callID) {
-            Link(destination: url) {
-                Image(systemName: icon)
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: IslandActionLayout.buttonSide, height: IslandActionLayout.buttonSide)
-            }
-            .accessibilityLabel(title)
-            .modifier(LiveActivityGlassButtonStyle(prominent: prominent, tint: tint))
+        Button(intent: intent) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .frame(width: IslandActionLayout.buttonSide, height: IslandActionLayout.buttonSide)
         }
+        .accessibilityLabel(title)
+        .modifier(LiveActivityGlassButtonStyle(prominent: prominent, tint: tint))
     }
 
     @ViewBuilder

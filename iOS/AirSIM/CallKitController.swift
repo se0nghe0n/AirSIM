@@ -264,6 +264,23 @@ final class CallKitController: NSObject {
         }
     }
 
+    /// Cloud calls do not pass through the local status poll that normally binds this ID.
+    func bindOutgoingBackendCall(_ callID: String) {
+        guard !callID.isEmpty, currentDirection == "outgoing", currentUUID != nil,
+              currentBackendID == nil || currentBackendID == callID else { return }
+        currentBackendID = callID
+    }
+
+    func performLiveActivityAction(_ action: AirSIMLiveActivityAction, callID: String) async throws {
+        guard managesCurrentCall else { throw LiveActivityCallError.unavailable }
+        guard try LiveActivityCallActionPolicy.shouldPerform(action, callID: callID,
+                currentCallID: currentBackendID, state: currentState, direction: currentDirection) else { return }
+        switch action {
+        case .answer: try await answerCurrentCall()
+        case .reject, .hangup: try await endCurrentCall()
+        }
+    }
+
     func answerCurrentCall(presentInApp: Bool = false) async throws {
         guard let uuid = currentUUID, systemCallReported else {
             throw CallKitBridgeError.noSystemCall
@@ -522,6 +539,10 @@ final class CallKitController: NSObject {
     }
 
     private func performAnswer(_ action: CXAnswerCallAction) async {
+        guard currentUUID == action.callUUID else {
+            action.fail()
+            return
+        }
         do {
             guard let handler else { throw CallKitBridgeError.handlerUnavailable }
             let origin: CallAnswerOrigin = appAnswerRequestUUID == action.callUUID ? .app : .system
