@@ -8,6 +8,8 @@ JAVAC="$JAVA_HOME/bin/javac"
 JAVA="$JAVA_HOME/bin/java"
 ANDROID_JAR="${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}/platforms/android-35/android.jar"
 
+python3 "$ROOT/test/test_install_device.py"
+
 assert_contains() {
   file=$1
   expected=$2

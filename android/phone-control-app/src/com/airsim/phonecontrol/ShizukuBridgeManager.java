@@ -112,7 +112,9 @@ final class ShizukuBridgeManager {
                 .daemon(false)
                 .processNameSuffix("media_shell")
                 .debuggable(true)
-                .tag("airsim-media-v2")
+                // Persistent upgrade identity, not the current media protocol name.
+                // Shizuku replaces an older version only under the same package/tag.
+                .tag("airsim-pcm-v1")
                 // Bump when the embedded bridge or its lifecycle changes so an
                 // APK update cannot keep Vivo/Samsung running an old daemon.
                 .version(9);

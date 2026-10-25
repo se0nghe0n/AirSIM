@@ -97,6 +97,12 @@ UUID rather than a transport label; existing protected local files are preserved
 
 The historical `android/phone-audio-bridge` source, tests and scripts are removed. Its former implementation remains in Git history; [carrier-route validation](carrier-route-validation.md) records the unperformed device acceptance. Package-scoped old-daemon eviction still recognizes the historical class/port so an upgrade can stop a stale bridge without killing unrelated processes. Removal of the reference implementation does not establish physical call quality.
 
+The Shizuku UserService retains the legacy `airsim-pcm-v1` tag as its persistent
+upgrade identity. Shizuku matches services by package and tag, so version 9 replaces
+the old version-8 daemon before binding the non-daemon media service. Renaming the
+tag would leave that old daemon able to restart a removed audio-bridge child; the
+legacy name does not enable PCM transport.
+
 Old policy values are accepted only for safe migration/rejection, not fallback. Relay
 requires bearer headers and keeps deployed Durable Object bindings/migration history.
 Existing pairings, identities, ordinary registration, SMS and recordings are not reset.
