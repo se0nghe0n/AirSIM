@@ -1,6 +1,9 @@
 # AirSIM Android Standalone
 
-AirSIM Android Standalone is designed for compatible Android phones across device models. This fork is verified on Zinwa Q25 and Pixel 8 Pro; other hardware and feature/OS combinations require validation. See [Android compatibility and verification](../README.md#android-compatibility-and-verification) for requirements and scope.
+> Standalone is the only Android runtime. See [data preservation](../docs/standalone-migration.md) and the [physical WebRTC acceptance gates](../docs/webrtc-only-migration.md).
+
+
+AirSIM Android Standalone is designed for compatible Android phones across device models. The preceding architecture was verified on Zinwa Q25 and Pixel 8 Pro; the new privileged WebRTC architecture still requires physical acceptance on both. See [Android compatibility and verification](../README.md#android-compatibility-and-verification) for requirements and scope.
 
 AirSIM Android Standalone is the recommended Android deployment. It moves the Agent previously hosted in Android AVF Linux into an Android foreground service, providing a single APK. After installation, Linux Terminal, Debian, the AVF private network, and `airsim-installerd` are no longer required, and Agent/installer ports `8575` and `8576` are not used.
 
@@ -8,19 +11,18 @@ AirSIM Android Standalone is the recommended Android deployment. It moves the Ag
 
 The following reports describe upstream release testing, separate from this fork’s verified hardware. This hotfix addresses missing Java I/O and array-conversion methods on older systems; it does not establish full Android 10–13/OEM audio compatibility. Redmi Android 12 received an in-place update preserving data, and the user confirmed VoBLE pairing and reported no call-UI recurrence with steadier cloud-call audio in that test round. The vivo Android 11 report was diagnosed but not retested; Android 10, 13, and realme have not been device-tested. See the [release notes](../docs/releases/0.9.7.1-android10-13.md) for scope, signing, and validation boundaries.
 
-Standalone reuses Telecom, SMS, VoWLAN, pairing, and Shizuku management from [`android/phone-control-app`](../android/phone-control-app/README.md), and the call PCM bridge from [`android/phone-audio-bridge`](../android/phone-audio-bridge/README.md). This fork’s current Manifest uses package `com.airsim.phonecontrol.pixel8pro` and label “AirSIM Pixel 8 Pro”; these are build identity and branding, not a runtime model restriction. The distinct package can coexist with the legacy AVF app. Only one app can hold the default phone role and Shizuku PCM session at a time.
+Standalone uses the shared application in `android/phone-control-app`. The canonical manifest retains package `com.airsim.phonecontrol.pixel8pro` and label “AirSIM Pixel 8 Pro”; these are build identity and branding, not a device-model restriction. Keep the existing signing certificate and app data on upgrades. AVF Agent, installer and recovery paths have been removed.
 
 ## Built-in capabilities
 
 - Relay device registration, 30-second heartbeats, WebSocket cloud commands, and HTTP fallback fetching;
 - Android Telecom dialing, answer, reject, hang-up, DTMF, and system SMS sending;
-- Incoming-call push, call lifecycle, and single-stream cloud PCM media orchestration;
-- Cloud and VoWLAN call audio use native WebRTC. NetEq holds at most 50 packets and fast-accelerates excess delay. The telephony loopback drops PCM older than 80 ms and does not add a second jitter buffer. See [WebRTC calls](../docs/webrtc.md);
-- Local VoWLAN control and PCM links;
-- Local VoBLE control and encrypted G.711 μ-law bidirectional audio;
+- Incoming-call push, call lifecycle, and native WebRTC media orchestration;
+- Cloud and VoWLAN call audio use native WebRTC. NetEq holds at most 50 packets and fast-accelerates excess delay. Carrier samples stay in process and do not form a network PCM transport. See [WebRTC calls](../docs/webrtc.md);
+- Local authenticated VoWLAN control and native WebRTC audio;
 - An in-process compatibility layer for the original Agent `/api/health`, `/api/android/status`, call, and audio-configuration APIs;
 - Xiaomi HyperOS default phone-role guidance, with authorized Shizuku configuration when the system role-selection UI is unavailable;
-- Non-Samsung devices select call uplink/downlink through Android `TYPE_TELEPHONY` audio devices; Samsung devices retain their voice TX route.
+- Carrier routing must be verified through `TYPE_TELEPHONY`; a vendor voice TX tag alone is not sufficient. Hidden OEM routing remains a physical validation gate.
 - A separate lock-screen call UI and answer/reject notification actions when acting as default phone app. During calls, the notification reopens the UI for hang-up. Android retains silent-forwarding behavior; showing the UI does not automatically switch audio back to the local earpiece.
 
 VoWLAN `/api/calls/answer`, `/api/calls/reject`, and `/api/calls/hangup` accept optional JSON `call_id`, taken from the current call's `id` in `/api/calls/status`. With an ID, only that call may be affected. Expired or mismatched IDs are rejected without selecting another call. Older clients without an ID retain the current-call compatibility path.
@@ -29,12 +31,12 @@ VoWLAN `/api/calls/answer`, `/api/calls/reject`, and `/api/calls/hangup` accept 
 
 ```text
 iPhone / Apple Watch
-        │  VoWLAN, VoBLE, or Cloudflare Relay
+        │  VoWLAN or Cloudflare Relay
         ▼
 AirSIM Android Standalone APK
         ├─ Built-in Agent: identity, heartbeats, commands, and media orchestration
         ├─ Telecom / SMS: cellular calls and text messages
-        └─ Shizuku UserService: call PCM bridge
+        └─ Shizuku UserService: native WebRTC and carrier audio
 ```
 
 Shizuku remains the permission bridge for capturing and injecting system call audio. Standalone cannot bypass Android/OEM security boundaries or replace system emergency calling.
@@ -90,34 +92,15 @@ VoWLAN and Cloud mode retrieve the same latest 100 Android records. iPhone retai
 
 ### Default calling SIM (dual/multi-SIM)
 
-Under Android AirSIM “Settings → Default Calling SIM,” select “Follow System Default” or an enabled SIM/eSIM. Slots and carriers come from the system; a number is shown only when permission and carrier data are available. The local preference survives restart and in-place upgrades. BLE, VoWLAN, Relay, and Android local dialing all use it, without network access for SIM selection.
+Under Android AirSIM “Settings → Default Calling SIM,” select “Follow System Default” or an enabled SIM/eSIM. Slots and carriers come from the system; a number is shown only when permission and carrier data are available. The local preference survives restart and in-place upgrades. VoWLAN, Relay, and Android local dialing all use it, without network access for SIM selection.
 
 AirSIM selects the SIM through Telecom `EXTRA_PHONE_ACCOUNT_HANDLE`, without changing system call or SMS defaults. It rechecks the account on each dial. If the selected SIM is disabled/removed or phone-state permission is revoked, it returns an explicit error without choosing another SIM. System safety routing still determines emergency calls and may override this choice.
-
-### Configure VoBLE Bluetooth mode
-
-Authenticated `device_info`, VoWLAN health checks, and Standalone Relay heartbeats read the device name and number live. The number follows the current calling SIM; changing/disabling a SIM or losing number access never substitutes the initial pairing's old number. Newer iPhone settings can delete one device's local pairing record. Online Bluetooth deletion attempts to revoke both ends' credentials; after offline deletion, clear remaining Android credentials under “VoBLE Authentication” before re-pairing if needed.
-
-VoBLE is an independent settings mode. It does not require prior VoWLAN pairing or change existing VoWLAN/Relay configuration:
-
-1. Keep AirSIM Standalone as Android's default phone app, grant nearby-device/Bluetooth and notification permissions, and confirm the Shizuku PCM bridge is running.
-2. Enable VoBLE on Android's status screen. Select “Direct Bluetooth” in iPhone AirSIM settings, scan, and choose the Android device.
-3. Compare the short code on both devices and confirm pairing. Long-term keys remain only in Android Keystore and iOS Keychain; do not screenshot, record, or log them.
-4. Make one outgoing and one incoming call. Check answer, reject, hang-up, mute, speaker, and DTMF, then verify bidirectional audio.
-
-Bluetooth mode transports control and G.711 μ-law 8 kHz mono audio over BLE GATT, with AES-256-GCM authenticated frames. It uses no Relay, PushKit, or cloud-registration parameters and provides no Bluetooth PAN internet sharing; configure iPhone internet separately. The Android PCM bridge, default phone role, and system Telecom remain required. A brief disconnection may resume only the same `call_id`/generation within three seconds; a longer gap ends the media session to prevent old packets entering a later call.
-
-When dialing over VoBLE, the provisional iPhone `call_id` and the later authoritative Android Telecom `call_id` share one generation. Android replaces the ID without advancing generation, preventing media start, DTMF, and hang-up from being mistaken for a previous call's `call_mismatch`.
-
-“VoBLE Authentication” in settings shows Bluetooth permission, credential, and session state. Normal unpairing begins on iPhone through the authenticated control channel and deletes both ends' credentials. If reinstalling one end causes `already paired`, `peer is not paired`, or reconnection authentication failures, clear Android's old credentials here, clear iPhone's local credentials, and compare the new six-digit security code. This does not change VoWLAN or Relay configuration.
-
-iOS does not guarantee background BLE incoming-call wake-up after the user force-quits the app; reopening AirSIM resumes scanning. Apple Watch mirrors incoming calls/control through iPhone CallKit/WatchConnectivity rather than connecting to Android BLE directly. Whether audio can route to Watch depends on iPhone/watchOS system routing.
 
 Lock-screen incoming calls use a dedicated high-priority “AirSIM Incoming Calls” notification channel. On Android 14+, if system settings deny full-screen call permission, only an actionable banner may appear. The system/user controls that permission; the app cannot bypass it. Test locked-screen answer, reject, hang-up, and iPhone audio routing on each target device.
 
 ### Crash reports
 
-Standalone and AVF Bridge save the most recent unhandled Java exception stack to app-private storage. Reports include app version, Android SDK, model, thread, and stack, with phone numbers, tokens, passwords, and pairing codes redacted before saving/sharing. Only one report is retained, limited to 48 KiB.
+Standalone saves the most recent unhandled Java exception stack to app-private storage. Reports include app version, Android SDK, model, thread, and stack, with phone numbers, tokens, passwords, and pairing codes redacted before saving/sharing. Only one report is retained, limited to 48 KiB.
 
 On the next launch, “Previous crash detected” allows sending, opening the Debug sharing entry point, or deferring. “Send Crash Report” opens Android's share sheet with up to 12 KiB of recent redacted Debug logs. Nothing uploads automatically. The Debug screen can delete the report permanently.
 
@@ -130,12 +113,11 @@ adb install -r android-standalone/build/android/AirSIM-Android-Standalone-debug.
 
 Wireless debugging addresses and ports can change at each pairing; example values are not fixed device configuration.
 
-## Migrate from the AVF version
+## Preserve data during migration
 
-- Standalone has a separate package name and does not automatically read the legacy app's local data. Record your Relay, device ID, and pairing details before migration.
-- After installing and validating Standalone, make it the default phone app. Do not allow two AirSIM packages to control the same call.
-- Once Standalone works, the AVF Agent can be stopped. Deleting Debian/AVF data is a separate destructive operation, not part of APK installation.
-- To revert, make the old app the default phone app again and restore its AVF Agent. Both versions may remain installed for fallback.
+In-place Standalone upgrades keep the existing package, signing certificate, pairing credentials, mode preferences, SMS queue and delivery deduplication state. Do not uninstall or clear app data. See [the migration contract](../docs/standalone-migration.md).
+
+The removed AVF app used separate storage. This cleanup does not access or delete its files and does not silently import its credentials. Preserve its data and finish pending SMS delivery before explicitly pairing Standalone. There is no supported AVF fallback in this source tree.
 
 ## Device acceptance
 
@@ -145,36 +127,31 @@ Wireless debugging addresses and ports can change at each pairing; example value
 - Android/iPhone bidirectional audio uses the expected device and does not revert to the Xiaomi earpiece;
 - SMS send results follow Android system receipts, and the recipient confirms actual delivery;
 - Same-network VoWLAN and separate-network Relay are tested independently, with no transport change mid-call.
-- Select VoBLE, turn off Wi-Fi, and confirm outgoing/incoming calls and bidirectional audio do not access Relay. Then verify same-call recovery within three seconds and termination after timeout.
 
 Project-wide results, disconnected devices, and failures are recorded in the [VoBLE device test matrix](../docs/voble-real-device-test-matrix.md).
 
 ## Security boundaries
 
-- Call PCM is processed only in memory and on the network, never saved to disk;
+- Uncompressed samples stay in process; network audio uses encrypted WebRTC. Recording is saved only when explicitly requested on iPhone;
 - Logs must not contain complete SMS messages, phone numbers, push tokens, pairing keys, or Relay secrets;
 - The APK contains no APNs private keys, Cloudflare tokens, Android release private keys, or Apple signing identities;
 - Use is limited to noncommercial purposes allowed by the [PolyForm Noncommercial License 1.0.0](../LICENSE).
 
 ### Native WebRTC cloud audio
 
-The standalone Agent advertises `webrtc` and `legacy_pcm`. Relay selects the
-transport using both endpoints' capabilities and the owning iPhone/Watch;
-Watch and older peers retain the PCM WebSocket path. In WebRTC mode the call
-WebSocket carries authenticated SDP/ICE and lifecycle messages only. The iPhone
-offers and Android answers, using ephemeral ICE servers from the call's
-`/ice?role=agent` endpoint. Existing deployments must configure the Relay's TURN
-service before enabling normal WebRTC selection.
+The standalone Agent reports only native WebRTC, with capability revision 2 and
+fresh service readiness. Watch controls iPhone audio; unsupported
+clients fail clearly without a fallback. The authenticated WebSocket carries
+SDP/ICE and call lifecycle only. The app fetches ephemeral ICE credentials and
+passes those, never the account secret, to the privileged peer.
 
-Android uses pinned WebRTC SDK `144.7559.15`. Its microphone is disabled via the
-SDK's external audio buffer API; `WebRtcAudioTrack` is replaced with a small
-JNI-compatible external output adapter. Both directions use the rooted
-`AIRSIMPCM1`/`AIRSIMREADY` TCP bridge on loopback port 7580, at 8 kHz mono PCM16.
-The adapter runs at 10 ms; arbitrary bridge reads, including existing 20 ms
-frames, are split into bounded 10 ms units and discarded after 80 ms. Native
-Opus/NetEq owns network jitter, loss concealment and FEC, with a 50-packet cap
-and fast accelerate. The legacy PCM jitter/time-scaling pump is not used. No
-physical Android microphone or speaker is opened by the WebRTC layer.
+Android keeps pinned WebRTC SDK `144.7559.15`. Native WebRTC and the 8 kHz carrier
+audio device share the Shizuku process. Local samples remain in bounded 10 ms
+buffers; no TCP bridge or audio IPC is used. Opus/NetEq owns jitter and loss
+concealment. Current route verification requires a visible telephony sink, so
+hidden Samsung VOICE_TX routes need a separately verified capability adapter.
+Neither Q25 nor Pixel 8 Pro has yet accepted this new architecture on hardware.
+See the [draft migration gate](../docs/webrtc-only-migration.md).
 
 Builds verify the AAR SHA-256, package all four supplied ABIs, align shared
 libraries to 16 KB, and include dependency notices as APK assets. See

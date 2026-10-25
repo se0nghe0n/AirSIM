@@ -8,6 +8,8 @@ JAVAC="$JAVA_HOME/bin/javac"
 JAVA="$JAVA_HOME/bin/java"
 ANDROID_JAR="${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}/platforms/android-35/android.jar"
 
+python3 "$ROOT/test/test_install_device.py"
+
 assert_contains() {
   file=$1
   expected=$2
@@ -28,53 +30,11 @@ assert_not_contains() {
   fi
 }
 
-assert_contains "$ROOT/AndroidManifest.xml" \
-  'android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING' \
-  'boot-safe watchdog permission is missing'
-assert_contains "$ROOT/AndroidManifest.xml" \
-  'android:foregroundServiceType="remoteMessaging"' \
-  'boot-safe foreground service type is missing'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING' \
-  'watchdog still requests a boot-blocked foreground service type'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/VoWLANGatewayService.java" \
-  'ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING' \
-  'VoWLAN gateway still requests a boot-blocked foreground service type'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'setPendingIntentCreatorBackgroundActivityStartMode' \
-  'Terminal recovery does not grant creator-side background launch privileges'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'setPendingIntentBackgroundActivityStartMode' \
-  'Terminal recovery does not grant sender-side background launch privileges'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'PendingIntent.getActivity' \
-  'Terminal recovery still bypasses the supported PendingIntent launch path'
-assert_not_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'startActivity(terminal)' \
-  'Terminal recovery still uses a background activity start that Android blocks'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'String payload = new AgentClient(this).nextCommand();' \
-  'watchdog does not refresh the AVF Agent endpoint for each reconnect'
-assert_not_contains "$ROOT/src/com/airsim/phonecontrol/AgentWatchdogService.java" \
-  'AgentClient client = new AgentClient(this);' \
-  'watchdog still caches a pre-boot AVF endpoint for its entire lifetime'
-assert_contains "$ROOT/AndroidManifest.xml" \
-  'android:name=".BridgeApplication"' \
-  'persistent diagnostics are not initialized at process start'
-assert_contains "$ROOT/AndroidManifest.xml" 'android.permission.RECEIVE_SMS' \
-  'incoming SMS permission is missing'
-assert_contains "$ROOT/AndroidManifest.xml" 'android.permission.READ_SMS' \
-  'optional inbox fallback permission is missing'
-assert_contains "$ROOT/AndroidManifest.xml" 'android:name=".IncomingSMSReceiver"' \
-  'carrier SMS receiver is missing'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/StandaloneAgentGateway.java" \
-  'smsStore.localMessages().toString()' 'standalone SMS inbox is not exposed to iPhone'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentClient.java" \
-  'http_request_started' \
-  'Agent HTTP connection attempts are missing from debug diagnostics'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/AgentClient.java" \
-  'http_request_finished' \
-  'Agent HTTP response status and timing are missing from debug diagnostics'
+MANIFEST="$ROOT/../../android-standalone/AndroidManifest.xml"
+assert_contains "$MANIFEST" 'android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING' 'boot-safe foreground service permission is missing'
+assert_contains "$MANIFEST" 'com.airsim.phonecontrol.StandaloneBridgeApplication' 'Standalone application entry point is missing'
+assert_contains "$MANIFEST" 'com.airsim.phonecontrol.IncomingSMSReceiver' 'carrier SMS receiver is missing'
+
 assert_contains "$ROOT/src/com/airsim/phonecontrol/MainActivity.java" \
   'Debug logging' \
   'the Android app has no user-visible debug log controls'
@@ -106,12 +66,8 @@ mkdir -p "$OUT"
   "$ROOT"/test/android/telecom/VideoProfile.java \
   "$ROOT"/test/com/airsim/phonecontrol/AppConfig.java \
   "$ROOT"/test/com/airsim/phonecontrol/BridgeLog.java \
-	"$ROOT"/test/com/airsim/phonecontrol/RuntimeMode.java \
 	"$ROOT"/test/com/airsim/phonecontrol/StandaloneAgentGateway.java \
   "$ROOT"/src/com/airsim/phonecontrol/AgentClient.java \
-  "$ROOT"/src/com/airsim/phonecontrol/InstallerClient.java \
-  "$ROOT"/src/com/airsim/phonecontrol/ReleaseAssetSelector.java \
-  "$ROOT"/src/com/airsim/phonecontrol/AVFStartupPolicy.java \
 	"$ROOT"/src/com/airsim/phonecontrol/RuntimePermissionPolicy.java \
 	"$ROOT"/src/com/airsim/phonecontrol/SMSDeliveryIdentity.java \
 	"$ROOT"/src/com/airsim/phonecontrol/SMSRecentDeliveryIDs.java \
@@ -144,12 +100,9 @@ mkdir -p "$OUT"
   "$ROOT"/src/com/airsim/phonecontrol/RelayRetryPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CommandPollingPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CommandRegistrationPolicy.java \
-  "$ROOT"/src/com/airsim/phonecontrol/RecoveryPolicy.java \
-	"$ROOT"/src/com/airsim/phonecontrol/RecoveryLaunchPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallEventDeduplicator.java \
   "$ROOT"/src/com/airsim/phonecontrol/PairingCrypto.java \
   "$ROOT"/src/com/airsim/phonecontrol/PairingSession.java \
-	"$ROOT"/src/com/airsim/phonecontrol/AVFNetworkPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/VoWLANAuth.java \
   "$ROOT"/src/com/airsim/phonecontrol/VoWLANControlPolicy.java \
 	"$ROOT"/src/com/airsim/phonecontrol/VoWLANAcceptLoop.java \
@@ -210,15 +163,15 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/test/com/airsim/phonecontrol/StandaloneWebSocketTests.java
 "$JAVA" -cp "$OUT:$ANDROID_JAR" com.airsim.phonecontrol.StandaloneWebSocketTests
 
-assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+assert_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
   'config.audioJitterBufferMaxPackets = WebRTCPlayout.JITTER_BUFFER_MAX_PACKETS' \
   'Android WebRTC peer does not cap NetEq'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+assert_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
   'config.audioJitterBufferFastAccelerate = WebRTCPlayout.FAST_ACCELERATE' \
   'Android WebRTC peer does not enable NetEq fast accelerate'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
-  'connection.setSendBufferSize(WebRTCPcmBuffer.LOOPBACK_SOCKET_BYTES)' \
-  'WebRTC loopback does not bound its send buffer'
+assert_not_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
+  'new Socket' \
+  'Native carrier audio must remain in process'
 "$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayout.java \
@@ -244,3 +197,64 @@ assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
   "$ROOT"/src/com/airsim/phonecontrol/NativeCallHistoryRecord.java \
   "$ROOT"/test/com/airsim/phonecontrol/NativeCallHistoryTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.NativeCallHistoryTests
+
+# Run the real IPC owner/state machine with a fake native peer, never a hardware audio route.
+JSON_JAR="$ROOT/build/dependencies/json-test-20240303.jar"
+mkdir -p "$(dirname "$JSON_JAR")"
+if [ ! -f "$JSON_JAR" ]; then
+  curl -fsSL https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar -o "$JSON_JAR"
+fi
+if [ "$(shasum -a 256 "$JSON_JAR" | awk '{print $1}')" != 3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed ]; then
+  echo 'FAIL: test JSON dependency checksum mismatch' >&2; exit 1
+fi
+MEDIA_OUT="$OUT/privileged-media"
+mkdir -p "$MEDIA_OUT"
+"$JAVAC" --release 17 -cp "$JSON_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/test/media/android/content/Context.java \
+  "$ROOT"/test/media/android/os/SystemClock.java \
+  "$ROOT"/test/media/com/airsim/phonecontrol/TelephonyWebRTCPeer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaService.java \
+  "$ROOT"/test/media/com/airsim/phonecontrol/PrivilegedMediaTests.java
+"$JAVA" -cp "$MEDIA_OUT:$JSON_JAR" com.airsim.phonecontrol.PrivilegedMediaTests
+
+# Compile the real Binder service against Android, then replace only host runtime boundaries.
+"$JAVAC" --release 17 -cp "$ANDROID_JAR:$MEDIA_OUT:$OUT:$JSON_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/ShizukuBridgeUserService.java
+"$JAVAC" --release 17 -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/test/media/android/os/Binder.java \
+  "$ROOT"/test/media/android/os/Process.java \
+  "$ROOT"/test/android/util/Log.java \
+  "$ROOT"/test/media/com/airsim/phonecontrol/PrivilegedBridgeDisposalTests.java
+"$JAVA" -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" com.airsim.phonecontrol.PrivilegedBridgeDisposalTests
+
+# Readiness is a live admission signal, separate from the owner's continuing control channel.
+"$JAVAC" --release 17 -cp "$ANDROID_JAR:$MEDIA_OUT:$OUT:$JSON_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/StandaloneAgentStore.java
+"$JAVAC" --release 17 -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/test/media/com/airsim/phonecontrol/PrivilegedMediaReadinessTests.java
+"$JAVA" -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" com.airsim.phonecontrol.PrivilegedMediaReadinessTests
+
+# Real persistent stores reopen pre-upgrade records; only Android service launch is stubbed.
+PERSISTENCE_OUT="$OUT/persistence"
+mkdir -p "$PERSISTENCE_OUT"
+"$JAVAC" --release 17 -cp "$OUT:$JSON_JAR" -d "$PERSISTENCE_OUT" \
+  "$ROOT"/test/android/util/Base64.java \
+  "$ROOT"/test/persistence/com/airsim/phonecontrol/StandaloneAgentService.java \
+  "$ROOT"/src/com/airsim/phonecontrol/AppConfig.java \
+  "$ROOT"/src/com/airsim/phonecontrol/StandaloneAgentStore.java \
+  "$ROOT"/src/com/airsim/phonecontrol/StandaloneSMSStore.java \
+  "$ROOT"/src/com/airsim/phonecontrol/VoWLANPairingStore.java \
+  "$ROOT"/test/persistence/com/airsim/phonecontrol/StandalonePersistenceTests.java
+"$JAVA" -cp "$PERSISTENCE_OUT:$OUT:$JSON_JAR" com.airsim.phonecontrol.StandalonePersistenceTests
+
+# Credential preparation may overlap ringing, but never starts native/carrier media.
+PREFETCH_OUT="$OUT/cloud-prefetch"
+mkdir -p "$PREFETCH_OUT"
+"$JAVAC" --release 17 -cp "$OUT:$JSON_JAR" -d "$PREFETCH_OUT" \
+  "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/BridgeLog.java \
+  "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/ShizukuBridgeManager.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCCloudPeer.java \
+  "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/WebRTCICEPreparationTests.java
+"$JAVA" -cp "$PREFETCH_OUT:$OUT:$JSON_JAR" com.airsim.phonecontrol.WebRTCICEPreparationTests

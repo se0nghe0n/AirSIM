@@ -10,8 +10,7 @@ public final class BootReceiver extends BroadcastReceiver {
         String action = intent == null ? "" : intent.getAction();
         if (!Intent.ACTION_BOOT_COMPLETED.equals(action)
                 && !Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) return;
-        boolean configured = AppConfig.configured(context);
-        BridgeLog.info("boot_receiver action=" + action + " configured=" + configured);
-        if (configured) AgentWatchdogService.start(context);
+        BridgeLog.info("boot_receiver action=" + action);
+        StandaloneAgentService.start(context);
     }
 }

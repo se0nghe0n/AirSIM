@@ -9,14 +9,12 @@ struct LocalCallControlBody: Encodable {
 }
 
 enum LocalAgentRoute: Equatable, Sendable {
-    case moduleLocal
+    case unavailable
     case vowlan(endpoint: VoWLANEndpoint, credential: VoWLANCredential)
 
-    var baseURL: URL {
+    var baseURL: URL? {
         switch self {
-        case .moduleLocal:
-            // Legacy case retained only for decoding compatibility. AirSIM never contacts QDC507.
-            return URL(string: "http://127.0.0.1:9/")!
+        case .unavailable: return nil
         case let .vowlan(endpoint, _):
             return endpoint.controlBaseURL
         }
@@ -24,7 +22,7 @@ enum LocalAgentRoute: Equatable, Sendable {
 
     var traceDescription: String {
         switch self {
-        case .moduleLocal: return "Disabled Legacy Module Route"
+        case .unavailable: return "Local connection unavailable"
         case .vowlan: return "VoWLAN · Same Local Network"
         }
     }
@@ -35,7 +33,7 @@ enum LocalAgentRoute: Equatable, Sendable {
     }
 }
 
-/// AirSIM does not allow using the legacy module USB ECM address as a Samsung control channel.
+/// Local control is available only through authenticated VoWLAN.
 enum AirSIMRoutePolicy {
     static func permits(_ route: LocalAgentRoute) -> Bool {
         if case .vowlan = route { return true }
@@ -43,13 +41,13 @@ enum AirSIMRoutePolicy {
     }
 }
 
-/// Unified wrapper around the module Agent HTTP API; endpoint paths match the AirSIM Mac app.
+/// Authenticated local API for the Android Standalone Agent.
 struct AirSIMAPI: Sendable {
     /// Android Telecom waits up to 12 seconds for confirmation; VoWLAN must time out after the Agent confirmation window,
     /// otherwise iPhone may misclassify an in-progress non-idempotent dial as failed and trigger duplicate calls.
     static let voWLANDialTimeout: TimeInterval = 15
 
-    let baseURL: URL
+    let baseURL: URL?
     let route: LocalAgentRoute
     private let transport: WiredHTTPTransport
 
@@ -74,17 +72,11 @@ struct AirSIMAPI: Sendable {
 
     private static let decoder = makeDecoder()
 
-    init(route: LocalAgentRoute = .moduleLocal) {
+    init(route: LocalAgentRoute = .unavailable) {
         self.route = route
-        let baseURL = route.baseURL
-        precondition(Self.isAllowedLocalURL(baseURL), "Module Agent URL must be a local HTTP URL")
-        self.baseURL = baseURL
-        self.transport = WiredHTTPTransport(policy: route == .moduleLocal ? .moduleLocal : .vowlan)
-    }
-
-    init(baseURL: URL) {
-        precondition(baseURL == LocalAgentRoute.moduleLocal.baseURL, "Configure dynamic local addresses through LocalAgentRoute")
-        self.init(route: .moduleLocal)
+        self.baseURL = route.baseURL
+        if let baseURL { precondition(Self.isAllowedLocalURL(baseURL), "Agent URL must be local HTTP") }
+        self.transport = WiredHTTPTransport()
     }
 
     /// Restricts privileged control endpoints to loopback or private networks to prevent accidental requests to public hosts.
@@ -105,22 +97,7 @@ struct AirSIMAPI: Sendable {
     func waitForAgentEvent(after revision: UInt64, timeout: TimeInterval = 15) async throws -> AgentEventStatus {
         let boundedTimeout = min(30, max(1, timeout))
         var components = URLComponents(
-            url: endpoint("api/events"),
-            resolvingAgainstBaseURL: false
-        )!
-        components.queryItems = [
-            URLQueryItem(name: "after", value: String(revision)),
-            URLQueryItem(name: "timeout_ms", value: String(Int(boundedTimeout * 1_000)))
-        ]
-        var request = URLRequest(url: components.url!)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = boundedTimeout + 5
-        return try await decoded(request)
-    }
-    func waitForCallEvent(after revision: UInt64, timeout: TimeInterval = 25) async throws -> CallStatus {
-        let boundedTimeout = min(30, max(1, timeout))
-        var components = URLComponents(
-            url: endpoint("api/calls/events"),
+            url: try endpoint("api/events"),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [
@@ -143,7 +120,6 @@ struct AirSIMAPI: Sendable {
         try await post("api/sms/ack", ["ids": validIDs])
     }
     func smsStatus() async throws -> SMSStatus { try await get("api/sms/status") }
-    func simIdentity() async throws -> SIMIdentity { try await get("api/sim/identity") }
     func registerVoIPPush(_ registration: AgentPushRegistration) async throws {
         try await post("api/push/register", registration)
     }
@@ -183,16 +159,20 @@ struct AirSIMAPI: Sendable {
     }
     func sendDTMF(_ digit: String) async throws { try await post("api/calls/dtmf", ["digit": digit]) }
     func setAudioMuted(_ muted: Bool) async throws { try await post("api/calls/audio/mute", ["muted": muted]) }
-    func setAudioHostEnabled(_ enabled: Bool) async throws {
-        try await post("api/calls/audio/host/register", ["enabled": enabled])
-    }
     func warmAudioHost() async throws {
         try await post("api/calls/audio/host/warmup", EmptyBody())
     }
 
     func exchangeVoWLANWebRTC(_ signal: CloudWebRTCSignal) async throws -> CloudWebRTCSignal {
-        let data = try await raw(method: "POST", path: "api/calls/webrtc", body: signal, timeout: 20)
+        let data = try await raw(method: "POST", path: "api/calls/webrtc", body: signal, timeout: 25)
         return try Self.decode(CloudWebRTCSignal.self, from: data)
+    }
+    func voWLANWebRTCStatus(_ session: VoWLANWebRTCSession) async throws -> VoWLANWebRTCStatus {
+        let data = try await raw(method: "POST", path: "api/calls/webrtc/status", body: session, timeout: 5)
+        return try Self.decode(VoWLANWebRTCStatus.self, from: data)
+    }
+    func stopVoWLANWebRTC(_ session: VoWLANWebRTCSession) async throws {
+        try await post("api/calls/webrtc/stop", session, timeout: 5)
     }
     func audioHostConfig() async throws -> MaVoAudioHostConfig { try await get("api/calls/audio/host/config") }
 
@@ -201,15 +181,11 @@ struct AirSIMAPI: Sendable {
     }
     func refreshSMS() async throws { try await post("api/sms/refresh", EmptyBody()) }
     func clearModuleSMS() async throws { try await post("api/sms/clear-module", EmptyBody()) }
-    func setSMSAutoCleanup(_ enabled: Bool) async throws {
-        try await send("PATCH", "api/sms/settings", ["auto_cleanup_me": enabled])
-    }
-
     // MARK: Status, Network, Location & Debug
 
     func modemStatus() async throws -> ModemStatus { try await get("api/status") }
     func moduleDebug(after sequence: UInt64 = 0, limit: Int = 400) async throws -> ModuleDebugSnapshot {
-        var components = URLComponents(url: endpoint("api/debug"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: try endpoint("api/debug"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "after", value: String(sequence)),
             URLQueryItem(name: "limit", value: String(min(2_000, max(1, limit))))
@@ -223,10 +199,13 @@ struct AirSIMAPI: Sendable {
 
     // MARK: Shared HTTP Implementation
 
-    private func endpoint(_ path: String) -> URL { baseURL.appendingPathComponent(path) }
+    private func endpoint(_ path: String) throws -> URL {
+        guard let baseURL else { throw APIError.localConnectionUnavailable }
+        return baseURL.appendingPathComponent(path)
+    }
 
     private func get<Response: Decodable>(_ path: String) async throws -> Response {
-        var request = URLRequest(url: endpoint(path))
+        var request = URLRequest(url: try endpoint(path))
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 6
         return try await decoded(request)
@@ -250,7 +229,7 @@ struct AirSIMAPI: Sendable {
     }
 
     private func raw<Body: Encodable>(method: String, path: String, body: Body, timeout: TimeInterval) async throws -> Data {
-        var request = URLRequest(url: endpoint(path))
+        var request = URLRequest(url: try endpoint(path))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
@@ -275,7 +254,7 @@ struct AirSIMAPI: Sendable {
         recordVerboseTrace: Bool = true
     ) async throws -> WiredHTTPResponse {
         guard AirSIMRoutePolicy.permits(route) else {
-            throw APIError.disabledLegacyRoute
+            throw APIError.localConnectionUnavailable
         }
         var request = originalRequest
         let method = request.httpMethod?.uppercased() ?? "GET"
@@ -351,14 +330,14 @@ enum APIError: LocalizedError {
     case invalidResponse
     case http(Int, String?)
     case unreadablePayload(String)
-    case disabledLegacyRoute
+    case localConnectionUnavailable
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse: return "Module Agent returned an invalid response"
         case let .http(status, message): return message?.isEmpty == false ? message : "Request failed (HTTP \(status))"
         case let .unreadablePayload(message): return message
-        case .disabledLegacyRoute: return "AirSIM does not support the legacy module control route"
+        case .localConnectionUnavailable: return "No authenticated local connection is available"
         }
     }
 }

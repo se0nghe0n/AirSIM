@@ -33,10 +33,10 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     @MainActor
-    func ownsMedia(callID: String?) -> Bool {
+    func ownsCallPresentation(callID: String?) -> Bool {
         if pendingWatchDialID != nil { return true }
         guard let callID else { return false }
-        return watchOutgoingCall?.call.callID == callID
+        return watchOutgoingCall?.call.callID == callID || localWatchCall?.callID == callID
     }
 
     func start() {
@@ -184,6 +184,10 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                 }
                 return
             }
+            if action == "mute" {
+                await self.setMutedFromWatch(message, replyHandler: replyHandler)
+                return
+            }
             if action == "dial" {
                 await self.dialFromWatch(message, replyHandler: replyHandler)
                 return
@@ -232,6 +236,27 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     @MainActor
+    private func setMutedFromWatch(
+        _ message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void
+    ) async {
+        guard let callID = message["call_id"] as? String,
+              let uuid = (message["call_uuid"] as? String).flatMap(UUID.init(uuidString:)),
+              let muted = message["muted"] as? Bool else {
+            replyHandler(["ok": false, "error": "invalid_mute"]); return
+        }
+        let localMatches = localWatchCall?.callID == callID && localWatchCall?.uuid == uuid
+            && model?.callLifecycleSnapshot.callID == callID
+        let cloudMatches = cloudWatchIdentity?.callID == callID && cloudWatchIdentity?.uuid == uuid
+            && IPhoneCloudCallSession.shared.call?.uuid == uuid
+        let systemMatches = CallKitController.shared.matchesCurrentCall(callID: callID, uuid: uuid)
+        guard localMatches || cloudMatches || systemMatches, let model else {
+            replyHandler(["ok": false, "error": "stale_call"]); return
+        }
+        await model.callKitSetMuted(muted)
+        replyHandler(["ok": true])
+    }
+
+    @MainActor
     private func dialFromWatch(
         _ message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
@@ -253,8 +278,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         pendingWatchDialID = requestID
         defer { pendingWatchDialID = nil; cancelledWatchDialIDs.remove(requestID) }
         do {
-            if let model, let (api, pcmRoute) = await model.readyVoWLANRoute(),
-               case .vowlan = pcmRoute {
+            if let model, let (api, webRTCRoute) = await model.readyVoWLANRoute(),
+               case .vowlan = webRTCRoute {
                 guard !cancelledWatchDialIDs.contains(requestID) else {
                     replyHandler(["ok": false, "error": "Call canceled"])
                     return
@@ -382,8 +407,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         guard let callID = message["call_id"] as? String, !callID.isEmpty,
               let uuid = (message["call_uuid"] as? String).flatMap(UUID.init(uuidString:)),
               localWatchCall == nil, let model,
-              let (api, pcmRoute) = await model.readyVoWLANRoute(),
-              case .vowlan = pcmRoute else {
+              let (api, webRTCRoute) = await model.readyVoWLANRoute(),
+              case .vowlan = webRTCRoute else {
             replyHandler(["ok": false, "error": "VoWLAN is not ready",
                           "cloud_media_allowed": CloudModePreference.isEnabled()])
             return
@@ -398,13 +423,14 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             }
             localWatchCall = LocalWatchCall(requestID: nil, callID: callID, uuid: uuid, api: api)
             do {
-                try await api.answerCall(callID: current.id)
+                if CallKitController.shared.matchesCurrentCall(callID: callID, uuid: nil) {
+                    try await CallKitController.shared.answerCurrentCall()
+                } else {
+                    try await api.answerCall(callID: current.id)
+                }
             } catch {
                 localWatchCall = nil
                 throw error
-            }
-            if CallKitController.shared.matchesCurrentCall(callID: callID, uuid: nil) {
-                CallKitController.shared.reportCurrentCallEnded(reason: .answeredElsewhere)
             }
             monitorLocalAudio(callID: callID, api: api)
             replyHandler([
@@ -475,13 +501,13 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
                 if let current = try? await api.callStatus().active {
                     guard current.id == callID else { return }
                     if current.state == "active" {
-                        let outcome = try? await CallAudioRegistrationCoordinator.register(service: api)
-                        if outcome == .registered { return }
+                        await model?.startWatchLocalAudio(call: current, api: api)
+                        return
                     }
                 }
                 try? await Task.sleep(for: .milliseconds(500))
             }
-            NSLog("[AirSIM Watch] VoWLAN audio host registration timed out; call=%@", callID)
+            NSLog("[AirSIM Watch] VoWLAN call did not become active for iPhone audio; call=%@", callID)
         }
     }
 
@@ -490,10 +516,11 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         guard message["action"] as? String == "end" || message["action"] as? String == "reject",
               let callID = message["call_id"] as? String,
               let identity = cloudWatchIdentity,
-              identity.callID == callID else { return false }
+              identity.callID == callID,
+              (message["call_uuid"] as? String).flatMap(UUID.init(uuidString:)) == identity.uuid else { return false }
         cloudWatchIdentity = nil
         watchOutgoingCall = nil
-        if IPhoneCloudCallSession.shared.call?.callID == callID {
+        if IPhoneCloudCallSession.shared.call?.uuid == identity.uuid {
             await IPhoneCloudCallSession.shared.end()
         }
         if CallKitController.shared.matchesCurrentCall(callID: identity.callID, uuid: identity.uuid) {
@@ -617,9 +644,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             Task { await self.abandonCloudCall(call) }
         }
         guard CallKitController.shared.matchesCurrentCall(callID: callID, uuid: uuid) else { return true }
-        if phase == WatchCallPhase.active.rawValue {
-            CallKitController.shared.reportCurrentCallEnded(reason: .answeredElsewhere)
-        } else if phase == WatchCallPhase.ended.rawValue {
+        // The iPhone remains the audio owner even when Watch controls the call.
+        if phase == WatchCallPhase.ended.rawValue {
             CallKitController.shared.reportCurrentCallEnded(reason: .declinedElsewhere)
         }
         return true

@@ -112,6 +112,11 @@ final class StandaloneCloudMediaManager implements Closeable {
             descriptor = null;
         }
         if (descriptor != null) {
+            if ("active".equals(state)) {
+                synchronized (lock) {
+                    if (active != null && active.descriptor.same(descriptor)) active.carrierBecameActive();
+                }
+            }
             String phase = phase(state);
             if (!phase.isEmpty()) publishLifecycle(registration, relay, descriptor, phase);
             if ("ended".equals(state)) {
@@ -218,6 +223,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile WebRTCCloudPeer webRTC;
         volatile String mediaTransport;
         volatile boolean mediaStarted;
+        private boolean carrierActive;
 
         CloudSession(Descriptor descriptor) {
             this.descriptor = descriptor;
@@ -235,6 +241,9 @@ final class StandaloneCloudMediaManager implements Closeable {
                         if (!running) { closeSocket(owner); return; }
                         webSocket = owner;
                     }
+                    // Overlap call-scoped ICE retrieval with ringing/signaling. Carrier audio
+                    // still starts only after Telecom confirms the answer below.
+                    prepareWebRTC(owner);
                     owner.writeText(status("agent_ready", ""));
                     BridgeLog.info("standalone_cloud_media_connected call_uuid="
                             + DebugRedactor.safeIdentifier(descriptor.callUUID));
@@ -270,11 +279,22 @@ final class StandaloneCloudMediaManager implements Closeable {
                 String action = control.optString("action", "");
                 if (action.startsWith("webrtc_")) {
                     WebRTCCloudPeer peer = webRTC;
-                    if (peer != null && CloudCallMedia.WEBRTC.equals(mediaTransport)) peer.receive(control);
+                    if (mediaStarted && peer != null && CloudCallMedia.WEBRTC.equals(mediaTransport)) peer.receive(control);
                     continue;
                 }
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
                 if ("answer".equals(action)) mediaTransport = control.optString("media_transport", descriptor.mediaTransport);
+                if ("answer".equals(action) && (!CloudCallMedia.WEBRTC.equals(mediaTransport)
+                        || !ShizukuBridgeManager.get(context).mediaAvailable())) {
+                    owner.writeText(status("action_error", "privileged_media_unavailable"));
+                    continue;
+                }
+                if ("answer".equals(action) && "outgoing".equals(descriptor.direction)) {
+                    // The owner joins its outgoing call while it rings. Never send answer()
+                    // to a dialing Telecom call or report that the remote party answered.
+                    prepareOutgoingMedia(owner);
+                    continue;
+                }
                 JSONObject command = new JSONObject().put("command_id",
                                 control.optString("command_id", UUID.randomUUID().toString()))
                         .put("type", "call_control").put("action", action)
@@ -293,14 +313,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                 }
                 if ("answer".equals(action)) {
                     owner.writeText(status("answer_ok", ""));
-                    if (!mediaStarted) {
-                        StandaloneAgentStore.startCloudCallMedia(mediaTransport, () -> {
-                            mediaStarted = true;
-                            BridgeLog.info("standalone_webrtc_starting call_uuid="
-                                    + DebugRedactor.safeIdentifier(descriptor.callUUID));
-                            startWebRTC(owner);
-                        });
-                    }
+                    beginMedia(owner, false);
                 } else {
                     owner.writeText(status("reject".equals(action) ? "rejected" : "ended", ""));
                     running = false;
@@ -308,14 +321,52 @@ final class StandaloneCloudMediaManager implements Closeable {
             }
         }
 
-        private void startWebRTC(StandaloneWebSocket owner) {
+        private synchronized void prepareOutgoingMedia(StandaloneWebSocket owner) throws Exception {
+            if (!running || webSocket != owner) return;
+            if (!CallRepository.canPrepareOutgoingMedia(descriptor.androidID)) {
+                owner.writeText(status("answer_pending", ""));
+                return;
+            }
+            carrierActive |= CallRepository.state(descriptor.androidID) == android.telecom.Call.STATE_ACTIVE;
+            owner.writeText(status(carrierActive ? "answer_ok" : "media_prepared", ""));
+            beginMedia(owner, !carrierActive);
+            if (carrierActive && webRTC != null) webRTC.activateCarrierAudio();
+        }
+
+        private synchronized void beginMedia(StandaloneWebSocket owner, boolean deferCarrierAudio) {
+            if (!running || webSocket != owner || mediaStarted) return;
+            StandaloneAgentStore.startCloudCallMedia(mediaTransport, () -> {
+                mediaStarted = true;
+                BridgeLog.info("standalone_webrtc_starting call_uuid="
+                        + DebugRedactor.safeIdentifier(descriptor.callUUID));
+                startWebRTC(owner, deferCarrierAudio);
+            });
+        }
+
+        private synchronized void carrierBecameActive() {
+            carrierActive = true;
+            if (!running || !mediaStarted || webRTC == null || webSocket == null) return;
+            webRTC.activateCarrierAudio();
+            try { webSocket.writeText(status("active", "")); }
+            catch (Exception error) { closeSocket(webSocket); }
+        }
+
+        private void prepareWebRTC(StandaloneWebSocket owner) {
             synchronized (this) {
-                if (!running || webSocket != owner) return;
+                if (!running || webSocket != owner || webRTC != null) return;
                 webRTC = new WebRTCCloudPeer(context, descriptor.callUUID, descriptor.generation,
                         descriptor.relayURL, descriptor.secret, signal -> {
                     if (running && webSocket == owner) owner.writeText(signal.toString());
                 }, () -> closeSocket(owner));
-                webRTC.start();
+                webRTC.prepare();
+            }
+        }
+
+        private void startWebRTC(StandaloneWebSocket owner, boolean deferCarrierAudio) {
+            synchronized (this) {
+                if (!running || webSocket != owner) return;
+                prepareWebRTC(owner);
+                if (webRTC != null) webRTC.start(deferCarrierAudio);
             }
         }
 

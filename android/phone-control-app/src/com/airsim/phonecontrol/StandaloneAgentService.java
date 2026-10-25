@@ -21,7 +21,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** AVF-free foreground Agent: Relay registration, heartbeat and command execution. */
+/** Standalone foreground Agent: Relay registration, heartbeat and command execution. */
 public final class StandaloneAgentService extends Service {
     private static final ConcurrentLinkedQueue<String> CALL_EVENTS = new ConcurrentLinkedQueue<>();
     private final ExecutorService worker = Executors.newFixedThreadPool(2);
@@ -59,7 +59,7 @@ public final class StandaloneAgentService extends Service {
         relay = new StandaloneRelayClient();
         preferences = getSharedPreferences("standalone_agent", Context.MODE_PRIVATE);
         preferences.registerOnSharedPreferenceChangeListener(registrationListener);
-        startForeground(BridgeNotification.WATCHDOG_ID,
+        startForeground(BridgeNotification.AGENT_ID,
                 BridgeNotification.status(this, "Starting built-in Agent"),
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
         running = true;
@@ -145,11 +145,11 @@ public final class StandaloneAgentService extends Service {
     }
 
     private void sendHeartbeat(JSONObject registration) throws Exception {
-        JSONObject heartbeat = identity(registration)
+        boolean mediaReady = ShizukuBridgeManager.get(this).mediaAvailable();
+        JSONObject heartbeat = StandaloneAgentStore.applyMediaHeartbeat(identity(registration), mediaReady)
                 .put("event", "agent_heartbeat").put("agent_version", "standalone-0.1.0")
                 .put("agent_id", registration.optString("android_agent_id", AndroidAgentIdentity.agentID(this)))
                 .put("agent_kind", "standalone")
-                .put("agent_media_capabilities", StandaloneAgentStore.mediaCapabilities())
                 .put("device_name", AndroidAgentIdentity.deviceName())
                 .put("manufacturer", registration.optString("android_manufacturer", android.os.Build.MANUFACTURER))
                 .put("model", registration.optString("android_model", android.os.Build.MODEL))
@@ -324,7 +324,7 @@ public final class StandaloneAgentService extends Service {
         long now = System.currentTimeMillis();
         if (!notificationGate.shouldPublish(detail, now)) return;
         getSystemService(android.app.NotificationManager.class).notify(
-                BridgeNotification.WATCHDOG_ID, BridgeNotification.status(this, detail));
+                BridgeNotification.AGENT_ID, BridgeNotification.status(this, detail));
         notificationGate.published(detail, now);
     }
 

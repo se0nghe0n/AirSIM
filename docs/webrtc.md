@@ -1,11 +1,11 @@
 # Native WebRTC cloud calls
 
-AirSIM's rooted Android Standalone and iPhone clients can carry cloud-call audio with native WebRTC instead of sending raw PCM over a WebSocket. Call signaling, ownership, APNs, pairing, durable answer/end commands, and SMS continue to use the existing Relay.
+This draft migration moves AirSIM's privileged Android Standalone and iPhone clients can carry cloud-call audio with native WebRTC instead of sending raw PCM over a WebSocket. Call signaling, ownership, APNs, pairing, durable answer/end commands, and SMS continue to use the existing Relay.
 
 ```mermaid
 flowchart LR
-    SIM[KT / cellular call] <--> Bridge[Q25 rooted PCM bridge]
-    Bridge <-->|8 kHz mono PCM| Android[Android native WebRTC / Opus]
+    SIM[KT / cellular call] <--> Bridge[Privileged carrier audio device]
+    Bridge <-->|in-process samples only| Android[Same-process native WebRTC / Opus]
     Android <-->|ICE + DTLS-SRTP| iPhone[iPhone native WebRTC audio]
     Android <-.->|SDP / ICE / call control| Relay[Cloudflare Worker]
     Relay <-.->|SDP / ICE / call control| iPhone
@@ -13,11 +13,15 @@ flowchart LR
     TURN <--> iPhone
 ```
 
-The WebRTC path uses the SDK's jitter buffer, concealment and congestion handling. It does not run through the legacy iPhone PCM jitter buffer or its time-pitch recovery node. Android bridges ten-millisecond native audio callbacks to the existing twenty-millisecond rooted PCM frames; it does not capture the Q25 microphone or play remote speech through its speaker.
+The WebRTC path uses the SDK's jitter buffer, concealment and congestion handling. It does not run through the legacy iPhone PCM jitter buffer or its time-pitch recovery node. Android connects ten-millisecond native callbacks to its in-process privileged carrier device; it does not capture the Q25 microphone or play remote speech through its speaker.
+
+## Migration gate
+
+The native peer now shares the privileged carrier process. See [security, compatibility and device-validation gates](webrtc-only-migration.md). Q25 hidden vendor routes, native loading, and real two-way carrier calls are unverified for this architecture. Legacy source below is not device acceptance.
 
 ## Compatibility and rollout
 
-Install matching builds on both endpoints, then configure and deploy the Relay. The server selects WebRTC only when both clients advertise it, the iPhone requests it, rollout includes the device, and TURN is configured. Older Android agents, the legacy Go Agent, and Apple Watch retain PCM. A failed WebRTC negotiation is reported rather than silently switching the same call to a second media path.
+Install matching builds on both endpoints, then configure and deploy the Relay. The server selects WebRTC only when both clients advertise it, the iPhone requests it, rollout includes the device, and TURN is configured. Unsupported old agents fail clearly; the Android runtime is Standalone and Watch controls audio on iPhone. There is no PCM fallback. A failed WebRTC negotiation is reported rather than silently switching the same call to a second media path.
 
 For production external-network calls, configure either managed Cloudflare TURN or a TURN server using REST shared-secret authentication. A workers.dev HTTP/WebSocket endpoint is not itself a TURN server. No TURN service, production deployment, subscription, or device state is created by building this branch.
 

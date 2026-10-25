@@ -331,68 +331,48 @@ struct AirSIMLiveActivityWidget: Widget {
     }
 
     @ViewBuilder
-    private func actionButtons(
-        _ state: AirSIMCallActivityAttributes.ContentState
-    ) -> some View {
-        if #available(iOSApplicationExtension 17.0, *) {
-            switch state.phase {
-            case .incoming:
-                HStack(spacing: 8) {
-                    Text("Incoming Call")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    HStack(spacing: IslandActionLayout.buttonSpacing) {
-                        Button(intent: RejectAirSIMCallIntent(callID: state.callID)) {
-                            Image(systemName: "phone.down.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: IslandActionLayout.buttonSide,
-                                       height: IslandActionLayout.buttonSide)
-                        }
-                        .accessibilityLabel("Decline Call")
-                        .modifier(LiveActivityGlassButtonStyle(
-                            prominent: false,
-                            tint: Color.white.opacity(0.17)
-                        ))
-                        Button(intent: AnswerAirSIMCallIntent(callID: state.callID)) {
-                            Image(systemName: "phone.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: IslandActionLayout.buttonSide,
-                                       height: IslandActionLayout.buttonSide)
-                        }
-                        .accessibilityLabel("Answer Call")
-                        .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .green))
-                    }
-                    .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
-                           alignment: .trailing)
+    private func actionButtons(_ state: AirSIMCallActivityAttributes.ContentState) -> some View {
+        switch state.phase {
+        case .incoming:
+            HStack(spacing: 8) {
+                Text("Incoming Call")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                HStack(spacing: IslandActionLayout.buttonSpacing) {
+                    callActionButton(RejectAirSIMCallIntent(callID: state.callID), icon: "phone.down.fill",
+                                   title: "Decline Call", prominent: false, tint: Color.white.opacity(0.17))
+                    callActionButton(AnswerAirSIMCallIntent(callID: state.callID), icon: "phone.fill",
+                                   title: "Answer Call", prominent: true, tint: .green)
                 }
-            case .active, .held:
-                HStack(spacing: 8) {
-                    Image(systemName: state.phase == .held ? "pause.fill" : "waveform")
-                        .foregroundStyle(tint(for: state.phase))
-                    Text(state.phase == .held ? "Call on Hold" : "On Call")
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Button(intent: HangUpAirSIMCallIntent(callID: state.callID)) {
-                        Image(systemName: "phone.down.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .frame(width: IslandActionLayout.buttonSide,
-                                   height: IslandActionLayout.buttonSide)
-                    }
-                    .accessibilityLabel("End Call")
-                    .modifier(LiveActivityGlassButtonStyle(prominent: true, tint: .red))
-                    .frame(width: IslandActionLayout.reservedWidth(for: state.phase),
-                           alignment: .trailing)
-                }
-            case .standby, .cloudStandby, .offline:
-                EmptyView()
+                .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
             }
-        } else if state.phase == .incoming {
-            Text("Open AirSIM to Answer")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.62))
+        case .active, .held:
+            HStack(spacing: 8) {
+                Image(systemName: state.phase == .held ? "pause.fill" : "waveform")
+                    .foregroundStyle(tint(for: state.phase))
+                Text(state.phase == .held ? "Call on Hold" : "On Call")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                callActionButton(HangUpAirSIMCallIntent(callID: state.callID), icon: "phone.down.fill",
+                               title: "End Call", prominent: true, tint: .red)
+                    .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
+            }
+        case .standby, .cloudStandby, .offline:
+            EmptyView()
         }
+    }
+
+    private func callActionButton<Intent: AppIntent>(_ intent: Intent,
+                                icon: String, title: String, prominent: Bool, tint: Color) -> some View {
+        Button(intent: intent) {
+            Image(systemName: icon)
+                .font(.subheadline.weight(.semibold))
+                .frame(width: IslandActionLayout.buttonSide, height: IslandActionLayout.buttonSide)
+        }
+        .accessibilityLabel(title)
+        .modifier(LiveActivityGlassButtonStyle(prominent: prominent, tint: tint))
     }
 
     @ViewBuilder
@@ -479,7 +459,7 @@ struct AirSIMLiveActivityWidget: Widget {
     private func agentKindTitle(_ kind: String?) -> String {
         switch kind {
         case "standalone": return "Standalone"
-        case "avf": return "AVF Agent"
+        case "avf": return "Retired Android Agent"
         default: return "Android Agent"
         }
     }

@@ -5,6 +5,67 @@ import AudioToolbox
 @testable import AirSIM
 
 struct CloudWebRTCTests {
+    @Test func `Local readiness is versioned and bound to the exact call negotiation`() throws {
+        let session = VoWLANWebRTCSession(callUUID: UUID(), generation: 4, sessionID: UUID())
+        let body = try JSONEncoder().encode(session)
+        var payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(payload["version"] as? Int == 1)
+        #expect(payload["call_uuid"] as? String == session.callUUID.uuidString.lowercased())
+        #expect(payload["session_id"] as? String == session.sessionID.uuidString.lowercased())
+        payload["status"] = "ready"
+        func status() throws -> VoWLANWebRTCStatus {
+            try JSONDecoder().decode(VoWLANWebRTCStatus.self,
+                from: JSONSerialization.data(withJSONObject: payload))
+        }
+        #expect(try status().matches(session))
+        payload["session_id"] = UUID().uuidString
+        #expect(try !status().matches(session))
+        payload["session_id"] = session.sessionID.uuidString
+        payload["generation"] = 3
+        #expect(try !status().matches(session))
+        payload["generation"] = 4
+        payload["call_uuid"] = UUID().uuidString
+        #expect(try !status().matches(session))
+        payload["call_uuid"] = session.callUUID.uuidString
+        payload["version"] = 2
+        #expect(try !status().matches(session))
+    }
+
+    @Test func `Local host ICE alone never claims ready carrier audio`() {
+        var readiness = CloudWebRTCReadiness()
+        let session = UUID()
+        readiness.begin(session)
+        readiness.nativeConnected(session)
+        #expect(!readiness.isReady)
+        readiness.agentConnected(UUID())
+        #expect(!readiness.isReady)
+        readiness.agentConnected(session)
+        #expect(readiness.isReady)
+        readiness.nativeDisconnected(UUID())
+        #expect(readiness.isReady)
+        readiness.nativeDisconnected(session)
+        #expect(!readiness.isReady)
+        readiness.nativeConnected(session)
+        #expect(readiness.isReady)
+        readiness.agentRecovering()
+        #expect(!readiness.isReady)
+        readiness.reset()
+        readiness.agentConnected(session)
+        readiness.nativeConnected(session)
+        #expect(!readiness.isReady)
+    }
+
+    @Test(arguments: ["failed", "closed"])
+    func `Local terminal status is not readiness`(_ terminal: String) throws {
+        let session = VoWLANWebRTCSession(callUUID: UUID(), generation: 1, sessionID: UUID())
+        var payload = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any])
+        payload["status"] = terminal
+        let status = try JSONDecoder().decode(VoWLANWebRTCStatus.self,
+            from: JSONSerialization.data(withJSONObject: payload))
+        #expect(status.matches(session))
+        #expect(status.status != .ready)
+    }
+
     @Test @MainActor
     func `ICE prefetch and concurrent audio starts share one request`() async throws {
         let gate = ICEFetchGate()
@@ -218,6 +279,53 @@ struct CloudWebRTCTests {
     }
 
     @Test @MainActor
+    func `Outgoing ringback prepares media without publishing a connected call`() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        var events: [String] = []
+        handshake.confirm(status: "media_prepared", isOutgoing: true,
+            callConnected: { events.append("connected") }) { events.append("media") }
+        #expect(handshake.acknowledged)
+        #expect(events == ["media"])
+        handshake.confirm(status: "media_prepared", isOutgoing: true) {
+            Issue.record("Duplicate preparation restarted the peer")
+        }
+        handshake.confirm(status: "active", isOutgoing: true,
+            callConnected: { events.append("connected") }) {
+            Issue.record("Answer must reuse the prepared peer")
+        }
+        #expect(events == ["media", "connected"])
+        handshake.confirm(status: "answer_ok", isOutgoing: true,
+            callConnected: { Issue.record("Duplicate answer republished connection") }) {}
+    }
+
+    @Test @MainActor
+    func `Incoming call rejects outgoing preparation acknowledgement`() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.confirm(status: "media_prepared", isOutgoing: false,
+            callConnected: { Issue.record("Unanswered incoming call became active") }) {
+            Issue.record("Unanswered incoming call opened audio")
+        }
+        #expect(!handshake.acknowledged)
+    }
+
+    @Test @MainActor
+    func `Outgoing reconnect requires fresh preparation and preserves answer ordering`() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.invalidate(requiringAnswerOK: true)
+        handshake.confirm(status: "active", isOutgoing: true) {
+            Issue.record("Old activity bypassed peer preparation")
+        }
+        #expect(!handshake.acknowledged)
+        var offers = 0, connected = 0
+        handshake.confirm(status: "media_prepared", isOutgoing: true,
+            callConnected: { connected += 1 }) { offers += 1 }
+        #expect(offers == 1 && connected == 0)
+        handshake.confirm(status: "active", isOutgoing: true,
+            callConnected: { connected += 1 }) { offers += 1 }
+        #expect(offers == 1 && connected == 1)
+    }
+
+    @Test @MainActor
     func `Standalone answer enables recording in app model and ending disables it`() {
         let session = IPhoneCloudCallSession.shared
         let previousLifecycle = session.onLifecycleEvent
@@ -342,7 +450,7 @@ struct CloudWebRTCTests {
         #expect(!CloudWebRTCReadiness.shouldRenegotiatePeer(role: "watch"))
         #expect(!CloudWebRTCReadiness.shouldRenegotiatePeer(role: nil))
         let id = UUID()
-        let decoded = try CloudPCMControlMessage.decode("{\"status\":\"webrtc_ready\",\"session_id\":\"\(id.uuidString.lowercased())\",\"role\":\"agent\"}")
+        let decoded = try CloudCallControlMessage.decode("{\"status\":\"webrtc_ready\",\"session_id\":\"\(id.uuidString.lowercased())\",\"role\":\"agent\"}")
         let control = try #require(decoded)
         #expect(control.sessionID == id)
         #expect(control.role == "agent")
@@ -591,34 +699,16 @@ struct CloudWebRTCTests {
         let legacy = CloudMediaTransportNegotiator.resolve(
             requested: .legacyPCM,
             appSupported: supported,
-            agentSupported: supported,
-            forceLegacy: true
+            agentSupported: supported
         )
         #expect(legacy == .failure(.unsupported))
 
         let forced = CloudMediaTransportNegotiator.resolve(
             requested: .webRTC,
             appSupported: [.webRTC],
-            agentSupported: [.webRTC],
-            forceLegacy: true
+            agentSupported: [.webRTC]
         )
         #expect(try forced.get() == .webRTC)
-
-        let suite = "airsim.iphone-cloud-pcm-test"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
-        defaults.set(CloudMediaTransport.legacyPCM.rawValue, forKey: CloudMediaTransportPreference.requestedKey)
-        defaults.set(true, forKey: CloudMediaTransportPreference.forceLegacyKey)
-        #expect(CloudMediaTransportPreference.requested(defaults: defaults) == .webRTC)
-        #expect(!CloudMediaTransportPreference.forceLegacy(defaults: defaults))
-
-        var scheduled = 0
-        CloudCallBinaryFrame.deliver(Data(repeating: 0x11, count: 320)) { _ in scheduled += 1 }
-        var envelope = Data([65, 83, 80, 77, 1, 0, 0, 20])
-        envelope.append(Data(repeating: 2, count: 320))
-        CloudCallBinaryFrame.deliver(envelope) { _ in scheduled += 1 }
-        #expect(scheduled == 0)
-        #expect(!CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine())
 
         let call = try IncomingVoIPCall(
             outgoingCallID: "legacy",
@@ -731,5 +821,19 @@ private final class ICEFetchGate {
     func complete(_ index: Int, username: String) {
         continuations[index].resume(returning: .init(
             iceServers: [.init(urls: ["turn:relay.test"], username: username, credential: "test")], ttl: 600))
+    }
+}
+
+struct CloudAudioStatusTests {
+    @Test func `First cloud audio startup is not presented as a retry`() {
+        #expect(!CloudCallAudioState.starting.isRetrying)
+        #expect(CloudCallAudioState.connecting(attempt: 1, maximumAttempts: 4).isRetrying)
+        #expect(CallAudioStatusPresentation.text(transport: .cloud, localAudioActive: false,
+                                                cloudState: .starting) == "Connecting Cloud Audio")
+        #expect(CallAudioStatusPresentation.text(transport: .cloud, localAudioActive: false,
+                                                cloudState: .connecting(attempt: 1, maximumAttempts: 4))
+                == "Retrying Cloud Audio 1/4")
+        #expect(CallAudioStatusPresentation.text(transport: .cloud, localAudioActive: false,
+                                                cloudState: .connected) == "Cloud Audio Connected")
     }
 }

@@ -10,7 +10,7 @@ public final class VoWLANControlPolicy {
             "/api/calls/dial", "/api/calls/answer", "/api/calls/reject",
             "/api/calls/hangup", "/api/calls/dtmf", "/api/calls/audio/mute",
             "/api/calls/audio/host/warmup", "/api/calls/audio/host/register", "/api/push/register",
-			"/api/sms/send", "/api/sms/ack", "/api/sms/refresh", VoWLANWebRTCControl.PATH);
+			"/api/sms/send", "/api/sms/ack", "/api/sms/refresh", VoWLANWebRTCControl.PATH, VoWLANWebRTCControl.STATUS_PATH, VoWLANWebRTCControl.STOP_PATH);
 
     private VoWLANControlPolicy() {}
 

@@ -56,6 +56,7 @@ enum CallAudioStatusPresentation {
                      cloudState: CloudCallAudioState) -> String {
         switch cloudState {
         case .idle: return localAudioActive ? "Audio Connected" : "Connecting Audio"
+        case .starting: return "Connecting Cloud Audio"
         case let .connecting(attempt, maximum): return "Retrying Cloud Audio \(attempt)/\(maximum)"
         case .connected: return "Cloud Audio Connected"
         case let .failed(message): return message
@@ -87,7 +88,7 @@ enum CallPresentationPolicy {
 
 enum CallAnswerConfirmationPolicy {
     static func shouldMarkActiveImmediately(transport: CallTransport?) -> Bool {
-        transport == .moduleLocal || transport == .vowlan
+        transport == .vowlan
     }
 }
 
@@ -107,7 +108,7 @@ enum CallKitEndDecision {
         activeIncomingRinging: Bool
     ) -> Route {
         if hasIncomingPush, !systemCallAnswered,
-           transport != .vowlan, transport != .moduleLocal {
+           transport != .vowlan {
             return .cloudReject
         }
         if transport == .cloud || cloudSessionPrepared { return .cloudEnd }
@@ -144,18 +145,6 @@ enum CallAnswerCompletionCoordinator {
         ) else { return }
         confirmActive()
         await startAudio()
-    }
-}
-
-enum LocalControlReachability {
-    static func moduleLocal(
-        isOnline: Bool,
-        isReconnecting: Bool,
-        lastSuccessfulRoute: LocalAgentRoute?
-    ) -> Bool {
-        guard isOnline, !isReconnecting, let lastSuccessfulRoute else { return false }
-        if case .moduleLocal = lastSuccessfulRoute { return true }
-        return false
     }
 }
 
@@ -308,7 +297,7 @@ final class AppModel {
     @ObservationIgnored private var currentCallTransport: CallTransport?
     @ObservationIgnored private var lockedCallTransport: LockedCallTransport?
     @ObservationIgnored private var currentLocalAPI: AirSIMAPI?
-    @ObservationIgnored private var currentPCMRoute: PCMRoute?
+    @ObservationIgnored private var currentLocalWebRTCRoute: LocalWebRTCRoute?
     @ObservationIgnored private var lastSuccessfulLocalAPI: AirSIMAPI?
     @ObservationIgnored private var observedCallLocalAPI: (callID: String, service: AirSIMAPI)?
     @ObservationIgnored private var callLifecycleStore = CallLifecycleStore()
@@ -346,7 +335,7 @@ final class AppModel {
     }
 
     var callAudioIsActive: Bool {
-        audio.active || cloudCallAudioState.isConnected || isVirtualCallTTSPrepared
+        audio.transportReady || cloudCallAudioState.isConnected || isVirtualCallTTSPrepared
     }
 
     var connectionModePresentation: ConnectionModePresentation {
@@ -623,12 +612,12 @@ final class AppModel {
             mode: ConnectionModePreference.selected(),
             vowlanOnline: permitsVoWLANEndpoint(vowlan.availability.endpoint)
                 && vowlan.availability.isOnlineForDisplay,
-            moduleLocalReachable: false,
+
             cloudOnline: boundCloudReady
         )
     }
 
-    /// The dial view cannot rely solely on `isOnline`: that property represents the local USB control link and is intentionally
+    /// The dial view cannot rely solely on `isOnline`: that property represents the local VoWLAN link and is intentionally
     /// false when the module only maintains a Relay heartbeat. Allow dialing when cloud mode is enabled and the heartbeat is fresh;
     /// actual execution still re-authenticates and verifies state inside the CallKit action.
     var canStartOutgoingCommand: Bool {
@@ -644,7 +633,7 @@ final class AppModel {
 
     var callAudioStatusText: String {
         CallAudioStatusPresentation.text(
-            transport: currentCallTransport, localAudioActive: audio.active,
+            transport: currentCallTransport, localAudioActive: audio.transportReady,
             cloudState: cloudCallAudioState)
     }
 
@@ -879,7 +868,7 @@ final class AppModel {
         }
     }
 
-    /// Aligns with the module 1-second AT poll while online and backs off when offline to avoid repeatedly waking the phone and USB stack.
+    /// Aligns with the module 1-second AT poll while online and backs off when offline to avoid repeatedly waking the phone and local network.
     private var nextPollingDelay: TimeInterval {
         if consecutivePollFailures > 0 {
             let maximumDelay: TimeInterval = appIsActive ? 3 : 30
@@ -906,9 +895,6 @@ final class AppModel {
         audio.deactivate()
         backgroundStandby.setEnabled(false)
         Task { await liveActivity.stop() }
-        if let samsungAPI = verifiedVoWLANAPI() {
-            Task { try? await samsungAPI.setAudioHostEnabled(false) }
-        }
     }
 
     private func poll(generation: Int) async {
@@ -983,12 +969,12 @@ final class AppModel {
             } else if status.active == nil, previousCall != nil {
                 audioWarmupCallID = nil
             }
-            // A successful HTTP response proves the USB module Agent is online. last_poll_error only reflects the latest
-            // internal AT+CLCC poll and may be transiently non-empty during call setup, so do not mark the USB link offline from it.
+            // A successful HTTP response proves the Android Agent is online. last_poll_error only reflects the latest
+            // internal AT+CLCC poll and may be transiently non-empty during call setup, so do not mark the local link offline from it.
             if !isOnline { isOnline = true }
             cloudAgentStatus = nil
             updateLocalConnectionSummary(cellularState: modemStatus?.cellularState)
-            // PushKit tokens must be written to the currently reachable Agent; hotspot mode cannot hardcode the USB address.
+            // PushKit tokens must be written to the currently reachable Agent; use the authenticated hotspot endpoint.
             let callSyncSnapshot = callLifecycleSnapshot
             let callSyncAttempt = outgoingAttemptID
             await VoIPPushController.shared.syncRegistration(with: result.api)
@@ -1004,7 +990,7 @@ final class AppModel {
             let callerName = (systemCall ?? lifecycleCall).map { contacts.displayName(for: $0.number) }
             // Request CallKit before deciding whether to post a local notification, otherwise background incoming calls would show
             // both the system call UI and a banner with an Answer button; fall back on the next poll if CallKit reporting fails.
-            if !WatchCallCoordinator.shared.ownsMedia(callID: systemCall?.id) {
+            if !WatchCallCoordinator.shared.ownsCallPresentation(callID: systemCall?.id) {
                 callKit.synchronize(
                     // Preserve real Agent state except for identities explicitly
                     // ending/ended locally; a late poll must not create a new CXCall.
@@ -1049,7 +1035,7 @@ final class AppModel {
             // AirSIM neither bundles nor auto-flashes the QDC507 Agent.
 
             // Continuously verify that local audio is still running during an active call. After a CallKit or media server reset,
-            // the next poll must be able to rebuild network PCM even if module state did not change.
+            // the next poll must be able to rebuild local WebRTC even if module state did not change.
             if status.active?.state == "active" {
                 await startCallAudioIfReady()
             } else if status.active == nil, previousCall != nil {
@@ -1057,7 +1043,7 @@ final class AppModel {
                 // during media teardown is not misreported as full module offline.
                 beginCallTransitionProtection()
                 // A cloud fallback call may remain active after local module state disappears; do not let local polling
-                // clear the shared AVAudioSession speaker override or interrupt cloud PCM.
+                // clear the shared AVAudioSession speaker override or interrupt cloud WebRTC.
                 if currentCallTransport != .cloud,
                    !IPhoneCloudCallSession.shared.hasActiveCall {
                     audio.deactivate()
@@ -1096,7 +1082,7 @@ final class AppModel {
             }()
             connectionMessage = "Reconnecting\(failedRouteName): \(error.localizedDescription)"
 
-            // A single long-poll interruption does not mean USB ECM is offline. Preserve the last online state during the 8s
+            // A single long-poll interruption does not mean VoWLAN is offline. Preserve the last online state during the 8s
             // grace window after a call action, and require three consecutive failures plus an independent health check failure afterward.
             guard ModuleConnectivityPolicy.shouldConfirmOffline(
                 consecutiveFailures: consecutivePollFailures,
@@ -1130,7 +1116,7 @@ final class AppModel {
 
             guard !Task.isCancelled, generation == pollingGeneration else { return }
             if IPhoneCloudCallSession.shared.hasActiveCall || IPhoneCloudCallSession.shared.isRecovering {
-                // An established cloud media session is independent proof that cloud is online. Brief USB/ECM route jitter
+                // An established cloud media session is independent proof that cloud is online. Brief local-network route jitter
                 // when answering must neither mark the module offline nor end the Dynamic Island activity.
                 consecutivePollFailures = 0
                 if isOnline { isOnline = false }
@@ -1142,7 +1128,7 @@ final class AppModel {
                 )
                 connectionMessage = IPhoneCloudCallSession.shared.isRecovering
                     ? "Cloud call active, reconnecting internet PCM"
-                    : "Cloud call active, reconnecting USB ECM"
+                    : "Cloud call active, reconnecting VoWLAN"
                 var lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
                 await awaitCloudStatusForLiveActivity(call: lifecycleCall)
                 lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
@@ -1176,7 +1162,7 @@ final class AppModel {
                 isReconnecting = true
                 if let version = cloudStatus?.agentVersion, !version.isEmpty { agentVersion = version }
                 connectionMessage = cloudConnectionMessage(for: cloudStatus!)
-                // Unreachable local USB control does not mean the module is offline. Keep Dynamic Island standby while the Relay heartbeat is fresh;
+                // Unreachable local control does not mean the module is offline. Keep Dynamic Island standby while the Relay heartbeat is fresh;
                 // incoming calls can still wake via PushKit and use cloud PCM.
                 let lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
                 await liveActivity.update(
@@ -1255,10 +1241,6 @@ final class AppModel {
         return AirSIMAPI(route: .vowlan(endpoint: endpoint, credential: credential))
     }
 
-    private var moduleLocalIsReachable: Bool {
-        false
-    }
-
     private var reachableLocalAPI: AirSIMAPI? {
         if let currentLocalAPI, AirSIMRoutePolicy.permits(currentLocalAPI.route) {
             return currentLocalAPI
@@ -1282,7 +1264,6 @@ final class AppModel {
         switch currentCallTransport {
         case .vowlan: return .vowlan
         case .cloud: return .cloud
-        case .moduleLocal: return .moduleLocal
         case nil: break
         }
         switch DialRouteSelector.preferred(
@@ -1293,7 +1274,6 @@ final class AppModel {
         ) {
         case .vowlan: return .vowlan
         case .cloud: return .cloud
-        case .moduleLocal: return .moduleLocal
         case nil: return nil
         }
     }
@@ -1307,10 +1287,9 @@ final class AppModel {
         )
     }
 
-    private static func pcmRoute(for route: LocalAgentRoute) -> PCMRoute {
+    private static func webRTCRoute(for route: LocalAgentRoute) -> LocalWebRTCRoute? {
         switch route {
-        case .moduleLocal:
-            return .moduleLocal
+        case .unavailable: return nil
         case let .vowlan(endpoint, credential):
             return .vowlan(endpoint: endpoint, credential: credential)
         }
@@ -1358,15 +1337,15 @@ final class AppModel {
         case .localOnlineNoService:
             let detail = modemStatus?.cellularRecovery ?? modemStatus?.registrationText
             connectionMessage = detail?.isEmpty == false
-                ? "USB ECM Connected · \(detail!)"
-                : "USB ECM connected, cellular network recovering"
+                ? "VoWLAN Connected · \(detail!)"
+                : "VoWLAN connected, cellular network recovering"
         case .cloudOnly, .offline:
             break
         }
     }
 
     private func cloudConnectionMessage(for status: CloudAgentStatus) -> String {
-        let local = "USB ECM disconnected, module online through cloud"
+        let local = "VoWLAN disconnected, module online through cloud"
         if status.cellularState == "registered" {
             return local + "; incoming calls will use cloud"
         }
@@ -1410,6 +1389,86 @@ final class AppModel {
         }
     }
 
+    /// Live Activity actions stay in the app process without opening its UI.
+    func performLiveActivityAction(_ action: AirSIMLiveActivityAction, callID: String) async throws {
+        guard !callID.isEmpty, !callLifecycleStore.suppressesPresentation(callID: callID) else {
+            throw LiveActivityCallError.staleCall
+        }
+        if callKit.managesCurrentCall {
+            // A background intent can initialize this model after PushKit reported the call.
+            if let push = callKit.currentIncomingPush, push.callID == callID,
+               callLifecycleSnapshot.callID == nil {
+                callKitDidReceiveIncoming(push)
+            }
+            try await callKit.performLiveActivityAction(action, callID: callID)
+            return
+        }
+
+        let cloud = IPhoneCloudCallSession.shared
+        if let call = cloud.call {
+            guard try LiveActivityCallActionPolicy.shouldPerform(action, callID: callID,
+                    currentCallID: call.callID, state: cloud.answered ? "active" : "incoming",
+                    direction: call.isOutgoing ? "outgoing" : "incoming") else { return }
+            switch action {
+            case .answer: throw LiveActivityCallError.unavailable
+            case .reject, .hangup:
+                applyCurrentCallIntent(.ending, source: .app)
+                await cloud.end()
+                if callLifecycleSnapshot.callID == callID { callKitCallDidEnd() }
+            }
+            return
+        }
+
+        // Local mode has no CallKit transaction. Resolve only a paired, authenticated
+        // route and freeze the backend call ID before any command is sent.
+        guard !callLifecycleSnapshot.state.representsCall || callLifecycleSnapshot.callID == callID else {
+            throw LiveActivityCallError.staleCall
+        }
+        let service: AirSIMAPI
+        if let current = localCallControlAPI { service = current }
+        else if let (discovered, _) = await readyVoWLANRoute() { service = discovered }
+        else { throw LiveActivityCallError.unavailable }
+        guard let observed = try await service.callStatus().active else { throw LiveActivityCallError.staleCall }
+        guard try LiveActivityCallActionPolicy.shouldPerform(action, callID: callID,
+                currentCallID: observed.id, state: observed.state, direction: observed.direction) else { return }
+        guard !callLifecycleStore.suppressesPresentation(callID: callID),
+              !callLifecycleSnapshot.state.representsCall || callLifecycleSnapshot.callID == callID,
+              callLifecycleSnapshot.state != .ending else { throw LiveActivityCallError.staleCall }
+        guard applyAgentCallRecord(observed) || callLifecycleSnapshot.callID == callID else {
+            throw LiveActivityCallError.staleCall
+        }
+        activeCall = observed
+        observedCallLocalAPI = (callID: callID, service: service)
+        beginCallTransitionProtection()
+        audio.stopCallTone()
+        switch action {
+        case .answer:
+            guard case let .vowlan(endpoint, credential) = service.route else {
+                throw LiveActivityCallError.unavailable
+            }
+            try audio.prepareForCallKit()
+            backgroundStandby.suspendForCall()
+            applyCurrentCallIntent(.connecting, source: .app)
+            do { try await service.answerCall(callID: callID) }
+            catch {
+                backgroundStandby.resumeAfterCall()
+                throw error
+            }
+            guard callLifecycleSnapshot.callID == callID, callLifecycleSnapshot.state != .ending else { return }
+            lockLocalTransport(.vowlan, api: service, webRTCRoute: .vowlan(endpoint: endpoint, credential: credential))
+            applyCurrentCallIntent(.active, source: .app)
+            await startCallAudioIfReady()
+        case .reject, .hangup:
+            // Keep the call retryable if the authenticated command fails.
+            if action == .reject { _ = try await service.rejectCall(callID: callID) }
+            else { try await service.hangupCall(callID: callID) }
+            guard callLifecycleSnapshot.callID == callID else { return }
+            applyCurrentCallIntent(.ending, source: .app)
+            audio.deactivate()
+            callKitCallDidEnd()
+        }
+    }
+
     func answer() async {
         beginCallTransitionProtection()
         audio.stopCallTone()
@@ -1420,7 +1479,7 @@ final class AppModel {
                 do {
                     try await self.callKit.answerCurrentCall(presentInApp: true)
                 } catch CallKitBridgeError.staleSystemCall {
-                    // Reuse standard route selection while system UI is rebuilding rather than falling back to the default USB address.
+                    // Reuse standard route selection while system UI is rebuilding rather than using an unverified local address.
                     try await self.callKitAnswer(origin: .app)
                 }
             }
@@ -1574,8 +1633,7 @@ final class AppModel {
         // Mobile uplink voice is generated by the local PCM pipeline; mute locally first without depending on module AT command success.
         isMuted = target
         audio.setMuted(target)
-        // Some QDC507 firmware versions do not implement AT+CMUT; local PCM is already the authoritative mute state on mobile,
-        // so background sync failures must not interrupt the call or show a misleading mute error.
+        // Local WebRTC owns microphone mute; a failed status synchronization must not interrupt the call.
         if let localAPI = reachableLocalAPI {
             Task { try? await localAPI.setAudioMuted(target) }
         }
@@ -1604,14 +1662,14 @@ final class AppModel {
                     errorMessage = "Recording is available once the call is connected"
                     return
                 }
-                guard !WatchCallCoordinator.shared.ownsMedia(callID: callID) else {
-                    errorMessage = "Recording is available when call audio is on this iPhone"
-                    return
-                }
-                let source: CallRecordingSource
+                let source: CallRecordingSource?
                 switch currentCallTransport {
                 case .cloud: source = IPhoneCloudCallSession.shared.recordingSource
-                default: source = .localPCM
+                default: source = audio.recordingSource
+                }
+                guard let source else {
+                    errorMessage = "Recording is available once WebRTC audio is ready"
+                    return
                 }
                 CallAudioRecorder.shared.setMuted(isMuted)
                 try await recordings.start(callID: callID, source: source)
@@ -1928,11 +1986,6 @@ final class AppModel {
     }
 
     private func startCallAudioIfReady() async {
-        if WatchCallCoordinator.shared.ownsMedia(callID: activeCall?.id)
-            || WatchCallCoordinator.shared.ownsMedia(callID: remoteCall?.id)
-            || WatchCallCoordinator.shared.ownsMedia(callID: callLifecycleSnapshot.callID) {
-            return
-        }
         let managedByCallKit = callKit.managesCurrentCall
         let cloudSession = IPhoneCloudCallSession.shared
         if cloudSession.call != nil, cloudSession.answered {
@@ -1956,57 +2009,53 @@ final class AppModel {
         defer { startingCallAudio = false }
         backgroundStandby.suspendForCall()
 
-        do {
-            guard let localAPI = reachableLocalAPI else {
-                backgroundStandby.resumeAfterCall()
-                errorMessage = "Local audio route is not locked yet"
-                return
-            }
-            let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
-            let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
-            let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
-            // Complete microphone authorization and WebRTC startup before registering the audio host.
-            let outcome = try await LocalCallAudioStartupCoordinator.start(
-                activatePhoneAudio: { [audio] in
-                    await audio.activateForCall(
-                        route: pcmRoute,
-                        sessionAlreadyActive: managedByCallKit,
-                        callUUID: vowlanCallUUID,
-                        generation: vowlanGeneration
-                    )
-                },
-                registerAgentAudio: {
-                    try await CallAudioRegistrationCoordinator.register(service: localAPI)
-                },
-                rollbackPhoneAudio: { [audio] in
-                    audio.deactivate()
-                    try? await localAPI.setAudioHostEnabled(false)
-                }
-            )
-            guard outcome == .started else {
-                backgroundStandby.resumeAfterCall()
-                return
-            }
-            if currentCallTransport == nil {
-                let transport: CallTransport
-                switch localAPI.route {
-                case .moduleLocal: transport = .moduleLocal
-                case .vowlan: transport = .vowlan
-                }
-                lockLocalTransport(transport, api: localAPI, pcmRoute: pcmRoute)
-            }
-        } catch {
-            audio.deactivate()
-            if let localAPI = reachableLocalAPI {
-                try? await localAPI.setAudioHostEnabled(false)
-            }
+        guard let localAPI = reachableLocalAPI else {
             backgroundStandby.resumeAfterCall()
-            errorMessage = "Unable to register call audio: \(error.localizedDescription)"
+            errorMessage = "Local audio route is not locked yet"
             return
+        }
+        guard let webRTCRoute = currentLocalWebRTCRoute ?? Self.webRTCRoute(for: localAPI.route) else {
+            backgroundStandby.resumeAfterCall()
+            errorMessage = "Local audio connection is unavailable"
+            return
+        }
+        let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
+        let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
+        // The session-scoped offer owns Android carrier activation. Generic
+        // register/unregister requests could otherwise stop the next call.
+        guard await audio.activateForCall(
+            route: webRTCRoute, sessionAlreadyActive: managedByCallKit,
+            callUUID: vowlanCallUUID, generation: vowlanGeneration
+        ) else {
+            backgroundStandby.resumeAfterCall()
+            return
+        }
+        guard !Task.isCancelled, callLifecycleSnapshot.callUUID == vowlanCallUUID,
+              callLifecycleSnapshot.generation == vowlanGeneration,
+              callLifecycleSnapshot.state == .active else {
+            audio.deactivate()
+            backgroundStandby.resumeAfterCall()
+            return
+        }
+        if currentCallTransport == nil {
+            guard case .vowlan = localAPI.route else { audio.deactivate(); return }
+            lockLocalTransport(.vowlan, api: localAPI, webRTCRoute: webRTCRoute)
         }
     }
 
-    func readyVoWLANRoute() async -> (AirSIMAPI, PCMRoute)? {
+    /// A Watch is only a controller. Start the same iPhone media path used by
+    /// in-app calls instead of merely registering an Android audio host.
+    func startWatchLocalAudio(call: CallRecord, api: AirSIMAPI) async {
+        guard let webRTCRoute = Self.webRTCRoute(for: api.route), call.state == "active",
+              !callLifecycleStore.suppressesPresentation(callID: call.id) else { return }
+        guard applyAgentCallRecord(call) || callLifecycleSnapshot.callID == call.id else { return }
+        activeCall = call
+        observedCallLocalAPI = (callID: call.id, service: api)
+        lockLocalTransport(.vowlan, api: api, webRTCRoute: webRTCRoute)
+        await startCallAudioIfReady()
+    }
+
+    func readyVoWLANRoute() async -> (AirSIMAPI, LocalWebRTCRoute)? {
         vowlan.startBrowsing()
         await vowlan.probeNow()
         if vowlan.availability.isReady(),
@@ -2019,7 +2068,7 @@ final class AppModel {
             )
         }
         // PushKit may resume in the background before the Bonjour browser. If the latest successful poll came from VoWLAN,
-        // reuse that authenticated endpoint; never mistake the generic isOnline flag for USB ECM.
+        // reuse that authenticated endpoint; never mistake the generic isOnline flag for VoWLAN.
         guard isOnline, !isReconnecting, let cached = lastSuccessfulLocalAPI,
               case let .vowlan(endpoint, credential) = cached.route,
               permitsVoWLANEndpoint(endpoint) else { return nil }
@@ -2029,16 +2078,16 @@ final class AppModel {
     private func lockLocalTransport(
         _ transport: CallTransport,
         api: AirSIMAPI,
-        pcmRoute: PCMRoute
+        webRTCRoute: LocalWebRTCRoute
     ) {
         currentCallTransport = transport
         currentLocalAPI = api
-        currentPCMRoute = pcmRoute
+        currentLocalWebRTCRoute = webRTCRoute
         lockedCallTransport = LockedCallTransport(
             transport: transport,
             generation: callLifecycleSnapshot.generation
         )
-        // Cancel any long-poll still bound to the legacy USB route so the active state returns immediately from VoWLAN.
+        // Cancel any long-poll still bound to the previous local route so the active state returns immediately from VoWLAN.
         restartPolling()
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
@@ -2052,7 +2101,7 @@ final class AppModel {
     private func clearLockedTransport() {
         currentCallTransport = nil
         currentLocalAPI = nil
-        currentPCMRoute = nil
+        currentLocalWebRTCRoute = nil
         lockedCallTransport = nil
     }
 
@@ -2213,87 +2262,10 @@ final class AppModel {
 
 protocol OutgoingCallServicing: Sendable {
     func warmAudioHost() async throws
-    func setAudioHostEnabled(_ enabled: Bool) async throws
     func dial(number: String) async throws
 }
 
 extension AirSIMAPI: OutgoingCallServicing {}
-
-protocol CallAudioRegistrationServicing: Sendable {
-    func setAudioHostEnabled(_ enabled: Bool) async throws
-    func callStatus() async throws -> CallStatus
-}
-
-extension AirSIMAPI: CallAudioRegistrationServicing {}
-
-enum CallAudioRegistrationOutcome: Equatable, Sendable {
-    case registered
-    case callNoLongerActive
-    case temporarilyUnavailable
-}
-
-enum CallAudioRegistrationCoordinator {
-    static func register(
-        service: any CallAudioRegistrationServicing,
-        retryDelay: Duration = .milliseconds(250)
-    ) async throws -> CallAudioRegistrationOutcome {
-        do {
-            try await service.setAudioHostEnabled(true)
-            return .registered
-        } catch APIError.http(409, _) {
-            // Call events and media registration are separate requests. If an older Agent finishes a CLCC refresh in between,
-            // re-read status so a brief race is not treated as a fatal dial error.
-            let latest = try await service.callStatus()
-            guard latest.active?.state == "active" else {
-                return .callNoLongerActive
-            }
-            if retryDelay > .zero {
-                try await Task.sleep(for: retryDelay)
-            }
-            do {
-                try await service.setAudioHostEnabled(true)
-                return .registered
-            } catch APIError.http(409, _) {
-                // In 0.3.39, DSCI and CLCC can briefly interleave at the moment a call connects. Keep the CallKit call alive
-                // and let the next event poll retry rather than surfacing unready media as a dial failure.
-                return .temporarilyUnavailable
-            }
-        }
-    }
-}
-
-enum LocalCallAudioStartupOutcome: Equatable, Sendable {
-    case started
-    case phoneAudioUnavailable
-    case callNoLongerActive
-    case temporarilyUnavailable
-}
-
-@MainActor
-enum LocalCallAudioStartupCoordinator {
-    static func start(
-        activatePhoneAudio: () async -> Bool,
-        registerAgentAudio: () async throws -> CallAudioRegistrationOutcome,
-        rollbackPhoneAudio: () async -> Void
-    ) async rethrows -> LocalCallAudioStartupOutcome {
-        guard await activatePhoneAudio() else { return .phoneAudioUnavailable }
-        do {
-            switch try await registerAgentAudio() {
-            case .registered:
-                return .started
-            case .callNoLongerActive:
-                await rollbackPhoneAudio()
-                return .callNoLongerActive
-            case .temporarilyUnavailable:
-                await rollbackPhoneAudio()
-                return .temporarilyUnavailable
-            }
-        } catch {
-            await rollbackPhoneAudio()
-            throw error
-        }
-    }
-}
 
 enum OutgoingCommandAvailability {
     static func isAvailable(
@@ -2446,10 +2418,10 @@ extension AppModel: CallKitActionHandling {
 
             switch routeResult {
             case .vowlan:
-                guard let (vowlanAPI, pcmRoute) = vowlanRoute else {
+                guard let (vowlanAPI, webRTCRoute) = vowlanRoute else {
                     throw CloudCommandError.unavailable
                 }
-                lockLocalTransport(.vowlan, api: vowlanAPI, pcmRoute: pcmRoute)
+                lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
             case let .cloud(outgoing):
                 guard applyCallLifecycle(CallLifecycleEvent(
                     callID: outgoing.callID, callUUID: outgoing.uuid,
@@ -2460,6 +2432,7 @@ extension AppModel: CallKitActionHandling {
                     IPhoneCloudCallSession.shared.endUnadoptedOutgoing(outgoing)
                     return
                 }
+                callKit.bindOutgoingBackendCall(outgoing.callID)
                 try await IPhoneCloudCallSession.shared.answer(outgoing)
                 guard outgoingAttemptID == attempt, !Task.isCancelled,
                       !callLifecycleStore.suppressesPresentation(callID: outgoing.callID) else {
@@ -2505,36 +2478,32 @@ extension AppModel: CallKitActionHandling {
             }
             let cloudMediaEnabled = CloudModePreference.isEnabled()
             let vowlanRoute = await readyVoWLANRoute()
-            let moduleLocalReachable = false
             let transport = CallTransportPolicy.preferred(
                 vowlanReady: vowlanRoute != nil,
-                moduleLocalReachable: moduleLocalReachable,
+
                 cloudMediaAvailable: pushedCall?.authenticatedMediaURL != nil,
                 cloudMediaEnabled: cloudMediaEnabled
             )
             switch transport {
             case .vowlan:
-                guard let (vowlanAPI, pcmRoute) = vowlanRoute else {
+                guard let (vowlanAPI, webRTCRoute) = vowlanRoute else {
                     throw CallKitBridgeError.noReachableTransport
                 }
                 try audio.prepareForCallKit()
                 try await vowlanAPI.answerCall(callID: activeCall?.id)
-                lockLocalTransport(.vowlan, api: vowlanAPI, pcmRoute: pcmRoute)
-            case .moduleLocal:
-                throw CallKitBridgeError.noReachableTransport
+                lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
             case .cloud:
                 guard let pushedCall else { throw CallKitBridgeError.noReachableTransport }
                 try await IPhoneCloudCallSession.shared.answer(pushedCall)
                 currentLocalAPI = nil
-                currentPCMRoute = nil
+                currentLocalWebRTCRoute = nil
                 currentCallTransport = .cloud
                 lockedCallTransport = LockedCallTransport(
                     transport: .cloud, generation: callLifecycleSnapshot.generation
                 )
                 await startCallAudioIfReady()
             case nil:
-                if !moduleLocalReachable,
-                   !cloudMediaEnabled,
+                if !cloudMediaEnabled,
                    pushedCall?.authenticatedMediaURL != nil {
                     throw CallKitBridgeError.cloudMediaDisabled
                 }
@@ -2625,7 +2594,7 @@ extension AppModel: CallKitActionHandling {
         }
         audio.setMuted(muted)
         IPhoneCloudCallSession.shared.setMuted(muted)
-        // CallKit mute actions apply directly to the local PCM encoder; module AT+CMUT failures must not affect bidirectional audio.
+        // CallKit mute actions apply directly to the native WebRTC track; module AT+CMUT failures must not affect bidirectional audio.
         if currentCallTransport != .cloud {
             if let localAPI = reachableLocalAPI {
                 Task { try? await localAPI.setAudioMuted(muted) }
@@ -2746,7 +2715,7 @@ private enum ModuleSetupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .notReady(message): return message
-        case .timeout: return "Module did not reconnect after restarting. Reconnect the USB cable."
+        case .timeout: return "Module did not reconnect after restarting. Reconnect to the same Wi-Fi or Android hotspot."
         }
     }
 }

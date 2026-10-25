@@ -24,11 +24,16 @@ enum IPhoneCloudCallError: LocalizedError {
 
 enum CloudCallAudioState: Equatable, Sendable {
     case idle
+    case starting
     case connecting(attempt: Int, maximumAttempts: Int)
     case connected
     case failed(String)
 
     var isConnected: Bool { self == .connected }
+    var isRetrying: Bool {
+        if case .connecting = self { return true }
+        return false
+    }
 }
 
 enum CloudCallAudioStartupPolicy {
@@ -169,278 +174,18 @@ enum CloudMediaTransportNegotiationError: Error, Equatable {
 
 enum CloudMediaTransportNegotiator {
     /// The only successful cloud carrier is WebRTC. `legacy_pcm` and the
-    /// `force_legacy_pcm` preference fail closed instead of selecting PCM.
+    /// obsolete legacy preference never select another carrier.
     static func resolve(
         requested: CloudMediaTransport,
         appSupported: Set<CloudMediaTransport>,
-        agentSupported: Set<CloudMediaTransport>,
-        forceLegacy: Bool
+        agentSupported: Set<CloudMediaTransport>
     ) -> Result<CloudMediaTransport, CloudMediaTransportNegotiationError> {
-        _ = forceLegacy
         guard requested == .webRTC,
               appSupported.contains(.webRTC),
               agentSupported.contains(.webRTC) else {
             return .failure(.unsupported)
         }
         return .success(.webRTC)
-    }
-}
-
-enum CloudMediaTransportPreference {
-    static let requestedKey = "airsim.cloud-media-requested-transport"
-    static let forceLegacyKey = "airsim.cloud-media-force-legacy-pcm"
-
-    static func requested(defaults: UserDefaults = .standard) -> CloudMediaTransport {
-        _ = defaults.string(forKey: requestedKey)
-        _ = defaults.object(forKey: forceLegacyKey)
-        return .webRTC
-    }
-
-    static func forceLegacy(defaults: UserDefaults = .standard) -> Bool {
-        _ = defaults.object(forKey: forceLegacyKey)
-        return false
-    }
-}
-
-
-struct CloudPCMTransportFrame {
-    struct Trace {
-        let sequence: UInt32
-        let sourceQueueMS: UInt32
-        let sourceSendMonoMS: UInt64
-        let sourceSendUnixMS: UInt64
-        let relayReceiveUnixMS: UInt64
-        let relayForwardUnixMS: UInt64
-    }
-
-    let pcm: Data
-    let trace: Trace?
-
-    static func decode(_ wire: Data) -> CloudPCMTransportFrame? {
-        // A raw PCM frame can legitimately start with the envelope magic.
-        if !wire.isEmpty, wire.count.isMultiple(of: 320) {
-            return .init(pcm: wire, trace: nil)
-        }
-        guard wire.count >= 20, Array(wire.prefix(4)) == [65, 83, 80, 77] else { return nil }
-        let version = wire[wire.startIndex + 4]
-        let header = number(wire, at: 6, bytes: 2)
-        if version == 1, header == 20, wire.count == 340 {
-            return .init(pcm: Data(wire.dropFirst(20)), trace: nil)
-        }
-        guard version == 2, header == 48, wire.count == 368,
-              wire[wire.startIndex + 5] == 0 else { return nil }
-        return .init(pcm: Data(wire.dropFirst(48)), trace: .init(
-            sequence: UInt32(number(wire, at: 8, bytes: 4)),
-            sourceQueueMS: UInt32(number(wire, at: 12, bytes: 4)),
-            sourceSendMonoMS: number(wire, at: 16, bytes: 8),
-            sourceSendUnixMS: number(wire, at: 24, bytes: 8),
-            relayReceiveUnixMS: number(wire, at: 32, bytes: 8),
-            relayForwardUnixMS: number(wire, at: 40, bytes: 8)
-        ))
-    }
-
-    private static func number(_ data: Data, at offset: Int, bytes: Int) -> UInt64 {
-        (offset..<(offset + bytes)).reduce(0) { ($0 << 8) | UInt64(data[data.startIndex + $1]) }
-    }
-}
-
-struct CloudPCMTransportDiagnostics {
-    private var previous: CloudPCMTransportFrame.Trace?
-    private var previousReceiveMS: Double?
-    private var lastTraceMS: Double?
-    private(set) var frames: UInt64 = 0
-    private(set) var missingSequences: UInt64 = 0
-    private(set) var reorderedSequences: UInt64 = 0
-    private var sourceGapMax: Double = 0
-    private var sourceQueueMax: Double = 0
-    private var relayGapMax: Double = 0
-    private var relayWorkMax: Double = 0
-    private var upstreamExcessMax: Double = 0
-    private var downstreamExcessMax: Double = 0
-
-    mutating func record(_ trace: CloudPCMTransportFrame.Trace,
-                         receivedMonoMS: Double, receivedUnixMS: UInt64) -> [String: String]? {
-        frames &+= 1
-        sourceQueueMax = max(sourceQueueMax, Double(trace.sourceQueueMS))
-        if trace.relayForwardUnixMS >= trace.relayReceiveUnixMS, trace.relayReceiveUnixMS > 0 {
-            relayWorkMax = max(relayWorkMax, Double(trace.relayForwardUnixMS - trace.relayReceiveUnixMS))
-        }
-        var fields: [String: String] = [
-            "seq": String(trace.sequence),
-            "source_queue_ms": String(trace.sourceQueueMS),
-            "source_send_mono_ms": String(trace.sourceSendMonoMS),
-            "source_send_unix_ms": String(trace.sourceSendUnixMS),
-            "relay_receive_unix_ms": String(trace.relayReceiveUnixMS),
-            "relay_forward_unix_ms": String(trace.relayForwardUnixMS),
-            "client_receive_unix_ms": String(receivedUnixMS),
-        ]
-        var anomalous = false
-        if let previous, let previousReceiveMS {
-            let sequenceDelta = trace.sequence &- previous.sequence
-            if sequenceDelta > 0, sequenceDelta < UInt32.max / 2 {
-                missingSequences &+= UInt64(sequenceDelta - 1)
-            } else {
-                reorderedSequences &+= 1
-            }
-            let receiveGap = max(0, receivedMonoMS - previousReceiveMS)
-            fields["client_gap_ms"] = String(Int(receiveGap))
-            fields["previous_seq"] = String(previous.sequence)
-            anomalous = receiveGap >= 80
-            if trace.sourceSendMonoMS >= previous.sourceSendMonoMS {
-                let sourceGap = Double(trace.sourceSendMonoMS - previous.sourceSendMonoMS)
-                sourceGapMax = max(sourceGapMax, sourceGap)
-                fields["source_gap_ms"] = String(Int(sourceGap))
-                if trace.relayReceiveUnixMS >= previous.relayReceiveUnixMS,
-                   previous.relayReceiveUnixMS > 0 {
-                    let relayGap = Double(trace.relayReceiveUnixMS - previous.relayReceiveUnixMS)
-                    relayGapMax = max(relayGapMax, relayGap)
-                    upstreamExcessMax = max(upstreamExcessMax, relayGap - sourceGap)
-                    fields["relay_receive_gap_ms"] = String(Int(relayGap))
-                }
-            }
-            if trace.relayForwardUnixMS >= previous.relayForwardUnixMS,
-               previous.relayForwardUnixMS > 0 {
-                let relayGap = Double(trace.relayForwardUnixMS - previous.relayForwardUnixMS)
-                downstreamExcessMax = max(downstreamExcessMax, receiveGap - relayGap)
-                fields["relay_forward_gap_ms"] = String(Int(relayGap))
-            }
-        }
-        previous = trace
-        previousReceiveMS = receivedMonoMS
-        // One regular sample per second; gap samples are capped at ten per second.
-        if let lastTraceMS, receivedMonoMS - lastTraceMS < (anomalous ? 100 : 1_000) { return nil }
-        lastTraceMS = receivedMonoMS
-        fields["gap_event"] = anomalous ? "true" : "false"
-        return fields
-    }
-
-    mutating func takeWindow() -> [String: String] {
-        let result = [
-            "rx_trace_frames": String(frames),
-            "rx_wire_seq_missing": String(missingSequences),
-            "rx_wire_seq_reordered": String(reorderedSequences),
-            "rx_source_gap_max_ms": String(Int(sourceGapMax)),
-            "rx_source_queue_max_ms": String(Int(sourceQueueMax)),
-            "rx_relay_gap_max_ms": String(Int(relayGapMax)),
-            "rx_relay_work_max_ms": String(Int(relayWorkMax)),
-            "rx_upstream_excess_max_ms": String(Int(upstreamExcessMax)),
-            "rx_downstream_excess_max_ms": String(Int(downstreamExcessMax)),
-        ]
-        sourceGapMax = 0
-        sourceQueueMax = 0
-        relayGapMax = 0
-        relayWorkMax = 0
-        upstreamExcessMax = 0
-        downstreamExcessMax = 0
-        return result
-    }
-}
-
-struct CloudPCMPlaybackWindow {
-    static let completionType: AVAudioPlayerNodeCompletionCallbackType = .dataRendered
-    static let maximumAcceleratedPackets = 4
-    private(set) var scheduledPackets = 0
-    private(set) var packetLimit = 2
-    var availablePackets: Int { max(0, packetLimit - scheduledPackets) }
-    mutating func setAccelerated(_ accelerated: Bool) {
-        // Reduce only future reservations. Already scheduled speech drains normally.
-        packetLimit = accelerated ? Self.maximumAcceleratedPackets : 2
-    }
-    mutating func schedulePacket() { scheduledPackets += 1 }
-    mutating func didRenderPacket() { scheduledPackets = max(0, scheduledPackets - 1) }
-}
-
-/// Bounds network backlog and sends one 20 ms PCM packet at a time.
-struct CloudPCMUplinkSendQueue {
-    private var pending: [(pcm: Data, capturedAt: TimeInterval)] = []
-    private var lastSendAt: TimeInterval?
-    private var nextSendAt: TimeInterval?
-    private(set) var inFlightAt: TimeInterval?
-    private(set) var droppedPackets: UInt64 = 0
-    private(set) var capturedPackets: UInt64 = 0
-    private(set) var sentPackets: UInt64 = 0
-    private(set) var maximumSendDurationMS: Double = 0
-    var pendingPackets: Int { pending.count }
-
-    mutating func enqueue(_ pcm: Data, at now: TimeInterval) {
-        guard pcm.count == 320 else { return }
-        capturedPackets &+= 1
-        pending.append((pcm, now))
-        if pending.count > 12 {
-            pending.removeFirst()
-            droppedPackets &+= 1
-        }
-    }
-
-    mutating func next(at now: TimeInterval) -> Data? {
-        guard inFlightAt == nil else { return nil }
-        while let first = pending.first, now - first.capturedAt > 0.25 {
-            pending.removeFirst()
-            droppedPackets &+= 1
-        }
-        guard !pending.isEmpty else { return nil }
-        // Pace against the nominal 20 ms timeline, not the last timer's actual
-        // delivery time. Otherwise 1 ms of timer jitter can discard whole ticks.
-        guard lastSendAt.map({ now - $0 >= 0.010 }) ?? true,
-              nextSendAt.map({ now + 0.005 >= $0 }) ?? true else { return nil }
-        nextSendAt = max((nextSendAt ?? now) + 0.020, now + 0.010)
-        lastSendAt = now
-        inFlightAt = now
-        sentPackets &+= 1
-        return pending.removeFirst().pcm
-    }
-
-    mutating func complete(at now: TimeInterval? = nil) {
-        if let now, let inFlightAt {
-            maximumSendDurationMS = max(maximumSendDurationMS, max(0, now - inFlightAt) * 1_000)
-        }
-        inFlightAt = nil
-    }
-}
-
-/// Measures receive-to-player-render residence on this device's monotonic clock.
-/// Excludes the downstream time-pitch processor and hardware presentation latency.
-struct CloudPCMRenderLatency {
-    private(set) var sampleCount: UInt64 = 0
-    private(set) var latestMS: Double = 0
-    private(set) var maximumMS: Double = 0
-
-    mutating func record(receivedAt: TimeInterval?, renderedAt: TimeInterval) {
-        guard let receivedAt, receivedAt.isFinite, renderedAt.isFinite,
-              renderedAt >= receivedAt else { return }
-        latestMS = (renderedAt - receivedAt) * 1_000
-        maximumMS = max(maximumMS, latestMS)
-        sampleCount &+= 1
-    }
-}
-
-/// Bounds source consumption above the learned reserve. The two-frame guard is
-/// additional to both the next player reservation and the learned jitter target.
-/// All times are from the receive/render monotonic clock, never wall-clock Date().
-struct CloudPCMPlaybackRateController {
-    static let maximumRate = 1.04
-    private(set) var rate = 1.0
-    private var lastUpdateAt: TimeInterval?
-
-    mutating func update(at now: TimeInterval?, queuedAfterRefill: Int, target: Int,
-                         lastArrival: TimeInterval?, recovering: Bool) {
-        // Date's reference-date conversion can round this monotonic value by
-        // sub-microseconds; do not mistake that for a backwards-running clock.
-        guard let now, now.isFinite, let lastArrival, now + 0.000_001 >= lastArrival,
-              now - lastArrival <= 0.04, !recovering,
-              queuedAfterRefill > target + 2 else {
-            rate = 1
-            lastUpdateAt = now
-            return
-        }
-        // Hysteresis prevents toggling when the reserve is close to its floor.
-        guard rate > 1 || queuedAfterRefill >= target + 4 else {
-            lastUpdateAt = now
-            return
-        }
-        let elapsed = min(0.02, max(0, now - (lastUpdateAt ?? (now - 0.02))))
-        rate = min(Self.maximumRate, rate + elapsed * 0.25)
-        lastUpdateAt = now
     }
 }
 
@@ -486,7 +231,7 @@ enum CloudCallAnswerPolicy {
     static let confirmationDelays: [TimeInterval] = [0, 3, 3, 4, 5]
 
     static func isAcknowledged(status: String) -> Bool {
-        status == "answer_ok" || status == "active"
+        status == "answer_ok" || status == "active" || status == "media_prepared"
     }
 
     static func shouldReplayImmediately(status: String) -> Bool {
@@ -504,7 +249,7 @@ enum CloudCallTerminationCoordinator {
     }
 }
 
-struct CloudPCMControlMessage: Equatable, Sendable {
+struct CloudCallControlMessage: Equatable, Sendable {
     func matches(callID: String, uuid: UUID, generation: UInt64) -> Bool {
         (self.callID == nil || self.callID == callID)
             && (callUUID == nil || callUUID?.lowercased() == uuid.uuidString.lowercased())
@@ -554,11 +299,11 @@ struct CloudPCMControlMessage: Equatable, Sendable {
         }
     }
 
-    static func decode(_ text: String) throws -> CloudPCMControlMessage? {
+    static func decode(_ text: String) throws -> CloudCallControlMessage? {
         guard let data = text.data(using: .utf8) else { return nil }
         let payload = try JSONDecoder().decode(Payload.self, from: data)
         guard let status = payload.status ?? payload.event else { return nil }
-        return CloudPCMControlMessage(
+        return CloudCallControlMessage(
             status: status,
             role: payload.role,
             sessionID: payload.sessionID,
@@ -594,11 +339,9 @@ struct CloudCallControlEnvelope: Codable, Equatable, Sendable {
     let generation: UInt64
     let commandID: String
     let traceID: String
-    var mediaProtocol: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case action, generation
-        case mediaProtocol = "media_protocol"
         case callID = "call_id"
         case callUUID = "call_uuid"
         case commandID = "command_id"
@@ -828,6 +571,7 @@ final class IPhoneCloudCallSession {
     private var webRTCStartTask: Task<Void, Never>?
     private var webRTCStartID = UUID()
     private var audioStartupPermitted = false
+    private var audioSetupStartedAt: TimeInterval?
     private var ownsWebRTCAudioActivation = false
     private var usesWebRTC: Bool { call?.requestedMediaTransport == .webRTC }
 
@@ -847,11 +591,23 @@ final class IPhoneCloudCallSession {
                 guard session.usesWebRTC, session.media.isCurrentWebRTCSession(negotiation, connection: connection) else { return }
                 if connected {
                     session.webRTCReadiness.nativeConnected(negotiation)
-                    if session.webRTCReadiness.isReady { session.audioState = .connected }
+                    session.traceAudio(phase: "native_connected", title: "WebRTC Connected")
+                    if session.webRTCReadiness.isReady, !session.audioState.isConnected {
+                        session.audioState = .connected
+                        session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                    }
                 } else {
                     session.webRTCReadiness.reset()
                     session.requestMediaRebuild(.connectionLost)
                 }
+            }
+        }
+        media.onWebRTCRecovering = { connection, negotiation in
+            Task { @MainActor in
+                let session = IPhoneCloudCallSession.shared
+                guard session.media.isCurrentWebRTCSession(negotiation, connection: connection) else { return }
+                session.webRTCReadiness.nativeDisconnected(negotiation)
+                session.audioState = .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
             }
         }
         media.onConnectionLost = { connection in
@@ -867,16 +623,19 @@ final class IPhoneCloudCallSession {
                 let session = IPhoneCloudCallSession.shared
                 let status = control.status
                 let relayStatuses = ["action_queued", "action_forwarded", "peer_connected", "owner_claimed"]
-                await AgentVerboseTraceRecorder.shared.recordEvent(
-                    source: relayStatuses.contains(status) ? "RELAY" : "AGENT",
-                    category: relayStatuses.contains(status) ? "relay" : "cloud-call-control",
-                    phase: status,
-                    title: control.action.map { "Call Control · \($0)" } ?? "Cloud Call Status",
-                    detail: control.message ?? "",
-                    fields: control.traceFields,
-                    isFailure: status == "action_error"
-                )
-                // The trace await can outlive hangup or even the next call.
+                // File-backed diagnostics must not delay answer/readiness handling.
+                Task {
+                    await AgentVerboseTraceRecorder.shared.recordEvent(
+                        source: relayStatuses.contains(status) ? "RELAY" : "AGENT",
+                        category: relayStatuses.contains(status) ? "relay" : "cloud-call-control",
+                        phase: status,
+                        title: control.action.map { "Call Control · \($0)" } ?? "Cloud Call Status",
+                        detail: control.message ?? "",
+                        fields: control.traceFields,
+                        isFailure: status == "action_error"
+                    )
+                }
+                // A queued callback can outlive hangup or even the next call.
                 guard let call = session.call, session.media.isCurrentConnection(connection),
                       control.matches(callID: call.callID, uuid: call.uuid, generation: call.generation) else { return }
                 if status == "peer_connected", session.usesWebRTC,
@@ -902,8 +661,13 @@ final class IPhoneCloudCallSession {
                     session.stop()
                 case "webrtc_ready":
                     if session.usesWebRTC, let negotiation = control.sessionID {
+                        guard session.webRTCReadiness.sessionID == negotiation else { break }
                         session.webRTCReadiness.agentConnected(negotiation)
-                        if session.webRTCReadiness.isReady { session.audioState = .connected }
+                        session.traceAudio(phase: "carrier_ready", title: "Android Carrier Audio Ready")
+                        if session.webRTCReadiness.isReady, !session.audioState.isConnected {
+                            session.audioState = .connected
+                            session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                        }
                     }
                 case "webrtc_failed":
                     if session.usesWebRTC,
@@ -911,7 +675,7 @@ final class IPhoneCloudCallSession {
                         session.webRTCReadiness.reset()
                         session.requestMediaRebuild(.connectionLost)
                     }
-                case "pcm_recovering":
+                case "webrtc_recovering":
                     if session.usesWebRTC { session.webRTCReadiness.agentRecovering() }
                     session.audioState = .connecting(
                         attempt: 1,
@@ -922,36 +686,7 @@ final class IPhoneCloudCallSession {
                 }
             }
         }
-        media.onDownlinkPlayback = { connection in
-            Task { @MainActor in
-                let session = IPhoneCloudCallSession.shared
-                if session.media.isCurrentConnection(connection), session.hasActiveCall, session.media.isAudioRunning {
-                    session.audioState = .connected
-                }
-            }
-        }
-        media.onDownlinkFrame = { bytes, peak, jitterBufferFrames, droppedFrames, connection in
-            Task { @MainActor in
-                let session = IPhoneCloudCallSession.shared
-                guard session.call != nil, session.media.isCurrentConnection(connection) else { return }
-                session.mediaHealthTracker?.recordDownlink(
-                    bytes: bytes,
-                    peak: peak,
-                    at: Date(),
-                    jitterBufferFrames: jitterBufferFrames,
-                    droppedFrames: droppedFrames
-                )
-                session.publishMediaHealth()
-            }
-        }
-        media.onUplinkFrame = { bytes, peak, connection in
-            Task { @MainActor in
-                let session = IPhoneCloudCallSession.shared
-                guard session.call != nil, session.media.isCurrentConnection(connection) else { return }
-                session.mediaHealthTracker?.recordUplink(bytes: bytes, peak: peak, at: Date())
-                session.publishMediaHealth()
-            }
-        }
+
     }
 
     func answer(_ incoming: IncomingVoIPCall) async throws {
@@ -962,6 +697,11 @@ final class IPhoneCloudCallSession {
         try media.prepareForCallKit(webRTC: true)
         let callChanged = call?.uuid != incoming.uuid
         call = incoming
+        if callChanged || audioSetupStartedAt == nil {
+            audioSetupStartedAt = ProcessInfo.processInfo.systemUptime
+            audioState = .starting
+            traceAudio(phase: "setup_started", title: "Cloud Audio Connecting")
+        }
         answered = true
         lifecycleState = .connecting
         answerHandshake.invalidate()
@@ -988,6 +728,7 @@ final class IPhoneCloudCallSession {
             }
         }
         guard call?.uuid == incoming.uuid, answered else { return }
+        traceAudio(phase: "signaling_connected", title: "Cloud Signaling Connected")
         scheduleAnswerConfirmation(for: incoming)
     }
 
@@ -1203,8 +944,11 @@ final class IPhoneCloudCallSession {
             "call_uuid": call.uuid.uuidString.lowercased(),
             "generation": String(call.generation),
             "audio_route": media.audioRouteDescription,
-            "downlink_received": String(media.hasReceivedDownlink),
         ]
+        if let audioSetupStartedAt {
+            fields["setup_elapsed_ms"] = String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"),
+                    max(0, ProcessInfo.processInfo.systemUptime - audioSetupStartedAt) * 1_000)
+        }
         fields.merge(additionalFields) { current, _ in current }
         if let attempt { fields["attempt"] = String(attempt) }
         Task {
@@ -1238,13 +982,11 @@ final class IPhoneCloudCallSession {
         webRTCStartTask?.cancel()
         webRTCStartTask = nil
         media.stopAudio()
-        audioState = hasActiveCall
-            ? .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.audioDelays.count)
-            : .idle
+        audioState = hasActiveCall ? .starting : .idle
     }
     func setMuted(_ muted: Bool) { media.setMuted(muted) }
 
-    var recordingSource: CallRecordingSource { .cloudWebRTC }
+    var recordingSource: CallRecordingSource? { call.map { .init(callUUID: $0.uuid) } }
 
     func recordAudioRoute(_ route: String) {
         guard call != nil else { return }
@@ -1271,6 +1013,7 @@ final class IPhoneCloudCallSession {
         lifecycleState = .idle
         answerHandshake.invalidate()
         audioState = .idle
+        audioSetupStartedAt = nil
         mediaHealthTracker = nil
         mediaHealthSnapshot = CloudMediaHealthSnapshot()
     }
@@ -1307,46 +1050,39 @@ final class IPhoneCloudCallSession {
     }
 
     private func confirmAnswer(status: String, traceID: String?) {
-        answerHandshake.confirm(status: status, callConnected: {
+        let wasAcknowledged = answerAcknowledged
+        answerHandshake.confirm(status: status, isOutgoing: call?.isOutgoing == true, callConnected: {
             emitLifecycle(.active, source: .agent, traceID: traceID)
         }) { startWebRTCIfReady() }
         guard answerAcknowledged else { return }
+        if !wasAcknowledged {
+            traceAudio(phase: status == "media_prepared" ? "media_prepared" : "answer_confirmed",
+                       title: status == "media_prepared" ? "Outgoing WebRTC Prepared" : "Android Answer Confirmed")
+        }
         answerRetryGeneration &+= 1
         answerRetryTask?.cancel()
         answerRetryTask = nil
     }
 
-    func callKitAudioDidActivate(_ audioSession: AVAudioSession) {
-        guard usesWebRTC else { return }
-        let rtc = RTCAudioSession.sharedInstance()
-        rtc.audioSessionDidActivate(audioSession)
-        rtc.isAudioEnabled = true
-    }
-
-    func callKitAudioDidDeactivate(_ audioSession: AVAudioSession) {
-        guard usesWebRTC else { return }
-        audioStartupPermitted = false
-        webRTCStartTask?.cancel()
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
-        RTCAudioSession.sharedInstance().audioSessionDidDeactivate(audioSession)
-    }
-
     private func restartWebRTCNegotiation() {
         guard usesWebRTC, answered, let call else { return }
+        let replacingPeer = media.isAudioRunning
         answerHandshake.agentReconnected(role: "agent", stopMedia: {
             webRTCReadiness.reset()
             webRTCStartID = UUID()
             webRTCStartTask?.cancel()
             webRTCStartTask = nil
             media.stopWebRTC()
-            audioState = .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+            audioState = replacingPeer
+                ? .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+                : .starting
         }, replayAnswer: {
             media.sendControl("answer", call: call)
         }, scheduleConfirmation: {
             scheduleAnswerConfirmation(for: call)
         })
-        // Only a fresh answer_ok can re-open startWebRTCIfReady. The agent must
-        // recreate its native peer/phone audio bridge before we send new SDP.
+        // A fresh answer_ok (or outgoing media_prepared) must confirm the agent
+        // recreated its native peer before we send new SDP.
     }
 
     private func startWebRTCIfReady() {
@@ -1356,7 +1092,8 @@ final class IPhoneCloudCallSession {
               let call else { return }
         let id = UUID()
         webRTCStartID = id
-        audioState = .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+        // Keep a real recovery indication; the first negotiation is ordinary startup.
+        if !audioState.isRetrying { audioState = .starting }
         webRTCStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { if webRTCStartID == id { webRTCStartTask = nil } }
@@ -1380,11 +1117,11 @@ final class IPhoneCloudCallSession {
                 rtc.isAudioEnabled = true
                 let negotiation = try media.startWebRTC(call: call, servers: config.iceServers.map(\.native))
                 webRTCReadiness.begin(negotiation)
+                traceAudio(phase: "peer_started", title: "WebRTC Peer Started")
             } catch {
                 guard !Task.isCancelled, webRTCStartID == id else { return }
                 audioState = .failed(error.localizedDescription)
                 traceAudio(phase: "webrtc_failed", title: "WebRTC Audio Failed", detail: error.localizedDescription, isFailure: true)
-                guard CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine() else { return }
             }
         }
     }
@@ -1483,6 +1220,7 @@ private struct CloudCallControlOperationIdentity {
 
 private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     var onWebRTCState: ((_ connected: Bool, _ connection: UUID, _ negotiation: UUID) -> Void)?
+    var onWebRTCRecovering: ((_ connection: UUID, _ negotiation: UUID) -> Void)?
     private var webRTCSessionID: UUID?
     func isCurrentWebRTCSession(_ id: UUID, connection: UUID) -> Bool {
         queue.sync { connectionID == connection && webRTCSessionID == id }
@@ -1491,17 +1229,13 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var webRTCCall: IncomingVoIPCall?
     private var webRTCMode = false
     var onConnectionLost: ((UUID) -> Void)?
-    var onControl: ((CloudPCMControlMessage, UUID) -> Void)?
-    var onDownlinkPlayback: ((UUID) -> Void)?
-    var onDownlinkFrame: ((_ bytes: Int, _ peak: Int, _ jitterBufferFrames: Int, _ droppedFrames: Int, _ connection: UUID) -> Void)?
-    var onUplinkFrame: ((_ bytes: Int, _ peak: Int, _ connection: UUID) -> Void)?
+    var onControl: ((CloudCallControlMessage, UUID) -> Void)?
 
     private let queue = DispatchQueue(label: "com.example.airsim.iphone-cloud-media", qos: .userInteractive)
     private var webSocket: URLSessionWebSocketTask?
     private var networkSession: URLSession?
     private var connectionID = UUID()
     func isCurrentConnection(_ id: UUID) -> Bool { queue.sync { connectionID == id } }
-    private var receivedDownlink = false
     private var muted = false
     private var stopped = true
     private var controlOperations: [String: CloudCallControlOperationIdentity] = [:]
@@ -1511,7 +1245,6 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     }
 
     var isAudioRunning: Bool { queue.sync { webRTCPeer != nil } }
-    var hasReceivedDownlink: Bool { queue.sync { receivedDownlink } }
 
     var audioRouteDescription: String {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -1564,6 +1297,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                         }
                     }
                 }, connected: { [weak self] in self?.onWebRTCState?(true, owner, negotiation) },
+                disconnected: { [weak self] in self?.onWebRTCRecovering?(owner, negotiation) },
                 failure: { [weak self] in
                     guard let self else { return }
                     self.webRTCPeer = nil
@@ -1693,8 +1427,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             callUUID: call.uuid.uuidString.lowercased(),
             generation: call.generation,
             commandID: identity.commandID,
-            traceID: identity.traceID,
-            mediaProtocol: action == "answer" ? "airsim-pcm-trace-v2" : nil
+            traceID: identity.traceID
         )
         return envelope
     }
@@ -1741,7 +1474,6 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         webRTCCall = nil
         webRTCSessionID = nil
         if webRTCMode { RTCAudioSession.sharedInstance().isAudioEnabled = false }
-        receivedDownlink = false
     }
 
     func stop() {
@@ -1764,8 +1496,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             queue.async {
                 guard !self.stopped, self.webSocket === socket else { return }
                 switch result {
-                case let .success(.data(data)):
-                    CloudCallBinaryFrame.deliver(data) { _ in }
+                case .success(.data):
+                    break // Call WebSockets carry signaling; binary payloads never enter the audio engine.
                 case let .success(.string(text)):
                     self.consumeControl(text)
                 case .success:
@@ -1790,64 +1522,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             peer.receive(signal)
             return
         }
-        guard let control = try? CloudPCMControlMessage.decode(text) else { return }
+        guard let control = try? CloudCallControlMessage.decode(text) else { return }
         onControl?(control, connectionID)
-    }
-}
-
-struct CloudPCMResampler {
-    private var converter: AVAudioConverter?
-    private var sampleRate = 0.0
-
-    mutating func encode(samples input: [Float], sampleRate rate: Double, muted: Bool) -> Data {
-        guard !input.isEmpty, rate.isFinite, rate >= 8_000 else { return Data() }
-        if sampleRate != rate || converter == nil {
-            guard let source = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1),
-                  let destination = AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1),
-                  let converter = AVAudioConverter(from: source, to: destination) else {
-                return Data()
-            }
-            // Keep the anti-alias filter state across microphone callbacks. Selecting
-            // every sixth 48 kHz sample folds high-frequency noise into audible speech.
-            converter.sampleRateConverterQuality = AVAudioQuality.max.rawValue
-            converter.primeMethod = .normal
-            self.converter = converter
-            sampleRate = rate
-        }
-        guard let converter,
-              let source = AVAudioPCMBuffer(pcmFormat: converter.inputFormat,
-                                            frameCapacity: AVAudioFrameCount(input.count)),
-              let sourceSamples = source.floatChannelData?[0] else { return Data() }
-        source.frameLength = source.frameCapacity
-        input.withUnsafeBufferPointer { buffer in
-            if let base = buffer.baseAddress { sourceSamples.update(from: base, count: input.count) }
-        }
-
-        let capacity = AVAudioFrameCount(ceil(Double(input.count) * 8_000 / rate)) + 256
-        guard let destination = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
-                                                 frameCapacity: capacity) else { return Data() }
-        var suppliedInput = false
-        var error: NSError?
-        let status = converter.convert(to: destination, error: &error) { _, inputStatus in
-            guard !suppliedInput else {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            suppliedInput = true
-            inputStatus.pointee = .haveData
-            return source
-        }
-        guard status != .error, error == nil,
-              let converted = destination.floatChannelData?[0] else { return Data() }
-
-        var output = Data()
-        output.reserveCapacity(Int(destination.frameLength) * 2)
-        for index in 0..<Int(destination.frameLength) {
-            let value = converted[index]
-            let scaled = muted || !value.isFinite ? Int16(0) : Int16(max(-1, min(1, value)) * 32_767)
-            var littleEndian = scaled.littleEndian
-            withUnsafeBytes(of: &littleEndian) { output.append(contentsOf: $0) }
-        }
-        return output
     }
 }

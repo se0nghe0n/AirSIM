@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-MANIFEST_SOURCE=${AIRSIM_ANDROID_MANIFEST:-"$ROOT/AndroidManifest.xml"}
-OUTPUT_BASENAME=${AIRSIM_ANDROID_OUTPUT_BASENAME:-AirSIM-Phone-Bridge}
+MANIFEST_SOURCE=${AIRSIM_ANDROID_MANIFEST:-"$ROOT/../../android-standalone/AndroidManifest.xml"}
+OUTPUT_BASENAME=${AIRSIM_ANDROID_OUTPUT_BASENAME:-AirSIM-Android-Standalone}
 SDK=${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}
 BUILD_TOOLS="$SDK/build-tools/35.0.0"
 ANDROID_JAR="$SDK/platforms/android-35/android.jar"
@@ -66,7 +66,6 @@ CLASSPATH="$ANDROID_JAR:$(IFS=:; echo "${SHIZUKU_JARS[*]}")"
 
 SOURCES=()
 while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/src" -name '*.java' -print0)
-while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/../phone-audio-bridge/src" -name '*.java' -print0)
 "$JAVA_HOME/bin/javac" -source 17 -target 17 -Xlint:all -classpath "$CLASSPATH" -d "$CLASSES" "${SOURCES[@]}"
 
 sh "$ROOT/verify-io-api.sh" "$CLASSES"

@@ -6,6 +6,7 @@ import android.os.RemoteException;
 import android.content.Context;
 
 final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transport {
+    private final IBinder owner = new android.os.Binder();
     private final IBinder binder;
     private final PrivilegedProcessTransport process;
 
@@ -23,6 +24,8 @@ final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transp
     static PrivilegedBridgeClient openProcess(Context context) throws Exception {
         return new PrivilegedBridgeClient(PrivilegedProcessTransport.open(context));
     }
+
+    boolean isAlive() { return process != null ? process.isAlive() : binder.pingBinder(); }
 
     boolean isProcessTransport() { return process != null; }
 
@@ -46,6 +49,22 @@ final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transp
         return transact(PrivilegedBridgeProtocol.TRANSACTION_ENSURE_DIALER_ROLE, false, false);
     }
 
+    String mediaRequest(String request) throws Exception {
+        PrivilegedMediaProtocol.bounded(request);
+        if (process != null) return process.mediaRequest(request);
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            data.writeInterfaceToken(PrivilegedBridgeProtocol.DESCRIPTOR);
+            data.writeStrongBinder(owner);
+            data.writeString(request);
+            if (!binder.transact(PrivilegedBridgeProtocol.TRANSACTION_MEDIA, data, reply, 0))
+                throw new RemoteException("media_transaction_rejected");
+            reply.readException();
+            return PrivilegedMediaProtocol.bounded(reply.readString());
+        } finally { reply.recycle(); data.recycle(); }
+    }
+
     private String transact(int code, boolean hasBoolean, boolean value) throws RemoteException {
         if (process != null) {
             try { return process.request(code, hasBoolean && value); }
@@ -57,6 +76,7 @@ final class PrivilegedBridgeClient implements PrivilegedBridgeCoordinator.Transp
         Parcel reply = Parcel.obtain();
         try {
             data.writeInterfaceToken(PrivilegedBridgeProtocol.DESCRIPTOR);
+            data.writeStrongBinder(owner);
             if (hasBoolean) data.writeInt(value ? 1 : 0);
             if (!binder.transact(code, data, reply, 0)) throw new RemoteException("privileged transaction rejected");
             reply.readException();

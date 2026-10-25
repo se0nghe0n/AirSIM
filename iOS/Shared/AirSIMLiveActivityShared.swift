@@ -8,13 +8,20 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
         enum Transport: String, Codable, Hashable {
             case vowlan
             case cloud
-            case moduleLocal = "module_local"
+            case unavailable
+
+            init(from decoder: Decoder) throws {
+                let container = try decoder.singleValueContainer()
+                let value = try container.decode(String.self)
+                // Existing activities may carry a retired transport; retain their other fields.
+                self = Self(rawValue: value) ?? .unavailable
+            }
 
             var title: String {
                 switch self {
                 case .vowlan: return "VoWLAN"
                 case .cloud: return "Cloud"
-                case .moduleLocal: return "Local Module"
+                case .unavailable: return "Unavailable"
                 }
             }
 
@@ -22,7 +29,7 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
                 switch self {
                 case .vowlan: return "wifi"
                 case .cloud: return "icloud.fill"
-                case .moduleLocal: return "cable.connector"
+                case .unavailable: return "exclamationmark.triangle"
                 }
             }
         }
@@ -193,226 +200,101 @@ enum AirSIMLiveActivityActionURL {
     }
 }
 
-/// Dynamic Island actions use a minimal module client so the extension can control calls over USB ECM without launching the main app.
-private enum LiveActivityCallClient {
-    enum Action {
-        case answer
-        case reject
-        case hangup
+/// App-only dispatch is installed during App initialization; the widget contains no credentials.
+@MainActor
+final class LiveActivityCallActionDispatcher {
+    static let shared = LiveActivityCallActionDispatcher()
+    var handler: ((AirSIMLiveActivityAction, String) async throws -> Void)?
 
-        var endpoint: String {
-            switch self {
-            case .answer: return "api/calls/answer"
-            case .reject: return "api/calls/reject"
-            case .hangup: return "api/calls/hangup"
-            }
-        }
-    }
-
-    private struct Status: Decodable {
-        let active: ActiveCall?
-    }
-
-    private struct ActiveCall: Decodable {
-        let id: String
-        let direction: String
-        let state: String
-    }
-
-    static func perform(_ action: Action, callID: String) async throws {
-        // An empty call ID (default parameter from Shortcuts/Siri) must never match the "" callID of a standby/offline island,
-        // otherwise running the intent with no active call would end the persistent standby activity.
+    func perform(_ action: AirSIMLiveActivityAction, callID: String) async throws {
         guard !callID.isEmpty else { throw LiveActivityCallError.staleCall }
-        let transport = WiredHTTPTransport()
-        let statusResponse = try await transport.send(request(method: "GET", path: "api/calls/status"))
-        guard (200..<300).contains(statusResponse.statusCode) else {
-            throw LiveActivityCallError.httpStatus(statusResponse.statusCode)
-        }
-        let status: Status
-        do {
-            status = try JSONDecoder().decode(Status.self, from: statusResponse.body)
-        } catch {
-            throw LiveActivityCallError.invalidResponse
-        }
+        guard let handler else { throw LiveActivityCallError.unavailable }
+        do { try await handler(action, callID) }
+        catch let error as LiveActivityCallError { throw error }
+        catch { throw LiveActivityCallError.unavailable }
+    }
+}
 
-        // perform() may be re-run from the beginning by the system (App Intents execution model): POST is the only
-        // irreversible side effect and is placed after the state check to keep replays idempotent. The POST body carries call_id,
-        // which the Agent validates atomically (requireActiveCallID); the client GET check is only a fast path
-        // and cannot guarantee the call does not change between check and execution.
-        // An already-active answer or an already-ended (or superseded) reject/hangup succeeds immediately
-        // without repeating the POST or reporting confusing state errors.
-        guard let active = status.active, active.id == callID else {
-            try await finishStaleCall(action, callID: callID)
-            return
-        }
-
+enum LiveActivityCallActionPolicy {
+    static func shouldPerform(_ action: AirSIMLiveActivityAction, callID: String,
+                              currentCallID: String?, state: String?, direction: String?) throws -> Bool {
+        guard !callID.isEmpty, callID == currentCallID else { throw LiveActivityCallError.staleCall }
+        guard let state, ["incoming", "waiting", "connecting", "dialing", "alerting", "active", "held"].contains(state)
+        else { throw LiveActivityCallError.staleCall }
         switch action {
         case .answer:
-            // Do not repeat POST on retry when already active to avoid double-answering.
-            guard active.state != "active" else {
-                await synchronizeActivities(after: action, callID: callID)
-                return
-            }
-            guard active.direction == "incoming",
-                  ["incoming", "waiting"].contains(active.state) else {
-                throw LiveActivityCallError.invalidState
-            }
+            if ["connecting", "active", "held"].contains(state) { return false }
+            guard direction == "incoming", ["incoming", "waiting"].contains(state)
+            else { throw LiveActivityCallError.invalidState }
         case .reject:
-            guard active.direction == "incoming",
-                  ["incoming", "waiting"].contains(active.state) else {
-                throw LiveActivityCallError.invalidState
-            }
+            guard direction == "incoming", ["incoming", "waiting"].contains(state)
+            else { throw LiveActivityCallError.invalidState }
         case .hangup:
             break
         }
-
-        let response = try await transport.send(request(method: "POST", path: action.endpoint, callID: callID))
-        if response.statusCode == 502, isStaleCallRejection(response.body) {
-            // If the call is superseded after the GET check, the Agent call_id check rejects with 502 without executing
-            // the action; finish via the stale branch rather than reporting an HTTP error. Genuine action failures also return
-            // 502 with a different error message and are still reported as failures.
-            try await finishStaleCall(action, callID: callID)
-            return
-        }
-        guard (200..<300).contains(response.statusCode) else {
-            throw LiveActivityCallError.httpStatus(response.statusCode)
-        }
-        await synchronizeActivities(after: action, callID: callID)
+        return true
     }
+}
 
-    /// No matching call remains on the module endpoint: answer throws stale; reject/hangup cleans up the corresponding activity.
-    /// However, the module endpoint does not govern VoWLAN/cloud calls, so an absent call on the endpoint does not prove the call ended;
-    /// keep the island and throw stale in that case.
-    private static func finishStaleCall(_ action: Action, callID: String) async throws {
-        guard action != .answer else { throw LiveActivityCallError.staleCall }
-        for activity in Activity<AirSIMCallActivityAttributes>.activities
-        where activity.content.state.callID == callID {
-            switch activity.content.state.transport {
-            case .vowlan, .cloud:
-                throw LiveActivityCallError.staleCall
-            case .moduleLocal, nil:
-                break
-            }
-        }
-        await synchronizeActivities(after: action, callID: callID)
-    }
-
-    /// The Agent returns this fixed error string when rejecting a stale call_id (module-agent
-    /// requireActiveCallID / answerCallForID / executeAndroidCallCommandForID),
-    /// distinguishing a superseded call from a genuine action failure that also returns HTTP 502.
-    private static func isStaleCallRejection(_ body: Data) -> Bool {
-        struct Payload: Decodable { let error: String? }
-        return (try? JSONDecoder().decode(Payload.self, from: body))?.error == "Call ID is no longer valid"
-    }
-
-    private static func request(method: String, path: String, callID: String = "") -> URLRequest {
-        var request = URLRequest(url: URL(string: "http://192.168.225.1:7575/\(path)")!)
-        request.httpMethod = method
-        request.timeoutInterval = 8
-        if method == "POST" {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            // Same call_id field as the main app LocalCallControlBody.
-            request.httpBody = try? JSONEncoder().encode(["call_id": callID])
-        }
-        return request
-    }
-
-    private static func synchronizeActivities(after action: Action, callID: String) async {
-        for activity in Activity<AirSIMCallActivityAttributes>.activities
-        where activity.content.state.callID == callID {
-            switch action {
-            case .answer:
-                let previous = activity.content.state
-                let state = AirSIMCallActivityAttributes.ContentState(
-                    callID: previous.callID,
-                    number: previous.number,
-                    displayName: previous.displayName,
-                    phase: .active,
-                    // Retry synchronization must not reset the call timer: keep the original start time if already active.
-                    startedAt: previous.phase == .active ? previous.startedAt : Date(),
-                    transport: previous.transport,
-                    agentDeviceName: previous.agentDeviceName,
-                    agentPhoneNumber: previous.agentPhoneNumber,
-                    agentKind: previous.agentKind,
-                    pairedAgentCount: previous.pairedAgentCount,
-                    vowlanOnline: previous.vowlanOnline,
-                    bluetoothOnline: previous.bluetoothOnline,
-                    cloudOnline: previous.cloudOnline
-                )
-                await activity.update(ActivityContent(state: state, staleDate: nil))
-            case .reject, .hangup:
-                await activity.end(nil, dismissalPolicy: .immediate)
-            }
+enum LiveActivityCallError: Error, CustomLocalizedStringResourceConvertible {
+    case staleCall, invalidState, unavailable
+    var localizedStringResource: LocalizedStringResource {
+        switch self {
+        case .staleCall: "This call has ended or was replaced by another call"
+        case .invalidState: "This action is unavailable in the current call state"
+        case .unavailable: "The call could not be controlled. Check the connection to your Android phone."
         }
     }
 }
 
 struct AnswerAirSIMCallIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Answer Module Call"
-    // openAppWhenRun is deprecated in iOS 26.0. Gate supportedModes on iOS 26.0+ for the iOS 17.0
-    // deployment target; iOS 17-25 uses the framework default (equivalent to openAppWhenRun = false).
+    static let title: LocalizedStringResource = "Answer AirSIM Call"
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
-
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     @Parameter(title: "Call ID") var callID: String
-
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
-
+    @MainActor
     func perform() async throws -> some IntentResult {
-        try await LiveActivityCallClient.perform(.answer, callID: callID)
+        try await LiveActivityCallActionDispatcher.shared.perform(.answer, callID: callID)
         return .result()
     }
 }
 
 struct RejectAirSIMCallIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Decline Module Call"
-    // Same supportedModes availability gating as AnswerAirSIMCallIntent.
+    static let title: LocalizedStringResource = "Decline AirSIM Call"
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
-
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     @Parameter(title: "Call ID") var callID: String
-
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
-
+    @MainActor
     func perform() async throws -> some IntentResult {
-        try await LiveActivityCallClient.perform(.reject, callID: callID)
+        try await LiveActivityCallActionDispatcher.shared.perform(.reject, callID: callID)
         return .result()
     }
 }
 
 struct HangUpAirSIMCallIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "End Module Call"
-    // Same supportedModes availability gating as AnswerAirSIMCallIntent.
+    static let title: LocalizedStringResource = "End AirSIM Call"
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
-
+    static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     @Parameter(title: "Call ID") var callID: String
-
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
-
+    @MainActor
     func perform() async throws -> some IntentResult {
-        try await LiveActivityCallClient.perform(.hangup, callID: callID)
+        try await LiveActivityCallActionDispatcher.shared.perform(.hangup, callID: callID)
         return .result()
     }
 }
 
-/// Only CustomLocalizedStringResourceConvertible errors surface their actual message to
-/// Siri/Shortcuts; LocalizedError is not read by the App Intents framework.
-private enum LiveActivityCallError: Error, CustomLocalizedStringResourceConvertible {
-    case staleCall
-    case invalidState
-    case invalidResponse
-    case httpStatus(Int)
-
-    var localizedStringResource: LocalizedStringResource {
-        switch self {
-        case .staleCall: "This call has ended or was replaced by another call"
-        case .invalidState: "This action is unavailable in the current call state"
-        case .invalidResponse: "The module returned an unreadable response"
-        case let .httpStatus(code): "Module call endpoint returned HTTP \(code)"
-        }
+/// A stale island must never control a newer call after the app opens.
+enum LiveActivityActionGate {
+    static func accepts(callID: String, currentCallID: String?, callIsLive: Bool) -> Bool {
+        callIsLive && !callID.isEmpty && currentCallID == callID
     }
 }

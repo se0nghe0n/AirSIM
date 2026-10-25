@@ -1,6 +1,6 @@
 # AirSIM Cloudflare Relay Deployment Guide
 
-`push-relay-worker/` contains a deployable Relay backend, not placeholder domain files. It provides public-network control, APNs push, status synchronization, command queues, and call media relay between AirSIM iPhone, Apple Watch, Live Activity, and the Android Standalone built-in Agent (or legacy AVF Agent). AirSIM and DJOneHub must use separate Workers, KV, Durable Objects, and domains. The upstream maintainer's production AirSIM domain is `https://airsim-push.remotepilot.site`; other deployers should use their own Cloudflare custom domain.
+`push-relay-worker/` contains a deployable Relay backend, not placeholder domain files. It provides public-network control, APNs push, status synchronization, command queues, and authenticated call signaling between AirSIM iPhone, Apple Watch, Live Activity, and the Android Standalone built-in Agent. AirSIM and DJOneHub must use separate Workers, KV, Durable Objects, and domains. The upstream maintainer's production AirSIM domain is `https://airsim-push.remotepilot.site`; other deployers should use their own Cloudflare custom domain.
 
 > Replace the domains, Cloudflare resources, Apple Team ID, and keys in this guide with your own. Never reuse another AirSIM environment's KV, Durable Objects, Dashboard token, device secret, or APNs private key.
 
@@ -13,7 +13,6 @@
 | `ALLOWED_BUNDLE_ID` | `com.eric3u.airsim` |
 | Worker protocol version | `/healthz` reports `0.2.1` |
 | Companion app release | [`v0.9.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.6) |
-| Companion AVF Agent | [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6), Debian package `0.4.6-1` |
 | Storage | AirSIM-specific `DEVICES` KV and `MEDIA`, `STATUS`, `COMMANDS` Durable Objects |
 | Secrets | `APNS_P8` and `DASHBOARD_TOKEN` names configured; values are not in the repository |
 | DJOneHub isolation | `https://push.remotepilot.site` still returns `djonehub-push-relay` |
@@ -28,7 +27,7 @@ Main files:
 
 | File | Purpose |
 | --- | --- |
-| `src/index.mjs` | HTTP/WebSocket API, device authentication, APNs JWT/push, commands, and media relay |
+| `src/index.mjs` | HTTP/WebSocket API, device authentication, APNs JWT/push, commands, and WebRTC signaling |
 | `src/status-store.mjs` | Device, heartbeat, Relay status, and Dashboard-event persistence |
 | `src/dashboard.mjs` | Protected operations dashboard and virtual incoming-call test |
 | `wrangler.example.toml` | Cloudflare Worker, KV, Durable Objects, and variable template |
@@ -51,7 +50,7 @@ Storage responsibilities:
 - `DEVICES` KV: recovery mirrors of devices/status and short-lived Relay data.
 - `STATUS` Durable Object: authoritative device registration, Agent heartbeats, and Dashboard events.
 - `COMMANDS` Durable Object: per-device command queues, results, and command WebSockets.
-- `MEDIA` Durable Object: bidirectional media sessions for individual calls.
+- `MEDIA` Durable Object: authenticated signaling/control sessions for individual calls, not an audio tunnel. The deployed binding and migration history stay unchanged.
 
 ## 2. Apple prerequisites
 
@@ -157,7 +156,6 @@ APNS_KEY_ID = "YOUR_APNS_KEY_ID"
 ALLOWED_BUNDLE_ID = "org.example.airsim"
 WEBRTC_TRANSPORT_READY = "false"
 WEBRTC_ROLLOUT_PERCENT = "0"
-WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "false"
 NEW_DEVICE_ENROLLMENT_ENABLED = "false"
 
 [[kv_namespaces]]
@@ -360,7 +358,7 @@ Run these separately with a Debug device build and a Release/TestFlight build:
 5. Answer, reject, hang-up, and timeout events reach the Agent; duplicates do not create another call.
 6. Validate ordinary notifications, Watch incoming calls, and Live Activity topics individually.
 7. Agent disconnection, incorrect Secrets, expired commands, and failed media authentication are rejected.
-8. Cloud media is WebRTC when TURN is configured, both sides advertise `webrtc`, the device requests it, and the rollout percent includes the device. Otherwise registration returns no media transport. Binary PCM frames are closed.
+8. Cloud media setup is permitted only with configured TURN, enabled rollout, a WebRTC-capable app, and a fresh revision-2 native-service heartbeat. Registration-only or historical capability claims do not authorize a call. Verify unavailable-media dial/answer rejection, incoming carrier-call preservation, and binary rejection for all roles.
 
 ## 9. Troubleshooting
 
@@ -372,7 +370,7 @@ Run these separately with a Debug device build and a Release/TestFlight build:
 | APNs `DeviceTokenNotForTopic` | Match Bundle ID, provisioning profile, and `.voip`/Watch/Live Activity topics |
 | Registration `400` | At least one token, hexadecimal format, Bundle ID, Watch Bundle ID, and environment fields |
 | Registration `401` | Same `device_id` used a different `device_secret`; do not overwrite production records directly |
-| Incoming-call endpoint `409` | Device has no iPhone or Watch VoIP token yet |
+| Dial/answer endpoint `409` | Inspect `remote_audio_reason`; missing/stale native readiness, unsupported media, disabled policy, and missing TURN/rollout fail closed. Incoming carrier calls instead remain on Android with an unavailable-audio mirror when an alert token exists. |
 | Dashboard `503` | `DASHBOARD_TOKEN` is not configured |
 | `Exceeded allowed volume of requests in Durable Objects free tier` | The account exhausted its daily Durable Objects request allowance. Inspect usage by `STATUS`, `COMMANDS`, and `MEDIA`. `/commands/connect` is the failing entry point, not necessarily the main source of usage. The documented free allowance resets at 00:00 UTC (08:00 China time); investigate frequent polling/reconnects after recovery. |
 | Custom-domain deployment fails | Check conflicting CNAME/Worker routes and whether the zone belongs to the current account |
@@ -403,19 +401,68 @@ Adjacent `codex.md`, `claude.md`, and `LLM.txt` provide repository facts, safety
 - Apple: [Communicate with APNs using authentication tokens](https://developer.apple.com/help/account/capabilities/communicate-with-apns-using-authentication-tokens), [Register your app with APNs](https://developer.apple.com/documentation/usernotifications/registering-your-app-with-apns), [Respond to PushKit VoIP notifications](https://developer.apple.com/documentation/pushkit/responding-to-voip-notifications-from-pushkit), [Make and receive VoIP calls with CallKit](https://developer.apple.com/documentation/callkit/making-and-receiving-voip-calls).
 - Cloudflare: [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/), [Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/), [Worker Secrets](https://developers.cloudflare.com/workers/configuration/secrets/), [Create a KV namespace](https://developers.cloudflare.com/kv/get-started/), [Durable Object migrations](https://developers.cloudflare.com/durable-objects/reference/durable-objects-migrations/).
 
-### Native WebRTC calls
+### Native WebRTC calls and current readiness
 
-`WEBRTC_TRANSPORT_READY=true` and a nonzero `WEBRTC_ROLLOUT_PERCENT` select
-WebRTC when both `app_media_capabilities` and `agent_media_capabilities` contain
-`webrtc`, the device requests `media_transport: "webrtc"`, and valid TURN
-configuration is present. Any other combination is a rejection: `selectMediaTransport`
-returns `webrtc` or nothing. Registration and incoming-call responses include that
-result. Heartbeats may add `webrtc` and must not clear a stored `webrtc` capability.
-An incoming event that names another transport is rejected. Dial accepts only
-`webrtc`. Binary frames close the media socket for every role, including Watch.
-JSON answer, reject, and end controls still forward, and a Watch answer does not
-force another transport. The agent uses the forwarded answer when the Watch wins
-ownership.
+The Relay is a control/signaling service. Real call media is native WebRTC/Opus
+between Android and iPhone, optionally relayed by TURN, never binary audio over
+Worker WebSockets. `MEDIA`, `STATUS`, `COMMANDS`, KV registration, and the deployed
+Durable Object migrations retain their existing identities.
+
+Cloud setup requires all of:
+
+- `WEBRTC_TRANSPORT_READY=true`, a rollout bucket that includes the device, and
+  valid TURN configuration.
+- App `media_transport: "webrtc"` and `app_media_capabilities: ["webrtc"]`.
+- The **latest authenticated Agent heartbeat**, received within 90 seconds,
+  contains `media_capability_revision: 2`, `agent_media_ready: true`, and
+  `agent_media_capabilities: ["webrtc"]`.
+- No explicit `remote_audio_disabled` policy.
+
+Revision 2 describes the Android-owned native media service. `agent_media_ready`
+means that service has initialized and its native SDK is available. It does not
+mean that carrier audio has connected: session `webrtc_ready` remains the
+stronger requirement of peer connectivity plus a verified live telephony route.
+There is no phone-model allowlist and no claimed physical-device acceptance.
+Missing, unsupported, stale, or explicitly false heartbeat fields revoke setup
+eligibility. An old ready entry in the Agent roster cannot override the latest
+heartbeat. Registration fields and stored capability claims cannot establish or
+restore readiness. If `STATUS` is configured, a failed authoritative heartbeat
+read does not fall back to a possibly stale KV readiness mirror.
+
+Registration still succeeds for control-only/older combinations and returns
+`media_transport: null`. Pairing, device secrets, push tokens, SMS, and call
+history remain intact. Native-service registration should be followed by a
+current heartbeat before attempting remote calls.
+
+Dial and remote answer return HTTP 409 with `remote_audio_available: false` and
+a bounded `remote_audio_reason` instead of creating/dispatching a cellular action
+with unsupported media. Queued dial/answer commands recheck readiness at initial
+delivery, pull, reconnect, and retry. Duplicate dial commands retain their
+original call UUID/secret rather than allocating a second media session; failed
+or expired duplicates do not return a new call. Existing pre-migration queued media commands
+without the new authenticated device metadata fail closed; reject/end and other
+control commands retain their durable behavior. WebSocket answers also recheck
+readiness before ownership or forwarding, including when flushing a queued
+answer. Cancellation, terminal state, and socket replacement win a concurrent
+readiness check.
+
+For an incoming carrier call with unavailable remote media, Relay retains a
+ringing lifecycle and returns HTTP 202 with `media_transport: null`,
+`remote_audio_available: false`, and `remote_audio_reason`. It can send a normal
+mirror alert instructing the user to answer on Android, but sends no answerable
+VoIP/Watch/Live Activity presentation or media credentials. It never sends a
+carrier hangup merely because remote audio is unavailable. Unsupported stored
+calls cannot open a media WebSocket. Watch is companion control: direct
+`owner: "watch"` answers are rejected with `iphone_audio_required`; the companion
+must ask iPhone to perform the answer and own the native peer. Reject/end control
+and existing owner isolation are preserved.
+
+Old `force_legacy_pcm: true` records migrate on registration to
+`remote_audio_disabled: true`, never to another transport. The obsolete field is
+not written back. An old `force_legacy_pcm: false` or stale Agent registration
+cannot re-enable calls; the app must explicitly set `remote_audio_disabled: false`.
+Saved identities and pairing are not cleared. Registration by an Agent cannot
+overwrite the paired app's existing transport/capability/disabled policy.
 
 Configure `TURN_URLS` as a JSON array of `turn:`/`turns:` URLs (optional
 `?transport=udp|tcp`), and store coturn's shared REST secret as the Worker secret
@@ -440,14 +487,14 @@ sufficient.
 On the authenticated call WebSocket, the owning iPhone sends `webrtc_offer`, the
 agent sends `webrtc_answer`, and both may send `webrtc_ice` after an offer. Every
 WebRTC client authenticates the upgrade with `Authorization: Bearer <call_secret>`;
-the URL contains only the media role. Query-string secrets are rejected for
-WebRTC calls. During a coordinated Q25 upgrade only, an operator may set
-`WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "true"`; this permits URL tokens for the
-`agent` role only while updated iPhone and Watch clients use headers. After
-updating Q25, restore `"false"`. Older legacy PCM calls retain query-token compatibility
-until their clients are upgraded. Disable automatic Worker invocation logs while
-that compatibility remains, because they include request URLs; explicit
-structured application logs can remain enabled. Every message includes `call_uuid`, integer
+the URL contains only the media role. Query-string secrets are rejected for all
+roles, even when a valid Bearer header is also present. The old
+`WEBRTC_AGENT_QUERY_AUTH_ALLOWED` switch has been removed and cannot restore the
+exception. ICE credential requests enforce the same bearer-only rule and reject
+unsupported stored calls. Unsupported legacy-media calls are rejected, not
+upgraded in place. Keep automatic Worker invocation logs disabled because even
+rejected old clients can put credentials in request URLs; explicit redacted
+application logs can remain enabled. Every signaling message includes `call_uuid`, integer
 `generation`, and UUID `session_id`. SDP is
 limited to 48 KiB, ICE candidate strings to 4096 characters, and frames to 64 KiB.
 Only negotiation identities are kept in hibernation attachments. Relay never
@@ -456,12 +503,16 @@ SDP is installed. After `peer_connected`, start a fresh negotiation; old
 connection callbacks and mismatched session IDs are rejected. Repeated offers
 cannot reuse a session ID. At most 24 negotiations are retained per connected
 pair to fit Durable Object attachment limits; both peers must reconnect after
-that limit. Binary PCM is rejected for WebRTC owners; Watch and legacy calls
-retain the existing PCM path and durable answer/end receipts.
+that limit. Binary frames are rejected for every role and transport; there is no Watch or
+legacy PCM path. Durable answer/end receipts remain control-plane messages.
+New hibernation attachments use `connectionKey`; the old `pcmTraceKey` is read
+only as a bounded identity alias for already-hibernating sockets, never audio.
 
 Local validation: `npm run check && npm test`. The tests cover credential HMAC,
 authentication/expiry, configuration gates, signaling identity/roles/bounds,
-reconnect, owner isolation, and legacy PCM/Watch behavior. They do not establish
+reconnect, owner isolation, unavailable-media preflight and revocation, current
+heartbeat semantics, disabled-policy migration, carrier-call preservation, and
+negative legacy/Watch audio behavior. They do not establish
 TURN reachability, native device audio quality, or production readiness.
 
 For managed Cloudflare TURN, use `TURN_PROVIDER=cloudflare`,

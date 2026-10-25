@@ -75,23 +75,20 @@ public final class MainActivity extends Activity {
     private static final int DANGER = Color.rgb(255, 99, 99);
 
     private enum Page { STATUS, CALLS, DEBUG, SETTINGS }
-    private enum Feature { VOWLAN, AGENT, PCM, PUSH, SHIZUKU }
+    private enum Feature { VOWLAN, AGENT, MEDIA, PUSH, SHIZUKU }
 
     private FrameLayout contentHost;
     private LinearLayout bottomBar;
     private final List<TextView> navigationItems = new ArrayList<>();
     private Page currentPage = Page.STATUS;
-    private HealthTile pcmHealthTile;
-    private LiveStatusPoller pcmStatusPoller;
+    private HealthTile mediaHealthTile;
+    private LiveStatusPoller mediaStatusPoller;
     private boolean resumed;
 
-    private EditText endpoint;
-    private EditText token;
     private EditText number;
     private String selectedMode;
     private TextView status;
     private TextView shizukuStatus;
-	private TextView installerStatus;
     private TextView pairingStatus;
     private TextView pairingCodeView;
     private TextView pairingCountdownView;
@@ -112,7 +109,6 @@ public final class MainActivity extends Activity {
 	private boolean cloudEnabled;
 	private boolean cloudRelayConfigured;
 	private String cloudLastError = "";
-	private boolean avfStartupPromptShown;
 	private boolean crashPromptShown;
     private ShizukuStartupPolicy shizukuStartupPolicy;
     private boolean startupSetupPending;
@@ -140,11 +136,11 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         shizukuStartupPolicy = new ShizukuStartupPolicy(
                 state != null && state.getBoolean(SHIZUKU_STARTUP_CHECKED, false));
-        pcmStatusPoller = new LiveStatusPoller(() -> {
+        mediaStatusPoller = new LiveStatusPoller(() -> {
             ShizukuBridgeManager bridge = ShizukuBridgeManager.get(this);
             bridge.refreshBridgeStatus();
             return bridge.bridgeRunning();
-        }, this::renderPCMStatus, new LiveStatusPoller.Scheduler() {
+        }, this::renderMediaStatus, new LiveStatusPoller.Scheduler() {
             @Override public void postDelayed(Runnable task, long delayMillis) {
                 handler.postDelayed(task, delayMillis);
             }
@@ -284,8 +280,8 @@ public final class MainActivity extends Activity {
     }
 
     private void showPage(Page page) {
-        if (pcmStatusPoller != null) pcmStatusPoller.stop();
-        pcmHealthTile = null;
+        if (mediaStatusPoller != null) mediaStatusPoller.stop();
+        mediaHealthTile = null;
         currentPage = page;
         handler.removeCallbacks(debugRefresh);
         bottomBar.setVisibility(View.VISIBLE);
@@ -302,7 +298,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         updateNavigation();
         if (page == Page.DEBUG && realtimeLogging) handler.post(debugRefresh);
-        if (page == Page.STATUS && resumed) pcmStatusPoller.start();
+        if (page == Page.STATUS && resumed) mediaStatusPoller.start();
     }
 
     private void updateNavigation() {
@@ -358,15 +354,15 @@ public final class MainActivity extends Activity {
 
         LinearLayout firstHealthRow = row();
         HealthTile agentTile = healthTile(
-                RuntimeMode.agentLabel(this), agentOnline ? "Online" : agentDetail,
+                "Built-in Agent", agentOnline ? "Online" : agentDetail,
                 android.R.drawable.ic_menu_manage, agentOnline);
         agentTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.AGENT));
         firstHealthRow.addView(agentTile.view, weightedWithEnd(5));
-        pcmHealthTile = healthTile(
-                "PCM audio bridge", pcmBridgeRunning() ? "Running" : "Not running",
-                android.R.drawable.ic_media_play, pcmBridgeRunning());
-        pcmHealthTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.PCM));
-        firstHealthRow.addView(pcmHealthTile.view, weightedWithStart(5));
+        mediaHealthTile = healthTile(
+                "WebRTC media service", mediaServiceReady() ? "Running" : "Not running",
+                android.R.drawable.ic_media_play, mediaServiceReady());
+        mediaHealthTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.MEDIA));
+        firstHealthRow.addView(mediaHealthTile.view, weightedWithStart(5));
         root.addView(firstHealthRow, matchWithTop(12));
 
         LinearLayout secondHealthRow = row();
@@ -534,25 +530,14 @@ public final class MainActivity extends Activity {
         LinearLayout root = pageRoot();
         root.addView(pageTitle("Settings", null));
 
-        boolean standaloneRuntime = RuntimeMode.isStandalone(this);
-        root.addView(sectionTitle(RuntimeMode.agentLabel(this)), matchWithTop(18));
+        root.addView(sectionTitle("Built-in Agent"), matchWithTop(18));
         LinearLayout agentCard = card(SURFACE, 22);
         agentCard.setOrientation(LinearLayout.VERTICAL);
         agentCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-        if (standaloneRuntime) {
-            agentCard.addView(label("The Agent runs in this app's foreground service. It does not use AVF, Linux Terminal, or ports 8575 and 8576.",
-                    14, TEXT, Gravity.START));
-        } else {
-            endpoint = input("Agent address", InputType.TYPE_CLASS_TEXT);
-            endpoint.setText(AppConfig.endpoint(this));
-            agentCard.addView(endpoint);
-            token = input("Control token", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            token.setText(AppConfig.token(this));
-            agentCard.addView(token, matchWithTop(10));
-        }
+        agentCard.addView(label("The Agent runs in this app's foreground service.", 14, TEXT, Gravity.START));
         selectedMode = AppConfig.mode(this);
         agentCard.addView(modeSelector(), matchWithTop(12));
-        TextView save = primaryButton(standaloneRuntime ? "Save mode and start built-in Agent" : "Save settings and start watchdog", BLUE);
+        TextView save = primaryButton("Save mode and start built-in Agent", BLUE);
         save.setOnClickListener(ignored -> saveConfiguration());
         agentCard.addView(save, matchWithTop(12));
         root.addView(agentCard, matchWithTop(10));
@@ -603,60 +588,13 @@ public final class MainActivity extends Activity {
 		}
 		root.addView(smsCard, matchWithTop(10));
 
-		if (!standaloneRuntime) {
-		root.addView(sectionTitle("Initial AVF Linux setup"), matchWithTop(22));
-		LinearLayout bootstrapCard = card(SURFACE, 22);
-		bootstrapCard.setOrientation(LinearLayout.VERTICAL);
-		bootstrapCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-		AVFEnvironmentDetector.Snapshot avf = AVFEnvironmentDetector.inspect(this);
-		bootstrapCard.addView(label(avfEnvironmentSummary(avf), 14, TEXT, Gravity.START));
-		TextView installCommand = label(AVFStartupPolicy.installCommand(), 12, MUTED, Gravity.START);
-		installCommand.setTextIsSelectable(true);
-		installCommand.setPadding(0, dp(10), 0, dp(4));
-		bootstrapCard.addView(installCommand);
-		LinearLayout bootstrapActions = row();
-		TextView copyInstall = secondaryButton("Copy installation command");
-		copyInstall.setOnClickListener(ignored -> copyAVFInstallCommand());
-		TextView openLinux = secondaryButton(avf.state() == AVFStartupPolicy.State.RUNNING
-				? "Open Linux Terminal" : "Start Linux Terminal");
-		openLinux.setOnClickListener(ignored -> openAVFTerminalOrSettings());
-		bootstrapActions.addView(copyInstall, weightedWithEnd(5));
-		bootstrapActions.addView(openLinux, weightedWithStart(5));
-		bootstrapCard.addView(bootstrapActions, matchWithTop(10));
-		TextView developerOptions = secondaryButton("Open developer options");
-		developerOptions.setOnClickListener(ignored -> AVFEnvironmentActions.openDeveloperOptions(this));
-		bootstrapCard.addView(developerOptions, matchWithTop(10));
-		root.addView(bootstrapCard, matchWithTop(10));
-
-		root.addView(sectionTitle("AVF Agent management"), matchWithTop(22));
-		LinearLayout installerCard = card(SURFACE, 22);
-		installerCard.setOrientation(LinearLayout.VERTICAL);
-		installerCard.setPadding(dp(16), dp(16), dp(16), dp(16));
-		installerStatus = label("Reading installerd status…", 13, MUTED, Gravity.START);
-		installerCard.addView(installerStatus);
-		TextView updateAgent = primaryButton("Check and install latest Agent", BLUE);
-		updateAgent.setOnClickListener(ignored -> runAgentMaintenance("update"));
-		installerCard.addView(updateAgent, matchWithTop(12));
-		LinearLayout installerActions = row();
-		TextView repairAgent = secondaryButton("Repair current version");
-		repairAgent.setOnClickListener(ignored -> runAgentMaintenance("repair"));
-		TextView rollbackAgent = secondaryButton("Roll back to previous version");
-		rollbackAgent.setTextColor(WARNING);
-		rollbackAgent.setOnClickListener(ignored -> runAgentMaintenance("rollback"));
-		installerActions.addView(repairAgent, weightedWithEnd(5));
-		installerActions.addView(rollbackAgent, weightedWithStart(5));
-		installerCard.addView(installerActions, matchWithTop(10));
-		root.addView(installerCard, matchWithTop(10));
-		refreshInstallerStatus();
-		}
-
-        root.addView(sectionTitle("Shizuku permission and PCM bridge"), matchWithTop(22));
+        root.addView(sectionTitle("Shizuku permission and WebRTC service"), matchWithTop(22));
         LinearLayout shizukuCard = card(SURFACE, 22);
         shizukuCard.setOrientation(LinearLayout.VERTICAL);
         shizukuCard.setPadding(dp(16), dp(16), dp(16), dp(16));
         shizukuStatus = label("", 14, TEXT, Gravity.START);
         shizukuCard.addView(shizukuStatus);
-        shizukuCard.addView(description("Start Shizuku with wireless debugging and authorize AirSIM once. AirSIM then restores the PCM bridge automatically."), matchWithTop(6));
+        shizukuCard.addView(description("Start Shizuku with wireless debugging and authorize AirSIM once. AirSIM then restores the WebRTC service automatically."), matchWithTop(6));
         LinearLayout shizukuActions = row();
         TextView authorize = secondaryButton("Authorize and start");
         authorize.setOnClickListener(ignored -> {
@@ -707,9 +645,6 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         startPairing();
     }
-
-
-
 
     private View pairingPage() {
         LinearLayout root = pageRoot();
@@ -771,7 +706,7 @@ public final class MainActivity extends Activity {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
         LinearLayout filterRow = row();
-        String[] filters = {"All", "Agent", "VoWLAN", "PCM", "Telecom"};
+        String[] filters = {"All", "Agent", "VoWLAN", "WebRTC", "Telecom"};
         for (String filter : filters) {
             boolean selected = filter.equals(activeDebugFilter);
             TextView chip = label(filter, 13, selected ? BG : TEXT, Gravity.CENTER);
@@ -854,8 +789,8 @@ public final class MainActivity extends Activity {
         return new HealthTile(tile, icon, state);
     }
 
-    private void renderPCMStatus(boolean running) {
-        HealthTile tile = pcmHealthTile;
+    private void renderMediaStatus(boolean running) {
+        HealthTile tile = mediaHealthTile;
         if (tile == null || currentPage != Page.STATUS) return;
         int color = running ? PRIMARY : WARNING;
         tile.state.setText(running ? "Running" : "Not running");
@@ -936,7 +871,7 @@ public final class MainActivity extends Activity {
         }
         switch (DialerRoleSetupPolicy.initial(
                 dialerRoleHeld(), shizuku.dialerRoleAutomationAuthorized())) {
-            case COMPLETE -> checkAVFEnvironmentAtStartup();
+            case COMPLETE -> startStandaloneAgent();
             case SHIZUKU -> attemptPrivilegedDialerRole(false);
             case SYSTEM_ROLE -> requestDialerRole();
             case SETTINGS -> openDefaultAppsSettings();
@@ -1049,7 +984,7 @@ public final class MainActivity extends Activity {
         ShizukuBridgeManager shizuku = ShizukuBridgeManager.get(this);
         switch (DialerRoleSetupPolicy.afterSystemRequest(
                 dialerRoleHeld(), shizuku.dialerRoleAutomationAvailable())) {
-            case COMPLETE -> checkAVFEnvironmentAtStartup();
+            case COMPLETE -> startStandaloneAgent();
             case SHIZUKU -> attemptPrivilegedDialerRole(true);
             case SETTINGS -> openDefaultAppsSettings();
             case SYSTEM_ROLE -> requestDialerRole();
@@ -1064,7 +999,7 @@ public final class MainActivity extends Activity {
                     success && dialerRoleHeld());
             if (next == DialerRoleSetupPolicy.Action.COMPLETE) {
                 toast("System enabled the default phone role");
-                checkAVFEnvironmentAtStartup();
+                startStandaloneAgent();
             } else {
                 toast(detail + ". Select AirSIM in default apps.");
                 openDefaultAppsSettings();
@@ -1106,78 +1041,39 @@ public final class MainActivity extends Activity {
     private void refreshAgent(boolean showResult) {
         final int generation = ++agentRefreshGeneration;
         agentDetail = "Checking";
-        if (showResult) setAgentRefreshMessage("Requesting " + AppConfig.endpoint(this)
-                + " Agent status…", MUTED);
+        if (showResult) setAgentRefreshMessage("Checking built-in Agent…", MUTED);
         updateVisibleStatus();
         Executors.newSingleThreadExecutor().execute(() -> {
-            String address = AppConfig.endpoint(this);
-            String path = AppConfig.configured(this) ? "/api/android/status" : "/api/health";
             try {
-                boolean paired = AppConfig.configured(this);
                 AgentClient client = new AgentClient(this);
-                String payload = paired ? client.status() : client.health();
-                JSONObject result = new JSONObject(payload);
+                JSONObject result = new JSONObject(client.status());
+                JSONObject push = new JSONObject(client.pushStatus());
                 boolean healthy = result.optBoolean("ok", false);
-                String profile = result.optString("runtime_profile", "Unknown");
-                String detail = paired
-                        ? "Endpoint: GET " + path + " · HTTP 200\nAgent: " + address
-                                + "\nRuntime mode: " + profile
-                                + " · Pending commands: " + result.optInt("pending_commands", 0)
-                                + "\nLast active: " + result.optString("last_seen", "Not recorded")
-                        : "Endpoint: GET " + path + " · HTTP 200\nAgent: " + address
-                                + "\nVersion: " + result.optString("version", "Unknown")
-                                + " · Runtime mode: " + profile
-                                + "\nControl token: not configured";
-                BridgeLog.info("agent_status_refresh path=" + path + " ok=" + healthy
-                        + " profile=" + profile + " endpoint=" + address);
+                BridgeLog.info("standalone_status_refresh ok=" + healthy);
                 runOnUiThread(() -> {
                     if (generation != agentRefreshGeneration) return;
-                    agentOnline = paired && healthy;
-                    agentDetail = healthy
-                            ? (paired ? "Online" : "Reachable · Control token not paired")
-                            : "Reachable · Agent reports not ready";
+                    agentOnline = healthy;
+                    agentDetail = healthy ? "Online" : "Agent reports not ready";
+                    updatePushStatus(push);
                     if (showResult) setAgentRefreshMessage(
-                            (healthy ? "Refresh successful" : "Agent not ready") + "\n" + detail,
+                            (healthy ? "Refresh successful" : "Agent not ready")
+                                    + "\nRuntime: Android Standalone"
+                                    + "\nLast active: " + result.optString("last_seen", "Not recorded"),
                             healthy ? PRIMARY : WARNING);
                     updateVisibleStatus();
                 });
-                try {
-                    JSONObject pushStatus = new JSONObject(client.pushStatus());
-                    runOnUiThread(() -> {
-                        if (generation != agentRefreshGeneration) return;
-                        updatePushStatus(pushStatus);
-                        updateVisibleStatus();
-                    });
-                } catch (Exception error) {
-                    BridgeLog.error("push_status_refresh_failed endpoint=" + address, error);
-                    String pushError = error.getClass().getSimpleName() + " · " + error.getMessage();
-                    runOnUiThread(() -> {
-                        if (generation != agentRefreshGeneration) return;
-                        pushConfigured = false;
-                        pushDetail = "Status unavailable";
-                        cloudRelayConfigured = false;
-                        cloudLastError = DebugRedactor.sanitize(pushError);
-                        pushDiagnostic = "Failed to read /api/push/status: "
-                                + DebugRedactor.sanitize(pushError);
-                        updateVisibleStatus();
-                    });
-                }
             } catch (Exception error) {
-                BridgeLog.error("agent_status_refresh_failed path=" + path + " endpoint=" + address, error);
+                BridgeLog.error("standalone_status_refresh_failed", error);
                 runOnUiThread(() -> {
                     if (generation != agentRefreshGeneration) return;
                     agentOnline = false;
-                    agentDetail = "Offline · " + error.getClass().getSimpleName();
+                    agentDetail = "Unavailable";
                     pushConfigured = false;
-                    pushDetail = "Agent unreachable";
                     cloudRelayConfigured = false;
-                    cloudLastError = RuntimeMode.agentLabel(this) + " unreachable";
-                    pushDiagnostic = "Restore " + RuntimeMode.agentLabel(this)
-                            + "; /api/push/status cannot currently be queried.";
-                    if (showResult) setAgentRefreshMessage("Refresh failed · GET " + path
-                            + "\nAgent: " + address + "\nReason: "
-                            + DebugRedactor.sanitize(error.getClass().getSimpleName() + " · "
-                                    + String.valueOf(error.getMessage())), DANGER);
+                    cloudLastError = "Built-in Agent unavailable";
+                    pushDiagnostic = "Check the foreground service and recent diagnostics.";
+                    if (showResult) setAgentRefreshMessage("Refresh failed: "
+                            + DebugRedactor.sanitize(String.valueOf(error.getMessage())), DANGER);
                     updateVisibleStatus();
                 });
             }
@@ -1229,7 +1125,7 @@ public final class MainActivity extends Activity {
                 AgentClient client = new AgentClient(this);
                 JSONObject result = new JSONObject(feature == Feature.PUSH
                         ? client.pushStatus()
-                        : AppConfig.configured(this) ? client.status() : client.health());
+                        : client.status());
                 if (feature == Feature.PUSH) {
                     String cloudLogs;
                     try {
@@ -1248,12 +1144,10 @@ public final class MainActivity extends Activity {
                     });
                     return;
                 }
-                live = "Live query: " + (AppConfig.configured(this) ? "/api/android/status" : "/api/health")
+                live = "Live query: /api/android/status"
                         + " · HTTP 200\nResponse: ok=" + result.optBoolean("ok", false)
                         + " · runtime_profile=" + result.optString("runtime_profile", "Unknown")
-                        + (AppConfig.configured(this)
-                            ? " · pending_commands=" + result.optInt("pending_commands", 0)
-                            : " · version=" + result.optString("version", "Unknown"));
+                        + " · pending_commands=" + result.optInt("pending_commands", 0);
             } catch (Exception error) {
                 live = "Live query failed: " + DebugRedactor.sanitize(
                         error.getClass().getSimpleName() + " · " + error.getMessage());
@@ -1292,8 +1186,8 @@ public final class MainActivity extends Activity {
     private String featureTitle(Feature feature) {
         return switch (feature) {
             case VOWLAN -> "VoWLAN connection details";
-            case AGENT -> RuntimeMode.agentLabel(this) + " details";
-            case PCM -> "PCM audio bridge details";
+            case AGENT -> "Built-in Agent details";
+            case MEDIA -> "WebRTC media service details";
             case PUSH -> "Push / Relay details";
             case SHIZUKU -> "Shizuku details";
         };
@@ -1309,12 +1203,11 @@ public final class MainActivity extends Activity {
             case VOWLAN -> {
                 boolean paired = VoWLANPairingStore.configured(this);
                 String address = localVoWLANAddress();
-                String pcmBackend = RuntimeMode.isStandalone(this) ? "Local PCM port 7580" : "AVF PCM port 7580";
+                String mediaBackend = "Privileged WebRTC service";
                 String reason = !paired ? "Not paired with iPhone"
                         : address.isEmpty() ? "No address available on the same Wi-Fi or Android hotspot"
-                        : currentVoWLAN.contains("avf=missing") ? "AVF virtual network interface not found"
                         : currentVoWLAN.contains("agent_ready=false") ? "Agent failed the VoWLAN readiness check"
-                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + "Not ready"
+                        : currentVoWLAN.contains("media_ready=false") ? mediaBackend + " not ready"
                         : !vowlanReady() ? "VoWLAN service has not completed the current check: " + currentVoWLAN
                         : "Current checks pass; an actual call is still needed to verify";
                 details = "Pairing: " + (paired ? "Key saved" : "Not paired")
@@ -1325,29 +1218,25 @@ public final class MainActivity extends Activity {
                 keywords = new String[]{"vowlan", "pairing"};
             }
             case AGENT -> {
-                boolean standalone = RuntimeMode.isStandalone(this);
                 details = "Status: " + agentDetail
-                        + (standalone ? "\nRuns in: this app's foreground service"
-                                : "\nAddress: " + AppConfig.endpoint(this)
-                                + "\nControl token: " + (AppConfig.configured(this) ? "Configured" : "Not configured"))
+                        + "\nRuns in: this app's foreground service"
                         + "\nReason: " + (agentOnline ? "Latest status check passed"
-                            : standalone ? "Check the foreground service, notification permission, and battery restrictions"
-                            : "Check AVF Linux is running, address uses :8575, and control token matches")
+                            : "Check the foreground service, notification permission, and battery restrictions")
                         + "\n" + agentRefreshMessage;
-                keywords = new String[]{"agent", "watchdog", "http_request", "avf"};
+                keywords = new String[]{"agent", "standalone", "relay"};
             }
-            case PCM -> {
+            case MEDIA -> {
                 String shizuku = ShizukuBridgeManager.get(this).status();
-                String pcmBackend = RuntimeMode.isStandalone(this) ? "Local PCM port 7580" : "AVF PCM port 7580";
-                String reason = !shizukuReady() ? "Shizuku is disconnected or unauthorized; PCM user service unavailable"
-                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + " did not respond"
-                        : !pcmBridgeRunning() ? "PCM audio bridge process is not running"
+                String mediaBackend = "Privileged WebRTC service";
+                String reason = !shizukuReady() ? "Shizuku is disconnected or unauthorized; WebRTC user service unavailable"
+                        : currentVoWLAN.contains("media_ready=false") ? mediaBackend + " did not respond"
+                        : !mediaServiceReady() ? "Native WebRTC service is unavailable"
                         : "Current checks pass; verify two-way audio with an actual call";
-                details = "Shizuku: " + shizuku + "\nBridge status: " + (pcmBridgeRunning() ? "Running" : "Not running")
+                details = "Shizuku: " + shizuku + "\nBridge status: " + (mediaServiceReady() ? "Running" : "Not running")
                         + "\nStatus reason: " + reason
                         + "\nCurrent VoWLAN check: " + currentVoWLAN
                         + "\nLatest VoWLAN check: " + (latestVoWLAN.isEmpty() ? "None" : latestVoWLAN);
-                keywords = new String[]{"pcm", "shizuku", "vowlan_state"};
+                keywords = new String[]{"webrtc", "shizuku", "vowlan_state"};
             }
             case PUSH -> {
                 details = "Status: " + pushDetail + "\n" + pushDiagnostic
@@ -1358,8 +1247,8 @@ public final class MainActivity extends Activity {
             case SHIZUKU -> {
                 String shizuku = ShizukuBridgeManager.get(this).status();
                 details = "Status: " + shizuku + "\nReason: " + (shizukuReady()
-                        ? "Binder connected; check PCM routing to verify audio"
-                        : "Check Shizuku is running, AirSIM is authorized, and PCM user service is bound");
+                        ? "Binder connected; check carrier audio routing to verify audio"
+                        : "Check Shizuku is running, AirSIM is authorized, and WebRTC user service is bound");
                 keywords = new String[]{"shizuku", "local_output"};
             }
             default -> throw new IllegalStateException("Unknown feature");
@@ -1368,130 +1257,6 @@ public final class MainActivity extends Activity {
         return details + (live.isEmpty() ? "" : "\n\n" + live)
                 + "\n\nRelated logs (newest first)\n" + recent;
     }
-
-	private void checkAVFEnvironmentAtStartup() {
-		if (RuntimeMode.isStandalone(this)) {
-			StandaloneAgentService.start(this);
-			completeStartupSetup();
-			return;
-		}
-		if (avfStartupPromptShown) { completeStartupSetup(); return; }
-		AVFEnvironmentDetector.Snapshot snapshot = AVFEnvironmentDetector.inspect(this);
-		boolean agentConfigured = AppConfig.configured(this);
-		if (!AVFStartupPolicy.shouldPrompt(snapshot.state(), agentConfigured)) {
-            completeStartupSetup();
-            return;
-        }
-		avfStartupPromptShown = true;
-		boolean needsInstall = snapshot.state() == AVFStartupPolicy.State.RUNNING && !agentConfigured;
-		boolean canLaunch = snapshot.state() == AVFStartupPolicy.State.READY_TO_START;
-		AlertDialog dialog = new AlertDialog.Builder(this)
-				.setTitle(needsInstall ? "Set up AirSIM AVF Agent" : "Start the AVF Linux environment")
-				.setMessage(avfEnvironmentSummary(snapshot)
-						+ (needsInstall
-						? "\n\nIf not installed, copy the initial installation command into Linux Terminal. " +
-								"If the Agent is running, run sudo airsim-avf-pair to pair and check installerd."
-						: "\n\nAfter starting Linux, paste the AirSIM installation command into Terminal."))
-				.setPositiveButton(needsInstall ? "Copy initial installation command"
-						: canLaunch ? "Start Linux Terminal" : "Open developer options",
-						(ignored, which) -> {
-							if (needsInstall) copyAVFInstallCommand();
-							else if (canLaunch) openAVFTerminalOrSettings();
-							else AVFEnvironmentActions.openDeveloperOptions(this);
-						})
-				.setNeutralButton(needsInstall ? "Open Linux Terminal" : "Copy installation command",
-						(ignored, which) -> {
-							if (needsInstall) openAVFTerminalOrSettings();
-							else copyAVFInstallCommand();
-						})
-				.setNegativeButton("Later", null)
-				.create();
-		dialog.setOnDismissListener(ignored -> completeStartupSetup());
-		dialog.show();
-	}
-
-	private String avfEnvironmentSummary(AVFEnvironmentDetector.Snapshot snapshot) {
-		return switch (snapshot.state()) {
-			case RUNNING -> "AVF Linux is running and ready to connect to Agent.";
-			case READY_TO_START -> "AVF and Linux Terminal are available, but the Linux VM has not started.";
-			case TERMINAL_DISABLED -> "Linux Terminal is included but disabled in developer options.";
-			case TERMINAL_MISSING -> snapshot.restrictedChinaOEM()
-					? "This ROM does not include AOSP Linux Terminal. AirSIM cannot install or enable it with normal app permissions."
-					: "The system declares AVF support but AOSP Linux Terminal is not installed.";
-			case AVF_UNSUPPORTED -> snapshot.restrictedChinaOEM()
-					? "This ROM does not expose AVF Linux to third-party apps. AirSIM cannot force it on."
-					: "This system does not expose AVF. Check the system version and manufacturer support.";
-		};
-	}
-
-	private void openAVFTerminalOrSettings() {
-		if (!AVFEnvironmentActions.openTerminal(this)) {
-			AVFEnvironmentActions.openDeveloperOptions(this);
-			toast("No launchable Linux Terminal found. Enable it in developer options.");
-		}
-	}
-
-	private void copyAVFInstallCommand() {
-		getSystemService(ClipboardManager.class).setPrimaryClip(
-				ClipData.newPlainText("AirSIM AVF installation", AVFStartupPolicy.installCommand()));
-		toast("AVF installation command copied");
-	}
-
-	private void refreshInstallerStatus() {
-		if (installerStatus == null) return;
-		if (!AppConfig.configured(this)) {
-			installerStatus.setText("Control token not paired. Complete the initial signed installation in AVF Linux Terminal, " +
-					"then run sudo airsim-avf-pair and save the token above." +
-					"If Agent is installed but the installer service is unavailable, check airsim-installerd in Terminal. Do not clear Linux data.");
-			return;
-		}
-		Executors.newSingleThreadExecutor().execute(() -> {
-			try {
-				String value = new AgentReleaseManager(this).status();
-				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("installerd online\n" + value);
-				});
-			} catch (Exception error) {
-				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("installerd unavailable · " +
-							error.getClass().getSimpleName() +
-							". In Linux Terminal, run sudo systemctl status airsim-installerd; " +
-							"do not clear Linux data.");
-				});
-			}
-		});
-	}
-
-	private void runAgentMaintenance(String action) {
-		if (!AppConfig.configured(this)) {
-			if (installerStatus != null) installerStatus.setText(
-					"Not paired. Complete initial AVF Linux setup and run sudo airsim-avf-pair, " +
-					"then save the control token before updating, repairing, or rolling back.");
-			return;
-		}
-		if (installerStatus != null) installerStatus.setText("Agent operation in progress · " + action);
-		Executors.newSingleThreadExecutor().execute(() -> {
-			try {
-				AgentReleaseManager manager = new AgentReleaseManager(this);
-				String result = switch (action) {
-					case "repair" -> manager.repairLatest();
-					case "rollback" -> manager.rollback();
-					default -> manager.installLatest();
-				};
-				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("Agent operation completed\n" + result);
-					toast("AVF Agent operation completed");
-					refreshAgent();
-				});
-			} catch (Exception error) {
-				BridgeLog.error("avf_agent_maintenance_failed action=" + action, error);
-				runOnUiThread(() -> {
-					if (installerStatus != null) installerStatus.setText("Agent operation failed · " + error.getMessage());
-					toast("AVF Agent operation failed");
-				});
-			}
-		});
-	}
 
     private void updateVisibleStatus() {
         if (status != null) status.setText(roleText() + "\nAgent: " + agentDetail);
@@ -1687,20 +1452,15 @@ public final class MainActivity extends Activity {
 				.show();
 	}
 
+    private void startStandaloneAgent() {
+        StandaloneAgentService.start(this);
+        completeStartupSetup();
+    }
+
     private void saveConfiguration() {
-        try {
-            if (RuntimeMode.isStandalone(this)) {
-                AppConfig.save(this, "", "", selectedMode);
-            } else {
-                AppConfig.save(this, endpoint.getText().toString(), token.getText().toString(), selectedMode);
-            }
-            AgentWatchdogService.start(this);
-            toast(RuntimeMode.isStandalone(this)
-                    ? "Mode saved; starting built-in Agent" : "Settings saved; starting watchdog service");
-            refreshAgent();
-        } catch (IllegalArgumentException error) {
-            toast(error.getMessage());
-        }
+        AppConfig.saveMode(this, selectedMode);
+        toast("Mode saved; starting built-in Agent");
+        refreshAgent();
     }
 
     private String roleText() {
@@ -1722,8 +1482,7 @@ public final class MainActivity extends Activity {
         String state = VoWLANGatewayService.currentDiagnosticState();
         return dialerRoleHeld() && VoWLANPairingStore.configured(this) && !localVoWLANAddress().isEmpty()
                 && state.contains("paired=true") && state.contains("agent_ready=true")
-                && state.contains("pcm_ready=true") && state.contains("dialer_role=true")
-                && !state.contains("avf=missing");
+                && state.contains("media_ready=true") && state.contains("dialer_role=true");
     }
 
     private String localVoWLANAddress() {
@@ -1750,7 +1509,7 @@ public final class MainActivity extends Activity {
         return value.contains("Shizuku connected");
     }
 
-    private boolean pcmBridgeRunning() {
+    private boolean mediaServiceReady() {
         return ShizukuBridgeManager.get(this).bridgeRunning();
     }
 
@@ -1918,7 +1677,7 @@ public final class MainActivity extends Activity {
         if (request == ROLE_REQUEST) {
             continueAfterSystemRoleRequest();
         } else if (request == DEFAULT_APPS_REQUEST) {
-            if (dialerRoleHeld()) checkAVFEnvironmentAtStartup();
+            if (dialerRoleHeld()) startStandaloneAgent();
             else {
                 toast("AirSIM still does not have the default phone role");
                 completeStartupSetup();
@@ -1934,7 +1693,7 @@ public final class MainActivity extends Activity {
         super.onResume();
         resumed = true;
         if (startupSetupPending) scheduleStartupSetup();
-        if (currentPage == Page.STATUS && pcmStatusPoller != null) pcmStatusPoller.start();
+        if (currentPage == Page.STATUS && mediaStatusPoller != null) mediaStatusPoller.start();
         refreshShizukuStatus();
 		startSMSInboxBaselineIfAuthorized();
         if (startupSetupCompleted && !startupSetupPending && !startupSetupInFlight) {
@@ -1944,7 +1703,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onPause() {
         resumed = false;
-        if (pcmStatusPoller != null) pcmStatusPoller.stop();
+        if (mediaStatusPoller != null) mediaStatusPoller.stop();
         super.onPause();
     }
 
@@ -1967,7 +1726,7 @@ public final class MainActivity extends Activity {
             shizukuStartupDialog.setOnDismissListener(null);
             shizukuStartupDialog.dismiss();
         }
-        if (pcmStatusPoller != null) pcmStatusPoller.stop();
+        if (mediaStatusPoller != null) mediaStatusPoller.stop();
         handler.removeCallbacks(debugRefresh);
         stopPairingServer();
         super.onDestroy();

@@ -92,35 +92,10 @@ enum WatchVoIPPayloadError: LocalizedError, Equatable {
     }
 }
 
-struct WatchLocalPCMEndpoint: Equatable, Sendable {
-    let host: String
-    let port: UInt16
-    let secret: Data
-
-    init?(dictionary: [String: Any]) {
-        guard let host = dictionary["pcm_host"] as? String,
-              let rawPort = dictionary["pcm_port"] as? Int,
-              (1024...65535).contains(rawPort),
-              let encoded = dictionary["pcm_secret"] as? String else { return nil }
-        let octets = host.split(separator: ".").compactMap { UInt8($0) }
-        guard octets.count == 4,
-              octets[0] == 10 || (octets[0] == 172 && (16...31).contains(octets[1]))
-                || (octets[0] == 192 && octets[1] == 168) else { return nil }
-        let base64 = encoded.replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padded = base64 + String(repeating: "=", count: (4 - base64.count % 4) % 4)
-        guard let secret = Data(base64Encoded: padded), secret.count >= 32 else { return nil }
-        self.host = host
-        port = UInt16(rawPort)
-        self.secret = secret
-    }
-}
-
 enum WatchCallMedia: Equatable, Sendable {
     /// The iPhone `CloudWebRTCPeer` is the microphone and speaker. The watch does not open a PCM socket.
     case iphoneWebRTC
-    case local(WatchLocalPCMEndpoint)
-    /// APNs does not carry the paired VoWLAN secret; fetch it from the paired iPhone on answer.
+    /// APNs without a route requires a reachable paired iPhone to select and answer.
     case pendingLocal
 }
 
@@ -177,7 +152,7 @@ struct WatchVoIPCall: Equatable, Sendable {
 
     var opensBinaryPCMWebSocket: Bool {
         switch media {
-        case .iphoneWebRTC, .local, .pendingLocal:
+        case .iphoneWebRTC, .pendingLocal:
             return false
         }
     }
@@ -201,16 +176,12 @@ struct WatchVoIPCall: Equatable, Sendable {
         var endsOnVoWLAN = false
         if userInfo["media_route"] as? String == "vowlan" {
             endsOnVoWLAN = true
-            let dictionary = Dictionary(uniqueKeysWithValues: userInfo.compactMap { key, value in
-                (key as? String).map { ($0, value) }
-            })
-            if let endpoint = WatchLocalPCMEndpoint(dictionary: dictionary) {
-                media = .local(endpoint)
-            } else if WatchCloudAudioPlan.accepts(transport: userInfo["media_transport"] as? String) {
-                media = .iphoneWebRTC
-            } else {
-                throw WatchVoIPPayloadError.invalidLocalMedia
+            guard userInfo["pcm_host"] == nil, userInfo["pcm_port"] == nil,
+                  userInfo["pcm_secret"] == nil,
+                  WatchCloudAudioPlan.accepts(transport: userInfo["media_transport"] as? String) else {
+                throw WatchVoIPPayloadError.legacyPCMNotCarrier
             }
+            media = .iphoneWebRTC
         } else if userInfo["media_route"] as? String == WatchCloudAudioPlan.iphoneRoute
             || userInfo["call_secret"] != nil
             || userInfo["media_url"] != nil
@@ -260,14 +231,6 @@ struct WatchVoIPCall: Equatable, Sendable {
         WatchVoIPCall(
             callID: callID, uuid: uuid, number: number, callerName: callerName,
             expiresAt: expiresAt, media: .iphoneWebRTC, isOutgoing: isOutgoing,
-            endsOnVoWLAN: true
-        )
-    }
-
-    func usingLocalMedia(_ endpoint: WatchLocalPCMEndpoint) -> WatchVoIPCall {
-        WatchVoIPCall(
-            callID: callID, uuid: uuid, number: number, callerName: callerName,
-            expiresAt: expiresAt, media: .local(endpoint), isOutgoing: isOutgoing,
             endsOnVoWLAN: true
         )
     }

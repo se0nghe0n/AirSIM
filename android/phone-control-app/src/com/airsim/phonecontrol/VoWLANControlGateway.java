@@ -24,7 +24,7 @@ import java.util.concurrent.Executors;
 public final class VoWLANControlGateway implements Closeable {
     private static final int MAX_HEADERS = 8_192;
     private static final int MAX_BODY = 32_768;
-    private static final int MAX_SIGNALING_BODY = 131_072;
+    private static final int MAX_SIGNALING_BODY = PrivilegedMediaProtocol.MAX_BYTES;
     private final Context context;
     private final VoWLANWebRTCBridge webrtc;
     private final VoWLANReplayCache replayCache = new VoWLANReplayCache(30);
@@ -88,12 +88,19 @@ public final class VoWLANControlGateway implements Closeable {
             } finally {
                 Arrays.fill(secret, (byte) 0);
             }
-            if ("POST".equals(request.method) && VoWLANWebRTCControl.PATH.equals(pathOnly(request.path))) {
+            String signalingPath = pathOnly(request.path);
+            if ("POST".equals(request.method) && (VoWLANWebRTCControl.PATH.equals(signalingPath)
+                    || VoWLANWebRTCControl.STATUS_PATH.equals(signalingPath) || VoWLANWebRTCControl.STOP_PATH.equals(signalingPath))) {
                 try {
-                    String output = webrtc.handle(new String(request.body, StandardCharsets.UTF_8));
+                    String body = new String(request.body, StandardCharsets.UTF_8);
+                    String output = VoWLANWebRTCControl.PATH.equals(signalingPath) ? webrtc.handle(body)
+                            : webrtc.status(body, VoWLANWebRTCControl.STOP_PATH.equals(signalingPath));
                     respond(peer, 200, output);
                 } catch (IllegalStateException busy) {
                     respond(peer, 409, "{\"error\":\"session_busy\"}");
+                } catch (Exception | LinkageError unavailable) {
+                    // Parsing/native errors can include SDP/ICE: do not put them in diagnostics.
+                    respond(peer, 502, "{\"error\":\"webrtc_unavailable\"}");
                 }
                 BridgeLog.info("vowlan_webrtc_signaled path=" + VoWLANWebRTCControl.PATH);
                 return;
@@ -104,7 +111,7 @@ public final class VoWLANControlGateway implements Closeable {
                 output = new org.json.JSONObject()
                         .put("ok", true).put("transport", "vowlan").put("version", 1)
                         .put("agent_id", AndroidAgentIdentity.agentID(context))
-                        .put("agent_kind", RuntimeMode.isStandalone(context) ? "standalone" : "avf")
+                        .put("agent_kind", "standalone")
                         .put("device_name", AndroidAgentIdentity.deviceName())
                         .put("manufacturer", android.os.Build.MANUFACTURER)
                         .put("model", android.os.Build.MODEL)
@@ -119,7 +126,7 @@ public final class VoWLANControlGateway implements Closeable {
                 if (output.isEmpty()) output = "{}";
                 boolean nextOwnsCall = VoWLANControlPolicy.ownsCallAfterResponse(
                         request.path, responseStatus, ownsCall);
-                if (ownsCall && !nextOwnsCall) webrtc.close();
+                if (ownsCall && !nextOwnsCall) webrtc.stopCurrent();
                 ownsCall = nextOwnsCall;
             }
             respond(peer, responseStatus, output);

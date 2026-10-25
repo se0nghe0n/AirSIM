@@ -11,8 +11,7 @@ import android.net.Uri;
 public final class BridgeNotification {
     public static final String CHANNEL = "airsim_bridge_status";
     private static final String CALL_CHANNEL = "airsim_incoming_calls_v1";
-    public static final int WATCHDOG_ID = 5071;
-    public static final int RECOVERY_ID = 5074;
+    public static final int AGENT_ID = 5071;
     private static final int CALL_ID = 5072;
     public static final int VOWLAN_ID = 5073;
     private BridgeNotification() {}
@@ -43,21 +42,6 @@ public final class BridgeNotification {
                 .setContentTitle("AirSIM call bridge")
                 .setContentText(detail)
                 .setContentIntent(open)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .build();
-    }
-
-    public static Notification terminalRecovery(Context context, Intent terminal) {
-        createChannel(context);
-        PendingIntent open = PendingIntent.getActivity(context, RECOVERY_ID, terminal,
-                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        return new Notification.Builder(context, CHANNEL)
-                .setSmallIcon(android.R.drawable.stat_sys_phone_call)
-                .setContentTitle("AirSIM needs to restore Linux VM")
-                .setContentText("Tap to open Terminal and restore connection")
-                .setContentIntent(open)
-                .addAction(android.R.drawable.ic_menu_view, "Open Terminal", open)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .build();

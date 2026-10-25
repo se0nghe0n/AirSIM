@@ -56,27 +56,6 @@ public final class CoreTests {
 			assertTrue(preferred.getLocalPort() >= 1024);
 			assertEquals(loopback, preferred.getInetAddress());
 		}
-		assertEquals(AVFStartupPolicy.State.RUNNING,
-				AVFStartupPolicy.assess(true, true, true, true));
-		assertEquals(AVFStartupPolicy.State.READY_TO_START,
-				AVFStartupPolicy.assess(true, true, true, false));
-		assertEquals(AVFStartupPolicy.State.TERMINAL_DISABLED,
-				AVFStartupPolicy.assess(true, true, false, false));
-		assertEquals(AVFStartupPolicy.State.TERMINAL_MISSING,
-				AVFStartupPolicy.assess(true, false, false, false));
-		assertEquals(AVFStartupPolicy.State.AVF_UNSUPPORTED,
-				AVFStartupPolicy.assess(false, false, false, false));
-		assertTrue(AVFStartupPolicy.shouldPrompt(AVFStartupPolicy.State.RUNNING, false));
-		assertTrue(!AVFStartupPolicy.shouldPrompt(AVFStartupPolicy.State.RUNNING, true));
-		assertTrue(AVFStartupPolicy.shouldPrompt(AVFStartupPolicy.State.READY_TO_START, true));
-		assertTrue(AVFStartupPolicy.isRestrictedChinaOEM("Xiaomi"));
-		assertTrue(AVFStartupPolicy.isRestrictedChinaOEM("OPPO"));
-		assertTrue(AVFStartupPolicy.isRestrictedChinaOEM("vivo"));
-		assertTrue(AVFStartupPolicy.isRestrictedChinaOEM("HONOR"));
-		assertTrue(!AVFStartupPolicy.isRestrictedChinaOEM("samsung"));
-		assertEquals(
-				"bash -o pipefail -c 'curl -fsSL --connect-timeout 10 --max-time 90 --retry 2 --proto =https --proto-redir =https --tlsv1.2 https://github.com/kai-wu-cortex/AirSIM/releases/download/v0.4.6/install-avf.sh | sudo sh'",
-				AVFStartupPolicy.installCommand());
 		assertArrayEquals(new String[]{
 				"android.permission.CALL_PHONE", "android.permission.SEND_SMS", "android.permission.RECEIVE_SMS",
 				"android.permission.POST_NOTIFICATIONS"},
@@ -101,109 +80,6 @@ public final class CoreTests {
 		assertEquals(1_100L, invokeProviderTimestamp(0L, 1_100L));
 		assertRecentSMSIDsRetainBoundedDeliveryHistory();
 		assertInboxCursorBaselinesExistingMessagesAndRetriesFailures();
-
-		java.util.Map<String, String> releaseAssets = new java.util.LinkedHashMap<>();
-		releaseAssets.put("notes.txt", "https://example.test/notes.txt");
-		releaseAssets.put("airsim-avf-agent_0.4.2-1_arm64.deb.sig", "https://example.test/agent.deb.sig");
-		releaseAssets.put("airsim-avf-agent_0.4.2-1_arm64.deb", "https://example.test/agent.deb");
-		ReleaseAssetSelector.Selection selection = ReleaseAssetSelector.select(releaseAssets);
-		assertEquals("airsim-avf-agent_0.4.2-1_arm64.deb", selection.packageName());
-		assertEquals("https://example.test/agent.deb", selection.packageURL());
-		assertEquals("https://example.test/agent.deb.sig", selection.signatureURL());
-		try {
-			ReleaseAssetSelector.select(java.util.Map.of(
-					"airsim-avf-agent_0.4.2-1_arm64.deb", "https://example.test/agent.deb"));
-			throw new AssertionError("release without detached signature must fail");
-		} catch (IllegalArgumentException expected) {
-			assertContains(expected.getMessage(), "signature");
-		}
-
-		java.util.concurrent.atomic.AtomicReference<String> installerRequest = new java.util.concurrent.atomic.AtomicReference<>("");
-		com.sun.net.httpserver.HttpServer installer = com.sun.net.httpserver.HttpServer.create(
-				new java.net.InetSocketAddress("127.0.0.1", 0), 0);
-		installer.createContext("/v1/status", exchange -> {
-			installerRequest.set(exchange.getRequestMethod() + " " + exchange.getRequestHeaders().getFirst("Authorization"));
-			byte[] payload = "{\"phase\":\"idle\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			exchange.sendResponseHeaders(200, payload.length);
-			try (java.io.OutputStream output = exchange.getResponseBody()) { output.write(payload); }
-		});
-		installer.createContext("/v1/packages/install", exchange -> {
-			byte[] body = exchange.getRequestBody().readAllBytes();
-			installerRequest.set(exchange.getRequestMethod() + " "
-					+ exchange.getRequestHeaders().getFirst("Content-Type") + " "
-					+ exchange.getRequestHeaders().getFirst("X-Airsim-Signature") + " "
-					+ exchange.getRequestHeaders().getFirst("X-Airsim-Install-Mode") + " "
-					+ new String(body, java.nio.charset.StandardCharsets.UTF_8));
-			byte[] payload = "{\"phase\":\"completed\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			exchange.sendResponseHeaders(200, payload.length);
-			try (java.io.OutputStream output = exchange.getResponseBody()) { output.write(payload); }
-		});
-		installer.createContext("/v1/packages/rollback", exchange -> {
-			installerRequest.set(exchange.getRequestMethod());
-			exchange.sendResponseHeaders(204, -1);
-			exchange.close();
-		});
-		installer.start();
-		try {
-			InstallerClient installerClient = new InstallerClient(
-					"http://127.0.0.1:" + installer.getAddress().getPort(),
-					"test-installer-token-1234567890");
-			assertContains(installerClient.status(), "idle");
-			assertEquals("GET Bearer test-installer-token-1234567890", installerRequest.get());
-			assertContains(installerClient.install("deb-data".getBytes(java.nio.charset.StandardCharsets.UTF_8), "base64-signature"), "completed");
-			assertEquals("POST application/vnd.debian.binary-package base64-signature normal deb-data", installerRequest.get());
-			assertContains(installerClient.repair("deb-data".getBytes(java.nio.charset.StandardCharsets.UTF_8), "base64-signature"), "completed");
-			assertEquals("POST application/vnd.debian.binary-package base64-signature repair deb-data", installerRequest.get());
-			installerClient.rollback();
-			assertEquals("POST", installerRequest.get());
-		} finally {
-			installer.stop(0);
-		}
-
-		com.sun.net.httpserver.HttpServer upstream = com.sun.net.httpserver.HttpServer.create(
-				new java.net.InetSocketAddress("127.0.0.1", 0), 0);
-		upstream.createContext("/api/calls/audio/host/warmup", exchange -> {
-			byte[] payload = "{\"error\":\"No call is in progress\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			exchange.sendResponseHeaders(409, payload.length);
-			try (java.io.OutputStream output = exchange.getResponseBody()) { output.write(payload); }
-		});
-		upstream.createContext("/api/health", exchange -> {
-			byte[] payload = "{\"ok\":true,\"product\":\"airsim\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			exchange.sendResponseHeaders(200, payload.length);
-			try (java.io.OutputStream output = exchange.getResponseBody()) { output.write(payload); }
-		});
-		upstream.start();
-		try {
-			AgentClient client = new AgentClient(
-					"http://127.0.0.1:" + upstream.getAddress().getPort(), "test-token");
-			assertContains(client.health(), "\"ok\":true");
-			AgentClient.ForwardResponse response = client.forwardVoWLAN(
-					"POST", "/api/calls/audio/host/warmup", "{}");
-			assertEquals(409, response.status());
-			assertContains(response.payload(), "No call is in progress");
-		} finally {
-			upstream.stop(0);
-		}
-		com.sun.net.httpserver.HttpServer otherProduct = com.sun.net.httpserver.HttpServer.create(
-				new java.net.InetSocketAddress("127.0.0.1", 0), 0);
-		otherProduct.createContext("/api/health", exchange -> {
-			byte[] payload = "{\"ok\":true,\"version\":\"0.4.2\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-			exchange.sendResponseHeaders(200, payload.length);
-			try (java.io.OutputStream output = exchange.getResponseBody()) { output.write(payload); }
-		});
-		otherProduct.start();
-		try {
-			AgentClient client = new AgentClient(
-					"http://127.0.0.1:" + otherProduct.getAddress().getPort(), "test-token");
-			try {
-				client.health();
-				throw new AssertionError("other product was mistaken for AirSIM");
-			} catch (IllegalStateException expected) {
-				assertContains(expected.getMessage(), "AirSIM Agent");
-			}
-		} finally {
-			otherProduct.stop(0);
-		}
 
 		TrackingPeer failingPeer = new TrackingPeer();
 		VoWLANPeerLifecycle.run(
@@ -253,7 +129,7 @@ public final class CoreTests {
 			}
 
 			@Override public String status() {
-				return "pcm=running";
+				return "media=ready";
 			}
 
 			@Override public String setLocalOutputMuted(boolean muted) {
@@ -348,12 +224,6 @@ public final class CoreTests {
         assertTrue(CommandPollingPolicy.shouldPoll(false, 1_000, 16_000));
         assertTrue(!CommandPollingPolicy.shouldPoll(true, 1_000, 16_000));
         assertTrue(CommandPollingPolicy.shouldPoll(false, 16_000, 1_000));
-        assertTrue(!RecoveryPolicy.shouldAttempt(2, 0, 100_000));
-        assertTrue(RecoveryPolicy.shouldAttempt(3, 0, 100_000));
-        assertTrue(!RecoveryPolicy.shouldAttempt(8, 90_000, 100_000));
-        assertTrue(RecoveryPolicy.shouldAttempt(8, 1_000, 400_000));
-		assertEquals(1, RecoveryLaunchPolicy.backgroundActivityStartMode(35));
-		assertEquals(3, RecoveryLaunchPolicy.backgroundActivityStartMode(36));
 		CallEventDeduplicator deduplicator = new CallEventDeduplicator();
 		assertTrue(deduplicator.shouldSend("call-1", "incoming", "incoming", "+86138"));
 		assertTrue(!deduplicator.shouldSend("call-1", "incoming", "incoming", "+86138"));
@@ -402,21 +272,6 @@ public final class CoreTests {
 		}
 		assertTrue(session.code().matches("[0-9]{6}"));
 		assertEquals(121_000L, session.expiresAtMillis());
-		assertEquals("http://172.29.240.25:8575", AVFNetworkPolicy.agentEndpoint("172.29.240.24"));
-		assertEquals("http://10.185.5.25:8575", AVFNetworkPolicy.agentEndpoint("10.185.5.63"));
-		assertEquals("http://172.29.240.25:8576", AVFNetworkPolicy.installerEndpoint("172.29.240.24"));
-		assertEquals("http://10.185.5.25:8576", AVFNetworkPolicy.installerEndpoint("10.185.5.63"));
-		assertEquals("", AVFNetworkPolicy.agentEndpoint("192.168.2.86"));
-		assertTrue(AVFNetworkPolicy.isAgentEndpoint("http://172.29.240.25:8575"));
-		assertTrue(AVFNetworkPolicy.isInstallerEndpoint("http://172.29.240.25:8576"));
-		assertEquals("http://172.29.240.25:8576",
-				AVFNetworkPolicy.installerEndpointForAgent("http://172.29.240.25:8575"));
-		assertEquals("", AVFNetworkPolicy.installerEndpointForAgent("http://192.168.2.86:8575"));
-		assertTrue(!AVFNetworkPolicy.isInstallerEndpoint("http://172.29.240.25:8575"));
-		assertTrue(AVFNetworkPolicy.isAgentEndpoint("http://10.185.5.25:8575"));
-		assertTrue(!AVFNetworkPolicy.isAgentEndpoint("http://10.185.5.25:7575"));
-		assertTrue(!AVFNetworkPolicy.isAgentEndpoint("http://192.168.2.86:8575"));
-		assertTrue(!AVFNetworkPolicy.isAgentEndpoint("https://172.29.240.25:8575"));
 		byte[] vowlanSecret = PairingCrypto.hex(
 				"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
 		String vowlanCanonical = VoWLANAuth.canonicalRequest(
@@ -535,19 +390,19 @@ public final class CoreTests {
 						"22:42 Agent heartbeat normal\n22:43 VoWLAN broadcast discovered\n22:44 PCM bridge ready\n22:45 VoWLAN health check passed",
 						"VoWLAN",
 						2));
-		assertEquals("Linux Agent status returned HTTP 200",
+		assertEquals("Built-in Agent status ready",
 				MainScreenPresentation.activitySummary(
-						"2026-09-25T10:11:12Z http_request_finished method=GET path=/api/android/status status=200"));
+						"2026-10-25T10:11:12Z standalone_status_refresh ok=true"));
 		assertEquals("VoWLAN pairing complete",
 				MainScreenPresentation.activitySummary("pairing_completed peer=iphone"));
-		assertEquals("Shizuku PCM bridge connected",
+		assertEquals("Shizuku WebRTC service connected",
 				MainScreenPresentation.activitySummary("shizuku_user_service_connected uid=2000"));
-		assertEquals("Agent watchdog started",
-				MainScreenPresentation.activitySummary("watchdog_created"));
+		assertEquals("Built-in Agent started",
+				MainScreenPresentation.activitySummary("standalone_agent_created"));
 		assertEquals("VoWLAN service started",
 				MainScreenPresentation.activitySummary("vowlan_service_created"));
 		assertEquals("vowlan_state", MainScreenPresentation.activitySummary(
-				"vowlan_state paired=true agent_ready=false pcm_ready=true"));
+				"vowlan_state paired=true agent_ready=false media_ready=true"));
 		assertEquals("unrecognized",
 				MainScreenPresentation.activitySummary("unrecognized verbose internal entry"));
 		String detailed = "2026-10-07T10:11:12Z ERROR [pool-1] "
@@ -684,13 +539,19 @@ public final class CoreTests {
 		assertTrue(storeSource.contains("CloudCallMedia.start(mediaTransport, startWebRTC)"));
 		assertTrue(storeSource.contains("new JSONArray().put(CloudCallMedia.WEBRTC)"));
 		assertTrue(!serviceSource.contains("legacy_pcm"));
-		assertTrue(serviceSource.contains("StandaloneAgentStore.mediaCapabilities()"));
+		assertTrue(serviceSource.contains("StandaloneAgentStore.applyMediaHeartbeat(identity(registration), mediaReady)"));
+        assertTrue(storeSource.contains("ready ? mediaCapabilities() : new JSONArray()"));
+        String bridgeSource = java.nio.file.Files.readString(phoneControlSource("ShizukuBridgeManager.java"));
+        assertTrue(bridgeSource.contains("return coordinator.mediaAvailable();"));
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
-		assertTrue(peer.contains("connectPCM"));
-		assertTrue(peer.contains("127.0.0.1"));
-		assertTrue(peer.contains("7580"));
-		assertTrue(peer.contains("AIRSIMPCM1"));
-		assertTrue(peer.contains("pcmConnected"));
+        assertTrue(!peer.contains("connectPCM"));
+        assertTrue(!peer.contains("7580"));
+        assertTrue(!peer.contains("AIRSIMPCM1"));
+        assertTrue(peer.contains("mediaRequest"));
+        String nativePeer = java.nio.file.Files.readString(phoneControlSource("TelephonyWebRTCPeer.java"));
+        assertTrue(nativePeer.contains("TelephonyAudioDevice"));
+        assertTrue(nativePeer.contains("readiness.deviceReady()"));
+        assertTrue(!nativePeer.contains("new Socket"));
 	}
 
 	private static java.nio.file.Path phoneControlSource(String name) {
@@ -740,9 +601,11 @@ public final class CoreTests {
 			throw new AssertionError("VoWLAN gateway still listens for PCM");
 		}
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
-		if (!peer.contains("AIRSIMPCM1") || !peer.contains("127.0.0.1") || !peer.contains("7580")) {
-			throw new AssertionError("telephony samples must still handshake AIRSIMPCM1 on 127.0.0.1:7580");
-		}
+		if (peer.contains("AIRSIMPCM1") || peer.contains("127.0.0.1") || peer.contains("7580")) {
+            throw new AssertionError("telephony samples must not cross a socket");
+        }
+        assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/status"));
+        assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/stop"));
 		assertTrue(VoWLANWebRTCControl.CONTROL_PORT == 7592);
 		assertTrue(!VoWLANWebRTCControl.LISTENS_ON_PCM_PORT);
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc"));
@@ -911,9 +774,9 @@ public final class CoreTests {
 		try {
 			Class<?> type = Class.forName("com.airsim.phonecontrol.PCMBridgeStatus");
 			java.lang.reflect.Method running = type.getDeclaredMethod("isRunning", String.class);
-			assertTrue((boolean) running.invoke(null, "uid=2000 pcm=running local_output=normal"));
-			assertTrue(!(boolean) running.invoke(null, "uid=2000 pcm=stopped local_output=normal"));
-			assertTrue(!(boolean) running.invoke(null, "uid=2000 pcm=runningish local_output=normal"));
+			assertTrue((boolean) running.invoke(null, "uid=2000 media=ready local_output=normal"));
+			assertTrue(!(boolean) running.invoke(null, "uid=2000 media=unavailable local_output=normal"));
+			assertTrue(!(boolean) running.invoke(null, "uid=2000 media=readyish local_output=normal"));
 			assertTrue(!(boolean) running.invoke(null, (String) null));
 		} catch (ClassNotFoundException | NoSuchMethodException error) {
 			throw new AssertionError("PCM readiness must use the privileged bridge process status", error);
@@ -928,8 +791,8 @@ public final class CoreTests {
 			java.util.concurrent.atomic.AtomicBoolean processAlive = new java.util.concurrent.atomic.AtomicBoolean(true);
 			Object transport = java.lang.reflect.Proxy.newProxyInstance(
 					transportType.getClassLoader(), new Class<?>[]{transportType},
-					(proxy, method, arguments) -> "uid=2000 pcm="
-							+ (processAlive.get() ? "running" : "stopped") + " local_output=normal");
+					(proxy, method, arguments) -> "uid=2000 media="
+							+ (processAlive.get() ? "ready" : "unavailable") + " local_output=normal");
 			Object coordinator = coordinatorType.getDeclaredConstructor().newInstance();
 			coordinatorType.getDeclaredMethod("connect", transportType).invoke(coordinator, transport);
 			java.lang.reflect.Method running = coordinatorType.getDeclaredMethod("bridgeRunning");
@@ -950,8 +813,8 @@ public final class CoreTests {
 
 	private static void assertMuteResultDoesNotHideRunningPCMBridge() throws Exception {
 		PrivilegedBridgeCoordinator.Transport transport = new PrivilegedBridgeCoordinator.Transport() {
-			@Override public String startBridge() { return "uid=2000 pcm=running local_output=normal"; }
-			@Override public String status() { return "uid=2000 pcm=running local_output=muted"; }
+			@Override public String startBridge() { return "uid=2000 media=ready local_output=normal"; }
+			@Override public String status() { return "uid=2000 media=ready local_output=muted"; }
 			@Override public String setLocalOutputMuted(boolean muted) {
 				return "local_output_muted previous_muted=false verified=true";
 			}

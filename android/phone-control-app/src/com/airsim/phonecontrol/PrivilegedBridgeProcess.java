@@ -27,18 +27,32 @@ public final class PrivilegedBridgeProcess {
             ShizukuBridgeUserService active = service;
             Runtime.getRuntime().addShutdownHook(new Thread(active::closeBridge));
             emit("READY");
-            try (BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = input.readLine()) != null && !"quit".equals(line)) {
-                    try {
-                        if (!line.matches("[1-4] [01]")) throw new IllegalArgumentException("invalid command");
-                        String result = service.executeCommand(line.charAt(0) - '0', line.charAt(2) == '1');
-                        emit("OK  " + encode(result));
-                    } catch (Exception error) {
-                        emit("ERR " + encode(error.getClass().getSimpleName() + ": " + error.getMessage()));
+            Thread commands = new Thread(() -> {
+                try (BufferedReader input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = PrivilegedMediaProtocol.readLine(input)) != null && !"quit".equals(line)) {
+                        try {
+                            if (line.startsWith("5 ")) {
+                                emit("DATA " + active.mediaRequest(line.substring(2)));
+                            } else {
+                                if (!line.matches("[1-4] [01]")) throw new IllegalArgumentException("invalid command");
+                                String result = active.executeCommand(line.charAt(0) - '0', line.charAt(2) == '1');
+                                emit("OK  " + encode(result));
+                            }
+                        } catch (Exception | LinkageError error) {
+                            emit("ERR " + encode("privileged_operation_failed"));
+                        }
                     }
+                } catch (Exception ignored) {
+                    // EOF, malformed frame or owner death: release native peer and carrier route.
+                } finally {
+                    active.closeBridge();
+                    // Android's main Looper cannot be quit; terminate only after owned audio is closed.
+                    System.exit(0);
                 }
-            }
+            }, "airsim-media-commands");
+            commands.start();
+            Looper.loop();
         } catch (Throwable error) {
             emit("ERR " + encode(error.getClass().getSimpleName()));
         } finally {

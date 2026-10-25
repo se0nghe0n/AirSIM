@@ -50,6 +50,18 @@ final class PrivilegedBridgeCoordinator {
         return lastResult;
     }
 
+    /** Fresh admission readiness; a cached UI status must not authorize another call. */
+    synchronized boolean mediaAvailable() {
+        if (transport == null) return false;
+        try { return PCMBridgeStatus.isRunning(refreshStatus()); }
+        catch (Exception error) {
+            // Fail closed for admission, but retain the transport for owner poll/stop and recovery.
+            lastBridgeStatus = "media=unavailable";
+            lastResult = lastBridgeStatus;
+            return false;
+        }
+    }
+
     synchronized boolean bridgeRunning() {
         return PCMBridgeStatus.isRunning(lastBridgeStatus);
     }

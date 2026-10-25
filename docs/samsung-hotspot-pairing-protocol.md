@@ -2,7 +2,7 @@
 
 ## Scope
 
-This protocol transfers the existing iOS `AgentPushRegistration` to the Linux Agent running in Android 16 AVF. It is available only while the foreground Android activity has an explicit two-minute pairing session open.
+This protocol transfers the existing iOS `AgentPushRegistration` to the Agent embedded in Android Standalone. It is available only while the foreground Android activity has an explicit two-minute pairing session open.
 
 ## Discovery
 
@@ -38,7 +38,7 @@ Content-Type: application/json
 }
 ```
 
-The Android bridge accepts private/link-local peers only, limits headers to 8 KiB and bodies to 32 KiB, and never persists the decrypted registration. It forwards the plaintext over the AVF-only authenticated control channel to `POST /api/android/pair/register`. The Agent validates and atomically persists it using the existing Push registration store.
+The Android pairing server accepts private/link-local peers only and limits headers to 8 KiB and bodies to 32 KiB. After authenticating the claim it passes the registration directly to the in-process Agent, which validates and saves it in the existing private registration store. The transport and key derivation are unchanged; no Linux backend is contacted.
 
 ## Replay and diagnostics
 

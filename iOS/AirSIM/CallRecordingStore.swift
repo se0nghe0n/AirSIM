@@ -3,7 +3,12 @@ import Foundation
 import UIKit
 #endif
 
-enum CallRecordingSource: String, Sendable { case cloudWebRTC, cloudPCM, localPCM }
+/// Recording follows the owning call, not its local/cloud transport. Native
+/// observers carry an immutable identity, so callbacks from an ended peer can
+/// never enter the next call's recording. Renegotiation preserves the call UUID.
+struct CallRecordingSource: Equatable, Sendable {
+    let callUUID: UUID
+}
 enum CallRecordingChannel: Sendable { case local, remote }
 
 struct CallRecordingFile: Codable, Identifiable, Sendable, Equatable {

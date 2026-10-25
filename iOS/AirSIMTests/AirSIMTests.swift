@@ -2,6 +2,7 @@ import CryptoKit
 import CoreBluetooth
 import AVFoundation
 import Testing
+import AppIntents
 import Foundation
 @testable import AirSIM
 
@@ -38,7 +39,6 @@ private actor OutgoingCallServiceProbe: OutgoingCallServicing {
     }
 
     func warmAudioHost() async throws { actions.append("warm") }
-    func setAudioHostEnabled(_ enabled: Bool) async throws { actions.append("enable:\(enabled)") }
     func dial(number: String) async throws {
         actions.append("dial:\(number)")
         if let dialError { throw dialError }
@@ -204,102 +204,6 @@ struct AirSIMTests {
         }
     }
 
-    private func traceFrame(sequence: UInt32 = 1, source: UInt64 = 1_000,
-                            relay: UInt64 = 10_000, queue: UInt32 = 7) -> Data {
-        var data = Data([65, 83, 80, 77, 2, 0, 0, 48])
-        func append(_ value: UInt64, bytes: Int) {
-            for shift in stride(from: (bytes - 1) * 8, through: 0, by: -8) {
-                data.append(UInt8(truncatingIfNeeded: value >> shift))
-            }
-        }
-        append(UInt64(sequence), bytes: 4)
-        append(UInt64(queue), bytes: 4)
-        append(source, bytes: 8)
-        append(source + 500_000, bytes: 8)
-        append(relay, bytes: 8)
-        append(relay, bytes: 8)
-        data.append(Data(repeating: 0x7b, count: 320))
-        return data
-    }
-
-    @Test func `Cloud PCM trace wire decode and legacy compatibility`() throws {
-        let frame = try #require(CloudPCMTransportFrame.decode(
-            traceFrame(sequence: 0xfedcba98, source: 9_876, relay: 55_000, queue: 17)))
-        #expect(frame.pcm == Data(repeating: 0x7b, count: 320))
-        let trace = try #require(frame.trace)
-        #expect(trace.sequence == 0xfedcba98)
-        #expect(trace.sourceQueueMS == 17)
-        #expect(trace.sourceSendMonoMS == 9_876)
-        #expect(trace.sourceSendUnixMS == 509_876)
-        #expect(trace.relayReceiveUnixMS == 55_000)
-        #expect(trace.relayForwardUnixMS == 55_000)
-        for size in [320, 640] {
-            var raw = Data(repeating: 0, count: size)
-            raw.replaceSubrange(0..<4, with: [65, 83, 80, 77])
-            #expect(CloudPCMTransportFrame.decode(raw)?.pcm == raw)
-            #expect(CloudPCMTransportFrame.decode(raw)?.trace == nil)
-        }
-        var legacy = Data([65, 83, 80, 77, 1, 0, 0, 20])
-        legacy.append(Data(repeating: 0, count: 12))
-        legacy.append(Data(repeating: 7, count: 320))
-        #expect(CloudPCMTransportFrame.decode(legacy)?.pcm == Data(repeating: 7, count: 320))
-    }
-
-    @Test func `Cloud PCM trace rejects malformed envelope`() {
-        var bad = traceFrame()
-        bad[7] = 47
-        #expect(CloudPCMTransportFrame.decode(bad) == nil)
-        bad = traceFrame()
-        bad[4] = 3
-        #expect(CloudPCMTransportFrame.decode(bad) == nil)
-        bad = traceFrame()
-        bad[5] = 1
-        #expect(CloudPCMTransportFrame.decode(bad) == nil)
-        #expect(CloudPCMTransportFrame.decode(Data(traceFrame().dropLast())) == nil)
-        #expect(CloudPCMTransportFrame.decode(Data()) == nil)
-    }
-
-    @Test func `Cloud PCM trace separates upstream and downstream delay without clock sync`() throws {
-        func trace(_ sequence: UInt32, _ source: UInt64, _ relay: UInt64) throws -> CloudPCMTransportFrame.Trace {
-            try #require(CloudPCMTransportFrame.decode(
-                traceFrame(sequence: sequence, source: source, relay: relay))?.trace)
-        }
-        var upstream = CloudPCMTransportDiagnostics()
-        _ = upstream.record(try trace(1, 1_000, 9_000), receivedMonoMS: 10_000, receivedUnixMS: 999_000)
-        _ = upstream.record(try trace(2, 1_020, 9_420), receivedMonoMS: 10_420, receivedUnixMS: 999_420)
-        let upstreamWindow = upstream.takeWindow()
-        #expect(upstreamWindow["rx_source_gap_max_ms"] == "20")
-        #expect(upstreamWindow["rx_upstream_excess_max_ms"] == "400")
-        #expect(upstreamWindow["rx_downstream_excess_max_ms"] == "0")
-
-        var downstream = CloudPCMTransportDiagnostics()
-        _ = downstream.record(try trace(1, 1_000, 9_000), receivedMonoMS: 10_000, receivedUnixMS: 999_000)
-        _ = downstream.record(try trace(2, 1_020, 9_020), receivedMonoMS: 10_620, receivedUnixMS: 999_620)
-        let downstreamWindow = downstream.takeWindow()
-        #expect(downstreamWindow["rx_upstream_excess_max_ms"] == "0")
-        #expect(downstreamWindow["rx_downstream_excess_max_ms"] == "600")
-    }
-
-    @Test func `Cloud PCM trace tracks sequence wrap and resets only window maxima`() throws {
-        func trace(_ sequence: UInt32, _ time: UInt64) throws -> CloudPCMTransportFrame.Trace {
-            try #require(CloudPCMTransportFrame.decode(
-                traceFrame(sequence: sequence, source: time, relay: time + 8_000))?.trace)
-        }
-        var stats = CloudPCMTransportDiagnostics()
-        #expect(stats.record(try trace(UInt32.max, 1_000), receivedMonoMS: 5_000, receivedUnixMS: 80_000) != nil)
-        #expect(stats.record(try trace(0, 1_020), receivedMonoMS: 5_020, receivedUnixMS: 80_020) == nil)
-        _ = stats.record(try trace(3, 1_080), receivedMonoMS: 5_080, receivedUnixMS: 80_080)
-        let first = stats.takeWindow()
-        #expect(first["rx_wire_seq_missing"] == "2")
-        #expect(first["rx_wire_seq_reordered"] == "0")
-        #expect(first["rx_source_gap_max_ms"] == "60")
-        _ = stats.record(try trace(4, 1_100), receivedMonoMS: 5_100, receivedUnixMS: 80_100)
-        let second = stats.takeWindow()
-        #expect(second["rx_wire_seq_missing"] == "2")
-        #expect(second["rx_trace_frames"] == "4")
-        #expect(second["rx_source_gap_max_ms"] == "20")
-    }
-
     @Test func `Old ended history cannot finish a new system call`() {
         #expect(CallKitSynchronizationPolicy.mayFinishEndedHistory(currentBackendID: "a", endedID: "a"))
         #expect(!CallKitSynchronizationPolicy.mayFinishEndedHistory(currentBackendID: "b", endedID: "a"))
@@ -358,212 +262,6 @@ struct AirSIMTests {
         }
     }
 
-    @Test(arguments: [44_100.0, 48_000.0])
-    func `Cloud PCM resampler rejects aliased high frequency noise`(_ rate: Double) {
-        let speech = cloudPCMTone(frequency: 1_000, sampleRate: rate)
-        #expect(cloudPCMRMS(speech) > 0.30, "Keep speech energy at \(rate) Hz")
-        for frequency in [5_500.0, 7_000.0, 10_000.0] {
-            let noise = cloudPCMTone(frequency: frequency, sampleRate: rate)
-            #expect(cloudPCMRMS(noise) < cloudPCMRMS(speech) * 0.01,
-                    "Suppress out-of-band noise before downsampling: \(frequency) Hz")
-        }
-    }
-
-    @Test func `Cloud PCM resampler keeps filter continuous between microphone buffers`() {
-        let rate = 48_000.0
-        let input = (0..<24_000).map { index in
-            Float(0.5 * sin(2 * Double.pi * 1_300 * Double(index) / rate))
-        }
-        var whole = CloudPCMResampler()
-        let expected = whole.encode(samples: input, sampleRate: rate, muted: false)
-        var chunked = CloudPCMResampler()
-        var actual = Data()
-        for offset in stride(from: 0, to: input.count, by: 480) {
-            actual.append(chunked.encode(samples: Array(input[offset..<min(offset + 480, input.count)]),
-                                         sampleRate: rate, muted: false))
-        }
-        #expect(actual == expected, "Callback boundaries must not reset the filter or click")
-        #expect(actual.count > 7_600, "Conversion must keep pace with captured speech")
-    }
-
-    @Test func `Cloud PCM resampler mutes and clears filter when input route changes`() {
-        var resampler = CloudPCMResampler()
-        let tone = (0..<4_800).map { index in
-            Float(0.5 * sin(2 * Double.pi * 1_000 * Double(index) / 48_000))
-        }
-        _ = resampler.encode(samples: tone, sampleRate: 48_000, muted: false)
-        let muted = resampler.encode(samples: tone, sampleRate: 48_000, muted: true)
-        #expect(!muted.isEmpty)
-        #expect(muted.allSatisfy { $0 == 0 }, "Mute must silence even filter history")
-        let changedRoute = resampler.encode(samples: [Float](repeating: 0, count: 4_410),
-                                            sampleRate: 44_100, muted: false)
-        #expect(!changedRoute.isEmpty)
-        #expect(changedRoute.allSatisfy { $0 == 0 }, "No old-route audio may leak after a rate change")
-    }
-
-    private func cloudPCMTone(frequency: Double, sampleRate: Double) -> Data {
-        var resampler = CloudPCMResampler()
-        var result = Data()
-        let count = Int(sampleRate)
-        let frameSize = Int(sampleRate / 50)
-        for offset in stride(from: 0, to: count, by: frameSize) {
-            let input = (offset..<min(offset + frameSize, count)).map { index in
-                Float(0.5 * sin(2 * Double.pi * frequency * Double(index) / sampleRate))
-            }
-            result.append(resampler.encode(samples: input, sampleRate: sampleRate, muted: false))
-        }
-        return result
-    }
-
-    private func cloudPCMRMS(_ pcm: Data) -> Double {
-        let bytes = [UInt8](pcm)
-        // Ignore startup and the final filter tail; measure steady-state PCM.
-        let lower = min(800, bytes.count / 2), upper = bytes.count / 2 - 400
-        guard upper > lower else { return .infinity }
-        var sum = 0.0
-        for index in lower..<upper {
-            let bits = UInt16(bytes[index * 2]) | UInt16(bytes[index * 2 + 1]) << 8
-            let value = Double(Int16(bitPattern: bits)) / 32_768
-            sum += value * value
-        }
-        return sqrt(sum / Double(upper - lower))
-    }
-
-    @Test func `Cloud native time pitch preserves pitch with bounded completion fed buffers`() throws {
-        let normal = try renderCloudTone(rate: 1)
-        let faster = try renderCloudTone(rate: 1.04, window: 4)
-        #expect(normal.completed == 200)
-        #expect(faster.completed == 200)
-        #expect(normal.maximumPending <= 2)
-        #expect(faster.maximumPending <= 4)
-        func lastAudible(_ samples: [Float]) -> Int {
-            samples.lastIndex(where: { abs($0) > 0.01 }) ?? 0
-        }
-        let recovered = Double(lastAudible(normal.samples) - lastAudible(faster.samples)) / 8_000
-        #expect(recovered > 0.10, "Measure final output, including the processor tail")
-        #expect(recovered < 0.24)
-        for samples in [normal.samples, faster.samples] {
-            let section = Array(samples[4_000..<20_000])
-            let crossings = zip(section, section.dropFirst()).filter { $0 <= 0 && $1 > 0 }.count
-            #expect(abs(Double(crossings) / 2 - 440) <= 2, "Pitch must not rise with playback rate")
-            for offset in stride(from: 4_000, to: 20_000, by: 160) {
-                let energy = samples[offset..<(offset + 160)].reduce(0.0) { $0 + Double($1 * $1) } / 160
-                #expect(energy > 0.01, "Completion-driven refill must not introduce silent blocks")
-            }
-        }
-    }
-
-    /// Real AVAudioEngine output; callbacks refill immediately on a serial media
-    /// queue, with the production two/four buffer cap and no polling refill.
-    private func renderCloudTone(rate: Float, window: Int = 2) throws -> (samples: [Float], completed: Int, maximumPending: Int) {
-        let format = AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1)!
-        let engine = AVAudioEngine(), player = AVAudioPlayerNode(), pitch = AVAudioUnitTimePitch()
-        engine.attach(player)
-        engine.attach(pitch)
-        pitch.pitch = 0
-        pitch.rate = rate
-        engine.connect(player, to: pitch, format: format)
-        engine.connect(pitch, to: engine.mainMixerNode, format: format)
-        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 160)
-        try engine.start()
-        defer { engine.stop() }
-        player.play()
-        let queue = DispatchQueue(label: "com.example.airsim.test-time-pitch")
-        var nextPacket = 0, completed = 0, maximumPending = 0
-        func feed() {
-            while nextPacket - completed < window, nextPacket < 200 {
-                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)!
-                buffer.frameLength = 160
-                for i in 0..<160 {
-                    buffer.floatChannelData![0][i] = Float(sin(2 * .pi * 440 * Double(nextPacket * 160 + i) / 8_000)) * 0.3
-                }
-                nextPacket += 1
-                maximumPending = max(maximumPending, nextPacket - completed)
-                player.scheduleBuffer(buffer, completionCallbackType: .dataRendered) { _ in
-                    queue.async {
-                        completed += 1
-                        feed()
-                    }
-                }
-            }
-        }
-        queue.sync { feed() }
-        let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160)!
-        var samples: [Float] = []
-        for _ in 0..<240 {
-            #expect(try engine.renderOffline(160, to: output) == .success)
-            samples.append(contentsOf: UnsafeBufferPointer(start: output.floatChannelData![0], count: Int(output.frameLength)))
-            // Give asynchronous completion delivery real audio cadence. This is
-            // an offline graph and never selects or records a physical device.
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        return queue.sync { (samples, completed, maximumPending) }
-    }
-
-
-    @Test func `Cloud playback window drains accelerated reservations without discarding`() {
-        var window = CloudPCMPlaybackWindow()
-        window.setAccelerated(true)
-        for _ in 0..<4 { window.schedulePacket() }
-        window.setAccelerated(false)
-        #expect(window.scheduledPackets == 4)
-        #expect(window.availablePackets == 0)
-        window.didRenderPacket()
-        #expect(window.availablePackets == 0)
-        window.didRenderPacket()
-        #expect(window.availablePackets == 0)
-        window.didRenderPacket()
-        #expect(window.availablePackets == 1)
-    }
-
-    @Test func `Cloud speech rate tolerates monotonic date round trip`() {
-        var controller = CloudPCMPlaybackRateController()
-        for i in 0..<20 {
-            let now = 15 + Double(i) * 0.02
-            controller.update(at: now, queuedAfterRefill: 20, target: 4,
-                              lastArrival: Date(timeIntervalSince1970: now).timeIntervalSince1970,
-                              recovering: false)
-        }
-        #expect(abs(controller.rate - 1.04) <= 0.00001)
-    }
-
-    @Test func `Cloud speech rate stops at reserve and when arrivals stall`() {
-        var controller = CloudPCMPlaybackRateController()
-        for i in 0..<20 {
-            let now = Double(i) * 0.02
-            controller.update(at: now, queuedAfterRefill: 20, target: 4,
-                              lastArrival: now, recovering: false)
-        }
-        #expect(abs(controller.rate - 1.04) <= 0.00001)
-        controller.update(at: 0.40, queuedAfterRefill: 6, target: 4, lastArrival: 0.40, recovering: false)
-        #expect(controller.rate == 1)
-        controller.update(at: 0.42, queuedAfterRefill: 7, target: 4, lastArrival: 0.42, recovering: false)
-        #expect(controller.rate == 1, "Hysteresis requires four excess frames to restart")
-        controller.update(at: 0.44, queuedAfterRefill: 20, target: 4, lastArrival: 0.44, recovering: false)
-        #expect(controller.rate > 1)
-        controller.update(at: 0.50, queuedAfterRefill: 20, target: 4, lastArrival: 0.44, recovering: false)
-        #expect(controller.rate == 1, "Stop before the transport's 80ms stall threshold")
-        controller.update(at: 0.52, queuedAfterRefill: 20, target: 4, lastArrival: 0.52, recovering: true)
-        #expect(controller.rate == 1)
-        controller.update(at: nil, queuedAfterRefill: 20, target: 4, lastArrival: 0.52, recovering: false)
-        #expect(controller.rate == 1, "Unknown time never authorizes acceleration")
-    }
-
-
-    @Test func `Cloud render latency measures local residence only`() {
-        var latency = CloudPCMRenderLatency()
-        latency.record(receivedAt: 100, renderedAt: 100.08)
-        #expect(abs(latency.latestMS - 80) <= 0.001)
-        latency.record(receivedAt: 200, renderedAt: 200.04)
-        #expect(abs(latency.latestMS - 40) <= 0.001)
-        #expect(abs(latency.maximumMS - 80) <= 0.001)
-        latency.record(receivedAt: nil, renderedAt: 201) // Concealment has no source arrival.
-        latency.record(receivedAt: 202, renderedAt: 201)
-        latency.record(receivedAt: .infinity, renderedAt: 201)
-        #expect(latency.sampleCount == 2)
-    }
-
-
     @Test(arguments: [true, false]) @MainActor
     func `Late cloud reconnect does not complete or fail a newer call`(_ succeeds: Bool) async throws {
         try await confirmation("connect suspended") { started in
@@ -594,7 +292,7 @@ struct AirSIMTests {
 
     @Test func `Cloud control cannot acknowledge another call or generation`() throws {
         let uuid = UUID()
-        let decoded = try CloudPCMControlMessage.decode("""
+        let decoded = try CloudCallControlMessage.decode("""
             {"status":"active","call_id":"a","call_uuid":"\(uuid.uuidString)","generation":2}
             """)
         let control = try #require(decoded)
@@ -648,15 +346,6 @@ struct AirSIMTests {
         applied = store.apply(event("first", first, .connecting))
         #expect(!applied)
         #expect(store.snapshot.callID == "next")
-    }
-
-
-    @Test func `Cloud uplink does not replay half second old speech`() {
-        var sender = CloudPCMUplinkSendQueue()
-        sender.enqueue(Data(repeating: 1, count: 320), at: 0)
-        #expect(sender.next(at: 0.5) == nil)
-        sender.enqueue(Data(repeating: 2, count: 320), at: 0.5)
-        #expect(sender.next(at: 0.5)?.first == 2)
     }
 
 
@@ -899,14 +588,6 @@ struct AirSIMTests {
         )
         #expect(offer.contains("\"action\":\"webrtc_offer\""))
         #expect(!offer.contains("AIRSIMVWL1"))
-        let endpoint = try VoWLANEndpoint(host: "192.168.43.1", controlPort: 7592, pcmPort: 0)
-        let credential = try VoWLANCredential(secret: Data(repeating: 7, count: 32))
-        let route = PCMRoute.vowlan(endpoint: endpoint, credential: credential)
-        let error = #expect(throws: APIError.self) { _ = try route.handshake() }
-        guard case APIError.disabledLegacyRoute? = error else {
-            Issue.record("VoWLAN audio must not send a PCM preface, actual \(String(describing: error))")
-            return
-        }
         let peer = try CloudWebRTCPeer(
             callUUID: callUUID,
             generation: 1,
@@ -970,101 +651,22 @@ struct AirSIMTests {
         #expect(pushed.id == synchronized.id)
     }
 
-    @Test(arguments: [0.001, 0.002, 0.003])
-    func `Cloud uplink maintains cadence despite timer jitter`(_ jitter: Double) {
-        var queue = CloudPCMUplinkSendQueue()
-        var events: [(time: TimeInterval, capture: Bool)] = []
-        let count = 3_000
-        for index in 0..<count {
-            events.append((Double(index) * 0.020, true))
-            events.append((0.006 + Double(index) * 0.020 + sin(Double(index) * 1.78) * jitter, false))
-        }
-        events.sort { $0.time < $1.time }
-        var sent = 0
-        for event in events {
-            if event.capture {
-                queue.enqueue(Data(repeating: 1, count: 320), at: event.time)
-            } else if queue.next(at: event.time) != nil {
-                sent += 1
-                queue.complete(at: event.time)
-            }
-        }
-        #expect(sent == count, "Timer jitter must not reduce the 50-packet/s voice stream")
-        #expect(queue.droppedPackets == 0)
-        #expect(queue.pendingPackets == 0)
-    }
-
-    @Test func `Cloud uplink records write latency without allowing immediate burst`() {
-        var queue = CloudPCMUplinkSendQueue()
-        for _ in 0..<3 { queue.enqueue(Data(repeating: 1, count: 320), at: 0) }
-        #expect(queue.next(at: 0) != nil)
-        queue.complete(at: 0.025)
-        #expect(abs(queue.maximumSendDurationMS - 25) <= 0.001)
-        #expect(queue.next(at: 0.025) != nil)
-        queue.complete(at: 0.026)
-        #expect(queue.next(at: 0.026) == nil)
-        #expect(queue.capturedPackets == 3)
-        #expect(queue.sentPackets == 2)
-    }
-
-    @Test func `Cloud uplink never bursts after blocked send`() {
-        var queue = CloudPCMUplinkSendQueue()
-        for index in 0..<10 {
-            queue.enqueue(Data(repeating: UInt8(index), count: 320), at: Double(index) * 0.02)
-        }
-        #expect(queue.next(at: 0.2)?.first == 0)
-        #expect(queue.next(at: 0.21) == nil)
-        queue.complete()
-        #expect(queue.next(at: 0.23)?.first == 1)
-        queue.complete()
-        #expect(queue.next(at: 0.231) == nil)
-        #expect(queue.next(at: 0.251)?.first == 2)
-    }
-
-    @Test func `Cloud uplink drops stale backlog`() {
-        var queue = CloudPCMUplinkSendQueue()
-        for _ in 0..<200 { queue.enqueue(Data(repeating: 1, count: 320), at: 0) }
-        #expect(queue.pendingPackets == 12)
-        #expect(queue.next(at: 2) == nil)
-        #expect(queue.pendingPackets == 0)
-        #expect(queue.droppedPackets == 200)
-    }
-
-
-    @Test func `Cloud playback reserve refills on rendered frames`() {
-        var window = CloudPCMPlaybackWindow()
-        for _ in 0..<2 { window.schedulePacket() }
-        #expect(window.availablePackets == 0)
-        window.didRenderPacket()
-        #expect(window.availablePackets == 1)
-        window.schedulePacket()
-        #expect(window.scheduledPackets == 2)
-    }
-
     @Test func `Only Samsung private endpoints are accepted`() throws {
-        let endpoint = try VoWLANEndpoint(host: "192.168.43.1", controlPort: 7575, pcmPort: 7576)
+        let endpoint = try VoWLANEndpoint(host: "192.168.43.1", controlPort: 7575)
         #expect(endpoint.controlBaseURL.absoluteString == "http://192.168.43.1:7575/")
         #expect(throws: (any Error).self) {
-            _ = try VoWLANEndpoint(host: "8.8.8.8", controlPort: 7575, pcmPort: 7576)
+            _ = try VoWLANEndpoint(host: "8.8.8.8", controlPort: 7575)
         }
-        #expect(!AirSIMRoutePolicy.permits(.moduleLocal))
+        #expect(!AirSIMRoutePolicy.permits(.unavailable))
     }
 
-    @Test func `Legacy module request is rejected before network access`() async {
-        // Expected: the old module route is blocked at the transport boundary.
+    @Test func `Unavailable local connection is rejected before network access`() async {
+        // An offline API has no endpoint and cannot issue a network request.
         let error = await #expect(throws: APIError.self) {
             _ = try await AirSIMAPI().health()
         }
-        guard case APIError.disabledLegacyRoute? = error else {
-            Issue.record("Expected legacy route retired error, got \(String(describing: error))")
-            return
-        }
-    }
-
-    @Test func `Legacy module PCM handshake is rejected`() {
-        let error = #expect(throws: APIError.self) { _ = try PCMRoute.moduleLocal.handshake() }
-        guard case APIError.disabledLegacyRoute? = error else {
-            Issue.record("Expected legacy module PCM to be blocked, got \(String(describing: error))")
+        guard case APIError.localConnectionUnavailable? = error else {
+            Issue.record("Expected unavailable local connection error, got \(String(describing: error))")
             return
         }
     }
@@ -1073,7 +675,7 @@ struct AirSIMTests {
         let route = DialPadTransportPresentation.make(
             mode: .automatic,
             vowlanOnline: true,
-            moduleLocalReachable: false,
+
             cloudOnline: true,
         )
         #expect(route?.transport == .vowlan)
@@ -1135,7 +737,7 @@ struct AirSIMTests {
     }
 
     @Test func `Fresh VoWLAN identity clears old number when new SIM does not report number`() throws {
-        let endpoint = try VoWLANEndpoint(host: "192.168.31.203", controlPort: 7592, pcmPort: 7593)
+        let endpoint = try VoWLANEndpoint(host: "192.168.31.203", controlPort: 7592)
         let previous = VoWLANDiscoveredAgent(id: "samsung", endpoint: endpoint, deviceName: "Flip7",
             manufacturer: "samsung", model: "Flip7", phoneNumber: "+10000000001", agentKind: "standalone")
         let empty = try JSONDecoder().decode(VoWLANHealthIdentity.self,
@@ -1275,8 +877,15 @@ struct AirSIMTests {
         ])
         #expect(call.media == .iphoneWebRTC)
         #expect(!call.opensBinaryPCMWebSocket)
-        if case .local = call.media {
-            Issue.record("A cloud watch payload must not construct local PCM transport")
+    }
+
+    @Test func `Watch rejects legacy local audio credentials instead of capturing discarded audio`() {
+        #expect(throws: WatchVoIPPayloadError.legacyPCMNotCarrier) {
+            try WatchVoIPCall(userInfo: [
+                "event": "incoming_call", "call_id": "legacy-watch", "call_uuid": UUID().uuidString,
+                "media_route": "vowlan", "media_transport": "webrtc",
+                "pcm_host": "192.168.43.1", "pcm_port": 7593, "pcm_secret": "retired",
+            ])
         }
     }
 
@@ -1645,5 +1254,109 @@ struct RecentCallTimeFormatterTests {
             for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
             calendar: calendar, locale: Locale(identifier: "en_GB"))
         #expect(text == "14:30")
+    }
+}
+
+
+@Suite(.serialized)
+struct LiveActivityCallActionTests {
+    @Test @MainActor
+    func `Live Activity intents dispatch all actions without a URL handoff`() async throws {
+        let dispatcher = LiveActivityCallActionDispatcher.shared
+        let previous = dispatcher.handler
+        defer { dispatcher.handler = previous }
+        var actions: [AirSIMLiveActivityAction] = []
+        var targets: [String] = []
+        dispatcher.handler = { action, callID in
+            actions.append(action)
+            targets.append(callID)
+        }
+        _ = try await AnswerAirSIMCallIntent(callID: "current-call").perform()
+        _ = try await RejectAirSIMCallIntent(callID: "current-call").perform()
+        _ = try await HangUpAirSIMCallIntent(callID: "current-call").perform()
+        #expect(actions == [.answer, .reject, .hangup])
+        #expect(targets == ["current-call", "current-call", "current-call"])
+    }
+
+    @Test @MainActor
+    func `Empty and unavailable intent targets fail without sending a command`() async {
+        let dispatcher = LiveActivityCallActionDispatcher()
+        var sent = false
+        dispatcher.handler = { _, _ in sent = true }
+        await #expect(throws: LiveActivityCallError.self) {
+            try await dispatcher.perform(.answer, callID: "")
+        }
+        #expect(!sent)
+        dispatcher.handler = nil
+        await #expect(throws: LiveActivityCallError.self) {
+            try await dispatcher.perform(.hangup, callID: "current")
+        }
+    }
+
+    @Test @MainActor
+    func `Intent backend failures remain failures`() async {
+        let dispatcher = LiveActivityCallActionDispatcher()
+        dispatcher.handler = { _, _ in throw URLError(.notConnectedToInternet) }
+        await #expect(throws: LiveActivityCallError.self) {
+            try await dispatcher.perform(.reject, callID: "current")
+        }
+    }
+
+    @Test func `Live Activity cannot control a replacement or ended call`() {
+        for action in [AirSIMLiveActivityAction.answer, .reject, .hangup] {
+            for target: String? in [nil, "replacement"] {
+                #expect(throws: LiveActivityCallError.self) {
+                    try LiveActivityCallActionPolicy.shouldPerform(action, callID: "old",
+                        currentCallID: target, state: "incoming", direction: "incoming")
+                }
+            }
+            #expect(throws: LiveActivityCallError.self) {
+                try LiveActivityCallActionPolicy.shouldPerform(action, callID: "old",
+                    currentCallID: "old", state: "ended", direction: "incoming")
+            }
+        }
+    }
+
+    @Test func `Incoming buttons cannot answer outgoing calls or reject answered calls`() throws {
+        #expect(try LiveActivityCallActionPolicy.shouldPerform(.answer, callID: "current",
+            currentCallID: "current", state: "incoming", direction: "incoming"))
+        #expect(try LiveActivityCallActionPolicy.shouldPerform(.reject, callID: "current",
+            currentCallID: "current", state: "waiting", direction: "incoming"))
+        #expect(throws: LiveActivityCallError.self) {
+            try LiveActivityCallActionPolicy.shouldPerform(.answer, callID: "current",
+                currentCallID: "current", state: "dialing", direction: "outgoing")
+        }
+        #expect(throws: LiveActivityCallError.self) {
+            try LiveActivityCallActionPolicy.shouldPerform(.reject, callID: "current",
+                currentCallID: "current", state: "active", direction: "incoming")
+        }
+        for state in ["connecting", "active", "held"] {
+            #expect(try !LiveActivityCallActionPolicy.shouldPerform(.answer, callID: "current",
+                currentCallID: "current", state: state, direction: "incoming"))
+        }
+        #expect(try LiveActivityCallActionPolicy.shouldPerform(.hangup, callID: "current",
+            currentCallID: "current", state: "active", direction: "outgoing"))
+    }
+}
+
+struct StandaloneCleanupTests {
+    @Test func `Old activity transport decodes without reviving USB routing`() throws {
+        let transport = try JSONDecoder().decode(
+            AirSIMCallActivityAttributes.ContentState.Transport.self,
+            from: Data(#""module_local""#.utf8))
+        #expect(transport == .unavailable)
+    }
+
+    @Test func `Live Activity handoff preserves the call identity and rejects stale targets`() throws {
+        for action in [AirSIMLiveActivityAction.answer, .reject, .hangup] {
+            let url = try #require(AirSIMLiveActivityActionURL.make(action: action, callID: "call-A"))
+            let request = try #require(AirSIMLiveActivityActionURL.parse(url))
+            #expect(request.action == action)
+            #expect(LiveActivityActionGate.accepts(callID: request.callID, currentCallID: "call-A", callIsLive: true))
+            #expect(!LiveActivityActionGate.accepts(callID: request.callID, currentCallID: "call-B", callIsLive: true))
+            #expect(!LiveActivityActionGate.accepts(callID: request.callID, currentCallID: nil, callIsLive: true))
+        }
+        #expect(!LiveActivityActionGate.accepts(callID: "", currentCallID: "", callIsLive: true))
+        #expect(!LiveActivityActionGate.accepts(callID: "call-A", currentCallID: "call-A", callIsLive: false))
     }
 }

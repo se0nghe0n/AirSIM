@@ -2,7 +2,7 @@
 
 This directory contains the iPhone app, Apple Watch app, Live Activity, and shared models for a compatible Android phone endpoint. Clients can connect directly over VoWLAN, or use a separately deployed Cloudflare Relay for remote calls and SMS.
 
-The documented app build is `0.9.7 (81)`, supplied as an unsigned IPA with [Apps v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). The upstream maintainer separately uploads production builds through Xcode to TestFlight; upload, processing, and review must be checked separately. The companion AVF Agent is [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6). The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; changing the Bundle ID requires your own Relay and APNs credentials.
+The documented app build is `0.9.7 (81)`, supplied as an unsigned IPA with [Apps v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). The upstream maintainer separately uploads production builds through Xcode to TestFlight; upload, processing, and review must be checked separately. The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; changing the Bundle ID requires your own Relay and APNs credentials.
 
 ## Xcode project
 
@@ -26,20 +26,20 @@ Main targets:
 - CallKit dialing, incoming calls, answer, hang-up, mute, and DTMF
 - PushKit, notification APNs, and ActivityKit
 - Microphone permission is requested first on entering the foreground. Local discovery and notification authorization start only after the microphone permission decision. If the system defers the prompt, it retries on the next foreground entry without requiring re-pairing.
-- Apple Watch dialing, answering, and call media
+- Apple Watch companion dialing, answering, mute, and hang-up. Call audio uses the paired iPhone microphone, speaker, or headset; independent Watch voice is not supported.
 - SMS list, sending, notifications, and contact integration
 - VoWLAN and cloud Relay transport selection. Automatic mode selects only actually available dialing routes, with fixed priority VoWLAN, then cloud.
-- Cloud call audio uses native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. The older PCM jitter buffer and time-pitch node are not on this path. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
+- Both cloud and local VoWLAN call audio use native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. Dormant PCM network engines, resampling, framing, and time-pitch helpers have been removed. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
 - Settings show current VoWLAN/cloud mode and Agent heartbeat status.
 - Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
 - Four-stage cloud diagnostics: local push credentials, Relay identity, device registration, and Agent heartbeat
 - Local call history, swipe-to-delete, deletion from details, diagnostics, and media health
 
-When the current call is known, VoWLAN answer, reject, and hang-up requests include the `call_id` returned by `/api/calls/status` (JSON field `call_id`). Standalone and newer AVF Agents validate it so an old notification cannot affect a subsequent call. Before a call ID is available, an empty request remains compatible with older Agents.
+When the current call is known, VoWLAN answer, reject, and hang-up requests include the `call_id` returned by `/api/calls/status` (JSON field `call_id`). Standalone validates it so an old notification cannot affect a subsequent call. Before a call ID is available, an empty request remains compatible with older Agents.
 
 ### SMS and push notifications
 
-AirSIM and DJOneHub use the same division of responsibilities but separate Relays and APNs topics. For outgoing SMS, iPhone calls the Agent directly if VoWLAN is ready. If offline with cloud mode enabled, it submits a device-authenticated `send_sms` command to the Relay, and the AVF Agent executes it and returns the result. Incoming SMS reaches the Relay as an Agent event with `delivery_id`; the Relay sends a normal APNs `alert` on the main app topic. The app saves local history and deduplicates against the next Agent sync using `delivery_id`. Opening a notification navigates to the sender's conversation, including after a cold start.
+AirSIM and DJOneHub use the same division of responsibilities but separate Relays and APNs topics. For outgoing SMS, iPhone calls the Agent directly if VoWLAN is ready. If offline with cloud mode enabled, it submits a device-authenticated `send_sms` command to the Relay, and the Standalone Agent executes it and returns the result. Incoming SMS reaches the Relay as an Agent event with `delivery_id`; the Relay sends a normal APNs `alert` on the main app topic. The app saves local history and deduplicates against the next Agent sync using `delivery_id`. Opening a notification navigates to the sender's conversation, including after a cold start.
 
 PushKit VoIP push is only for real incoming calls handled by CallKit; it must not carry SMS bodies or wake SMS-send tasks. SMS notifications require notification permission, an iPhone alert token, valid Relay/Agent registration, and a current heartbeat. iOS controls ordinary APNs delivery and background execution. Acceptance must separately test foreground, locked screen, cold start, and cloud sending; control-plane diagnostics alone do not establish successful SMS operation.
 
@@ -51,7 +51,7 @@ PushKit VoIP push is only for real incoming calls handled by CallKit; it must no
 4. On iPhone, select the pairing method in “Pair Android Phone,” then enter the Android six-digit code. With “Local Mode Pairing” on, pairing writes only VoWLAN keys and does not read or write Relay/push parameters. With it off, pairing writes cloud configuration and reports missing credentials rather than silently falling back. Its initial value follows global local mode, but changing it affects only this pairing and does not change global settings; it cannot be changed during pairing. Pairing waits for in-flight Agent registration writes, and automatic registration recognizes Android's local pairing state. Other devices' global Relay-token refresh is not disabled.
 5. Wait for VoWLAN to show Ready.
 6. For remote mode, enter a separate Relay URL matching the app's signing identity under “Cloud Relay,” select “Save Relay URL,” and enable “Remote Calls and SMS.” The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; other Bundle IDs require a self-deployed Relay.
-7. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the AVF Agent within 90 seconds. Diagnostics do not dial or send SMS.
+7. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the Standalone Agent within 90 seconds. Diagnostics do not dial or send SMS.
 
 ### Manage paired Android devices
 
@@ -59,7 +59,7 @@ Below “Settings → Samsung Connection → Pair Android Phone,” the paired-d
 
 Deletion removes the local list entry and manual binding for that device and retains a marker preventing automatic reconnection. Other devices, call history, and SMS are unaffected. Deleted devices must be explicitly paired again and cannot be restored by advertising or stale cloud status.
 
-Reconnection uses current advertisements and authentication checks rather than a cached peripheral UUID. Newer Android APKs support authenticated BLE `device_info`; older APKs do not substitute historical VoWLAN/Relay numbers. Standalone cloud heartbeats and local health checks read the current calling SIM, not the number saved at initial pairing. Legacy AVF Linux Agent cloud number heartbeats have not migrated to this flow.
+Reconnection uses current advertisements and authentication checks rather than a cached peripheral UUID. Newer Android APKs support authenticated BLE `device_info`; older APKs do not substitute historical VoWLAN/Relay numbers. Standalone cloud heartbeats and local health checks read the current calling SIM, not the number saved at initial pairing. Saved retired Agent records remain readable without becoming a supported runtime. Existing Apple pairing credentials, SMS history and recordings are preserved.
 
 ## Build and test
 
@@ -110,32 +110,54 @@ The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is a re-signing package w
 - Store the VoWLAN secret in Keychain, never UserDefaults or logs.
 - Pairing uses X25519, HKDF-SHA256, and AES-256-GCM.
 - Control requests use HMAC-SHA256, time windows, and nonces for replay protection.
-- Keep call PCM in memory and network streams unless the user explicitly starts an iPhone recording. Protect saved files, exclude them from backups, and never upload them or include audio in diagnostics.
+- Keep uncompressed call samples inside the native audio device and WebRTC processing callbacks unless the user explicitly starts an iPhone recording. Protect saved files, exclude them from backups, and never upload them or include audio in diagnostics.
 - Logs and error screens must not expose device secrets, HMAC, push tokens, or complete media URLs.
 
 ## Current status
 
 Simulator builds and tests cover the main protocol and transport-selection logic. A release still requires Apple signing, installation on physical iPhone/Apple Watch devices, Samsung dialing and answering, bidirectional voice, SMS, and background-push acceptance.
 
-## Native cloud WebRTC audio
+## Native WebRTC-only audio
 
 The iPhone advertises and requests only `webrtc`. `legacy_pcm` is not an iPhone
 cloud carrier, and `airsim.cloud-media-force-legacy-pcm` does not select PCM.
 A failed WebRTC negotiation does not open a PCM engine. Binary frames on the
 call WebSocket are ignored; SDP and call control stay on that socket.
 
-The iPhone offers only after its WebSocket answer is acknowledged and the existing
-CallKit audio startup policy permits capture. `CloudWebRTCSignal` implements the
+The iPhone offers only after its WebSocket owner handshake is acknowledged and the
+CallKit audio startup policy permits capture. For outgoing calls, `media_prepared`
+permits negotiation during ringback; the carrier route, call timer and recording
+availability still wait for Telecom's active state. Incoming calls require answer
+confirmation. `CloudWebRTCSignal` implements the
 v1 JSON SDP/ICE envelope. Each negotiation has a new UUID, remote ICE is bounded to
 128 candidates, and callbacks are fenced by connection, call and session identity.
 Only an agent reconnect triggers a new offer; a late Watch connection does not.
 Connected audio requires both native DTLS readiness and the agent's session-scoped
-`webrtc_ready` after its phone PCM bridge is ready. Peer reconnect and failed ICE
+`webrtc_ready` after its verified Android carrier route is ready. Peer reconnect and failed ICE
 use the existing bounded media recovery. Hangup,
 CallKit deactivation, mute and system route changes retain the existing lifecycle.
 Native WebRTC owns the device audio, Opus, 20 ms packetization, FEC/DTX, AEC, PLC and
 jitter handling; it never feeds the legacy PCM resampler/time-pitch graph. Stats
 contain only numeric media counters and session identity, never SDP or ICE secrets.
+
+Local VoWLAN uses host-only ICE and the same native peer. After the SDP exchange,
+iPhone polls authenticated `POST /api/calls/webrtc/status` with `version: 1`,
+`call_uuid`, `generation`, and `session_id`. Responses must echo the exact identity
+and report `preparing`, `ready`, `failed`, or `closed`. ICE connectivity alone is
+not readiness. Startup and recovery are bounded to 30 seconds; teardown cancels
+polling and posts the same identity to `/api/calls/webrtc/stop`. A failed local
+session never silently changes to cloud or hangs up the carrier call.
+
+CallKit forwards activation/deactivation once for either transport. User-started
+recordings use a call-UUID-bound native processing observer for both directions,
+so local/cloud source labels cannot discard local recordings or admit callbacks
+from a previous call. Existing recording files and privacy protections are unchanged.
+Watch is a companion controller only: it never opens a media socket or captures
+microphone audio; mute and local-answer controls reach the iPhone peer.
+
+These changes require a fresh Xcode build/test and real-device acceptance. Source
+and simulator checks cannot prove privileged carrier routing or locked/background
+CallKit and Watch behavior.
 
 `WebRTCDependency/Package.swift` pins the official `webrtc-sdk/Specs` 144.7559.15
 XCFramework URL and SHA-256 (SPM verifies every downloaded binary). The manifest
@@ -153,3 +175,9 @@ The optional TURN test requires `AIRSIM_WEBRTC_TURN_CONFIG` pointing to a privat
 JSON file with `ios_url`, `username`, and `credential`; it forces relay candidates.
 Never commit that file. Physical CallKit/headset routing and real carrier calls
 still require separately authorized device testing.
+
+## Standalone-only local control
+
+Local requests are HMAC-authenticated over Wi-Fi VoWLAN. An unavailable local API has no destination URL; USB ECM and the fixed QDC507 address are removed. Live Activity answer, decline and hang-up buttons use background `LiveActivityIntent` actions. The system executes them in the app process without opening AirSIM; the widget holds no credentials. Existing CallKit transactions control Cloud/system calls, including the cold-launch handler. Local mode resolves a paired VoWLAN endpoint and sends the exact observed call ID. Empty, replaced and ended targets fail; a stale Decline button cannot hang up an answered call. Typed call-action URLs remain compatible with older activities. Legacy activity transport values decode as unavailable without discarding the rest of the activity payload.
+
+Build both the app and Live Activity extension and verify their generated App Intents metadata contains all three actions with background execution. Unit tests exercise intent dispatch, invalid targets, repeated answers and surfaced failures. Locked-screen taps and cold-launch execution on a physical phone remain device acceptance checks.
