@@ -59,7 +59,7 @@ final class TelephonyWebRTCPeer implements Closeable {
         this.signals = signals; this.failed = failed; this.hostOnly = hostOnly;
     }
 
-    void start() {
+    void start(boolean activateCarrierAudio) {
         submit(() -> {
             initialize(context);
             iceServers = parseICE(configuration, hostOnly);
@@ -115,12 +115,20 @@ final class TelephonyWebRTCPeer implements Closeable {
             }
             source = factory.createAudioSource(constraints);
             track = factory.createAudioTrack("airsim-telephone", source);
-            device = new TelephonyAudioDevice(capture, playback, () -> {
-                deviceReady = true;
-                submit(() -> { readiness.deviceReady(); maybeEmitReady(); });
-            }, this::fail);
-            if (!closed.get()) device.start();
+            if (activateCarrierAudio) startCarrierAudio();
         });
+    }
+
+    /** Keep ICE/DTLS alive during ringback; attach the carrier route only on answer. */
+    void activateCarrierAudio() { submit(this::startCarrierAudio); }
+
+    private void startCarrierAudio() {
+        if (closed.get() || device != null) return;
+        device = new TelephonyAudioDevice(capture, playback, () -> {
+            deviceReady = true;
+            submit(() -> { readiness.deviceReady(); maybeEmitReady(); });
+        }, this::fail);
+        if (!closed.get()) device.start();
     }
 
     static synchronized void initialize(Context context) {

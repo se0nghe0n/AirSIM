@@ -124,8 +124,11 @@ cloud carrier, and `airsim.cloud-media-force-legacy-pcm` does not select PCM.
 A failed WebRTC negotiation does not open a PCM engine. Binary frames on the
 call WebSocket are ignored; SDP and call control stay on that socket.
 
-The iPhone offers only after its WebSocket answer is acknowledged and the existing
-CallKit audio startup policy permits capture. `CloudWebRTCSignal` implements the
+The iPhone offers only after its WebSocket owner handshake is acknowledged and the
+CallKit audio startup policy permits capture. For outgoing calls, `media_prepared`
+permits negotiation during ringback; the carrier route, call timer and recording
+availability still wait for Telecom's active state. Incoming calls require answer
+confirmation. `CloudWebRTCSignal` implements the
 v1 JSON SDP/ICE envelope. Each negotiation has a new UUID, remote ICE is bounded to
 128 candidates, and callbacks are fenced by connection, call and session identity.
 Only an agent reconnect triggers a new offer; a late Watch connection does not.

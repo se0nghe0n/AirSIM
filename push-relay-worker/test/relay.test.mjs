@@ -1788,6 +1788,22 @@ test("WebRTC relays bounded offer, answer and early ICE only between owning iPho
   assert.match(agent.sent.at(-1), /session already answered/);
 });
 
+test("outgoing preparation and carrier answer preserve the same WebRTC negotiation", async () => {
+  const { relay, iphone, agent, watch } = await webRTCSession();
+  const prepared = JSON.stringify({ status: "media_prepared", call_uuid: webRTCCallUUID, generation: 3 });
+  await relay.webSocketMessage(agent, prepared);
+  assert.equal(iphone.sent.at(-1), prepared);
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  await relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  const negotiation = { ...iphone.attachment.negotiation };
+  const active = JSON.stringify({ status: "active", call_uuid: webRTCCallUUID, generation: 3 });
+  await relay.webSocketMessage(agent, active);
+  assert.equal(iphone.sent.at(-1), active);
+  assert.deepEqual(iphone.attachment.negotiation, negotiation);
+  assert.deepEqual(agent.attachment.negotiation, negotiation);
+  assert.equal(watch.sent.length, 0);
+});
+
 test("WebRTC rejects wrong roles, identity, stale sessions and oversized payloads", async () => {
   const { relay, iphone, agent, watch } = await webRTCSession();
   for (const [sender, message] of [

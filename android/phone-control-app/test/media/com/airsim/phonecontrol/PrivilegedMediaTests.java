@@ -59,6 +59,7 @@ public final class PrivilegedMediaTests {
         closeDuringDisposal();
         failedAcquisitionAndStart();
         failedRestore();
+        prepareDuringRingback();
         System.out.println("Privileged media protocol/owner tests passed ("+checks+" checks)");
     }
 
@@ -199,6 +200,37 @@ public final class PrivilegedMediaTests {
             finishOffThread(TelephonyWebRTCPeer.latest);
             rejected("media_owner_busy", () -> service.request(start(UUID.randomUUID().toString())));
             check(service.closeAsync().isCompletedExceptionally());
+        }
+    }
+
+    static void prepareDuringRingback() throws Exception {
+        TelephonyWebRTCPeer.delayedDisposal = false;
+        try (PrivilegedMediaService service = new PrivilegedMediaService(new android.content.Context(), () -> {}, () -> {})) {
+            service.initialize();
+            service.request(message("start", OWNER).put("ice_servers", new JSONArray())
+                    .put("defer_carrier_audio", true).toString());
+            TelephonyWebRTCPeer prepared = TelephonyWebRTCPeer.latest;
+            check(!prepared.carrierActive);
+            service.request(message("signal", OWNER).put("signal", signal()).toString());
+            check(poll(service, OWNER).has("event"));
+            rejected("media_owner_mismatch", () -> service.request(message("activate_audio", UUID.randomUUID().toString()).toString()));
+            check(!prepared.carrierActive);
+            service.request(message("activate_audio", OWNER).toString());
+            service.request(message("activate_audio", OWNER).toString());
+            check(prepared.carrierActive && prepared.carrierActivations == 1);
+            check(TelephonyWebRTCPeer.latest == prepared);
+            service.request(message("stop", OWNER).toString());
+            rejected("media_session_ended", () -> service.request(message("activate_audio", OWNER).toString()));
+            check(prepared.carrierActivations == 1);
+        }
+        // An unanswered call can end without ever opening the carrier device.
+        try (PrivilegedMediaService service = new PrivilegedMediaService(new android.content.Context(), () -> {}, () -> {})) {
+            service.initialize();
+            service.request(message("start", OWNER).put("ice_servers", new JSONArray())
+                    .put("defer_carrier_audio", true).toString());
+            TelephonyWebRTCPeer prepared = TelephonyWebRTCPeer.latest;
+            service.request(message("stop", OWNER).toString());
+            check(!prepared.carrierActive);
         }
     }
 }

@@ -83,7 +83,7 @@ final class PrivilegedMediaService implements Closeable {
             disposal = new CompletableFuture<>();
             try {
                 acquireOutput.run();
-                peer.start();
+                peer.start(!request.optBoolean("defer_carrier_audio", false));
             } catch (RuntimeException | LinkageError error) {
                 stopOwned();
                 throw error;
@@ -96,6 +96,9 @@ final class PrivilegedMediaService implements Closeable {
                 JSONObject event = events.pollFirst();
                 if (event != null) result.put("event", event);
                 result.put("active", peer != null && !closing);
+            } else if ("activate_audio".equals(action)) {
+                if (peer == null || closing) throw new IllegalStateException("media_session_ended");
+                peer.activateCarrierAudio();
             } else if ("signal".equals(action)) {
                 if (peer == null || closing) throw new IllegalStateException("media_session_ended");
                 JSONObject signal = request.getJSONObject("signal");

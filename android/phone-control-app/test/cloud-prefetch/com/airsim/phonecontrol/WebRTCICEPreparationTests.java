@@ -122,6 +122,19 @@ public final class WebRTCICEPreparationTests {
         }
         check(new WebRTCCloudPeer.PreparedICE(new JSONArray(), 100).usableAt(99));
         check(!new WebRTCCloudPeer.PreparedICE(new JSONArray(), 100).usableAt(100));
+        // Ringback negotiates one native peer; answer activates its existing carrier path.
+        try (Fixture f = new Fixture()) {
+            f.block = true;
+            f.peer.start(true);
+            check(f.requested.await(3, TimeUnit.SECONDS));
+            f.peer.activateCarrierAudio(); // Answer can arrive before ICE finishes.
+            f.peer.activateCarrierAudio();
+            f.release.countDown();
+            check(f.bridge.activated.await(3, TimeUnit.SECONDS));
+            check(f.bridge.carrierDeferred);
+            check(f.bridge.starts.get() == 1 && f.bridge.activations.get() == 1);
+            check(f.requests.get() == 1 && f.failures.get() == 0);
+        }
         System.out.println("WebRTC ICE preparation tests passed (" + checks + " checks)");
     }
 }

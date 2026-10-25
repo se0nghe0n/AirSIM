@@ -35,8 +35,30 @@ public final class TelephonyWebRTCPeerDisposalTests {
         run("peer dispose failure is exceptional", TelephonyWebRTCPeerDisposalTests::peerDisposeFailureIsExceptional);
         run("earlier peer disposal failure stays sticky without retry", TelephonyWebRTCPeerDisposalTests::earlierDisposalFailureStaysSticky);
         run("rejected signaling submission fails closed", TelephonyWebRTCPeerDisposalTests::rejectedSubmissionFailsClosed);
+        run("cancelled ringback cannot activate carrier audio", TelephonyWebRTCPeerDisposalTests::cancelledRingbackCannotActivateCarrier);
         check(!(Boolean) field("initialized").get(null), "Native WebRTC must never be initialized");
         System.out.println("TelephonyWebRTCPeerDisposalTests: " + passed + " passed (production peer, no JNI)");
+    }
+
+    private static void cancelledRingbackCannotActivateCarrier() throws Exception {
+        TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null,
+                java.util.UUID.randomUUID().toString(), 1, new JSONArray(), signal -> {}, () -> {}, true);
+        ScheduledExecutorService signaling = (ScheduledExecutorService) field("signaling").get(owner);
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        try {
+            signaling.execute(() -> { entered.countDown(); await(release, "release prepared peer"); });
+            await(entered, "prepared peer queue held");
+            owner.activateCarrierAudio();
+            CompletableFuture<Void> completion = owner.closeAsync();
+            release.countDown();
+            get(completion);
+            check(field("device").get(owner) == null, "Cancelled ringback opened a carrier device");
+            owner.activateCarrierAudio();
+            check(field("device").get(owner) == null, "Late activation resurrected carrier audio");
+        } finally {
+            release.countDown();
+            get(owner.closeAsync());
+        }
     }
 
     private static void queuedCloseIsNotCompletion() throws Exception {

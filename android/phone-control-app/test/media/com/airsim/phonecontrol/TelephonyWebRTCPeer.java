@@ -13,15 +13,21 @@ final class TelephonyWebRTCPeer implements AutoCloseable {
     final Runnable failed;
     private final CompletableFuture<Void> disposal = new CompletableFuture<>();
     private boolean closing;
+    boolean carrierActive;
+    int carrierActivations;
 
     TelephonyWebRTCPeer(android.content.Context c, String call, long generation, JSONArray ice,
                         Signals signals, Runnable failed, boolean host) {
         this.signals = signals; this.failed = failed; latest = this;
     }
     static void initialize(android.content.Context context) {}
-    void start() {
+    void start(boolean activateCarrierAudio) {
         starts++;
         if (rejectStart) throw new IllegalStateException("fake_start_failure");
+        if (activateCarrierAudio) activateCarrierAudio();
+    }
+    void activateCarrierAudio() {
+        if (!carrierActive && !closing) { carrierActive = true; carrierActivations++; }
     }
     void receive(JSONObject signal) throws Exception { signals.send(signal); }
     CompletableFuture<Void> closeAsync() {

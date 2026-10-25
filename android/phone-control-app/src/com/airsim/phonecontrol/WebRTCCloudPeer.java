@@ -34,6 +34,7 @@ final class WebRTCCloudPeer implements Closeable {
     private volatile HttpURLConnection iceRequest;
     private long requestID;
     private boolean started;
+    private boolean carrierAudioActive;
     private PreparedICE preparedICE;
     private CompletableFuture<Boolean> preparation;
 
@@ -81,8 +82,13 @@ final class WebRTCCloudPeer implements Closeable {
     }
 
     void start() {
+        start(false);
+    }
+
+    void start(boolean deferCarrierAudio) {
         long waitStarted = System.nanoTime();
         submit(() -> {
+            if (started) return;
             if (!bridge.mediaAvailable()) throw new IOException("privileged_media_unavailable");
             boolean warmed = preparedICE != null && preparedICE.usableAt(System.nanoTime());
             JSONArray ice = hostOnly ? new JSONArray()
@@ -91,8 +97,10 @@ final class WebRTCCloudPeer implements Closeable {
             if (closed.get()) return;
             BridgeLog.info("webrtc_ice_ready prefetched=" + warmed
                     + " wait_ms=" + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted));
-            request(identity("start").put("host_only", hostOnly).put("ice_servers", ice));
+            request(identity("start").put("host_only", hostOnly).put("ice_servers", ice)
+                    .put("defer_carrier_audio", deferCarrierAudio));
             started = true;
+            carrierAudioActive = !deferCarrierAudio;
             worker.scheduleWithFixedDelay(() -> {
                 if (closed.get()) return;
                 try {
@@ -105,6 +113,14 @@ final class WebRTCCloudPeer implements Closeable {
                     if (!response.optBoolean("active")) fail();
                 } catch (Exception | LinkageError error) { fail(); }
             }, 0, 40, TimeUnit.MILLISECONDS);
+        });
+    }
+
+    void activateCarrierAudio() {
+        submit(() -> {
+            if (!started || carrierAudioActive) return;
+            request(identity("activate_audio"));
+            carrierAudioActive = true;
         });
     }
 

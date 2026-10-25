@@ -50,6 +50,12 @@ public final class CallRepository {
         return call == null ? -1 : call.getState();
     }
 
+    /** A bound outgoing call may negotiate media without invoking Telecom.answer(). */
+    static boolean canPrepareOutgoingMedia(String callId) {
+        int state = state(callId);
+        return state == Call.STATE_CONNECTING || state == Call.STATE_DIALING || state == Call.STATE_ACTIVE;
+    }
+
     public static String idForAction(String action) {
         int preferred = ("answer".equals(action) || "reject".equals(action))
                 ? Call.STATE_RINGING : Call.STATE_ACTIVE;

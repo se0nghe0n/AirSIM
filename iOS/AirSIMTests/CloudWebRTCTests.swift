@@ -279,6 +279,53 @@ struct CloudWebRTCTests {
     }
 
     @Test @MainActor
+    func `Outgoing ringback prepares media without publishing a connected call`() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        var events: [String] = []
+        handshake.confirm(status: "media_prepared", isOutgoing: true,
+            callConnected: { events.append("connected") }) { events.append("media") }
+        #expect(handshake.acknowledged)
+        #expect(events == ["media"])
+        handshake.confirm(status: "media_prepared", isOutgoing: true) {
+            Issue.record("Duplicate preparation restarted the peer")
+        }
+        handshake.confirm(status: "active", isOutgoing: true,
+            callConnected: { events.append("connected") }) {
+            Issue.record("Answer must reuse the prepared peer")
+        }
+        #expect(events == ["media", "connected"])
+        handshake.confirm(status: "answer_ok", isOutgoing: true,
+            callConnected: { Issue.record("Duplicate answer republished connection") }) {}
+    }
+
+    @Test @MainActor
+    func `Incoming call rejects outgoing preparation acknowledgement`() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.confirm(status: "media_prepared", isOutgoing: false,
+            callConnected: { Issue.record("Unanswered incoming call became active") }) {
+            Issue.record("Unanswered incoming call opened audio")
+        }
+        #expect(!handshake.acknowledged)
+    }
+
+    @Test @MainActor
+    func `Outgoing reconnect requires fresh preparation and preserves answer ordering`() {
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.invalidate(requiringAnswerOK: true)
+        handshake.confirm(status: "active", isOutgoing: true) {
+            Issue.record("Old activity bypassed peer preparation")
+        }
+        #expect(!handshake.acknowledged)
+        var offers = 0, connected = 0
+        handshake.confirm(status: "media_prepared", isOutgoing: true,
+            callConnected: { connected += 1 }) { offers += 1 }
+        #expect(offers == 1 && connected == 0)
+        handshake.confirm(status: "active", isOutgoing: true,
+            callConnected: { connected += 1 }) { offers += 1 }
+        #expect(offers == 1 && connected == 1)
+    }
+
+    @Test @MainActor
     func `Standalone answer enables recording in app model and ending disables it`() {
         let session = IPhoneCloudCallSession.shared
         let previousLifecycle = session.onLifecycleEvent

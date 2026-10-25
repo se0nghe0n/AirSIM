@@ -231,7 +231,7 @@ enum CloudCallAnswerPolicy {
     static let confirmationDelays: [TimeInterval] = [0, 3, 3, 4, 5]
 
     static func isAcknowledged(status: String) -> Bool {
-        status == "answer_ok" || status == "active"
+        status == "answer_ok" || status == "active" || status == "media_prepared"
     }
 
     static func shouldReplayImmediately(status: String) -> Bool {
@@ -1051,11 +1051,14 @@ final class IPhoneCloudCallSession {
 
     private func confirmAnswer(status: String, traceID: String?) {
         let wasAcknowledged = answerAcknowledged
-        answerHandshake.confirm(status: status, callConnected: {
+        answerHandshake.confirm(status: status, isOutgoing: call?.isOutgoing == true, callConnected: {
             emitLifecycle(.active, source: .agent, traceID: traceID)
         }) { startWebRTCIfReady() }
         guard answerAcknowledged else { return }
-        if !wasAcknowledged { traceAudio(phase: "answer_confirmed", title: "Android Answer Confirmed") }
+        if !wasAcknowledged {
+            traceAudio(phase: status == "media_prepared" ? "media_prepared" : "answer_confirmed",
+                       title: status == "media_prepared" ? "Outgoing WebRTC Prepared" : "Android Answer Confirmed")
+        }
         answerRetryGeneration &+= 1
         answerRetryTask?.cancel()
         answerRetryTask = nil
@@ -1078,8 +1081,8 @@ final class IPhoneCloudCallSession {
         }, scheduleConfirmation: {
             scheduleAnswerConfirmation(for: call)
         })
-        // Only a fresh answer_ok can re-open startWebRTCIfReady. The agent must
-        // recreate its native peer/phone audio bridge before we send new SDP.
+        // A fresh answer_ok (or outgoing media_prepared) must confirm the agent
+        // recreated its native peer before we send new SDP.
     }
 
     private func startWebRTCIfReady() {

@@ -10,6 +10,7 @@ public final class CallRepositoryTests {
         answeredCallCanConfirmMediaWithoutAnsweringAgain();
         pendingAnswerDoesNotPoisonCompletedReplay();
         outgoingDialingWaitsInsteadOfAnswering();
+        outgoingMediaCanPrepareBeforeAnswer();
         endedCallAcceptsHangupAfterTelecomRemoval();
         stuckRelayCallYieldsToTheNextConnectingCall();
         System.out.println("call repository tests passed");
@@ -68,6 +69,25 @@ public final class CallRepositoryTests {
                 null, new AgentCommand("late-answer", "answer", id, ""));
         assertTrue(!answer.success);
         assertEquals("active call id mismatch", answer.error);
+    }
+
+    private static void outgoingMediaCanPrepareBeforeAnswer() {
+        for (int state : new int[]{Call.STATE_CONNECTING, Call.STATE_DIALING, Call.STATE_ACTIVE,
+                Call.STATE_RINGING, Call.STATE_DISCONNECTING, Call.STATE_DISCONNECTED}) {
+            Call call = new Call(state) {
+                @Override public void answer(int videoState) {
+                    throw new AssertionError("Media preparation must not answer Telecom");
+                }
+            };
+            String id = CallRepository.add(call);
+            try {
+                boolean expected = state == Call.STATE_CONNECTING || state == Call.STATE_DIALING
+                        || state == Call.STATE_ACTIVE;
+                assertTrue(CallRepository.canPrepareOutgoingMedia(id) == expected);
+                assertTrue(call.getState() == state);
+            } finally { CallRepository.remove(call); }
+            assertTrue(!CallRepository.canPrepareOutgoingMedia(id));
+        }
     }
 
     private static void stuckRelayCallYieldsToTheNextConnectingCall() {

@@ -70,10 +70,12 @@ struct CloudWebRTCSignal: Codable, Equatable, Sendable {
 final class CloudWebRTCAnswerHandshake {
     private(set) var acknowledged = false
     private var requiresAnswerOK = false
+    private var connectionConfirmed = false
 
     func invalidate(requiringAnswerOK: Bool = false) {
         acknowledged = false
         requiresAnswerOK = requiringAnswerOK
+        connectionConfirmed = false
     }
 
     func agentReconnected(role: String?, stopMedia: () -> Void,
@@ -90,13 +92,19 @@ final class CloudWebRTCAnswerHandshake {
         sendAnswer()
     }
 
-    func confirm(status: String = "answer_ok", callConnected: () -> Void = {}, _ startMedia: () -> Void) {
-        guard !acknowledged, status == "answer_ok" || (!requiresAnswerOK && status == "active") else { return }
+    func confirm(status: String = "answer_ok", isOutgoing: Bool = false,
+                 callConnected: () -> Void = {}, _ startMedia: () -> Void) {
+        let prepared = isOutgoing && status == "media_prepared"
+        let connected = status == "answer_ok" || (status == "active" && (!requiresAnswerOK || acknowledged))
+        guard prepared || connected else { return }
+        let shouldStart = !acknowledged
         acknowledged = true
-        // Standalone WebRTC confirms Telecom with answer_ok; only legacy PCM
-        // emits a subsequent active event. Publish connection before media starts.
-        callConnected()
-        startMedia()
+        // A prepared outgoing peer is not evidence that the remote party answered.
+        if connected && !connectionConfirmed {
+            connectionConfirmed = true
+            callConnected()
+        }
+        if shouldStart { startMedia() }
     }
 }
 
