@@ -56,6 +56,7 @@ enum CallAudioStatusPresentation {
                      cloudState: CloudCallAudioState) -> String {
         switch cloudState {
         case .idle: return localAudioActive ? "Audio Connected" : "Connecting Audio"
+        case .starting: return "Connecting Cloud Audio"
         case let .connecting(attempt, maximum): return "Retrying Cloud Audio \(attempt)/\(maximum)"
         case .connected: return "Cloud Audio Connected"
         case let .failed(message): return message

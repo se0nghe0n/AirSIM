@@ -245,3 +245,14 @@ mkdir -p "$PERSISTENCE_OUT"
   "$ROOT"/src/com/airsim/phonecontrol/VoWLANPairingStore.java \
   "$ROOT"/test/persistence/com/airsim/phonecontrol/StandalonePersistenceTests.java
 "$JAVA" -cp "$PERSISTENCE_OUT:$OUT:$JSON_JAR" com.airsim.phonecontrol.StandalonePersistenceTests
+
+# Credential preparation may overlap ringing, but never starts native/carrier media.
+PREFETCH_OUT="$OUT/cloud-prefetch"
+mkdir -p "$PREFETCH_OUT"
+"$JAVAC" --release 17 -cp "$OUT:$JSON_JAR" -d "$PREFETCH_OUT" \
+  "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/BridgeLog.java \
+  "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/ShizukuBridgeManager.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCCloudPeer.java \
+  "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/WebRTCICEPreparationTests.java
+"$JAVA" -cp "$PREFETCH_OUT:$OUT:$JSON_JAR" com.airsim.phonecontrol.WebRTCICEPreparationTests

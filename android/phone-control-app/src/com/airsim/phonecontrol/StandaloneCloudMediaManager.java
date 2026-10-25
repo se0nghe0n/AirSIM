@@ -235,6 +235,9 @@ final class StandaloneCloudMediaManager implements Closeable {
                         if (!running) { closeSocket(owner); return; }
                         webSocket = owner;
                     }
+                    // Overlap call-scoped ICE retrieval with ringing/signaling. Carrier audio
+                    // still starts only after Telecom confirms the answer below.
+                    prepareWebRTC(owner);
                     owner.writeText(status("agent_ready", ""));
                     BridgeLog.info("standalone_cloud_media_connected call_uuid="
                             + DebugRedactor.safeIdentifier(descriptor.callUUID));
@@ -270,7 +273,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                 String action = control.optString("action", "");
                 if (action.startsWith("webrtc_")) {
                     WebRTCCloudPeer peer = webRTC;
-                    if (peer != null && CloudCallMedia.WEBRTC.equals(mediaTransport)) peer.receive(control);
+                    if (mediaStarted && peer != null && CloudCallMedia.WEBRTC.equals(mediaTransport)) peer.receive(control);
                     continue;
                 }
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
@@ -313,14 +316,22 @@ final class StandaloneCloudMediaManager implements Closeable {
             }
         }
 
-        private void startWebRTC(StandaloneWebSocket owner) {
+        private void prepareWebRTC(StandaloneWebSocket owner) {
             synchronized (this) {
-                if (!running || webSocket != owner) return;
+                if (!running || webSocket != owner || webRTC != null) return;
                 webRTC = new WebRTCCloudPeer(context, descriptor.callUUID, descriptor.generation,
                         descriptor.relayURL, descriptor.secret, signal -> {
                     if (running && webSocket == owner) owner.writeText(signal.toString());
                 }, () -> closeSocket(owner));
-                webRTC.start();
+                webRTC.prepare();
+            }
+        }
+
+        private void startWebRTC(StandaloneWebSocket owner) {
+            synchronized (this) {
+                if (!running || webSocket != owner) return;
+                prepareWebRTC(owner);
+                if (webRTC != null) webRTC.start();
             }
         }
 

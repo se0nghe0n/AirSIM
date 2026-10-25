@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
@@ -33,6 +34,12 @@ final class WebRTCCloudPeer implements Closeable {
     private volatile HttpURLConnection iceRequest;
     private long requestID;
     private boolean started;
+    private PreparedICE preparedICE;
+    private CompletableFuture<Boolean> preparation;
+
+    record PreparedICE(JSONArray servers, long expiresAtNanos) {
+        boolean usableAt(long now) { return now < expiresAtNanos; }
+    }
 
     WebRTCCloudPeer(Context context, String callUUID, long generation, String relayURL,
                     String secret, Signals signals, Runnable failed) {
@@ -50,11 +57,40 @@ final class WebRTCCloudPeer implements Closeable {
         this.relayURL = relayURL; this.secret = secret; this.signals = signals; this.failed = failed; this.hostOnly = hostOnly;
     }
 
+    /** Fetch call-scoped credentials only. Never opens carrier audio or starts a native peer. */
+    synchronized CompletableFuture<Boolean> prepare() {
+        if (closed.get() || hostOnly) return CompletableFuture.completedFuture(false);
+        if (preparation != null) return preparation;
+        preparation = new CompletableFuture<>();
+        try {
+            worker.execute(() -> {
+                if (closed.get()) { preparation.complete(false); return; }
+                try {
+                    PreparedICE value = fetchICE();
+                    if (!closed.get()) preparedICE = value;
+                    preparation.complete(!closed.get());
+                } catch (Exception | LinkageError error) {
+                    // A speculative request failing while the call rings is not a call failure.
+                    // start() retries through the normal, bounded request path after answer.
+                    BridgeLog.info("webrtc_ice_prefetch_unavailable");
+                    preparation.complete(false);
+                }
+            });
+        } catch (RejectedExecutionException closedWorker) { preparation.complete(false); }
+        return preparation;
+    }
+
     void start() {
+        long waitStarted = System.nanoTime();
         submit(() -> {
             if (!bridge.mediaAvailable()) throw new IOException("privileged_media_unavailable");
-            JSONArray ice = hostOnly ? new JSONArray() : fetchICE();
+            boolean warmed = preparedICE != null && preparedICE.usableAt(System.nanoTime());
+            JSONArray ice = hostOnly ? new JSONArray()
+                    : (warmed ? preparedICE : fetchICE()).servers();
+            preparedICE = null;
             if (closed.get()) return;
+            BridgeLog.info("webrtc_ice_ready prefetched=" + warmed
+                    + " wait_ms=" + TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - waitStarted));
             request(identity("start").put("host_only", hostOnly).put("ice_servers", ice));
             started = true;
             worker.scheduleWithFixedDelay(() -> {
@@ -95,10 +131,12 @@ final class WebRTCCloudPeer implements Closeable {
         return reply;
     }
 
-    private JSONArray fetchICE() throws Exception {
+    private PreparedICE fetchICE() throws Exception {
+        long requestedAt = System.nanoTime();
         HttpURLConnection connection = (HttpURLConnection) new URL(relayURL + "/v1/calls/" + callUUID + "/ice?role=agent").openConnection();
         iceRequest = connection;
         try {
+            if (closed.get()) throw new IOException("media_closed");
             connection.setConnectTimeout(8000); connection.setReadTimeout(8000);
             connection.setInstanceFollowRedirects(false); connection.setUseCaches(false);
             connection.setRequestProperty("Authorization", "Bearer " + secret);
@@ -111,7 +149,11 @@ final class WebRTCCloudPeer implements Closeable {
                     bytes.write(buffer, 0, count);
                 }
             }
-            return new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8)).getJSONArray("ice_servers");
+            JSONObject configuration = new JSONObject(new String(bytes.toByteArray(), StandardCharsets.UTF_8));
+            long ttl = Math.min(86400, Math.max(0, configuration.optLong("ttl", 0)));
+            long margin = Math.min(30, ttl / 10);
+            return new PreparedICE(configuration.getJSONArray("ice_servers"),
+                    requestedAt + TimeUnit.SECONDS.toNanos(ttl - margin));
         } finally { connection.disconnect(); iceRequest = null; }
     }
 
@@ -136,6 +178,7 @@ final class WebRTCCloudPeer implements Closeable {
         HttpURLConnection request = iceRequest;
         if (request != null) request.disconnect();
         worker.execute(() -> {
+            preparedICE = null;
             if (started) try { request(identity("stop")); } catch (Exception ignored) {}
         });
         worker.shutdown();

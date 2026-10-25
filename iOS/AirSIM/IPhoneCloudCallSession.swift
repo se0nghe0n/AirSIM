@@ -24,11 +24,16 @@ enum IPhoneCloudCallError: LocalizedError {
 
 enum CloudCallAudioState: Equatable, Sendable {
     case idle
+    case starting
     case connecting(attempt: Int, maximumAttempts: Int)
     case connected
     case failed(String)
 
     var isConnected: Bool { self == .connected }
+    var isRetrying: Bool {
+        if case .connecting = self { return true }
+        return false
+    }
 }
 
 enum CloudCallAudioStartupPolicy {
@@ -566,6 +571,7 @@ final class IPhoneCloudCallSession {
     private var webRTCStartTask: Task<Void, Never>?
     private var webRTCStartID = UUID()
     private var audioStartupPermitted = false
+    private var audioSetupStartedAt: TimeInterval?
     private var ownsWebRTCAudioActivation = false
     private var usesWebRTC: Bool { call?.requestedMediaTransport == .webRTC }
 
@@ -585,7 +591,11 @@ final class IPhoneCloudCallSession {
                 guard session.usesWebRTC, session.media.isCurrentWebRTCSession(negotiation, connection: connection) else { return }
                 if connected {
                     session.webRTCReadiness.nativeConnected(negotiation)
-                    if session.webRTCReadiness.isReady { session.audioState = .connected }
+                    session.traceAudio(phase: "native_connected", title: "WebRTC Connected")
+                    if session.webRTCReadiness.isReady, !session.audioState.isConnected {
+                        session.audioState = .connected
+                        session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                    }
                 } else {
                     session.webRTCReadiness.reset()
                     session.requestMediaRebuild(.connectionLost)
@@ -613,16 +623,19 @@ final class IPhoneCloudCallSession {
                 let session = IPhoneCloudCallSession.shared
                 let status = control.status
                 let relayStatuses = ["action_queued", "action_forwarded", "peer_connected", "owner_claimed"]
-                await AgentVerboseTraceRecorder.shared.recordEvent(
-                    source: relayStatuses.contains(status) ? "RELAY" : "AGENT",
-                    category: relayStatuses.contains(status) ? "relay" : "cloud-call-control",
-                    phase: status,
-                    title: control.action.map { "Call Control · \($0)" } ?? "Cloud Call Status",
-                    detail: control.message ?? "",
-                    fields: control.traceFields,
-                    isFailure: status == "action_error"
-                )
-                // The trace await can outlive hangup or even the next call.
+                // File-backed diagnostics must not delay answer/readiness handling.
+                Task {
+                    await AgentVerboseTraceRecorder.shared.recordEvent(
+                        source: relayStatuses.contains(status) ? "RELAY" : "AGENT",
+                        category: relayStatuses.contains(status) ? "relay" : "cloud-call-control",
+                        phase: status,
+                        title: control.action.map { "Call Control · \($0)" } ?? "Cloud Call Status",
+                        detail: control.message ?? "",
+                        fields: control.traceFields,
+                        isFailure: status == "action_error"
+                    )
+                }
+                // A queued callback can outlive hangup or even the next call.
                 guard let call = session.call, session.media.isCurrentConnection(connection),
                       control.matches(callID: call.callID, uuid: call.uuid, generation: call.generation) else { return }
                 if status == "peer_connected", session.usesWebRTC,
@@ -648,8 +661,13 @@ final class IPhoneCloudCallSession {
                     session.stop()
                 case "webrtc_ready":
                     if session.usesWebRTC, let negotiation = control.sessionID {
+                        guard session.webRTCReadiness.sessionID == negotiation else { break }
                         session.webRTCReadiness.agentConnected(negotiation)
-                        if session.webRTCReadiness.isReady { session.audioState = .connected }
+                        session.traceAudio(phase: "carrier_ready", title: "Android Carrier Audio Ready")
+                        if session.webRTCReadiness.isReady, !session.audioState.isConnected {
+                            session.audioState = .connected
+                            session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                        }
                     }
                 case "webrtc_failed":
                     if session.usesWebRTC,
@@ -679,6 +697,11 @@ final class IPhoneCloudCallSession {
         try media.prepareForCallKit(webRTC: true)
         let callChanged = call?.uuid != incoming.uuid
         call = incoming
+        if callChanged || audioSetupStartedAt == nil {
+            audioSetupStartedAt = ProcessInfo.processInfo.systemUptime
+            audioState = .starting
+            traceAudio(phase: "setup_started", title: "Cloud Audio Connecting")
+        }
         answered = true
         lifecycleState = .connecting
         answerHandshake.invalidate()
@@ -705,6 +728,7 @@ final class IPhoneCloudCallSession {
             }
         }
         guard call?.uuid == incoming.uuid, answered else { return }
+        traceAudio(phase: "signaling_connected", title: "Cloud Signaling Connected")
         scheduleAnswerConfirmation(for: incoming)
     }
 
@@ -921,6 +945,10 @@ final class IPhoneCloudCallSession {
             "generation": String(call.generation),
             "audio_route": media.audioRouteDescription,
         ]
+        if let audioSetupStartedAt {
+            fields["setup_elapsed_ms"] = String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"),
+                    max(0, ProcessInfo.processInfo.systemUptime - audioSetupStartedAt) * 1_000)
+        }
         fields.merge(additionalFields) { current, _ in current }
         if let attempt { fields["attempt"] = String(attempt) }
         Task {
@@ -954,9 +982,7 @@ final class IPhoneCloudCallSession {
         webRTCStartTask?.cancel()
         webRTCStartTask = nil
         media.stopAudio()
-        audioState = hasActiveCall
-            ? .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.audioDelays.count)
-            : .idle
+        audioState = hasActiveCall ? .starting : .idle
     }
     func setMuted(_ muted: Bool) { media.setMuted(muted) }
 
@@ -987,6 +1013,7 @@ final class IPhoneCloudCallSession {
         lifecycleState = .idle
         answerHandshake.invalidate()
         audioState = .idle
+        audioSetupStartedAt = nil
         mediaHealthTracker = nil
         mediaHealthSnapshot = CloudMediaHealthSnapshot()
     }
@@ -1023,10 +1050,12 @@ final class IPhoneCloudCallSession {
     }
 
     private func confirmAnswer(status: String, traceID: String?) {
+        let wasAcknowledged = answerAcknowledged
         answerHandshake.confirm(status: status, callConnected: {
             emitLifecycle(.active, source: .agent, traceID: traceID)
         }) { startWebRTCIfReady() }
         guard answerAcknowledged else { return }
+        if !wasAcknowledged { traceAudio(phase: "answer_confirmed", title: "Android Answer Confirmed") }
         answerRetryGeneration &+= 1
         answerRetryTask?.cancel()
         answerRetryTask = nil
@@ -1034,13 +1063,16 @@ final class IPhoneCloudCallSession {
 
     private func restartWebRTCNegotiation() {
         guard usesWebRTC, answered, let call else { return }
+        let replacingPeer = media.isAudioRunning
         answerHandshake.agentReconnected(role: "agent", stopMedia: {
             webRTCReadiness.reset()
             webRTCStartID = UUID()
             webRTCStartTask?.cancel()
             webRTCStartTask = nil
             media.stopWebRTC()
-            audioState = .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+            audioState = replacingPeer
+                ? .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+                : .starting
         }, replayAnswer: {
             media.sendControl("answer", call: call)
         }, scheduleConfirmation: {
@@ -1057,7 +1089,8 @@ final class IPhoneCloudCallSession {
               let call else { return }
         let id = UUID()
         webRTCStartID = id
-        audioState = .connecting(attempt: 1, maximumAttempts: CloudCallRetryPolicy.reconnectDelays.count)
+        // Keep a real recovery indication; the first negotiation is ordinary startup.
+        if !audioState.isRetrying { audioState = .starting }
         webRTCStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { if webRTCStartID == id { webRTCStartTask = nil } }
@@ -1081,6 +1114,7 @@ final class IPhoneCloudCallSession {
                 rtc.isAudioEnabled = true
                 let negotiation = try media.startWebRTC(call: call, servers: config.iceServers.map(\.native))
                 webRTCReadiness.begin(negotiation)
+                traceAudio(phase: "peer_started", title: "WebRTC Peer Started")
             } catch {
                 guard !Task.isCancelled, webRTCStartID == id else { return }
                 audioState = .failed(error.localizedDescription)

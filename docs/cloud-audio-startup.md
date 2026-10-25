@@ -16,3 +16,19 @@ Validation: seven preparation tests cover request coalescing, expiration, transi
 ## Standalone answer confirmation and recording
 
 The standalone Android agent sends `answer_ok` after Telecom confirms the cellular call is active. Its WebRTC path does not send the legacy PCM bridge's later `active` event. iPhone therefore publishes the active call lifecycle when the answer handshake accepts `answer_ok`, before starting media. Recording availability observes that lifecycle, rather than a separate displayed record. Reconnect still requires a fresh answer acknowledgement; queued/forwarded commands and WebRTC readiness alone cannot mark a cellular call connected. The lifecycle merger rejects late confirmation after hangup.
+
+## Initial connection and retries
+
+The first Cloud Relay audio negotiation displays **Connecting Cloud Audio**. **Retrying Cloud Audio N/M** is reserved for recovery after a disconnect/failure or replacement of an existing peer; the initial peer connection must not be presented as retry 1. This display distinction does not remove the required CallKit, answer acknowledgement, ICE or carrier-route gates.
+
+The existing private diagnostic trace now records `setup_started`, `signaling_connected`, `answer_confirmed`, `ice_prepared`, `peer_started`, `native_connected`, `carrier_ready` and `audio_ready`, with monotonic `setup_elapsed_ms` from the beginning of that call. `ice_wait_ms` measures the wait for the per-call ICE preparation result. These phase timings help distinguish slow setup from a real rebuild without logging SDP, ICE credentials or audio. Actual elapsed latency requires a device call trace; a passing simulator test does not establish it.
+
+Control-message handling does not await file-backed trace persistence. Answer confirmation and media-readiness updates proceed independently of diagnostic disk writes.
+
+## Android credential preparation
+
+As soon as the call's Agent signaling socket connects, Android starts a call-scoped ICE/TURN credential request. This overlaps ringing and answer confirmation. Preparation does not invoke the privileged media service, start a native peer, or capture/inject carrier audio. Those operations still start only after Telecom confirms the answer.
+
+Answer startup joins the same in-flight request or reuses its still-valid result. The lease starts at request time, with a safety margin; expired or missing-TTL preparation is fetched again. A failed speculative request is retried through normal startup and does not fail an unanswered call. Closing or replacing the call cancels preparation and cannot start native audio afterward. Credentials remain in the ordinary app and are never included in logs.
+
+The Android event `webrtc_ice_ready` reports `prefetched` and `wait_ms`. A ready prefetch removes credential-fetch waiting from the post-answer path. This does not remove ICE connectivity checks, native initialization, carrier routing, or the need for physical latency measurement.
