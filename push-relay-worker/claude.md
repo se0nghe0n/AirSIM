@@ -2,7 +2,7 @@
 
 Before assisting with deployment, read `README.md`, `wrangler.example.toml`, `package.json`, `src/index.mjs`, `src/status-store.mjs`, and `src/dashboard.mjs`, in that order. The source is the source of truth for the interface. Do not substitute an old DJOneHub configuration, resources from another AirSIM environment, or remembered Wrangler behavior for that check.
 
-The current compatibility baseline (2026-10-12) is Apps `v0.9.6`, AVF Agent `v0.4.6` (Debian `0.4.6-1`), and Relay protocol `0.2.1`. The maintainer address is `https://airsim-push.remotepilot.site`. `https://push.remotepilot.site` belongs only to DJOneHub.
+Android Standalone is the sole runtime; preserve existing registrations and retired Agent records. The maintainer AirSIM Relay is `https://airsim-push.remotepilot.site`; `https://push.remotepilot.site` belongs only to DJOneHub.
 
 AirSIM must use a Worker, KV, Durable Objects, Dashboard token, and hostname that are independent of DJOneHub. This project's maintainer uses `https://airsim-push.remotepilot.site`. AirSIM must not take over DJOneHub's `https://push.remotepilot.site`.
 

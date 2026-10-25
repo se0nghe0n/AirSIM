@@ -14,9 +14,8 @@ enum VoWLANAudioPlan {
     }
 }
 
-/// Local media has no socket or sample transport. The legacy route fails closed.
+/// Local media uses native WebRTC over an authenticated VoWLAN connection.
 enum LocalWebRTCRoute: Equatable, Sendable {
-    case moduleLocal
     case vowlan(endpoint: VoWLANEndpoint, credential: VoWLANCredential)
 }
 
@@ -147,16 +146,12 @@ final class AudioSessionController {
 
     @discardableResult
     func activateForCall(
-        route: LocalWebRTCRoute = .moduleLocal,
+        route: LocalWebRTCRoute,
         sessionAlreadyActive: Bool = false,
         callUUID: UUID = UUID(),
         generation: UInt64 = 1
     ) async -> Bool {
         guard !active else { return true }
-        guard case .vowlan = route else {
-            errorMessage = APIError.disabledLegacyRoute.localizedDescription
-            return false
-        }
         let attempt = UUID()
         activationID = attempt
         let permission = await requestMicrophonePermission()
@@ -182,11 +177,9 @@ final class AudioSessionController {
             try session.overrideOutputAudioPort(requestedSpeakerOverride ? .speaker : .none)
             refreshRouteDescription()
             switch route {
-            case .moduleLocal:
-                throw APIError.disabledLegacyRoute
             case let .vowlan(endpoint, credential):
                 guard VoWLANAudioPlan.usesHostICE, !VoWLANAudioPlan.opensNetworkPCM else {
-                    throw APIError.disabledLegacyRoute
+                    throw APIError.localConnectionUnavailable
                 }
                 try startVoWLANWebRTC(
                     endpoint: endpoint,

@@ -189,7 +189,7 @@ struct AndroidAgentPresentation: Equatable, Identifiable, Sendable {
     var agentKindTitle: LocalizedStringResource {
         switch agentKind {
         case "standalone": return "Standalone"
-        case "avf": return "AVF Agent"
+        case "avf": return "Retired Android Agent"
         default: return "Android Agent"
         }
     }

@@ -18,8 +18,8 @@ accepted SDP, or service-ready heartbeat.
   This is an OS/audio-device boundary, not a competing media transport or jitter engine.
 - iPhone uses native WebRTC for cloud and host-only local calls. Watch is an iPhone
   companion controller, not an independent microphone/speaker endpoint.
-- AVF remains available for pairing, SMS, call state and terminal controls. It returns
-  upgrade_required for dial/answer/audio setup; it does not advertise a native peer.
+- Android Standalone is the sole runtime. AVF Agent, installer and recovery paths are
+  removed; existing data is preserved as described in [Standalone migration](standalone-migration.md).
 - The Worker relays authenticated signaling/control, not audio. TURN is separate.
 
 ## Readiness is not one boolean
@@ -93,15 +93,9 @@ iPhone polls with a bounded startup timeout and fences callbacks by all identiti
 CallKit activation governs both local and cloud peers. Recording uses the current call
 UUID rather than a transport label; existing protected local files are preserved.
 
-## Legacy boundary and remaining deletion gate
+## Legacy removal and remaining physical gate
 
-The production APK no longer compiles or launches android/phone-audio-bridge. No
-AIRSIMPCM1 handshake is present in its DEX. The legacy source directory remains only
-as a reference for the physical architecture gate; its standalone scripts are not
-part of the supported build/run workflow. Do not launch them alongside the new service.
-Its complete removal is deferred until Q25/Pixel route and teardown acceptance.
-Package-scoped old-daemon eviction still recognizes the historical class/port so an
-upgrade can stop a stale bridge without killing unrelated processes.
+The historical `android/phone-audio-bridge` source, tests and scripts are removed. Its former implementation remains in Git history; [carrier-route validation](carrier-route-validation.md) records the unperformed device acceptance. Package-scoped old-daemon eviction still recognizes the historical class/port so an upgrade can stop a stale bridge without killing unrelated processes. Removal of the reference implementation does not establish physical call quality.
 
 Old policy values are accepted only for safe migration/rejection, not fallback. Relay
 requires bearer headers and keeps deployed Durable Object bindings/migration history.
@@ -112,7 +106,7 @@ Historical release notes describe their original versions and have not been rewr
 
 - Cloud: JVM protocol/readiness/owner/negative-transport tests; APK build, API-29 bytecode
   guard, all four native ABIs, 16 KiB alignment and signature verification; Relay and
-  Go suites. Delayed/failed-disposal tests cover the real service retirement gate and
+  persistent-store suites. Delayed/failed-disposal tests cover the real service retirement gate and
   the production peer's executor cleanup with synthetic resource boundaries. They do
   not exercise native JNI disposal or an actual privileged carrier route.
 - Mac: Xcode iOS/Watch builds and tests, native simulator recording/lifecycle tests,

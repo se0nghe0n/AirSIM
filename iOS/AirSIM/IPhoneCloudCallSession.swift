@@ -173,10 +173,8 @@ enum CloudMediaTransportNegotiator {
     static func resolve(
         requested: CloudMediaTransport,
         appSupported: Set<CloudMediaTransport>,
-        agentSupported: Set<CloudMediaTransport>,
-        forceLegacy: Bool
+        agentSupported: Set<CloudMediaTransport>
     ) -> Result<CloudMediaTransport, CloudMediaTransportNegotiationError> {
-        _ = forceLegacy
         guard requested == .webRTC,
               appSupported.contains(.webRTC),
               agentSupported.contains(.webRTC) else {
@@ -185,24 +183,6 @@ enum CloudMediaTransportNegotiator {
         return .success(.webRTC)
     }
 }
-
-enum CloudMediaTransportPreference {
-    static let requestedKey = "airsim.cloud-media-requested-transport"
-    static let forceLegacyKey = "airsim.cloud-media-force-legacy-pcm"
-
-    static func requested(defaults: UserDefaults = .standard) -> CloudMediaTransport {
-        // Retire the obsolete switch without disturbing pairing or credentials.
-        defaults.removeObject(forKey: forceLegacyKey)
-        defaults.set(CloudMediaTransport.webRTC.rawValue, forKey: requestedKey)
-        return .webRTC
-    }
-
-    static func forceLegacy(defaults: UserDefaults = .standard) -> Bool {
-        defaults.removeObject(forKey: forceLegacyKey)
-        return false
-    }
-}
-
 
 enum CloudCallRetryPolicy {
     /// A brief race can occur between CallKit activating the audio session and AVAudioEngine becoming ready; cover ~12 seconds
@@ -1105,7 +1085,6 @@ final class IPhoneCloudCallSession {
                 guard !Task.isCancelled, webRTCStartID == id else { return }
                 audioState = .failed(error.localizedDescription)
                 traceAudio(phase: "webrtc_failed", title: "WebRTC Audio Failed", detail: error.localizedDescription, isFailure: true)
-                guard CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine() else { return }
             }
         }
     }
@@ -1480,8 +1459,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             queue.async {
                 guard !self.stopped, self.webSocket === socket else { return }
                 switch result {
-                case let .success(.data(data)):
-                    CloudCallBinaryFrame.deliver(data) { _ in }
+                case .success(.data):
+                    break // Call WebSockets carry signaling; binary payloads never enter the audio engine.
                 case let .success(.string(text)):
                     self.consumeControl(text)
                 case .success:

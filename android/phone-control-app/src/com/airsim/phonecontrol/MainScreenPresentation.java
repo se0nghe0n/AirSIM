@@ -96,8 +96,7 @@ public final class MainScreenPresentation {
         String value = line.toLowerCase(java.util.Locale.ROOT);
         if (value.contains("pairing_completed")) return "VoWLAN pairing complete";
         if (value.contains("pairing_started")) return "Waiting for iPhone pairing";
-        if (value.contains("watchdog_created")) return "Agent watchdog started";
-        if (value.contains("watchdog_configuration_available")) return "Linux Agent settings loaded";
+        if (value.contains("standalone_agent_created")) return "Built-in Agent started";
         if (value.contains("application_started")) return "App service started";
         if (value.contains("shizuku_user_service_connected")) return "Shizuku WebRTC service connected";
         if (value.contains("shizuku_binder_received")) return "Shizuku connected";
@@ -106,12 +105,11 @@ public final class MainScreenPresentation {
         if (value.contains("vowlan_service_start_requested")) return "Starting VoWLAN service";
         if (value.contains("vowlan_ready")) return "VoWLAN local network service ready";
         if (value.contains("vowlan_state") && value.contains("paired=true")
-                && value.contains("agent_ready=true") && value.contains("pcm_ready=true")) {
+                && value.contains("agent_ready=true") && value.contains("media_ready=true")) {
             return "VoWLAN health check passed";
         }
-        if (value.contains("http_request_finished") && value.contains("status=200")
-                && value.contains("/api/android/status")) {
-            return "Linux Agent status returned HTTP 200";
+        if (value.contains("standalone_status_refresh") && value.contains("ok=true")) {
+            return "Built-in Agent status ready";
         }
         if (value.contains("telecom_call_added")) return "System call connected";
         if (value.contains("telecom_call_removed")) return "System call ended";

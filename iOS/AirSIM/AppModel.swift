@@ -87,7 +87,7 @@ enum CallPresentationPolicy {
 
 enum CallAnswerConfirmationPolicy {
     static func shouldMarkActiveImmediately(transport: CallTransport?) -> Bool {
-        transport == .moduleLocal || transport == .vowlan
+        transport == .vowlan
     }
 }
 
@@ -107,7 +107,7 @@ enum CallKitEndDecision {
         activeIncomingRinging: Bool
     ) -> Route {
         if hasIncomingPush, !systemCallAnswered,
-           transport != .vowlan, transport != .moduleLocal {
+           transport != .vowlan {
             return .cloudReject
         }
         if transport == .cloud || cloudSessionPrepared { return .cloudEnd }
@@ -144,18 +144,6 @@ enum CallAnswerCompletionCoordinator {
         ) else { return }
         confirmActive()
         await startAudio()
-    }
-}
-
-enum LocalControlReachability {
-    static func moduleLocal(
-        isOnline: Bool,
-        isReconnecting: Bool,
-        lastSuccessfulRoute: LocalAgentRoute?
-    ) -> Bool {
-        guard isOnline, !isReconnecting, let lastSuccessfulRoute else { return false }
-        if case .moduleLocal = lastSuccessfulRoute { return true }
-        return false
     }
 }
 
@@ -623,12 +611,12 @@ final class AppModel {
             mode: ConnectionModePreference.selected(),
             vowlanOnline: permitsVoWLANEndpoint(vowlan.availability.endpoint)
                 && vowlan.availability.isOnlineForDisplay,
-            moduleLocalReachable: false,
+
             cloudOnline: boundCloudReady
         )
     }
 
-    /// The dial view cannot rely solely on `isOnline`: that property represents the local USB control link and is intentionally
+    /// The dial view cannot rely solely on `isOnline`: that property represents the local VoWLAN link and is intentionally
     /// false when the module only maintains a Relay heartbeat. Allow dialing when cloud mode is enabled and the heartbeat is fresh;
     /// actual execution still re-authenticates and verifies state inside the CallKit action.
     var canStartOutgoingCommand: Bool {
@@ -879,7 +867,7 @@ final class AppModel {
         }
     }
 
-    /// Aligns with the module 1-second AT poll while online and backs off when offline to avoid repeatedly waking the phone and USB stack.
+    /// Aligns with the module 1-second AT poll while online and backs off when offline to avoid repeatedly waking the phone and local network.
     private var nextPollingDelay: TimeInterval {
         if consecutivePollFailures > 0 {
             let maximumDelay: TimeInterval = appIsActive ? 3 : 30
@@ -980,12 +968,12 @@ final class AppModel {
             } else if status.active == nil, previousCall != nil {
                 audioWarmupCallID = nil
             }
-            // A successful HTTP response proves the USB module Agent is online. last_poll_error only reflects the latest
-            // internal AT+CLCC poll and may be transiently non-empty during call setup, so do not mark the USB link offline from it.
+            // A successful HTTP response proves the Android Agent is online. last_poll_error only reflects the latest
+            // internal AT+CLCC poll and may be transiently non-empty during call setup, so do not mark the local link offline from it.
             if !isOnline { isOnline = true }
             cloudAgentStatus = nil
             updateLocalConnectionSummary(cellularState: modemStatus?.cellularState)
-            // PushKit tokens must be written to the currently reachable Agent; hotspot mode cannot hardcode the USB address.
+            // PushKit tokens must be written to the currently reachable Agent; use the authenticated hotspot endpoint.
             let callSyncSnapshot = callLifecycleSnapshot
             let callSyncAttempt = outgoingAttemptID
             await VoIPPushController.shared.syncRegistration(with: result.api)
@@ -1093,7 +1081,7 @@ final class AppModel {
             }()
             connectionMessage = "Reconnecting\(failedRouteName): \(error.localizedDescription)"
 
-            // A single long-poll interruption does not mean USB ECM is offline. Preserve the last online state during the 8s
+            // A single long-poll interruption does not mean VoWLAN is offline. Preserve the last online state during the 8s
             // grace window after a call action, and require three consecutive failures plus an independent health check failure afterward.
             guard ModuleConnectivityPolicy.shouldConfirmOffline(
                 consecutiveFailures: consecutivePollFailures,
@@ -1127,7 +1115,7 @@ final class AppModel {
 
             guard !Task.isCancelled, generation == pollingGeneration else { return }
             if IPhoneCloudCallSession.shared.hasActiveCall || IPhoneCloudCallSession.shared.isRecovering {
-                // An established cloud media session is independent proof that cloud is online. Brief USB/ECM route jitter
+                // An established cloud media session is independent proof that cloud is online. Brief local-network route jitter
                 // when answering must neither mark the module offline nor end the Dynamic Island activity.
                 consecutivePollFailures = 0
                 if isOnline { isOnline = false }
@@ -1139,7 +1127,7 @@ final class AppModel {
                 )
                 connectionMessage = IPhoneCloudCallSession.shared.isRecovering
                     ? "Cloud call active, reconnecting internet PCM"
-                    : "Cloud call active, reconnecting USB ECM"
+                    : "Cloud call active, reconnecting VoWLAN"
                 var lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
                 await awaitCloudStatusForLiveActivity(call: lifecycleCall)
                 lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
@@ -1173,7 +1161,7 @@ final class AppModel {
                 isReconnecting = true
                 if let version = cloudStatus?.agentVersion, !version.isEmpty { agentVersion = version }
                 connectionMessage = cloudConnectionMessage(for: cloudStatus!)
-                // Unreachable local USB control does not mean the module is offline. Keep Dynamic Island standby while the Relay heartbeat is fresh;
+                // Unreachable local control does not mean the module is offline. Keep Dynamic Island standby while the Relay heartbeat is fresh;
                 // incoming calls can still wake via PushKit and use cloud PCM.
                 let lifecycleCall = lifecycleRecord(from: activeCall ?? remoteCall)
                 await liveActivity.update(
@@ -1252,10 +1240,6 @@ final class AppModel {
         return AirSIMAPI(route: .vowlan(endpoint: endpoint, credential: credential))
     }
 
-    private var moduleLocalIsReachable: Bool {
-        false
-    }
-
     private var reachableLocalAPI: AirSIMAPI? {
         if let currentLocalAPI, AirSIMRoutePolicy.permits(currentLocalAPI.route) {
             return currentLocalAPI
@@ -1279,7 +1263,6 @@ final class AppModel {
         switch currentCallTransport {
         case .vowlan: return .vowlan
         case .cloud: return .cloud
-        case .moduleLocal: return .moduleLocal
         case nil: break
         }
         switch DialRouteSelector.preferred(
@@ -1290,7 +1273,6 @@ final class AppModel {
         ) {
         case .vowlan: return .vowlan
         case .cloud: return .cloud
-        case .moduleLocal: return .moduleLocal
         case nil: return nil
         }
     }
@@ -1304,10 +1286,9 @@ final class AppModel {
         )
     }
 
-    private static func webRTCRoute(for route: LocalAgentRoute) -> LocalWebRTCRoute {
+    private static func webRTCRoute(for route: LocalAgentRoute) -> LocalWebRTCRoute? {
         switch route {
-        case .moduleLocal:
-            return .moduleLocal
+        case .unavailable: return nil
         case let .vowlan(endpoint, credential):
             return .vowlan(endpoint: endpoint, credential: credential)
         }
@@ -1355,15 +1336,15 @@ final class AppModel {
         case .localOnlineNoService:
             let detail = modemStatus?.cellularRecovery ?? modemStatus?.registrationText
             connectionMessage = detail?.isEmpty == false
-                ? "USB ECM Connected · \(detail!)"
-                : "USB ECM connected, cellular network recovering"
+                ? "VoWLAN Connected · \(detail!)"
+                : "VoWLAN connected, cellular network recovering"
         case .cloudOnly, .offline:
             break
         }
     }
 
     private func cloudConnectionMessage(for status: CloudAgentStatus) -> String {
-        let local = "USB ECM disconnected, module online through cloud"
+        let local = "VoWLAN disconnected, module online through cloud"
         if status.cellularState == "registered" {
             return local + "; incoming calls will use cloud"
         }
@@ -1417,7 +1398,7 @@ final class AppModel {
                 do {
                     try await self.callKit.answerCurrentCall(presentInApp: true)
                 } catch CallKitBridgeError.staleSystemCall {
-                    // Reuse standard route selection while system UI is rebuilding rather than falling back to the default USB address.
+                    // Reuse standard route selection while system UI is rebuilding rather than using an unverified local address.
                     try await self.callKitAnswer(origin: .app)
                 }
             }
@@ -1571,8 +1552,7 @@ final class AppModel {
         // Mobile uplink voice is generated by the local PCM pipeline; mute locally first without depending on module AT command success.
         isMuted = target
         audio.setMuted(target)
-        // Some QDC507 firmware versions do not implement AT+CMUT; local PCM is already the authoritative mute state on mobile,
-        // so background sync failures must not interrupt the call or show a misleading mute error.
+        // Local WebRTC owns microphone mute; a failed status synchronization must not interrupt the call.
         if let localAPI = reachableLocalAPI {
             Task { try? await localAPI.setAudioMuted(target) }
         }
@@ -1953,7 +1933,11 @@ final class AppModel {
             errorMessage = "Local audio route is not locked yet"
             return
         }
-        let webRTCRoute = currentLocalWebRTCRoute ?? Self.webRTCRoute(for: localAPI.route)
+        guard let webRTCRoute = currentLocalWebRTCRoute ?? Self.webRTCRoute(for: localAPI.route) else {
+            backgroundStandby.resumeAfterCall()
+            errorMessage = "Local audio connection is unavailable"
+            return
+        }
         let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
         let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
         // The session-scoped offer owns Android carrier activation. Generic
@@ -1981,12 +1965,12 @@ final class AppModel {
     /// A Watch is only a controller. Start the same iPhone media path used by
     /// in-app calls instead of merely registering an Android audio host.
     func startWatchLocalAudio(call: CallRecord, api: AirSIMAPI) async {
-        guard case .vowlan = api.route, call.state == "active",
+        guard let webRTCRoute = Self.webRTCRoute(for: api.route), call.state == "active",
               !callLifecycleStore.suppressesPresentation(callID: call.id) else { return }
         guard applyAgentCallRecord(call) || callLifecycleSnapshot.callID == call.id else { return }
         activeCall = call
         observedCallLocalAPI = (callID: call.id, service: api)
-        lockLocalTransport(.vowlan, api: api, webRTCRoute: Self.webRTCRoute(for: api.route))
+        lockLocalTransport(.vowlan, api: api, webRTCRoute: webRTCRoute)
         await startCallAudioIfReady()
     }
 
@@ -2003,7 +1987,7 @@ final class AppModel {
             )
         }
         // PushKit may resume in the background before the Bonjour browser. If the latest successful poll came from VoWLAN,
-        // reuse that authenticated endpoint; never mistake the generic isOnline flag for USB ECM.
+        // reuse that authenticated endpoint; never mistake the generic isOnline flag for VoWLAN.
         guard isOnline, !isReconnecting, let cached = lastSuccessfulLocalAPI,
               case let .vowlan(endpoint, credential) = cached.route,
               permitsVoWLANEndpoint(endpoint) else { return nil }
@@ -2022,7 +2006,7 @@ final class AppModel {
             transport: transport,
             generation: callLifecycleSnapshot.generation
         )
-        // Cancel any long-poll still bound to the legacy USB route so the active state returns immediately from VoWLAN.
+        // Cancel any long-poll still bound to the previous local route so the active state returns immediately from VoWLAN.
         restartPolling()
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
@@ -2412,10 +2396,9 @@ extension AppModel: CallKitActionHandling {
             }
             let cloudMediaEnabled = CloudModePreference.isEnabled()
             let vowlanRoute = await readyVoWLANRoute()
-            let moduleLocalReachable = false
             let transport = CallTransportPolicy.preferred(
                 vowlanReady: vowlanRoute != nil,
-                moduleLocalReachable: moduleLocalReachable,
+
                 cloudMediaAvailable: pushedCall?.authenticatedMediaURL != nil,
                 cloudMediaEnabled: cloudMediaEnabled
             )
@@ -2427,8 +2410,6 @@ extension AppModel: CallKitActionHandling {
                 try audio.prepareForCallKit()
                 try await vowlanAPI.answerCall(callID: activeCall?.id)
                 lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
-            case .moduleLocal:
-                throw CallKitBridgeError.noReachableTransport
             case .cloud:
                 guard let pushedCall else { throw CallKitBridgeError.noReachableTransport }
                 try await IPhoneCloudCallSession.shared.answer(pushedCall)
@@ -2440,8 +2421,7 @@ extension AppModel: CallKitActionHandling {
                 )
                 await startCallAudioIfReady()
             case nil:
-                if !moduleLocalReachable,
-                   !cloudMediaEnabled,
+                if !cloudMediaEnabled,
                    pushedCall?.authenticatedMediaURL != nil {
                     throw CallKitBridgeError.cloudMediaDisabled
                 }
@@ -2653,7 +2633,7 @@ private enum ModuleSetupError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .notReady(message): return message
-        case .timeout: return "Module did not reconnect after restarting. Reconnect the USB cable."
+        case .timeout: return "Module did not reconnect after restarting. Reconnect to the same Wi-Fi or Android hotspot."
         }
     }
 }

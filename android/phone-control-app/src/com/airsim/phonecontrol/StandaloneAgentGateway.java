@@ -12,7 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
-/** In-process replacement for the HTTP API previously hosted by the AVF Agent. */
+/** In-process Agent API used by VoWLAN and the local application. */
 final class StandaloneAgentGateway {
     private static volatile StandaloneAgentGateway instance;
 

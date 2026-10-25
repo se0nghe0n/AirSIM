@@ -38,12 +38,7 @@ public final class IncomingSMSReceiver extends BroadcastReceiver {
                 JSONObject event = new JSONObject(WireJson.smsEvent(UUID.randomUUID().toString(),
                         id, sender == null ? "" : sender, content.toString(),
                         Instant.ofEpochMilli(eventTimestamp).toString()));
-                if (RuntimeMode.isStandalone(application)) {
-                    StandaloneAgentGateway.get(application).sendSMSEvent(event.toString());
-                } else {
-                    new StandaloneSMSStore(application).add(event, true);
-                    AgentWatchdogService.start(application);
-                }
+                StandaloneAgentGateway.get(application).sendSMSEvent(event.toString());
                 BridgeLog.info("incoming_sms_queued delivery_id=" + DebugRedactor.safeIdentifier(id));
             } catch (Exception error) {
                 BridgeLog.error("incoming_sms_queue_failed", error);

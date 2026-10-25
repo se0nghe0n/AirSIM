@@ -1,6 +1,6 @@
 # AirSIM Cloudflare Relay Deployment Guide
 
-`push-relay-worker/` contains a deployable Relay backend, not placeholder domain files. It provides public-network control, APNs push, status synchronization, command queues, and authenticated call signaling between AirSIM iPhone, Apple Watch, Live Activity, and the Android Standalone built-in Agent (or legacy AVF Agent). AirSIM and DJOneHub must use separate Workers, KV, Durable Objects, and domains. The upstream maintainer's production AirSIM domain is `https://airsim-push.remotepilot.site`; other deployers should use their own Cloudflare custom domain.
+`push-relay-worker/` contains a deployable Relay backend, not placeholder domain files. It provides public-network control, APNs push, status synchronization, command queues, and authenticated call signaling between AirSIM iPhone, Apple Watch, Live Activity, and the Android Standalone built-in Agent. AirSIM and DJOneHub must use separate Workers, KV, Durable Objects, and domains. The upstream maintainer's production AirSIM domain is `https://airsim-push.remotepilot.site`; other deployers should use their own Cloudflare custom domain.
 
 > Replace the domains, Cloudflare resources, Apple Team ID, and keys in this guide with your own. Never reuse another AirSIM environment's KV, Durable Objects, Dashboard token, device secret, or APNs private key.
 
@@ -13,7 +13,6 @@
 | `ALLOWED_BUNDLE_ID` | `com.eric3u.airsim` |
 | Worker protocol version | `/healthz` reports `0.2.1` |
 | Companion app release | [`v0.9.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.6) |
-| Companion AVF Agent | [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6), Debian package `0.4.6-1` |
 | Storage | AirSIM-specific `DEVICES` KV and `MEDIA`, `STATUS`, `COMMANDS` Durable Objects |
 | Secrets | `APNS_P8` and `DASHBOARD_TOKEN` names configured; values are not in the repository |
 | DJOneHub isolation | `https://push.remotepilot.site` still returns `djonehub-push-relay` |

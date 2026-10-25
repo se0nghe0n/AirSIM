@@ -1,5 +1,7 @@
 # VoBLE Device Test Matrix
 
+> Historical record. AVF deployment and recovery are retired; use the [current Standalone guide](../android-standalone/README.md). This record does not describe the supported runtime. Paths for removed components refer to the historical revision, not the current tree.
+
 This document records reproducible validation evidence for the `VoBLE` branch. Status applies only to explicitly exercised items; disconnected devices and calls that did not take place are never marked passed.
 
 ## Validation baseline

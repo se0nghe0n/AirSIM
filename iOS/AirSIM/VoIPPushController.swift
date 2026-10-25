@@ -122,8 +122,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
         switch CloudMediaTransportNegotiator.resolve(
             requested: requested,
             appSupported: [.webRTC],
-            agentSupported: [.webRTC],
-            forceLegacy: requested != .webRTC || CloudMediaTransportPreference.forceLegacy()
+            agentSupported: [.webRTC]
         ) {
         case .success(let transport):
             return transport
@@ -199,7 +198,6 @@ struct IncomingVoIPCall: Equatable, Sendable {
 
 enum CallTransport: Equatable, Sendable {
     case vowlan
-    case moduleLocal
     case cloud
 }
 
@@ -462,12 +460,10 @@ enum PushDeviceIdentity {
 enum CallTransportPolicy {
     static func preferred(
         vowlanReady: Bool,
-        moduleLocalReachable: Bool,
         cloudMediaAvailable: Bool,
         cloudMediaEnabled: Bool = true
     ) -> CallTransport? {
         if vowlanReady { return .vowlan }
-        if moduleLocalReachable { return .moduleLocal }
         if cloudMediaEnabled && cloudMediaAvailable { return .cloud }
         return nil
     }
@@ -614,7 +610,6 @@ struct AgentPushRegistration: Encodable, Equatable, Sendable {
     let relayURL: String
     var mediaTransport: String = CloudMediaTransport.webRTC.rawValue
     var appMediaCapabilities: [String] = [CloudMediaTransport.webRTC.rawValue]
-    var forceLegacyPCM: Bool = false
     var vowlanSecret: String? = nil
 
     enum CodingKeys: String, CodingKey {
@@ -632,7 +627,6 @@ struct AgentPushRegistration: Encodable, Equatable, Sendable {
         case relayURL = "relay_url"
         case mediaTransport = "media_transport"
         case appMediaCapabilities = "app_media_capabilities"
-        case forceLegacyPCM = "force_legacy_pcm"
         case vowlanSecret = "vowlan_secret"
     }
 
@@ -655,7 +649,6 @@ struct AgentPushRegistration: Encodable, Equatable, Sendable {
         try values.encode(relayURL, forKey: .relayURL)
         try values.encode(mediaTransport, forKey: .mediaTransport)
         try values.encode(appMediaCapabilities, forKey: .appMediaCapabilities)
-        try values.encode(forceLegacyPCM, forKey: .forceLegacyPCM)
     }
 
     static func local(vowlanSecret: String) -> Self {
@@ -689,7 +682,7 @@ struct AgentPushStatus: Decodable, Sendable {
 
     var preservesLocalPairing: Bool {
         if let localMode { return localMode }
-        // Older AVF Agents omit local_mode but only report configured without
+        // Older Android Agents omit local_mode but only report configured without
         // cloud credentials for a local pairing. Never infer from HTTP 200 alone.
         return configured && cloudModeEnabled == false && !callPushReady && !messagePushReady
             && (relayURL ?? "").isEmpty
@@ -1208,12 +1201,12 @@ final class VoIPPushController: NSObject {
             return report
         }
 
-        report.update(.agentHeartbeat, state: .running, detail: "Checking for an AVF Agent heartbeat in the last 90 seconds")
+        report.update(.agentHeartbeat, state: .running, detail: "Checking for an Android Agent heartbeat in the last 90 seconds")
         onUpdate(report)
         do {
             let status = try await fetchCloudAgentStatusForDiagnostics()
             guard status.cloudOnline else {
-                report.fail(.agentHeartbeat, detail: "Relay connected, but no AVF Agent heartbeat in the last 90 seconds")
+                report.fail(.agentHeartbeat, detail: "Relay connected, but no Android Agent heartbeat in the last 90 seconds")
                 onUpdate(report)
                 return report
             }
@@ -1596,9 +1589,8 @@ final class VoIPPushController: NSObject {
             bundleID: Bundle.main.bundleIdentifier ?? "com.example.airsim",
             environment: APNsEnvironment.current,
             relayURL: relayURL,
-            mediaTransport: CloudMediaTransportPreference.requested().rawValue,
+            mediaTransport: CloudMediaTransport.webRTC.rawValue,
             appMediaCapabilities: [CloudMediaTransport.webRTC.rawValue],
-            forceLegacyPCM: CloudMediaTransportPreference.forceLegacy(),
             vowlanSecret: nil
         )
     }

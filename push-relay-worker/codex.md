@@ -2,7 +2,7 @@
 
 This file guides Codex when assisting with `push-relay-worker` deployment. Deployment facts come from the current source, `README.md`, `wrangler.example.toml`, and `package-lock.json`. When the documentation and the source disagree, point out the difference first and do not guess the production configuration.
 
-The current compatibility baseline (2026-10-12) is Apps `v0.9.6`, AVF Agent `v0.4.6` (Debian `0.4.6-1`), and Relay protocol `0.2.1`. The maintainer address is `https://airsim-push.remotepilot.site`. `https://push.remotepilot.site` belongs only to DJOneHub.
+Android Standalone is the sole runtime; preserve existing registrations and retired Agent records. The maintainer AirSIM Relay is `https://airsim-push.remotepilot.site`; `https://push.remotepilot.site` belongs only to DJOneHub.
 
 ## Goals and boundaries
 

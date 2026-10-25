@@ -1,5 +1,7 @@
 # VoBLE Bluetooth Call Implementation Plan
 
+> Historical record. AVF deployment and recovery are retired; use the [current Standalone guide](../../../android-standalone/README.md). This record does not describe the supported runtime. Paths for removed components refer to the historical revision, not the current tree.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a user-selected Bluetooth mode that performs authenticated Android call control and bidirectional G.711 call audio over BLE without depending on Wi-Fi, Relay, or VoWLAN.

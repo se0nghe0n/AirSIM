@@ -1,5 +1,7 @@
 # AirSIM VoWLAN Design
 
+> Historical record. AVF deployment and recovery are retired; use the [current Standalone guide](../android-standalone/README.md). This record does not describe the supported runtime. Paths for removed components refer to the historical revision, not the current tree.
+
 Date: 2026-09-11
 
 ## Goal

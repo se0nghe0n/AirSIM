@@ -38,7 +38,7 @@ public final class AirSIMInCallService extends InCallService {
         };
         callbacks.put(call, callback);
         call.registerCallback(callback);
-        AgentWatchdogService.start(this);
+        StandaloneAgentService.start(this);
         emit(call, call.getState());
     }
 

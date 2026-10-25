@@ -126,7 +126,7 @@ public final class PairingServer implements Closeable {
             registration.put("android_manufacturer", android.os.Build.MANUFACTURER);
             registration.put("android_model", android.os.Build.MODEL);
             registration.put("android_phone_number", AndroidAgentIdentity.phoneNumber(context));
-            registration.put("android_agent_kind", RuntimeMode.isStandalone(context) ? "standalone" : "avf");
+            registration.put("android_agent_kind", "standalone");
             // The VoWLAN HMAC secret belongs only to the Android hotspot gateway. The Linux
             // Agent push-registration struct uses strict JSON decoding and does not need
             // that secret, so it must be removed before forwarding.

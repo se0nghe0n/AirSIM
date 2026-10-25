@@ -2,7 +2,7 @@ package com.airsim.phonecontrol;
 
 import android.app.Application;
 
-/** Application entry point for the AVF-free APK variant. */
+/** Application entry point for the Standalone runtime. */
 public final class StandaloneBridgeApplication extends Application {
     @Override public void onCreate() {
         super.onCreate();

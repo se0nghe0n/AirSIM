@@ -57,9 +57,7 @@ public final class VoWLANGatewayService extends Service {
     private void lifecycleLoop() {
         while (running) {
             try {
-                Inet4Address hotspot = findAddress(true);
-                Inet4Address avf = RuntimeMode.isStandalone(this)
-                        ? (Inet4Address) InetAddress.getByName("127.0.0.1") : findAddress(false);
+                Inet4Address hotspot = findAddress();
                 if (hotspot == null && hasVoWLANCall()) {
                     BridgeLog.info("hotspot_lost_no_midcall_handover action=end_current_call");
                     CallRepository.disconnectAll();
@@ -71,7 +69,7 @@ public final class VoWLANGatewayService extends Service {
                         && roleManager.isRoleHeld(RoleManager.ROLE_DIALER);
                 boolean agentReady = false;
                 boolean mediaReady = false;
-                if (hotspot != null && avf != null && paired && AppConfig.configured(this)) {
+                if (hotspot != null && paired) {
                     boolean sameRunningGateway = hotspot.getHostAddress().equals(activeHotspot)
                             && control != null && control.localPort() > 0;
                     if (sameRunningGateway) {
@@ -84,20 +82,20 @@ public final class VoWLANGatewayService extends Service {
                         } catch (Exception error) {
                             BridgeLog.error("vowlan_agent_probe_failed", error);
                         }
-                        mediaReady = RuntimeMode.isStandalone(this) && ShizukuBridgeManager.get(this).mediaAvailable();
+                        mediaReady = ShizukuBridgeManager.get(this).mediaAvailable();
                     }
                 }
-                diagnosticState(hotspot, avf, paired, agentReady, mediaReady, dialerRoleHeld);
+                diagnosticState(hotspot, paired, agentReady, mediaReady, dialerRoleHeld);
                 if (VoWLANNetworkPolicy.shouldAdvertise(
                         hotspot != null, paired, agentReady, mediaReady, dialerRoleHeld)) {
-                    ensureStarted(hotspot, avf);
+                    ensureStarted(hotspot);
                     update("VoWLAN ready · " + hotspot.getHostAddress());
                 } else {
                     stopGateways();
                     update(!dialerRoleHeld ? "Set AirSIM as the default phone app"
                             : !paired ? "VoWLAN not paired"
                             : hotspot == null ? "Waiting for the same Wi-Fi or Android hotspot"
-                            : !agentReady ? RuntimeMode.agentLabel(this) + " not ready" : "Privileged WebRTC service not ready");
+                            : !agentReady ? "Built-in Agent not ready" : "Privileged WebRTC service not ready");
                 }
                 Thread.sleep(5_000);
             } catch (InterruptedException interrupted) {
@@ -114,7 +112,7 @@ public final class VoWLANGatewayService extends Service {
         }
     }
 
-    private synchronized void ensureStarted(Inet4Address hotspot, Inet4Address avf) throws Exception {
+    private synchronized void ensureStarted(Inet4Address hotspot) throws Exception {
         String host = hotspot.getHostAddress();
         if (host.equals(activeHotspot) && control != null && control.localPort() > 0 && advertisement != null) return;
         stopGateways();
@@ -133,7 +131,7 @@ public final class VoWLANGatewayService extends Service {
     private void advertise() {
         NsdServiceInfo info = new NsdServiceInfo();
         String agentID = AndroidAgentIdentity.agentID(this);
-        String kind = RuntimeMode.isStandalone(this) ? "standalone" : "avf";
+        String kind = "standalone";
         info.setServiceName("AirSIM-" + kind + "-" + agentID.substring(Math.max(0, agentID.length() - 8)));
         info.setServiceType("_airsim-vowlan._tcp.");
         info.setPort(control.localPort());
@@ -172,9 +170,9 @@ public final class VoWLANGatewayService extends Service {
         return control != null && control.ownsCall();
     }
 
-    private void diagnosticState(Inet4Address hotspot, Inet4Address avf, boolean paired,
+    private void diagnosticState(Inet4Address hotspot, boolean paired,
                                  boolean agentReady, boolean mediaReady, boolean dialerRoleHeld) {
-        String value = "hotspot=" + address(hotspot) + " avf=" + address(avf) + " paired=" + paired
+        String value = "hotspot=" + address(hotspot) + " paired=" + paired
                 + " agent_ready=" + agentReady + " media_ready=" + mediaReady
                 + " dialer_role=" + dialerRoleHeld;
         currentDiagnosticState = value;
@@ -188,7 +186,7 @@ public final class VoWLANGatewayService extends Service {
         return address == null ? "missing" : address.getHostAddress();
     }
 
-    private static Inet4Address findAddress(boolean hotspot) throws Exception {
+    private static Inet4Address findAddress() throws Exception {
         Inet4Address wifiFallback = null;
         Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
         while (interfaces.hasMoreElements()) {
@@ -198,15 +196,14 @@ public final class VoWLANGatewayService extends Service {
             while (addresses.hasMoreElements()) {
                 InetAddress address = addresses.nextElement();
                 if (!(address instanceof Inet4Address value)) continue;
-                if (hotspot && VoWLANNetworkPolicy.isHotspotInterface(item.getName(), value.getHostAddress())) return value;
-                if (hotspot && wifiFallback == null
+                if (VoWLANNetworkPolicy.isHotspotInterface(item.getName(), value.getHostAddress())) return value;
+                if (wifiFallback == null
                         && VoWLANNetworkPolicy.isVoWLANInterface(item.getName(), value.getHostAddress())) {
                     wifiFallback = value;
                 }
-                if (!hotspot && "avf_tap_fixed".equals(item.getName())) return value;
             }
         }
-        return hotspot ? wifiFallback : null;
+        return wifiFallback;
     }
 
 

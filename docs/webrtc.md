@@ -21,7 +21,7 @@ The native peer now shares the privileged carrier process. See [security, compat
 
 ## Compatibility and rollout
 
-Install matching builds on both endpoints, then configure and deploy the Relay. The server selects WebRTC only when both clients advertise it, the iPhone requests it, rollout includes the device, and TURN is configured. Unsupported old agents fail clearly; AVF is control-only and Watch controls audio on iPhone. There is no PCM fallback. A failed WebRTC negotiation is reported rather than silently switching the same call to a second media path.
+Install matching builds on both endpoints, then configure and deploy the Relay. The server selects WebRTC only when both clients advertise it, the iPhone requests it, rollout includes the device, and TURN is configured. Unsupported old agents fail clearly; the Android runtime is Standalone and Watch controls audio on iPhone. There is no PCM fallback. A failed WebRTC negotiation is reported rather than silently switching the same call to a second media path.
 
 For production external-network calls, configure either managed Cloudflare TURN or a TURN server using REST shared-secret authentication. A workers.dev HTTP/WebSocket endpoint is not itself a TURN server. No TURN service, production deployment, subscription, or device state is created by building this branch.
 

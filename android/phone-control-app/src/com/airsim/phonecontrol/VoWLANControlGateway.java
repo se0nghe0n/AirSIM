@@ -111,7 +111,7 @@ public final class VoWLANControlGateway implements Closeable {
                 output = new org.json.JSONObject()
                         .put("ok", true).put("transport", "vowlan").put("version", 1)
                         .put("agent_id", AndroidAgentIdentity.agentID(context))
-                        .put("agent_kind", RuntimeMode.isStandalone(context) ? "standalone" : "avf")
+                        .put("agent_kind", "standalone")
                         .put("device_name", AndroidAgentIdentity.deviceName())
                         .put("manufacturer", android.os.Build.MANUFACTURER)
                         .put("model", android.os.Build.MODEL)

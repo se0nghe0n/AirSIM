@@ -652,34 +652,16 @@ struct CloudWebRTCTests {
         let legacy = CloudMediaTransportNegotiator.resolve(
             requested: .legacyPCM,
             appSupported: supported,
-            agentSupported: supported,
-            forceLegacy: true
+            agentSupported: supported
         )
         #expect(legacy == .failure(.unsupported))
 
         let forced = CloudMediaTransportNegotiator.resolve(
             requested: .webRTC,
             appSupported: [.webRTC],
-            agentSupported: [.webRTC],
-            forceLegacy: true
+            agentSupported: [.webRTC]
         )
         #expect(try forced.get() == .webRTC)
-
-        let suite = "airsim.iphone-cloud-pcm-test"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defaults.removePersistentDomain(forName: suite)
-        defaults.set(CloudMediaTransport.legacyPCM.rawValue, forKey: CloudMediaTransportPreference.requestedKey)
-        defaults.set(true, forKey: CloudMediaTransportPreference.forceLegacyKey)
-        #expect(CloudMediaTransportPreference.requested(defaults: defaults) == .webRTC)
-        #expect(!CloudMediaTransportPreference.forceLegacy(defaults: defaults))
-
-        var scheduled = 0
-        CloudCallBinaryFrame.deliver(Data(repeating: 0x11, count: 320)) { _ in scheduled += 1 }
-        var envelope = Data([65, 83, 80, 77, 1, 0, 0, 20])
-        envelope.append(Data(repeating: 2, count: 320))
-        CloudCallBinaryFrame.deliver(envelope) { _ in scheduled += 1 }
-        #expect(scheduled == 0)
-        #expect(!CloudWebRTCNegotiationRecovery.opensLegacyPCMEngine())
 
         let call = try IncomingVoIPCall(
             outgoingCallID: "legacy",

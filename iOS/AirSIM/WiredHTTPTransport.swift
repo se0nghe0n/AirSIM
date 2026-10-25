@@ -1,35 +1,15 @@
 import Foundation
 import Network
-import Darwin
 
-/// Module HTTP response; the transport layer retains only the fields needed for upper-layer decoding and error handling.
+/// Local HTTP response; the transport layer retains only the fields needed for upper-layer decoding and error handling.
 struct WiredHTTPResponse: Sendable {
     let statusCode: Int
     let body: Data
 }
 
-/// Uses Network.framework to pin module control requests to USB ECM so Wi-Fi or VPN cannot hijack private subnet routing.
+/// Uses Network.framework to keep VoWLAN requests on Wi-Fi, independent of cellular or VPN routes.
 final class WiredHTTPTransport: @unchecked Sendable {
-    enum Policy: Sendable {
-        case moduleLocal
-        case vowlan
-    }
-
-    private let queue = DispatchQueue(label: "com.jieden.airsim.wired-http", qos: .userInitiated)
-    private let policy: Policy
-    private let interfaceLock = NSLock()
-    private var preferredInterfaceType: NWInterface.InterfaceType = .wiredEthernet
-
-    init(policy: Policy = .moduleLocal) {
-        self.policy = policy
-    }
-
-    static func allowsInterfaceFallback(httpMethod: String?) -> Bool {
-        switch httpMethod?.uppercased() ?? "GET" {
-        case "GET", "HEAD": return true
-        default: return false
-        }
-    }
+    private let queue = DispatchQueue(label: "com.jieden.airsim.vowlan-http", qos: .userInitiated)
 
     func send(_ request: URLRequest, uploadFileURL: URL? = nil) async throws -> WiredHTTPResponse {
         guard let url = request.url,
@@ -52,62 +32,14 @@ final class WiredHTTPTransport: @unchecked Sendable {
             body = .none
         }
 
-        if case .vowlan = policy {
-            return try await sendOnce(
-                request,
-                host: NWEndpoint.Host(host),
-                port: port,
-                body: body,
-                route: .type(.wifi)
-            )
-        }
-
-        if let moduleInterface = ModuleUSBInterfaceResolver.resolve() {
-            do {
-                return try await sendOnce(
-                    request,
-                    host: NWEndpoint.Host(host),
-                    port: port,
-                    body: body,
-                    route: .exact(moduleInterface)
-                )
-            } catch {
-                guard Self.allowsInterfaceFallback(httpMethod: request.httpMethod),
-                      (error as? WiredHTTPError)?.isInterfaceFailure == true else { throw error }
-            }
-        }
-
-        let preferred = lockedPreferredInterface()
-        do {
-            return try await sendOnce(
-                request,
-                host: NWEndpoint.Host(host),
-                port: port,
-                body: body,
-                route: .type(preferred)
-            )
-        } catch {
-            guard Self.allowsInterfaceFallback(httpMethod: request.httpMethod),
-                  (error as? WiredHTTPError)?.isInterfaceFailure == true else { throw error }
-            let fallback: NWInterface.InterfaceType = preferred == .wiredEthernet ? .other : .wiredEthernet
-            let response = try await sendOnce(
-                request,
-                host: NWEndpoint.Host(host),
-                port: port,
-                body: body,
-                route: .type(fallback)
-            )
-            setPreferredInterface(fallback)
-            return response
-        }
+        return try await sendOnce(request, host: NWEndpoint.Host(host), port: port, body: body)
     }
 
     private func sendOnce(
         _ request: URLRequest,
         host: NWEndpoint.Host,
         port: NWEndpoint.Port,
-        body: WiredHTTPBody,
-        route: WiredInterfaceRoute
+        body: WiredHTTPBody
     ) async throws -> WiredHTTPResponse {
         try await withCheckedThrowingContinuation { continuation in
             let operation = WiredHTTPRequestOperation(
@@ -115,7 +47,6 @@ final class WiredHTTPTransport: @unchecked Sendable {
                 host: host,
                 port: port,
                 body: body,
-                route: route,
                 queue: queue,
                 continuation: continuation
             )
@@ -123,108 +54,6 @@ final class WiredHTTPTransport: @unchecked Sendable {
         }
     }
 
-    private func lockedPreferredInterface() -> NWInterface.InterfaceType {
-        interfaceLock.lock()
-        defer { interfaceLock.unlock() }
-        return preferredInterfaceType
-    }
-
-    private func setPreferredInterface(_ interfaceType: NWInterface.InterfaceType) {
-        interfaceLock.lock()
-        preferredInterfaceType = interfaceType
-        interfaceLock.unlock()
-    }
-}
-
-struct NetworkInterfaceAddress: Equatable, Sendable {
-    let name: String
-    let address: String
-}
-
-/// Looks up the module USB ECM interface from the local 192.168.225.x address. By binding to the exact interface name,
-/// requests to the module will not leak into utun or Wi-Fi even if a VPN rewrites the default route.
-enum ModuleUSBInterfaceResolver {
-    private static let monitorQueue = DispatchQueue(label: "com.jieden.airsim.usb-interface")
-
-    static func moduleInterfaceNames(from addresses: [NetworkInterfaceAddress]) -> Set<String> {
-        Set(addresses.compactMap { item in
-            let octets = item.address.split(separator: ".", omittingEmptySubsequences: false)
-            guard octets.count == 4,
-                  octets[0] == "192", octets[1] == "168", octets[2] == "225",
-                  let host = Int(octets[3]), (2...254).contains(host),
-                  String(host) == octets[3] else { return nil }
-            return item.name
-        })
-    }
-
-    static func resolve(timeout: TimeInterval = 0.35) -> NWInterface? {
-        let names = moduleInterfaceNames(from: systemInterfaceAddresses())
-        guard !names.isEmpty else { return nil }
-
-        let monitor = NWPathMonitor()
-        let semaphore = DispatchSemaphore(value: 0)
-        let lock = NSLock()
-        var resolved: NWInterface?
-        monitor.pathUpdateHandler = { path in
-            lock.lock()
-            resolved = path.availableInterfaces.first { names.contains($0.name) }
-            lock.unlock()
-            semaphore.signal()
-        }
-        monitor.start(queue: monitorQueue)
-        _ = semaphore.wait(timeout: .now() + timeout)
-        monitor.cancel()
-        lock.lock()
-        defer { lock.unlock() }
-        return resolved
-    }
-
-    private static func systemInterfaceAddresses() -> [NetworkInterfaceAddress] {
-        var head: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&head) == 0, let first = head else { return [] }
-        defer { freeifaddrs(head) }
-
-        var result: [NetworkInterfaceAddress] = []
-        var cursor: UnsafeMutablePointer<ifaddrs>? = first
-        while let item = cursor {
-            defer { cursor = item.pointee.ifa_next }
-            guard let address = item.pointee.ifa_addr,
-                  address.pointee.sa_family == UInt8(AF_INET) else { continue }
-            let ipv4 = UnsafeRawPointer(address).assumingMemoryBound(to: sockaddr_in.self)
-            var numericAddress = ipv4.pointee.sin_addr
-            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            guard inet_ntop(AF_INET, &numericAddress, &buffer, socklen_t(buffer.count)) != nil else { continue }
-            result.append(
-                NetworkInterfaceAddress(
-                    name: String(cString: item.pointee.ifa_name),
-                    address: String(cString: buffer)
-                )
-            )
-        }
-        return result
-    }
-}
-
-private enum WiredInterfaceRoute {
-    case exact(NWInterface)
-    case type(NWInterface.InterfaceType)
-
-    var description: String {
-        switch self {
-        case let .exact(interface): return "\(interface.name):\(interface.type)"
-        case let .type(type): return String(describing: type)
-        }
-    }
-
-    func matches(_ path: NWPath?) -> Bool {
-        guard let path else { return false }
-        switch self {
-        case let .exact(interface):
-            return path.availableInterfaces.contains { $0.name == interface.name }
-        case let .type(type):
-            return path.usesInterfaceType(type)
-        }
-    }
 }
 
 private enum WiredHTTPBody {
@@ -250,7 +79,6 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
     private let host: NWEndpoint.Host
     private let port: NWEndpoint.Port
     private let body: WiredHTTPBody
-    private let route: WiredInterfaceRoute
     private let queue: DispatchQueue
     private let continuation: CheckedContinuation<WiredHTTPResponse, Error>
     private let connection: NWConnection
@@ -265,7 +93,6 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         host: NWEndpoint.Host,
         port: NWEndpoint.Port,
         body: WiredHTTPBody,
-        route: WiredInterfaceRoute,
         queue: DispatchQueue,
         continuation: CheckedContinuation<WiredHTTPResponse, Error>
     ) {
@@ -273,7 +100,6 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         self.host = host
         self.port = port
         self.body = body
-        self.route = route
         self.queue = queue
         self.continuation = continuation
 
@@ -282,11 +108,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         tcp.enableKeepalive = true
         tcp.keepaliveIdle = 5
         let parameters = NWParameters(tls: nil, tcp: tcp)
-        // Prefer binding to the actual USB ECM interface; fall back to interface type constraints only when the interface name is not found.
-        switch route {
-        case let .exact(interface): parameters.requiredInterface = interface
-        case let .type(type): parameters.requiredInterfaceType = type
-        }
+        parameters.requiredInterfaceType = .wifi
         connection = NWConnection(host: host, port: port, using: parameters)
     }
 
@@ -297,7 +119,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         connection.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
             let interfaces = path.availableInterfaces.map { "\($0.name):\($0.type)" }.joined(separator: ",")
-            print("[AirSIM Network] route=\(self.route.description) status=\(path.status) reason=\(path.unsatisfiedReason) available=\(interfaces)")
+            print("[AirSIM Network] route=wifi status=\(path.status) reason=\(path.unsatisfiedReason) available=\(interfaces)")
         }
 #endif
         connection.stateUpdateHandler = { [weak self] state in
@@ -305,7 +127,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
             switch state {
             case .ready:
                 guard !self.requestStarted else { return }
-                guard self.route.matches(self.connection.currentPath) else {
+                guard self.connection.currentPath?.usesInterfaceType(.wifi) == true else {
                     self.finish(.failure(WiredHTTPError.wiredPathUnavailable))
                     return
                 }
@@ -316,7 +138,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
                 self.finish(.failure(WiredHTTPError.connectionFailed(error.localizedDescription)))
 #if DEBUG
             case let .waiting(error):
-                print("[AirSIM Network] route=\(self.route.description) waiting=\(error.localizedDescription)")
+                print("[AirSIM Network] route=wifi waiting=\(error.localizedDescription)")
 #endif
             case .cancelled:
                 if !self.finished { self.finish(.failure(WiredHTTPError.connectionClosed)) }
@@ -574,28 +396,18 @@ private enum WiredHTTPError: LocalizedError {
     case incompleteResponse
     case unreadableUpload
 
-    var isInterfaceFailure: Bool {
-        switch self {
-        case .wiredPathUnavailable, .connectionFailed, .connectionClosed, .timedOut:
-            return true
-        case .invalidRequest, .sendFailed, .receiveFailed, .responseTooLarge,
-             .invalidResponse, .incompleteResponse, .unreadableUpload:
-            return false
-        }
-    }
-
     var errorDescription: String? {
         switch self {
         case .invalidRequest: return "Invalid module request format"
-        case .wiredPathUnavailable: return "Module USB Ethernet connection not found"
-        case let .connectionFailed(message): return "Module wired connection failed: \(message)"
-        case .connectionClosed: return "Module wired connection closed"
+        case .wiredPathUnavailable: return "Wi-Fi connection not available"
+        case let .connectionFailed(message): return "VoWLAN connection failed: \(message)"
+        case .connectionClosed: return "VoWLAN connection closed"
         case let .sendFailed(message): return "Module request send failed: \(message)"
         case let .receiveFailed(message): return "Module response receive failed: \(message)"
-        case .timedOut: return "Module wired request timed out"
+        case .timedOut: return "VoWLAN request timed out"
         case .responseTooLarge: return "Module response exceeds the safe size limit"
-        case .invalidResponse: return "Module Agent returned an invalid HTTP response"
-        case .incompleteResponse: return "Module Agent returned an incomplete HTTP response"
+        case .invalidResponse: return "Android Agent returned an invalid HTTP response"
+        case .incompleteResponse: return "Android Agent returned an incomplete HTTP response"
         case .unreadableUpload: return "Unable to read module update package"
         }
     }

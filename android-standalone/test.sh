@@ -18,8 +18,6 @@ assert_not_contains() {
   fi
 }
 
-assert_contains "$MANIFEST" 'com.airsim.phonecontrol.STANDALONE_AGENT' \
-  'standalone runtime flag is missing'
 assert_contains "$MANIFEST" 'com.airsim.phonecontrol.StandaloneAgentService' \
   'embedded Agent foreground service is missing'
 assert_contains "$MANIFEST" 'android.permission.RECEIVE_SMS' \

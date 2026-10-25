@@ -134,27 +134,27 @@ struct ModuleConnectionPresentation: Equatable {
         switch summary {
         case .localOnline:
             return Self(
-                title: "Module Online", routeTitle: "Direct USB ECM",
-                description: message ?? "USB ECM connected. Status refreshes automatically.",
+                title: "Module Online", routeTitle: "Direct VoWLAN",
+                description: message ?? "VoWLAN connected. Status refreshes automatically.",
                 level: .online, systemImage: "checkmark.circle.fill"
             )
         case .localOnlineNoService:
             return Self(
-                title: "Module Online · No Service", routeTitle: "USB ECM Connected",
-                description: message ?? "USB ECM connected. Cellular network is recovering automatically.",
+                title: "Module Online · No Service", routeTitle: "VoWLAN Connected",
+                description: message ?? "VoWLAN connected. Cellular network is recovering automatically.",
                 level: .warning, systemImage: "antenna.radiowaves.left.and.right.slash"
             )
         case .cloudOnly:
             return Self(
                 title: "Cloud Online", routeTitle: "Internet Relay",
-                description: message ?? "Local USB ECM disconnected. The module can still receive calls and messages over the internet.",
+                description: message ?? "Local VoWLAN disconnected. The module can still receive calls and messages over the internet.",
                 level: .cloud, systemImage: "icloud.fill"
             )
         case .offline:
             return Self(
                 title: reconnecting ? "Reconnecting" : "Module Offline",
                 routeTitle: reconnecting ? "Restoring Connection" : "Connection Unavailable",
-                description: message ?? "Check module power, cellular service, and the USB ECM connection",
+                description: message ?? "Check module power, cellular service, and the VoWLAN connection",
                 level: reconnecting ? .warning : .offline,
                 systemImage: reconnecting ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle.fill"
             )

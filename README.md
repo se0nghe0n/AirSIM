@@ -3,10 +3,8 @@
 [![Android Standalone](https://img.shields.io/badge/Android-Standalone%20APK-3DDC84?logo=android&logoColor=white)](android-standalone/README.md)
 [![iOS](https://img.shields.io/badge/iOS-17.0%2B-000000?logo=apple&logoColor=white)](iOS/README.md)
 [![watchOS](https://img.shields.io/badge/watchOS-10%2B-000000?logo=apple&logoColor=white)](iOS/README.md)
-[![Android AVF](https://img.shields.io/badge/Android%20AVF-Linux%20arm64-FCC624?logo=linux&logoColor=black)](module/packaging/README.md)
 [![Apps release](https://img.shields.io/badge/Apps-v0.9.7.1-2563EB)](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1)
 [![Android 10–13 recommended hotfix](https://img.shields.io/badge/Android%2010–13-Hotfix_Recommended-3DDC84)](docs/releases/0.9.7.1-android10-13.md)
-[![AVF Agent release](https://img.shields.io/badge/AVF%20Agent-v0.4.6-0F766E)](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6)
 [![Cloudflare Relay](https://img.shields.io/badge/Relay-airsim--push.remotepilot.site-F38020?logo=cloudflare&logoColor=white)](https://airsim-push.remotepilot.site/healthz)
 [![Project status](https://img.shields.io/badge/status-active%20development-1f6feb)](#project-status)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c3aed)](LICENSE)
@@ -14,14 +12,14 @@
 
 **AirSIM is a source-available cross-device communication project that uses an Android phone as the cellular endpoint, allowing an iPhone and Apple Watch to make and receive calls and send and receive SMS remotely.** The recommended Android Standalone APK handles Android Telecom, SMS, device identity, Relay heartbeats, cloud commands, and media orchestration in one foreground service. It requires no AVF Linux, Terminal, Debian, `8575/8576`, or `airsim-installerd`. Apple clients use CallKit, PushKit, ActivityKit, and VoWLAN; an optional Cloudflare Workers Relay provides public-network events, APNs push, command queues, and media signaling.
 
-AirSIM is a source-available, noncommercial cross-device calling and messaging project that connects Android phones, iPhone, Apple Watch, legacy Android AVF Linux, CallKit, PushKit, VoWLAN, APNs, and Cloudflare Workers.
+AirSIM is a source-available, noncommercial cross-device calling and messaging project that connects Android phones, iPhone, Apple Watch, CallKit, PushKit, VoWLAN, APNs, and Cloudflare Workers.
 
 > This repository contains source code, build scripts, and deployment documentation. It does not provide a reusable Apple Developer identity, production APNs keys, or Cloudflare account resources. The upstream maintainer runs an AirSIM Relay for testing their own signed builds; it is not a public service for third-party Bundle IDs and has no availability commitment. Anyone re-signing the app must deploy their own Relay. This project cannot replace emergency calling. Production use requires joint acceptance testing on the intended Android phone, iPhone, and Apple Watch.
 
 > [!IMPORTANT]
 > This project is intended for personal learning, research, experiments, and other noncommercial uses. Commercial use, paid services, commercial product integration, and anticipated commercial applications are not authorized. Commercial licensing requires separate prior written permission from the copyright holder. See the [PolyForm Noncommercial License 1.0.0](LICENSE). Because commercial use is prohibited, this is **source-available**, not open source under the OSI definition.
 
-**Tags / Topics:** `Android` · `iPhone` · `Apple Watch` · `CallKit` · `PushKit` · `VoWLAN` · `Android AVF` · `Cloudflare Workers` · `APNs` · `SwiftUI` · `Go`
+**Tags / Topics:** `Android` · `iPhone` · `Apple Watch` · `CallKit` · `PushKit` · `VoWLAN` · `Cloudflare Workers` · `APNs` · `SwiftUI`
 
 ## About this fork
 
@@ -40,7 +38,6 @@ AirSIM is designed for compatible Android phones across device models. The maint
 
 - **Requirements:** the current Standalone Manifest requires Android 10 / API 29 or later (target API 35). Calling and SMS need the appropriate system roles and permissions. Call-audio features require the necessary Shizuku/root privileges and OEM audio routes for the chosen transport; see the [Standalone guide](android-standalone/README.md) and [WebRTC guide](docs/webrtc.md).
 - **Device-specific setup:** Pixel/Q25 build names, privilege workarounds, and Samsung/non-Samsung audio-route handling reflect deployment history and capability differences. They do not define an exclusive list of compatible hardware.
-- **Legacy path:** AVF/Linux deployment has its own platform and private-network prerequisites. It is optional for Standalone and does not determine the general Android compatibility scope.
 
 ## Buy Me A Coffee
 <img width="300" alt="05d04c887d99c9df849f81b1cff672dd" src="https://github.com/user-attachments/assets/91620ed1-727e-4a81-9d99-d20d6d55bb58" />
@@ -77,7 +74,7 @@ Android AirSIM Standalone APK
         └─ Shizuku native WebRTC + in-process carrier audio
 ```
 
-The legacy AVF architecture remains available for compatibility and fallback, but is no longer recommended for new installations.
+Android Standalone is the sole runtime. The AVF Agent and installation/recovery paths are retired; see [data preservation and migration](docs/standalone-migration.md).
 
 The upstream maintainer uses `https://airsim-push.remotepilot.site`, allowing only `com.eric3u.airsim`. DJOneHub continues to use `https://push.remotepilot.site`. The domains have separate Workers, KV, Durable Objects, and Dashboard tokens; do not reuse them across services. Other signing identities require their own Relay endpoints, Cloudflare resources, and APNs credentials.
 
@@ -89,10 +86,6 @@ Each call selects VoWLAN or Relay when established and keeps that transport unti
 | --- | --- | --- |
 | [`android-standalone`](android-standalone/README.md) | Android Standalone APK | Recommended entry point; combines Agent, Telecom, SMS, VoWLAN, Relay, and media orchestration in one APK |
 | [`android/phone-control-app`](android/phone-control-app/README.md) | Android control app | Default phone role, Android Telecom, pairing, SMS, VoWLAN, and foreground service |
-| [`android/phone-audio-bridge`](android/phone-audio-bridge/README.md) | Android call audio bridge | Historical route reference, not compiled or launched by current APKs; pending physical-gate deletion |
-| [`module/module-agent`](module/module-agent/README.md) | Android AVF Agent | Control API, device status, Relay heartbeats, commands, and media orchestration |
-| [`module/avf-installerd`](module/avf-installerd) | AVF recovery installer | Signed Debian package verification, health checks, and failure rollback |
-| [`module/packaging`](module/packaging/README.md) | AVF Debian releases | Single `arm64` package, systemd units, and bootstrap scripts |
 | [`iOS`](iOS/README.md) | iPhone / Apple Watch app | CallKit, PushKit, VoWLAN, SMS, Live Activities, and call media |
 | [`push-relay-worker`](push-relay-worker/README.md) | Cloudflare Relay | Device registration, APNs, cloud commands, Dashboard, and public-network media |
 | [`docs`](docs) | Protocol and design documentation | VoWLAN / VoBLE design, Samsung hotspot pairing protocol, and security boundaries |
@@ -103,9 +96,8 @@ Each call selects VoWLAN or Relay when established and keeps that transport unti
 
 | Component | Version or address |
 | --- | --- |
-| Android Standalone / AVF Bridge · Android 10–13 hotfix APK | [`v0.9.7.1 (81)`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1); Standalone recommended |
+| Historical Android Standalone · Android 10–13 hotfix APK | [`v0.9.7.1 (81)`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1); Standalone recommended |
 | iPhone / Apple Watch app | `0.9.7 (81)`; unsigned IPA supplied with [v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1); TestFlight uploaded separately |
-| Android AVF Linux Agent | [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6) (Debian package `0.4.6-1`) |
 | AirSIM Relay | `0.2.1` · [`https://airsim-push.remotepilot.site`](https://airsim-push.remotepilot.site/healthz) |
 | DJOneHub Relay | `https://push.remotepilot.site` (separate service; must not be used by AirSIM) |
 
@@ -113,7 +105,7 @@ Each call selects VoWLAN or Relay when established and keeps that transport unti
 
 #### Android 10–13 hotfix
 
-[AirSIM v0.9.7.1 — recommended Android 10–13 hotfix](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). For new installations, choose `AirSIM-Android-Standalone-0.9.7.1-Android10-13.apk`, which includes the Agent and needs no AVF Linux. Official signed builds can upgrade an existing Standalone installation signed with the same certificate while preserving data; versionCode increases from 80 to 81. Do not uninstall or clear pairing data first. Debug or third-party re-signed builds using another certificate cannot replace the existing app directly. Legacy AVF deployments can use the matching AVF Bridge APK without updating the Linux Agent.
+[AirSIM v0.9.7.1 — recommended Android 10–13 hotfix](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). For new installations, choose `AirSIM-Android-Standalone-0.9.7.1-Android10-13.apk`, which includes the Agent and needs no AVF Linux. Official signed builds can upgrade an existing Standalone installation signed with the same certificate while preserving data; versionCode increases from 80 to 81. Do not uninstall or clear pairing data first. Debug or third-party re-signed builds using another certificate cannot replace the existing app directly.
 
 This hotfix addresses startup, log/crash-report reading, permission requests, and VoWLAN, Relay, and PCM read crashes caused by Java methods missing on older systems. It replaces `ByteArrayOutputStream.toString(Charset)`, `InputStream.readNBytes`, and `Collection.toArray(IntFunction)`, and checks compiled output to prevent their return. It does not lower `targetSdk` or remove permissions or Bluetooth functionality. Targeting Android 10–13 does not prevent installation on newer systems or guarantee OEM call-audio support.
 
@@ -138,32 +130,7 @@ The hotfix was installed on Redmi M2004J19C (Android 12) without clearing data, 
 
 After installing, make AirSIM Standalone the default phone app, start Shizuku, and authorize AirSIM. On Xiaomi HyperOS, if the system role-selection page is unavailable, the app configures it after Shizuku authorization. See the [Android Standalone documentation](android-standalone/README.md).
 
-### 3. Optional: install the legacy Android AVF Agent
-
-For new devices, prefer the Standalone APK above. Use this AVF process only for legacy compatibility or fallback.
-
-For first installation, open Android AVF Linux Terminal and confirm an interactive Debian prompt before running the following command (`pipefail` exposes download failures). Devices already on `0.4.4-1` must use the one-time key migration below, not the first-install command:
-
-```sh
-bash -o pipefail -c 'curl -fsSL --connect-timeout 10 --max-time 90 --retry 2 --proto =https --proto-redir =https --tlsv1.2 https://github.com/kai-wu-cortex/AirSIM/releases/download/v0.4.6/install-avf.sh | sudo sh'
-```
-
-Devices on `0.4.4-1` must perform a one-time signing-key migration in the same AVF Terminal. The script checks the old package digest, verifies the new signature, retains the old package, and attempts rollback on failure. **Do not select “Update to latest” in the app yet: the old installer does not trust the new public key.**
-
-```sh
-curl -fsSL --connect-timeout 10 --max-time 90 --retry 2 --proto =https --proto-redir =https --tlsv1.2 -o /tmp/airsim-rotate-v0.4.5.sh https://github.com/kai-wu-cortex/AirSIM/releases/download/v0.4.5/rotate-avf-key.sh
-printf '%s  %s\n' '9ae6b8c69d5d9877638a50240282a67d06b73d807dba444c816c5efb9c5ec04d' /tmp/airsim-rotate-v0.4.5.sh | sha256sum -c - && sudo sh /tmp/airsim-rotate-v0.4.5.sh
-```
-
-The app only copies the command; paste and run it in Debian Terminal. The installer accepts only the matching `arm64` Debian package with its Ed25519 signature. **Installation is complete only when both Agent and installerd health checks pass.** The repaired bootstrap first restores services when `current.deb` exists and reinstalls from that package if necessary, allowing recovery of an existing installation. Then run `sudo airsim-avf-pair` and save the control token in the Samsung app. Use the dynamically assigned guest private address for this device, not an example subnet. Later updates, repairs, and rollbacks use the separate `airsim-installerd`. For “Not paired” or unavailable `8576`, see the [AVF installation and non-destructive troubleshooting guide](docs/AVF_INSTALL_GUIDE.md); see [AVF Debian releases](module/packaging/README.md) for package details. Source fixes must be re-signed and published as GitHub Release assets before the online installation commands can deliver them.
-
-If `apt` reports incompatible `udev` and `libudev1` versions, simulate dependency repair as described in the installation guide first. Do not directly run `apt --fix-broken install`, which might remove system components. The repaired bootstrap detects existing Debian dependency failures before Agent installation.
-
-DJOneHub can remain in the same AVF guest. AirSIM uses dedicated Agent/installer ports `8575` / `8576`, leaving DJOneHub's `7575` untouched. Before installing, confirm the GitHub Release includes the port migration. Older online packages still listen on `7575`; **do not run older commands in an environment shared with DJOneHub**.
-
-See the [0.4.5 release notes](docs/releases/0.4.5.md) for fixes, key migration, and acceptance steps.
-
-### 4. Configure and sign the iPhone / Apple Watch app
+### 3. Configure and sign the iPhone / Apple Watch app
 
 ```sh
 open iOS/AirSIM.xcodeproj
@@ -171,7 +138,7 @@ open iOS/AirSIM.xcodeproj
 
 Use your own Apple Developer Team, assign unique Bundle IDs to the main app, Watch app, and Live Activity Extension, and regenerate provisioning profiles. `com.example.airsim` is a placeholder and cannot be used directly for release or APNs. See the [iOS / watchOS documentation](iOS/README.md) for signing, CallKit, PushKit, and APNs topic relationships.
 
-### 5. Optional: deploy Cloudflare Relay
+### 4. Optional: deploy Cloudflare Relay
 
 Upstream maintainer deployment:
 
@@ -215,16 +182,13 @@ Replacing only the certificate while retaining someone else's Bundle ID does not
 | Document | Use |
 | --- | --- |
 | [Android Standalone APK](android-standalone/README.md) | Recommended installation, builds, signing, HyperOS permissions, migration, and device acceptance |
-| [Legacy Android control app](android/phone-control-app/README.md) | AVF compatibility, default phone role, pairing, and OEM compatibility |
-| [Android call audio bridge](android/phone-audio-bridge/README.md) | Shizuku bridge builds, operation, and PCM boundaries |
-| [Android AVF Agent](module/module-agent/README.md) | Agent configuration, API, security, and startup probes |
-| [AVF Debian releases](module/packaging/README.md) | `.deb` builds, signing, bootstrap, upgrades, and rollback |
-| [AVF installation and non-destructive troubleshooting](docs/AVF_INSTALL_GUIDE.md) | Terminal, control tokens, two-service health checks, and startup-conflict recovery |
+| [Shared Android application](android/phone-control-app/README.md) | Standalone source, default phone role, pairing, and OEM compatibility |
+| [Standalone migration](docs/standalone-migration.md) | Retirement scope, preserved data, and existing-installation boundaries |
 | [iOS and watchOS](iOS/README.md) | Xcode, Bundle IDs, Apple signing, CallKit, PushKit, and device tests |
 | [Cloudflare Relay](push-relay-worker/README.md) | Wrangler, KV, Durable Objects, APNs, Secrets, and custom domains |
 | [Native WebRTC cloud calls](docs/webrtc.md) | Q25/iPhone audio, TURN setup, compatibility, protocol, and validation |
 | [iPhone call recording](docs/call-recording.md) | Start/stop recording, local files, playback, export, and limits |
-| [VoWLAN design](docs/2026-09-11-vowlan-design.md) | Local transport design and protocol boundaries |
+| [VoWLAN design](docs/2026-09-11-vowlan-design.md) | Historical transport design; see the current WebRTC contract |
 | [VoBLE device test matrix](docs/voble-real-device-test-matrix.md) | Bluetooth setup, automation results, device matrix, and outstanding hardware acceptance |
 | [Samsung hotspot pairing protocol](docs/samsung-hotspot-pairing-protocol.md) | Pairing, key derivation, HMAC, and replay protection |
 | [Codex deployment assistance](codex.md) | Project-wide build, validation, and deployment rules for Codex |
@@ -236,31 +200,27 @@ Replacing only the certificate while retaining someone else's Bundle ID does not
 ```sh
 ./android-standalone/test.sh
 ./android/phone-control-app/test.sh
-./android/phone-audio-bridge/build.sh
 ./android/phone-control-app/build.sh
-(cd module/module-agent && go test ./...)
-(cd module/avf-installerd && go test ./...)
-./module/packaging/test.sh
 (cd push-relay-worker && npm test && npm run check)
 xcodebuild -project iOS/AirSIM.xcodeproj -scheme AirSIM \
   -destination 'generic/platform=iOS Simulator' \
   CODE_SIGNING_ALLOWED=NO build-for-testing
 ```
 
-Automation does not replace end-to-end acceptance on the intended Android phone, iPhone, Apple Watch, optional AVF Linux, APNs sandbox/production, and public-network Relay.
+Automation does not replace end-to-end acceptance on the intended Android phone, iPhone, Apple Watch, APNs sandbox/production, and public-network Relay.
 
 ## Security and privacy
 
-- AVF Agent and installer control ports may bind only to the device's internal private network or loopback. Current voice has no raw-audio port.
+- Local control is authenticated and restricted to the intended private network. Current voice has no raw-audio port.
 - VoWLAN control requests must validate timestamps, nonces, and HMAC; pairing keys reside in platform secure storage.
 - Never commit device secrets, Agent tokens, APNs `.p8`, `DASHBOARD_TOKEN`, signing private keys, real phone numbers, or production configuration.
 - Uncompressed call samples stay in process memory; network call audio is WebRTC/Opus unless the user explicitly starts a local iPhone recording. Recordings are private, excluded from backups, and never uploaded to Relay. Logs must omit PCM, complete SMS messages, push tokens, and authentication material.
 - Emergency calls must use system telephony; AirSIM is not an emergency communications guarantee.
-- The Android app cannot bypass OEM firmware or system-signature restrictions to enable hidden or removed AVF Linux features.
+- The Android app cannot bypass OEM firmware or system-signature restrictions on carrier audio.
 
 ## Project status
 
-AirSIM is actively developed. The repository combines Android Standalone, legacy AVF Agent/Installer, iOS/watchOS, and Cloudflare Relay sources with local automated validation. Android Standalone has recorded device verification on Xiaomi HyperOS for the default phone role, VoWLAN pairing, and bidirectional call audio. Each deployer must still validate Apple signing, additional Android OEMs, background push, and long-term stability in their own environment.
+AirSIM is actively developed. The repository combines Android Standalone, iOS/watchOS, and Cloudflare Relay sources with local automated validation. Historical architecture tests recorded Xiaomi HyperOS default-phone and pairing behavior. The new privileged audio architecture still requires physical validation. Each deployer must still validate Apple signing, additional Android OEMs, background push, and long-term stability in their own environment.
 
 ## Project trends
 

@@ -208,6 +208,10 @@ struct RootView: View {
             composeMessage(recipient)
         case let .liveActivity(action, callID):
             Task {
+                guard LiveActivityActionGate.accepts(callID: callID,
+                        currentCallID: model.callLifecycleSnapshot.callID,
+                        callIsLive: model.callLifecycleSnapshot.state.representsCall
+                            && model.callLifecycleSnapshot.state != .ending) else { return }
                 switch action {
                 case .answer: await model.answer()
                 case .reject: await model.reject()

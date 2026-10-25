@@ -49,7 +49,7 @@ enum LiveActivityStateBuilder {
         uploadBytesPerSecond: Double? = nil
     ) -> AirSIMCallActivityAttributes.ContentState {
         // Show offline only when both local control and Relay heartbeat are unreachable; use a dedicated
-        // cloud standby state while the cloud heartbeat is fresh to avoid misreporting a USB ECM disconnect as full module offline.
+        // cloud standby state while the cloud heartbeat is fresh to avoid misreporting a VoWLAN disconnect as full module offline.
         guard moduleOnline || cloudOnline else {
             return .init(
                 callID: "",

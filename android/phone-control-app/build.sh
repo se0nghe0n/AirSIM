@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-MANIFEST_SOURCE=${AIRSIM_ANDROID_MANIFEST:-"$ROOT/AndroidManifest.xml"}
-OUTPUT_BASENAME=${AIRSIM_ANDROID_OUTPUT_BASENAME:-AirSIM-Phone-Bridge}
+MANIFEST_SOURCE=${AIRSIM_ANDROID_MANIFEST:-"$ROOT/../../android-standalone/AndroidManifest.xml"}
+OUTPUT_BASENAME=${AIRSIM_ANDROID_OUTPUT_BASENAME:-AirSIM-Android-Standalone}
 SDK=${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}
 BUILD_TOOLS="$SDK/build-tools/35.0.0"
 ANDROID_JAR="$SDK/platforms/android-35/android.jar"

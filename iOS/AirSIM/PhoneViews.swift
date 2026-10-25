@@ -60,7 +60,6 @@ struct DialPadTransportPresentation: Equatable {
     static func make(
         mode: AirSIMConnectionMode = .automatic,
         vowlanOnline: Bool,
-        moduleLocalReachable: Bool,
         cloudOnline: Bool
     ) -> DialPadTransportPresentation? {
         let selected = DialRouteSelector.preferred(

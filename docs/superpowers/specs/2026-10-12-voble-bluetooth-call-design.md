@@ -1,5 +1,7 @@
 # VoBLE Bluetooth Call Design
 
+> Historical record. AVF deployment and recovery are retired; use the [current Standalone guide](../../../android-standalone/README.md). This record does not describe the supported runtime. Paths for removed components refer to the historical revision, not the current tree.
+
 ## Purpose
 
 VoBLE adds Bluetooth as an explicit AirSIM connection mode. In Bluetooth mode,

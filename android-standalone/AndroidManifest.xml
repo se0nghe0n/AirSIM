@@ -39,7 +39,6 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
-        <meta-data android:name="com.airsim.phonecontrol.STANDALONE_AGENT" android:value="true" />
         <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />
 
         <provider

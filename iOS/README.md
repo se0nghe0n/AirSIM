@@ -2,7 +2,7 @@
 
 This directory contains the iPhone app, Apple Watch app, Live Activity, and shared models for a compatible Android phone endpoint. Clients can connect directly over VoWLAN, or use a separately deployed Cloudflare Relay for remote calls and SMS.
 
-The documented app build is `0.9.7 (81)`, supplied as an unsigned IPA with [Apps v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). The upstream maintainer separately uploads production builds through Xcode to TestFlight; upload, processing, and review must be checked separately. The companion AVF Agent is [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6). The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; changing the Bundle ID requires your own Relay and APNs credentials.
+The documented app build is `0.9.7 (81)`, supplied as an unsigned IPA with [Apps v0.9.7.1](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1). The upstream maintainer separately uploads production builds through Xcode to TestFlight; upload, processing, and review must be checked separately. The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; changing the Bundle ID requires your own Relay and APNs credentials.
 
 ## Xcode project
 
@@ -35,11 +35,11 @@ Main targets:
 - Four-stage cloud diagnostics: local push credentials, Relay identity, device registration, and Agent heartbeat
 - Local call history, swipe-to-delete, deletion from details, diagnostics, and media health
 
-When the current call is known, VoWLAN answer, reject, and hang-up requests include the `call_id` returned by `/api/calls/status` (JSON field `call_id`). Standalone and newer AVF Agents validate it so an old notification cannot affect a subsequent call. Before a call ID is available, an empty request remains compatible with older Agents.
+When the current call is known, VoWLAN answer, reject, and hang-up requests include the `call_id` returned by `/api/calls/status` (JSON field `call_id`). Standalone validates it so an old notification cannot affect a subsequent call. Before a call ID is available, an empty request remains compatible with older Agents.
 
 ### SMS and push notifications
 
-AirSIM and DJOneHub use the same division of responsibilities but separate Relays and APNs topics. For outgoing SMS, iPhone calls the Agent directly if VoWLAN is ready. If offline with cloud mode enabled, it submits a device-authenticated `send_sms` command to the Relay, and the AVF Agent executes it and returns the result. Incoming SMS reaches the Relay as an Agent event with `delivery_id`; the Relay sends a normal APNs `alert` on the main app topic. The app saves local history and deduplicates against the next Agent sync using `delivery_id`. Opening a notification navigates to the sender's conversation, including after a cold start.
+AirSIM and DJOneHub use the same division of responsibilities but separate Relays and APNs topics. For outgoing SMS, iPhone calls the Agent directly if VoWLAN is ready. If offline with cloud mode enabled, it submits a device-authenticated `send_sms` command to the Relay, and the Standalone Agent executes it and returns the result. Incoming SMS reaches the Relay as an Agent event with `delivery_id`; the Relay sends a normal APNs `alert` on the main app topic. The app saves local history and deduplicates against the next Agent sync using `delivery_id`. Opening a notification navigates to the sender's conversation, including after a cold start.
 
 PushKit VoIP push is only for real incoming calls handled by CallKit; it must not carry SMS bodies or wake SMS-send tasks. SMS notifications require notification permission, an iPhone alert token, valid Relay/Agent registration, and a current heartbeat. iOS controls ordinary APNs delivery and background execution. Acceptance must separately test foreground, locked screen, cold start, and cloud sending; control-plane diagnostics alone do not establish successful SMS operation.
 
@@ -51,7 +51,7 @@ PushKit VoIP push is only for real incoming calls handled by CallKit; it must no
 4. On iPhone, select the pairing method in “Pair Android Phone,” then enter the Android six-digit code. With “Local Mode Pairing” on, pairing writes only VoWLAN keys and does not read or write Relay/push parameters. With it off, pairing writes cloud configuration and reports missing credentials rather than silently falling back. Its initial value follows global local mode, but changing it affects only this pairing and does not change global settings; it cannot be changed during pairing. Pairing waits for in-flight Agent registration writes, and automatic registration recognizes Android's local pairing state. Other devices' global Relay-token refresh is not disabled.
 5. Wait for VoWLAN to show Ready.
 6. For remote mode, enter a separate Relay URL matching the app's signing identity under “Cloud Relay,” select “Save Relay URL,” and enable “Remote Calls and SMS.” The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; other Bundle IDs require a self-deployed Relay.
-7. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the AVF Agent within 90 seconds. Diagnostics do not dial or send SMS.
+7. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the Standalone Agent within 90 seconds. Diagnostics do not dial or send SMS.
 
 ### Manage paired Android devices
 
@@ -59,7 +59,7 @@ Below “Settings → Samsung Connection → Pair Android Phone,” the paired-d
 
 Deletion removes the local list entry and manual binding for that device and retains a marker preventing automatic reconnection. Other devices, call history, and SMS are unaffected. Deleted devices must be explicitly paired again and cannot be restored by advertising or stale cloud status.
 
-Reconnection uses current advertisements and authentication checks rather than a cached peripheral UUID. Newer Android APKs support authenticated BLE `device_info`; older APKs do not substitute historical VoWLAN/Relay numbers. Standalone cloud heartbeats and local health checks read the current calling SIM, not the number saved at initial pairing. Legacy AVF Linux Agent cloud number heartbeats have not migrated to this flow.
+Reconnection uses current advertisements and authentication checks rather than a cached peripheral UUID. Newer Android APKs support authenticated BLE `device_info`; older APKs do not substitute historical VoWLAN/Relay numbers. Standalone cloud heartbeats and local health checks read the current calling SIM, not the number saved at initial pairing. Saved retired Agent records remain readable without becoming a supported runtime. Existing Apple pairing credentials, SMS history and recordings are preserved.
 
 ## Build and test
 
@@ -172,3 +172,7 @@ The optional TURN test requires `AIRSIM_WEBRTC_TURN_CONFIG` pointing to a privat
 JSON file with `ios_url`, `username`, and `credential`; it forces relay candidates.
 Never commit that file. Physical CallKit/headset routing and real carrier calls
 still require separately authorized device testing.
+
+## Standalone-only local control
+
+Local requests are HMAC-authenticated over Wi-Fi VoWLAN. An unavailable local API has no destination URL; USB ECM and the fixed QDC507 address are removed. Live Activity call buttons open AirSIM through the existing typed call-action URL. The app checks the current live call ID before acting; a stale activity cannot control a different or ended call. Legacy activity transport values decode as unavailable without discarding the rest of the activity payload.

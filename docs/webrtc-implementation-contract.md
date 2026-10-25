@@ -22,4 +22,4 @@ Require both app builds, focused native media tests/loopback where feasible, com
 
 ## Migration gate
 
-See [the privileged-media migration contract](webrtc-only-migration.md) for IPC, local status/stop, heartbeat revision 2, AVF control-only behavior, Watch companion ownership, security tradeoffs and unperformed device gates. This is not a production-ready claim.
+See [the privileged-media migration contract](webrtc-only-migration.md) for IPC, local status/stop, heartbeat revision 2, Standalone-only runtime, Watch companion ownership, security tradeoffs and unperformed device gates. This is not a production-ready claim.

@@ -252,19 +252,6 @@ final class CloudICEPreparation {
     }
 }
 
-/// Binary call-WebSocket payloads are not PCM playout. The closure is the only
-/// schedule hook; cloud speech stays on `CloudWebRTCPeer`.
-enum CloudCallBinaryFrame {
-    static func deliver(_ wire: Data, schedule: (Data) -> Void) {
-        _ = (wire, schedule)
-    }
-}
-
-/// A failed WebRTC negotiation does not open the legacy PCM engine.
-enum CloudWebRTCNegotiationRecovery {
-    static func opensLegacyPCMEngine() -> Bool { false }
-}
-
 enum CloudWebRTCError: LocalizedError {
     case iceUnavailable, turnUnavailable, negotiationFailed, candidateOverflow
     var errorDescription: String? {

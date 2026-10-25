@@ -656,16 +656,16 @@ struct AirSIMTests {
         #expect(throws: (any Error).self) {
             _ = try VoWLANEndpoint(host: "8.8.8.8", controlPort: 7575)
         }
-        #expect(!AirSIMRoutePolicy.permits(.moduleLocal))
+        #expect(!AirSIMRoutePolicy.permits(.unavailable))
     }
 
-    @Test func `Legacy module request is rejected before network access`() async {
-        // Expected: the old module route is blocked at the transport boundary.
+    @Test func `Unavailable local connection is rejected before network access`() async {
+        // An offline API has no endpoint and cannot issue a network request.
         let error = await #expect(throws: APIError.self) {
             _ = try await AirSIMAPI().health()
         }
-        guard case APIError.disabledLegacyRoute? = error else {
-            Issue.record("Expected legacy route retired error, got \(String(describing: error))")
+        guard case APIError.localConnectionUnavailable? = error else {
+            Issue.record("Expected unavailable local connection error, got \(String(describing: error))")
             return
         }
     }
@@ -674,7 +674,7 @@ struct AirSIMTests {
         let route = DialPadTransportPresentation.make(
             mode: .automatic,
             vowlanOnline: true,
-            moduleLocalReachable: false,
+
             cloudOnline: true,
         )
         #expect(route?.transport == .vowlan)
@@ -1253,5 +1253,27 @@ struct RecentCallTimeFormatterTests {
             for: date(hour: 14, minute: 30), now: date(hour: 16, minute: 0),
             calendar: calendar, locale: Locale(identifier: "en_GB"))
         #expect(text == "14:30")
+    }
+}
+
+struct StandaloneCleanupTests {
+    @Test func `Old activity transport decodes without reviving USB routing`() throws {
+        let transport = try JSONDecoder().decode(
+            AirSIMCallActivityAttributes.ContentState.Transport.self,
+            from: Data(#""module_local""#.utf8))
+        #expect(transport == .unavailable)
+    }
+
+    @Test func `Live Activity handoff preserves the call identity and rejects stale targets`() throws {
+        for action in [AirSIMLiveActivityAction.answer, .reject, .hangup] {
+            let url = try #require(AirSIMLiveActivityActionURL.make(action: action, callID: "call-A"))
+            let request = try #require(AirSIMLiveActivityActionURL.parse(url))
+            #expect(request.action == action)
+            #expect(LiveActivityActionGate.accepts(callID: request.callID, currentCallID: "call-A", callIsLive: true))
+            #expect(!LiveActivityActionGate.accepts(callID: request.callID, currentCallID: "call-B", callIsLive: true))
+            #expect(!LiveActivityActionGate.accepts(callID: request.callID, currentCallID: nil, callIsLive: true))
+        }
+        #expect(!LiveActivityActionGate.accepts(callID: "", currentCallID: "", callIsLive: true))
+        #expect(!LiveActivityActionGate.accepts(callID: "call-A", currentCallID: "call-A", callIsLive: false))
     }
 }
