@@ -86,7 +86,7 @@ class UnavailableStatusNamespace {
 
 class MemoryMediaSocket {
   constructor(role) {
-    this.attachment = { role, owner: false, pendingControl: "" };
+    this.attachment = { role, owner: false, pendingControl: "", mediaTransport: "webrtc", deviceID: "iphone-air" };
     this.sent = [];
     this.closed = false;
   }
@@ -114,7 +114,7 @@ class MemoryMediaNamespace {
   get(id) {
     if (!this.sessions.has(id)) {
       const state = new MemoryMediaState();
-      this.sessions.set(id, { state, session: new CallMediaSession(state, {}) });
+      this.sessions.set(id, { state, session: new CallMediaSession(state, mediaUnitEnvironment()) });
     }
     return { fetch: (request, options) => this.sessions.get(id).session.fetch(new Request(request, options)) };
   }
@@ -122,7 +122,7 @@ class MemoryMediaNamespace {
   recreate(id) {
     const { state } = this.entry(id);
     const recreated = new MemoryMediaState(state.sockets, state.storage);
-    this.sessions.set(id, { state: recreated, session: new CallMediaSession(recreated, {}) });
+    this.sessions.set(id, { state: recreated, session: new CallMediaSession(recreated, mediaUnitEnvironment()) });
     return this.entry(id);
   }
 }
@@ -135,12 +135,12 @@ class MemoryCommandState extends MemoryMediaState {
 }
 
 class MemoryCommandNamespace {
-  constructor() { this.sessions = new Map(); }
+  constructor(env) { this.sessions = new Map(); this.env = env; }
   idFromName(name) { return name; }
   get(id) {
     if (!this.sessions.has(id)) {
       const state = new MemoryCommandState();
-      this.sessions.set(id, { state, session: new DeviceCommandSession(state) });
+      this.sessions.set(id, { state, session: new DeviceCommandSession(state, this.env) });
     }
     const value = this.sessions.get(id);
     return { fetch: (request, options) => value.session.fetch(new Request(request, options)) };
@@ -186,6 +186,38 @@ const registration = {
   environment: "sandbox",
   relay_url: "https://push.airsim.example",
 };
+
+function readyHeartbeat(overrides = {}) {
+  return { event: "agent_heartbeat", device_id: registration.device_id,
+    device_secret: registration.device_secret, agent_id: "native-service",
+    agent_version: "test-native-revision-2", at_ok: true, cellular_state: "registered",
+    media_capability_revision: 2, agent_media_ready: true,
+    agent_media_capabilities: ["webrtc"], ...overrides };
+}
+
+async function advertiseReadyAgent(env, overrides = {}) {
+  const response = await worker.fetch(post("/v1/events/heartbeat", readyHeartbeat(overrides)), env);
+  assert.equal(response.status, 202);
+}
+
+async function enableReadyMedia(env, registrationOverride = {}) {
+  Object.assign(env, turnTestConfig, { WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" });
+  await worker.fetch(post("/v1/devices/register", { ...registration, media_transport: "webrtc",
+    app_media_capabilities: ["webrtc"], ...registrationOverride }), env);
+  await advertiseReadyAgent(env);
+}
+
+function mediaUnitEnvironment() {
+  const env = { DEVICES: new MemoryKV(), ...turnTestConfig,
+    WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+  env.DEVICES.values.set(`device:${registration.device_id}`, JSON.stringify({
+    device_id: registration.device_id, media_transport_requested: "webrtc", app_media_capabilities: ["webrtc"],
+  }));
+  env.DEVICES.values.set(`heartbeat:${registration.device_id}`, JSON.stringify({
+    ...readyHeartbeat(), received_at_ms: Date.now(),
+  }));
+  return env;
+}
 
 test("health and registration persist without returning credentials", async () => {
   const env = testEnvironment();
@@ -452,7 +484,7 @@ test("different devices register and authenticate independently", async () => {
 
 test("cloud dial and SMS commands are authenticated, device-scoped, and return Agent results", async () => {
   const env = testEnvironment();
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   const second = {
     ...registration,
     device_id: "iphone-second",
@@ -461,6 +493,7 @@ test("cloud dial and SMS commands are authenticated, device-scoped, and return A
     alert_token: "f".repeat(64),
   };
   await worker.fetch(post("/v1/devices/register", registration), env);
+  await enableReadyMedia(env);
   await worker.fetch(post("/v1/devices/register", second), env);
   const agent = env.COMMANDS.addAgent(registration.device_id);
   const commandID = "2d33c399-1030-4e9a-90ea-bb429e16ac5a";
@@ -514,7 +547,7 @@ test("cloud dial and SMS commands are authenticated, device-scoped, and return A
 
 test("dial accepts WebRTC and rejects a legacy PCM request", async () => {
   const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   const capable = {
     ...registration,
     media_transport: "webrtc",
@@ -522,6 +555,7 @@ test("dial accepts WebRTC and rejects a legacy PCM request", async () => {
     agent_media_capabilities: ["webrtc"],
   };
   assert.equal((await worker.fetch(post("/v1/devices/register", capable), env)).status, 200);
+  await advertiseReadyAgent(env);
   env.COMMANDS.addAgent(registration.device_id);
   const dial = await worker.fetch(post("/v1/commands/enqueue", {
     device_id: registration.device_id,
@@ -546,7 +580,7 @@ test("dial accepts WebRTC and rejects a legacy PCM request", async () => {
 
 test("call control is durable, idempotent, and delivered after the Agent reconnects", async () => {
   const env = testEnvironment();
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   await worker.fetch(post("/v1/devices/register", registration), env);
   const callUUID = "d9b59660-05bb-4ea8-9aeb-4505b35c93f9";
   const commandID = "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145";
@@ -635,7 +669,7 @@ test("call control is durable, idempotent, and delivered after the Agent reconne
 
 test("call control rejects stale generations and cross-device reads", async () => {
   const env = testEnvironment();
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   const secondDevice = {
     ...registration,
     device_id: "iphone-second",
@@ -758,7 +792,7 @@ test("unconfirmed hangup creates exactly one rescue command after eight seconds"
 
 test("heartbeat pull completes a rescue and propagates its modem result to the parent", async () => {
   const env = testEnvironment();
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   await worker.fetch(post("/v1/devices/register", registration), env);
   const parentID = "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145";
   const callUUID = "d9b59660-05bb-4ea8-9aeb-4505b35c93f9";
@@ -966,6 +1000,7 @@ test("dashboard virtual call requires auth, validates fields, and rate limits a 
 test("relay sends iPhone VoIP, Watch VoIP, mirror alert, and SMS on distinct APNs topics", async () => {
   const env = testEnvironment();
   await worker.fetch(post("/v1/devices/register", registration), env);
+  await enableReadyMedia(env);
   const captured = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
@@ -1027,6 +1062,7 @@ test("relay sends iPhone VoIP, Watch VoIP, mirror alert, and SMS on distinct APN
 test("incoming call retries deduplicate VoIP and Watch alert by call UUID", async () => {
   const env = testEnvironment();
   await worker.fetch(post("/v1/devices/register", registration), env);
+  await enableReadyMedia(env);
   const captured = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
@@ -1047,7 +1083,7 @@ test("incoming call retries deduplicate VoIP and Watch alert by call UUID", asyn
     const second = await worker.fetch(post("/v1/events/call", payload), env);
     assert.equal(first.status, 202);
     assert.equal(second.status, 202);
-    assert.deepEqual(await second.json(), { duplicate: true, media_transport: null });
+    assert.deepEqual(await second.json(), { duplicate: true, media_transport: "webrtc", remote_audio_available: true, remote_audio_reason: null });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1057,6 +1093,7 @@ test("incoming call retries deduplicate VoIP and Watch alert by call UUID", asyn
 test("registered ActivityKit update token is preferred over push-to-start and owner updates it", async () => {
   const env = testEnvironment();
   await worker.fetch(post("/v1/devices/register", registration), env);
+  await enableReadyMedia(env);
   const registered = await worker.fetch(post("/v1/live-activities/register", {
     device_id: registration.device_id,
     device_secret: registration.device_secret,
@@ -1078,6 +1115,7 @@ test("registered ActivityKit update token is preferred over push-to-start and ow
       event: "incoming_call", device_id: registration.device_id,
       device_secret: registration.device_secret, call_id: "call-live",
       call_uuid: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9",
+      call_secret: "ready-call-secret-0123456789abcdef",
       number: "10010", issued_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 45_000).toISOString(),
     }), env);
@@ -1098,7 +1136,7 @@ test("registered ActivityKit update token is preferred over push-to-start and ow
   assert.equal(live[1].payload.aps["content-state"].phase, "active");
 });
 
-test("watch token requires the signed companion bundle id", () => {
+test("watch token requires the signed companion bundle id", async () => {
   assert.equal(
     validateRegistration({ ...registration, watch_bundle_id: "com.attacker.watch" }, "com.example.airsim"),
     "watch bundle id is not allowed",
@@ -1109,10 +1147,11 @@ test("watch token requires the signed companion bundle id", () => {
   );
 });
 
-test("Watch-only VoIP registration can receive a native Watch call", async () => {
+test("Watch-only VoIP registration receives companion control notification when iPhone media is supported", async () => {
   const env = testEnvironment();
   const watchOnly = { ...registration, voip_token: "", alert_token: "", live_activity_push_to_start_token: "" };
   assert.equal((await worker.fetch(post("/v1/devices/register", watchOnly), env)).status, 200);
+  await enableReadyMedia(env, watchOnly);
   const captured = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
@@ -1163,7 +1202,7 @@ test("Watch answer sends a background ownership event to iPhone CallKit", async 
   assert.equal(captured[0].payload.owner, "watch");
 });
 
-test("legacy Agent call remains available on iPhone while Watch media is skipped", async () => {
+test("legacy Agent inbound call stays on Android and receives only an unavailable-audio mirror", async () => {
   const env = testEnvironment();
   await worker.fetch(post("/v1/devices/register", registration), env);
   const captured = [];
@@ -1184,10 +1223,16 @@ test("legacy Agent call remains available on iPhone while Watch media is skipped
   } finally {
     globalThis.fetch = originalFetch;
   }
-  assert.equal(captured.length, 3);
-  assert.equal(captured[0].options.headers["apns-topic"], "com.example.airsim.voip");
-  assert.equal(captured[1].options.headers["apns-push-type"], "alert");
-  assert.equal(captured[2].options.headers["apns-push-type"], "liveactivity");
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].options.headers["apns-push-type"], "alert");
+  const payload = JSON.parse(captured[0].options.body);
+  assert.equal(payload.remote_audio_available, false);
+  assert.equal(payload.media_url, undefined);
+  assert.equal(payload.call_secret, undefined);
+  assert.match(payload.aps.alert.body, /Answer on the Android phone/);
+  const lifecycle = JSON.parse(await env.DEVICES.get(`call-lifecycle:${registration.device_id}`));
+  assert.equal(lifecycle.phase, "ringing");
+  assert.equal(lifecycle.remote_audio_available, false);
 });
 
 test("call websocket authenticates the per-call secret before reaching its durable object", async () => {
@@ -1197,6 +1242,7 @@ test("call websocket authenticates the per-call secret before reaching its durab
   await env.DEVICES.put(`call:${callUUID}`, JSON.stringify({
     device_id: registration.device_id,
     call_id: "call-media",
+    media_transport: "webrtc",
     secret_hash: createHash("sha256").update(secret).digest("hex"),
     expires_at: new Date(Date.now() - 10_000).toISOString(),
     media_expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -1215,8 +1261,8 @@ test("call websocket authenticates the per-call secret before reaching its durab
   };
 
   const connect = (role, token) => worker.fetch(new Request(
-    `https://push.airsim.example/v1/calls/${callUUID}/connect?role=${role}&token=${token}`,
-    { headers: { upgrade: "websocket" } },
+    `https://push.airsim.example/v1/calls/${callUUID}/connect?role=${role}`,
+    { headers: { upgrade: "websocket", authorization: `Bearer ${token}` } },
   ), env);
 
   assert.equal((await connect("watch", "wrong-secret-value-0123456789")).status, 401);
@@ -1229,7 +1275,7 @@ test("call websocket authenticates the per-call secret before reaching its durab
   ]);
 });
 
-test("relay binds the authenticated client role into call control", () => {
+test("relay binds the authenticated client role into call control", async () => {
   assert.equal(
     bindMediaOwner('{"action":"answer","call_id":"call-9"}', "iphone"),
     '{"action":"answer","call_id":"call-9","owner":"iphone"}',
@@ -1237,7 +1283,7 @@ test("relay binds the authenticated client role into call control", () => {
   assert.equal(bindMediaOwner(new Uint8Array([1, 2]), "iphone") instanceof Uint8Array, true);
 });
 
-test("relay preserves call control trace identity in receipts", () => {
+test("relay preserves call control trace identity in receipts", async () => {
   const message = bindMediaOwner(JSON.stringify({
     action: "end",
     call_id: "call-9",
@@ -1256,12 +1302,12 @@ test("relay preserves call control trace identity in receipts", () => {
   });
 });
 
-test("relay queues answer until the Agent media socket connects", () => {
+test("relay queues answer until the Agent media socket connects", async () => {
   const iphone = new MemoryMediaSocket("iphone");
   const state = new MemoryMediaState([iphone]);
-  const session = new CallMediaSession(state, {});
+  const session = new CallMediaSession(state, mediaUnitEnvironment());
 
-  session.webSocketMessage(iphone, JSON.stringify({
+  await session.webSocketMessage(iphone, JSON.stringify({
     action: "answer", call_id: "call-9",
     call_uuid: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9", generation: 2,
     command_id: "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145", trace_id: "9f9dc60b",
@@ -1275,7 +1321,7 @@ test("relay queues answer until the Agent media socket connects", () => {
 
   const agent = new MemoryMediaSocket("agent");
   state.sockets.push(agent);
-  session.flushPendingControls(agent);
+  await session.flushPendingControls(agent);
 
   assert.equal(agent.sent.length, 1);
   assert.match(agent.sent[0], /"action":"answer"/);
@@ -1283,21 +1329,21 @@ test("relay queues answer until the Agent media socket connects", () => {
   assert.ok(iphone.sent.some((message) => message.includes("action_forwarded")));
 });
 
-test("binary frames close every media role and are not forwarded", () => {
+test("binary frames close every media role and are not forwarded", async () => {
   const agent = new MemoryMediaSocket("agent");
   const iphone = new MemoryMediaSocket("iphone");
   const watch = new MemoryMediaSocket("watch");
   const state = new MemoryMediaState([agent, iphone, watch]);
-  const session = new CallMediaSession(state, {});
+  const session = new CallMediaSession(state, mediaUnitEnvironment());
 
-  session.webSocketMessage(iphone, JSON.stringify({ action: "answer", call_id: "call-9" }));
+  await session.webSocketMessage(iphone, JSON.stringify({ action: "answer", call_id: "call-9" }));
   agent.sent = [];
   iphone.sent = [];
   watch.sent = [];
 
-  session.webSocketMessage(iphone, new Uint8Array([1, 2, 3, 4]));
-  session.webSocketMessage(agent, new Uint8Array([5, 6, 7, 8]));
-  session.webSocketMessage(watch, new Uint8Array([9]));
+  await session.webSocketMessage(iphone, new Uint8Array([1, 2, 3, 4]));
+  await session.webSocketMessage(agent, new Uint8Array([5, 6, 7, 8]));
+  await session.webSocketMessage(watch, new Uint8Array([9]));
 
   assert.equal(iphone.closed, true);
   assert.equal(agent.closed, true);
@@ -1307,7 +1353,7 @@ test("binary frames close every media role and are not forwarded", () => {
   assert.deepEqual(watch.sent, []);
 });
 
-test("selectMediaTransport returns webrtc or a rejection", () => {
+test("selectMediaTransport returns webrtc or a rejection", async () => {
   const capable = {
     deviceID: "device-rollout-a",
     requested: "webrtc",
@@ -1317,7 +1363,7 @@ test("selectMediaTransport returns webrtc or a rejection", () => {
   };
   assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 0 }), null);
   assert.equal(selectMediaTransport({ ...capable, requested: "", rolloutPercent: 100 }), null);
-  assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 100, forceLegacy: true }), null);
+  assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 100, disabled: true }), null);
   assert.equal(selectMediaTransport({ ...capable, rolloutPercent: 100 }), "webrtc");
   assert.equal(
     selectMediaTransport({ ...capable, rolloutPercent: 100 }),
@@ -1328,16 +1374,16 @@ test("selectMediaTransport returns webrtc or a rejection", () => {
   }), null);
 });
 
-test("media relay survives 50 answer reconnect and hangup cycles without cross-device control", () => {
+test("media relay survives 50 answer reconnect and hangup cycles without cross-device control", async () => {
   for (let round = 0; round < 50; round += 1) {
     const agent = new MemoryMediaSocket("agent");
     const iphone = new MemoryMediaSocket("iphone");
     const otherPhone = new MemoryMediaSocket("iphone");
     const state = new MemoryMediaState([agent, iphone, otherPhone]);
-    const session = new CallMediaSession(state, {});
+    const session = new CallMediaSession(state, mediaUnitEnvironment());
     const callID = `stress-${round}`;
 
-    session.webSocketMessage(iphone, JSON.stringify({ action: "answer", call_id: callID }));
+    await session.webSocketMessage(iphone, JSON.stringify({ action: "answer", call_id: callID }));
     assert.ok(agent.sent.some((message) => typeof message === "string" && message.includes('"action":"answer"')));
     assert.deepEqual(otherPhone.sent.filter((message) => typeof message === "string" && message.includes('"action":"answer"')), [], `round ${round} isolation`);
     agent.sent = [];
@@ -1347,13 +1393,13 @@ test("media relay survives 50 answer reconnect and hangup cycles without cross-d
     state.sockets.splice(state.sockets.indexOf(agent), 1);
     const reconnectedAgent = new MemoryMediaSocket("agent");
     state.sockets.push(reconnectedAgent);
-    session.flushPendingControls(reconnectedAgent);
-    session.webSocketMessage(iphone, JSON.stringify({ action: "end", call_id: callID }));
+    await session.flushPendingControls(reconnectedAgent);
+    await session.webSocketMessage(iphone, JSON.stringify({ action: "end", call_id: callID }));
     assert.ok(
       reconnectedAgent.sent.some((message) => typeof message === "string" && message.includes('"action":"end"')),
       `round ${round} hangup`,
     );
-    session.webSocketMessage(reconnectedAgent, JSON.stringify({
+    await session.webSocketMessage(reconnectedAgent, JSON.stringify({
       status: "remote_ended", call_id: callID,
     }));
     session.webSocketClose(iphone, 1000, "call ended");
@@ -1387,7 +1433,8 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     cloud_online: true,
     agent_id: "legacy",
     agent_version: "0.3.35",
-    agent_media_capabilities: ["webrtc"],
+    agent_media_capabilities: [],
+    media_capability_revision: 0, agent_media_ready: false,
     at_ok: true,
     cellular_state: "searching",
     cellular_registration: "Searching",
@@ -1397,7 +1444,8 @@ test("agent heartbeat lets iPhone distinguish cloud-only from fully offline", as
     agents: [{
       agent_id: "legacy",
       agent_version: "0.3.35",
-      agent_media_capabilities: ["webrtc"],
+      agent_media_capabilities: [],
+    media_capability_revision: 0, agent_media_ready: false,
       at_ok: true,
       cellular_state: "searching",
       cellular_registration: "Searching",
@@ -1504,7 +1552,7 @@ test("incoming SMS without an originating address still reaches iPhone", async (
   }
 });
 
-test("registration is pinned to the signed app bundle", () => {
+test("registration is pinned to the signed app bundle", async () => {
   assert.equal(validateRegistration({ ...registration, bundle_id: "com.attacker.app" }, "com.example.airsim"), "bundle id is not allowed");
   assert.equal(validateRegistration({ ...registration, device_id: "bad\nheader" }, "com.example.airsim"), "invalid device identity");
   assert.equal(validateRegistration({ ...registration, device_secret: `safe${"s".repeat(20)}\r\nInjected: yes` }, "com.example.airsim"), "invalid device identity");
@@ -1554,7 +1602,7 @@ test("Agent call-state end returns the current Live Activity to cloud standby", 
   assert.equal(captured[0].payload.aps["content-state"].displayName, "Internet relay connected");
 });
 
-test("call lifecycle reducer rejects stale and terminal resurrection events", () => {
+test("call lifecycle reducer rejects stale and terminal resurrection events", async () => {
   const base = {
     call_id: "call-state", call_uuid: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9",
     generation: 2, phase: "ended", source: "agent",
@@ -1576,6 +1624,7 @@ test("call lifecycle reducer rejects stale and terminal resurrection events", ()
 test("expired ActivityKit token never turns a delivered VoIP call into a relay failure", async () => {
   const env = testEnvironment();
   await worker.fetch(post("/v1/devices/register", registration), env);
+  await enableReadyMedia(env);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => new Response(
     options.headers["apns-push-type"] === "liveactivity" ? '{"reason":"BadDeviceToken"}' : "",
@@ -1587,6 +1636,7 @@ test("expired ActivityKit token never turns a delivered VoIP call into a relay f
       event: "incoming_call", device_id: registration.device_id,
       device_secret: registration.device_secret, call_id: "call-expired-activity",
       call_uuid: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9",
+      call_secret: "ready-call-secret-0123456789abcdef",
       number: "10086", issued_at: now.toISOString(),
       expires_at: new Date(now.getTime() + 45_000).toISOString(),
     }), env);
@@ -1679,11 +1729,12 @@ test("TURN URL validation and credential TTL are bounded by configuration and ca
 
 test("server rollout requires TURN and returns the negotiated registration and dial transport", async () => {
   const env = { ...testEnvironment(), WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   const capable = { ...registration, media_transport: "webrtc",
     app_media_capabilities: ["webrtc"], agent_media_capabilities: ["webrtc"] };
   let response = await worker.fetch(post("/v1/devices/register", capable), env);
   assert.equal((await response.json()).media_transport, null);
+  await advertiseReadyAgent(env);
   Object.assign(env, turnTestConfig);
   response = await worker.fetch(post("/v1/devices/register", capable), env);
   assert.equal((await response.json()).media_transport, "webrtc");
@@ -1697,11 +1748,12 @@ test("server rollout requires TURN and returns the negotiated registration and d
     device_secret: registration.device_secret, command_id: crypto.randomUUID(), type: "dial",
     number: "10086", media_transport: "legacy_pcm" }), env);
   assert.equal(rejected.status, 400);
+  await advertiseReadyAgent(env, { media_capability_revision: 0 });
   const legacy = { ...capable, agent_media_capabilities: ["legacy_pcm"] };
   assert.equal((await (await worker.fetch(post("/v1/devices/register", legacy), env)).json()).media_transport, null);
 });
 
-function webRTCSession() {
+async function webRTCSession() {
   const iphone = new MemoryMediaSocket("iphone");
   const agent = new MemoryMediaSocket("agent");
   const watch = new MemoryMediaSocket("watch");
@@ -1710,8 +1762,8 @@ function webRTCSession() {
     mediaTransport: socket === watch ? "" : "webrtc",
   });
   const state = new MemoryMediaState([iphone, agent, watch]);
-  const relay = new CallMediaSession(state, {});
-  relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  const relay = new CallMediaSession(state, mediaUnitEnvironment());
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
   for (const socket of [iphone, agent, watch]) socket.sent = [];
   return { relay, state, iphone, agent, watch };
 }
@@ -1721,23 +1773,23 @@ function signaling(action, sessionID = "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145", e
     ...(action === "webrtc_ice" ? { candidate: { candidate: "candidate:1 1 UDP 1 127.0.0.1 9000 typ host", sdp_mid: "0", sdp_mline_index: 0 } } : { sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n" }), ...extras });
 }
 
-test("WebRTC relays bounded offer, answer and early ICE only between owning iPhone and agent", () => {
-  const { relay, iphone, agent, watch } = webRTCSession();
-  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
-  relay.webSocketMessage(iphone, signaling("webrtc_ice"));
-  relay.webSocketMessage(agent, signaling("webrtc_ice"));
-  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+test("WebRTC relays bounded offer, answer and early ICE only between owning iPhone and agent", async () => {
+  const { relay, iphone, agent, watch } = await webRTCSession();
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  await relay.webSocketMessage(iphone, signaling("webrtc_ice"));
+  await relay.webSocketMessage(agent, signaling("webrtc_ice"));
+  await relay.webSocketMessage(agent, signaling("webrtc_answer"));
   assert.equal(agent.sent.length, 2);
   assert.equal(iphone.sent.length, 2);
   assert.equal(watch.sent.length, 0);
   assert.equal(JSON.stringify(agent.attachment).includes("v=0"), false);
   assert.equal(JSON.stringify(agent.attachment).includes("candidate:"), false);
-  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  await relay.webSocketMessage(agent, signaling("webrtc_answer"));
   assert.match(agent.sent.at(-1), /session already answered/);
 });
 
-test("WebRTC rejects wrong roles, identity, stale sessions and oversized payloads", () => {
-  const { relay, iphone, agent, watch } = webRTCSession();
+test("WebRTC rejects wrong roles, identity, stale sessions and oversized payloads", async () => {
+  const { relay, iphone, agent, watch } = await webRTCSession();
   for (const [sender, message] of [
     [agent, signaling("webrtc_offer")], [iphone, signaling("webrtc_answer")],
     [iphone, signaling("webrtc_offer", undefined, { generation: 2 })],
@@ -1746,50 +1798,52 @@ test("WebRTC rejects wrong roles, identity, stale sessions and oversized payload
     [iphone, signaling("webrtc_offer", undefined, { sdp: "x".repeat(49 * 1024) })],
     [agent, signaling("webrtc_ice")],
   ]) {
-    relay.webSocketMessage(sender, message);
+    await relay.webSocketMessage(sender, message);
     assert.match(sender.sent.at(-1), /webrtc_failed/);
   }
   agent.sent = []; iphone.sent = [];
-  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer"));
   const sessionID = crypto.randomUUID();
-  relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
-  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
+  await relay.webSocketMessage(agent, signaling("webrtc_answer"));
   assert.match(agent.sent.at(-1), /stale signaling session/);
-  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer"));
   assert.match(iphone.sent.at(-1), /stale signaling session/);
   for (const candidate of [{ candidate: "x".repeat(4097), sdp_mline_index: 0 },
     { candidate: "x", sdp_mline_index: -1 }, { candidate: "x", sdp_mline_index: 0.5 },
     { candidate: "x", sdp_mid: "x".repeat(257), sdp_mline_index: 0 }]) {
-    relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID, { candidate }));
+    await relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID, { candidate }));
     assert.match(agent.sent.at(-1), /invalid ICE candidate/);
   }
 });
 
-test("binary frames close Watch sockets and Watch answers do not select legacy PCM", () => {
-  const { relay, iphone, agent, watch } = webRTCSession();
-  relay.webSocketMessage(iphone, new Uint8Array([1]));
-  relay.webSocketMessage(agent, new Uint8Array([1]));
-  relay.webSocketMessage(watch, new Uint8Array([1]));
+test("binary frames close Watch sockets and Watch answers do not select legacy PCM", async () => {
+  const { relay, iphone, agent, watch } = await webRTCSession();
+  await relay.webSocketMessage(iphone, new Uint8Array([1]));
+  await relay.webSocketMessage(agent, new Uint8Array([1]));
+  await relay.webSocketMessage(watch, new Uint8Array([1]));
   assert.equal(iphone.closed, true);
   assert.equal(agent.closed, true);
   assert.equal(watch.closed, true);
   const watch2 = new MemoryMediaSocket("watch");
   const agent2 = new MemoryMediaSocket("agent");
   agent2.attachment.mediaTransport = "webrtc";
-  const relay2 = new CallMediaSession(new MemoryMediaState([watch2, agent2]), {});
-  relay2.webSocketMessage(watch2, JSON.stringify({ action: "answer", media_transport: "webrtc" }));
-  assert.equal(JSON.parse(agent2.sent.at(-1)).media_transport, undefined);
-  relay2.webSocketMessage(agent2, new Uint8Array([2]));
+  const relay2 = new CallMediaSession(new MemoryMediaState([watch2, agent2]), mediaUnitEnvironment());
+  await relay2.webSocketMessage(watch2, JSON.stringify({ action: "answer", media_transport: "webrtc" }));
+  assert.equal(agent2.sent.length, 0);
+  assert.equal(watch2.attachment.owner, false);
+  assert.equal(JSON.parse(watch2.sent.at(-1)).remote_audio_reason, "iphone_audio_required");
+  await relay2.webSocketMessage(agent2, new Uint8Array([2]));
   assert.equal(agent2.closed, true);
   assert.equal(watch2.sent.some((message) => message instanceof Uint8Array), false);
 });
 
 test("missing peers never queue SDP, and reconnect requires a fresh negotiation", async (t) => {
-  const { relay, state, iphone, agent } = webRTCSession();
-  relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  const { relay, state, iphone, agent } = await webRTCSession();
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer"));
   relay.webSocketClose(agent, 1000, "disconnected");
   assert.equal(iphone.attachment.negotiation, undefined);
-  relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
   assert.match(iphone.sent.at(-1), /peer unavailable/);
   assert.equal(iphone.attachment.pendingControl, "");
   const NativeResponse = globalThis.Response;
@@ -1807,15 +1861,15 @@ test("missing peers never queue SDP, and reconnect requires a fresh negotiation"
   } }));
   assert.equal(response.status, 101);
   const reconnected = state.getWebSockets("agent")[0];
-  relay.webSocketMessage(reconnected, signaling("webrtc_answer"));
+  await relay.webSocketMessage(reconnected, signaling("webrtc_answer"));
   assert.match(reconnected.sent.at(-1), /stale signaling session/);
-  relay.webSocketMessage(agent, signaling("webrtc_answer"));
+  await relay.webSocketMessage(agent, signaling("webrtc_answer"));
   assert.equal(agent.sent.filter((message) => typeof message === "string" && message.includes("webrtc_answer")).length, 0);
   const newSession = crypto.randomUUID();
-  relay.webSocketMessage(iphone, signaling("webrtc_offer", newSession));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer", newSession));
   relay.webSocketClose(agent, 1000, "late close callback");
   assert.equal(iphone.attachment.negotiation.sessionID, newSession);
-  relay.webSocketMessage(reconnected, signaling("webrtc_answer", newSession));
+  await relay.webSocketMessage(reconnected, signaling("webrtc_answer", newSession));
   assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_answer");
 });
 
@@ -1829,6 +1883,7 @@ test("incoming transport is server negotiated for iPhone and Watch", async (t) =
   });
   await worker.fetch(post("/v1/devices/register", { ...registration, media_transport: "webrtc",
     app_media_capabilities: ["webrtc"], agent_media_capabilities: ["webrtc"] }), env);
+  await advertiseReadyAgent(env);
   const event = { event: "incoming_call", device_id: registration.device_id,
     device_secret: registration.device_secret, call_id: "negotiated-call",
     call_uuid: crypto.randomUUID(), call_secret: "call-secret-for-negotiation",
@@ -1866,14 +1921,13 @@ test("call connect authenticates and forwards authoritative transport and identi
   assert.equal((await worker.fetch(new Request(
     `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone&token=call-secret`,
     { headers: { upgrade: "websocket" } }), env)).status, 401);
+  // An obsolete deployment flag cannot restore URL credentials for any role.
   env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED = "true";
-  assert.equal((await worker.fetch(new Request(
-    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone&token=call-secret`,
-    { headers: { upgrade: "websocket" } }), env)).status, 401);
-  assert.equal((await worker.fetch(new Request(
-    `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=agent&token=call-secret`,
-    { headers: { upgrade: "websocket" } }), env)).status, 200);
-  delete env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED;
+  for (const role of ["iphone", "watch", "agent"]) for (const header of [false, true]) {
+    assert.equal((await worker.fetch(new Request(
+      `https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=${role}&token=call-secret`,
+      { headers: { upgrade: "websocket", ...(header ? { authorization: "Bearer call-secret" } : {}) } }), env)).status, 401);
+  }
   assert.equal((await worker.fetch(connect("call-secret"), env)).status, 200);
   assert.equal(forwarded.headers.get("x-airsim-media-transport"), "webrtc");
   assert.equal(forwarded.headers.get("x-airsim-call-uuid"), webRTCCallUUID);
@@ -1886,33 +1940,34 @@ test("call connect authenticates and forwards authoritative transport and identi
   assert.equal((await worker.fetch(connect("call-secret"), env)).status, 410);
 });
 
-test("legacy and nonowner connections cannot send WebRTC and queued answer retains transport", () => {
+test("legacy and nonowner connections cannot send WebRTC and queued answer retains transport", async () => {
   const iphone = new MemoryMediaSocket("iphone");
   iphone.attachment.mediaTransport = "webrtc";
   const state = new MemoryMediaState([iphone]);
-  const relay = new CallMediaSession(state, {});
-  relay.webSocketMessage(iphone, JSON.stringify({ action: "answer", media_transport: "legacy_pcm" }));
+  const relay = new CallMediaSession(state, mediaUnitEnvironment());
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer", media_transport: "legacy_pcm" }));
   assert.equal(JSON.parse(iphone.attachment.pendingControl).media_transport, "webrtc");
   const agent = new MemoryMediaSocket("agent");
   state.sockets.push(agent);
-  relay.flushPendingControls(agent);
+  await relay.flushPendingControls(agent);
   assert.equal(JSON.parse(agent.sent.at(-1)).media_transport, "webrtc");
   agent.sent = [];
-  relay.webSocketMessage(agent, signaling("webrtc_offer"));
+  agent.attachment.mediaTransport = "";
+  await relay.webSocketMessage(agent, signaling("webrtc_offer"));
   assert.match(agent.sent.at(-1), /invalid WebRTC owner or transport/);
   const intruder = new MemoryMediaSocket("iphone");
   intruder.attachment = { ...iphone.attachment, owner: false, pcmTraceKey: "intruder" };
-  relay.webSocketMessage(intruder, signaling("webrtc_offer"));
+  await relay.webSocketMessage(intruder, signaling("webrtc_offer"));
   assert.equal(intruder.sent.length, 0);
 });
 
-test("heartbeat refreshes native capabilities on registry fast path and KV fallback without losing app capabilities", async () => {
+test("heartbeat replaces native readiness on registry and KV paths without losing app capabilities", async () => {
   for (const useRegistry of [false, true]) {
     const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
     if (useRegistry) env.STATUS = new MemoryStatusNamespace();
     await worker.fetch(post("/v1/devices/register", { ...registration, media_transport: "webrtc",
       app_media_capabilities: ["legacy_pcm", "webrtc"] }), env);
-    const heartbeat = { event: "agent_heartbeat", device_id: registration.device_id,
+    const heartbeat = { media_capability_revision: 2, agent_media_ready: true, event: "agent_heartbeat", device_id: registration.device_id,
       device_secret: registration.device_secret, agent_id: "q25", at_ok: true,
       cellular_state: "registered", agent_media_capabilities: ["legacy_pcm", "webrtc"] };
     assert.equal((await worker.fetch(post("/v1/events/heartbeat", heartbeat), env)).status, 202);
@@ -1922,26 +1977,28 @@ test("heartbeat refreshes native capabilities on registry fast path and KV fallb
     delete oldAgent.agent_media_capabilities;
     assert.equal((await worker.fetch(post("/v1/events/heartbeat", oldAgent), env)).status, 202);
     registrationResponse = await worker.fetch(post("/v1/devices/register", registration), env);
-    assert.equal((await registrationResponse.json()).media_transport, "webrtc");
+    assert.equal((await registrationResponse.json()).media_transport, null);
     const stored = useRegistry
       ? await env.STATUS.storage.get(`device:${registration.device_id}`)
       : JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
     assert.deepEqual(stored.app_media_capabilities, ["webrtc"]);
-    assert.deepEqual(stored.agent_media_capabilities, ["webrtc"]);
+    assert.equal(stored.agent_media_capabilities, undefined);
     assert.equal((await worker.fetch(post("/v1/events/heartbeat", {
       ...heartbeat, device_secret: "wrong",
     }), env)).status, 401);
   }
 });
 
-test("partial registrations preserve capabilities and explicit legacy override regardless registration order", async () => {
+test("partial registrations preserve app settings but never authorize native media from stored claims", async () => {
   for (const appFirst of [false, true]) {
     const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
     const app = { ...registration, media_transport: "webrtc", app_media_capabilities: ["webrtc"] };
     const agent = { ...registration, agent_media_capabilities: ["webrtc"] };
     await worker.fetch(post("/v1/devices/register", appFirst ? app : agent), env);
     const second = await worker.fetch(post("/v1/devices/register", appFirst ? agent : app), env);
-    assert.equal((await second.json()).media_transport, "webrtc");
+    assert.equal((await second.json()).media_transport, null);
+    await advertiseReadyAgent(env);
+    assert.equal((await (await worker.fetch(post("/v1/devices/register", registration), env)).json()).media_transport, "webrtc");
     await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
     const partial = await worker.fetch(post("/v1/devices/register", registration), env);
     assert.equal((await partial.json()).media_transport, null);
@@ -1949,17 +2006,17 @@ test("partial registrations preserve capabilities and explicit legacy override r
 });
 
 
-test("signaling history fits hibernation attachments and cannot grow without bound", () => {
-  const { relay, iphone, agent, state } = webRTCSession();
+test("signaling history fits hibernation attachments and cannot grow without bound", async () => {
+  const { relay, iphone, agent, state } = await webRTCSession();
   const intruder = new MemoryMediaSocket("iphone");
   intruder.attachment = { ...iphone.attachment, owner: false };
   state.sockets.push(intruder);
-  relay.webSocketMessage(intruder, signaling("webrtc_offer"));
+  await relay.webSocketMessage(intruder, signaling("webrtc_offer"));
   assert.match(intruder.sent.at(-1), /invalid WebRTC owner/);
   state.sockets.pop();
   for (let count = 0; count < 24; count++) relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
   assert.ok(new TextEncoder().encode(JSON.stringify(iphone.attachment)).length < 2048);
-  relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
   assert.match(iphone.sent.at(-1), /negotiation limit/);
   assert.equal(agent.attachment.usedSessions.length, 24);
 });
@@ -2052,10 +2109,10 @@ test("managed TURN failures, malformed responses and timeout fail closed without
 });
 
 test("late Watch connections and replacements preserve the owning iPhone WebRTC session", async (t) => {
-  const { relay, state, iphone, agent } = webRTCSession();
+  const { relay, state, iphone, agent } = await webRTCSession();
   const sessionID = crypto.randomUUID();
-  relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
-  relay.webSocketMessage(agent, signaling("webrtc_answer", sessionID));
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer", sessionID));
+  await relay.webSocketMessage(agent, signaling("webrtc_answer", sessionID));
   const NativeResponse = globalThis.Response;
   t.mock.method(globalThis, "Response", function(body, init) {
     return init?.status === 101 ? { status: 101, webSocket: init.webSocket } : new NativeResponse(body, init);
@@ -2073,9 +2130,9 @@ test("late Watch connections and replacements preserve the owning iPhone WebRTC 
     assert.equal(response.status, 101);
     assert.equal(iphone.attachment.negotiation.sessionID, sessionID);
     assert.equal(agent.attachment.negotiation.sessionID, sessionID);
-    relay.webSocketMessage(iphone, signaling("webrtc_ice", sessionID));
+    await relay.webSocketMessage(iphone, signaling("webrtc_ice", sessionID));
     assert.equal(JSON.parse(agent.sent.at(-1)).action, "webrtc_ice");
-    relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID));
+    await relay.webSocketMessage(agent, signaling("webrtc_ice", sessionID));
     assert.equal(JSON.parse(iphone.sent.at(-1)).action, "webrtc_ice");
     assert.equal(state.getWebSockets("watch")[0].attachment.mediaTransport, "webrtc");
   }
@@ -2087,7 +2144,8 @@ test("agent registration bootstraps app settings but cannot overwrite existing a
   const bootstrap = { ...registration, registration_source: "agent", media_transport: "webrtc",
     app_media_capabilities: ["legacy_pcm", "webrtc"], agent_media_capabilities: ["legacy_pcm", "webrtc"] };
   const initial = await worker.fetch(post("/v1/devices/register", bootstrap), env);
-  assert.equal((await initial.json()).media_transport, "webrtc");
+  assert.equal((await initial.json()).media_transport, null);
+  await advertiseReadyAgent(env);
   const stale = { ...bootstrap, media_transport: "legacy_pcm",
     app_media_capabilities: ["legacy_pcm"], force_legacy_pcm: true };
   const updated = await worker.fetch(post("/v1/devices/register", stale), env);
@@ -2095,17 +2153,17 @@ test("agent registration bootstraps app settings but cannot overwrite existing a
   let stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
   assert.equal(stored.media_transport_requested, "webrtc");
   assert.deepEqual(stored.app_media_capabilities, ["webrtc"]);
-  assert.equal(stored.force_legacy_pcm, false);
+  assert.equal(stored.remote_audio_disabled, false);
 
   // A normal app registration still owns the policy and may force a rejection.
   await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: true }), env);
   await worker.fetch(post("/v1/devices/register", { ...stale, force_legacy_pcm: false,
     agent_media_capabilities: ["legacy_pcm"] }), env);
   stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
-  assert.equal(stored.force_legacy_pcm, true);
+  assert.equal(stored.remote_audio_disabled, true);
   assert.equal(stored.media_transport_requested, "webrtc");
   assert.deepEqual(stored.app_media_capabilities, ["webrtc"]);
-  assert.deepEqual(stored.agent_media_capabilities, []);
+  assert.equal(stored.agent_media_capabilities, undefined);
   assert.equal(stored.media_transport, null);
 
   // A registration that still names the removed transport cannot restore it.
@@ -2115,7 +2173,8 @@ test("agent registration bootstraps app settings but cannot overwrite existing a
   stored = JSON.parse(await env.DEVICES.get(`device:${registration.device_id}`));
   assert.equal(stored.media_transport_requested, "webrtc");
   assert.deepEqual(stored.app_media_capabilities, []);
-  assert.equal(stored.force_legacy_pcm, false);
+  assert.equal(stored.remote_audio_disabled, true);
+  assert.equal(stored.force_legacy_pcm, undefined);
 });
 
 async function terminalEnvironment() {
@@ -2195,9 +2254,9 @@ test("terminal survives DO recreation and replays before reconnect can flush ans
   assert.deepEqual(agent.sent, []);
   for (const message of [JSON.stringify({ action: "answer" }), signaling("webrtc_offer"),
     signaling("webrtc_ice"), new Uint8Array([1, 2])]) session.webSocketMessage(reconnected, message);
-  session.webSocketMessage(agent, signaling("webrtc_answer"));
-  session.webSocketMessage(agent, new Uint8Array([3, 4]));
-  session.flushPendingControls(agent);
+  await session.webSocketMessage(agent, signaling("webrtc_answer"));
+  await session.webSocketMessage(agent, new Uint8Array([3, 4]));
+  await session.flushPendingControls(agent);
   assert.deepEqual(agent.sent, []);
   assert.ok(reconnected.sent.every((message) => JSON.parse(message).status === "remote_ended"));
   assert.equal(reconnected.attachment.owner, false);
@@ -2316,7 +2375,7 @@ test("old terminal retry after APNs failure drains without changing a newer call
 
 test("call history is authenticated, read-only, bounded, and device scoped", async () => {
   const env = testEnvironment();
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   const second = { ...registration, device_id: "second", device_secret: "t".repeat(32) };
   await worker.fetch(post("/v1/devices/register", registration), env);
   await worker.fetch(post("/v1/devices/register", second), env);
@@ -2364,7 +2423,7 @@ test("call history is authenticated, read-only, bounded, and device scoped", asy
 
 test("history respects requested bounds and preserves explicit permission failures", async () => {
   const env = testEnvironment();
-  env.COMMANDS = new MemoryCommandNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
   await worker.fetch(post("/v1/devices/register", registration), env);
   const input = { device_id: registration.device_id, device_secret: registration.device_secret,
     command_id: crypto.randomUUID(), type: "call_history", limit: 1 };
@@ -2379,4 +2438,381 @@ test("history respects requested bounds and preserves explicit permission failur
   const result = await (await worker.fetch(post("/v1/commands/result", input), env)).json();
   assert.equal(result.status, "failed");
   assert.equal(result.error, "Call history permission is not granted");
+});
+
+function dialRequest(overrides = {}) {
+  return post("/v1/commands/enqueue", { device_id: registration.device_id,
+    device_secret: registration.device_secret, command_id: crypto.randomUUID(),
+    type: "dial", number: "10086", media_transport: "webrtc", ...overrides });
+}
+
+async function putHeartbeatRecord(env, heartbeat) {
+  const key = `heartbeat:${registration.device_id}`;
+  if (env.STATUS) await env.STATUS.storage.put(key, heartbeat);
+  else await env.DEVICES.put(key, JSON.stringify(heartbeat));
+}
+
+async function putRegisteredDevice(env, update) {
+  const key = `device:${registration.device_id}`;
+  const previous = env.STATUS ? await env.STATUS.storage.get(key) : JSON.parse(await env.DEVICES.get(key));
+  const next = { ...previous, ...update };
+  if (env.STATUS) await env.STATUS.storage.put(key, next);
+  else await env.DEVICES.put(key, JSON.stringify(next));
+}
+
+async function seedControlCall(env, overrides = {}) {
+  const call = { device_id: registration.device_id, call_id: "preflight-call", call_uuid: webRTCCallUUID,
+    generation: 1, direction: "incoming", media_transport: "webrtc",
+    secret_hash: createHash("sha256").update("call-secret").digest("hex"),
+    expires_at: new Date(Date.now() + 45_000).toISOString(),
+    media_expires_at: new Date(Date.now() + 7200_000).toISOString(), ...overrides };
+  await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify(call));
+  return call;
+}
+
+function answerRequest(overrides = {}) {
+  return post(`/v1/calls/${webRTCCallUUID}/actions`, { device_id: registration.device_id,
+    device_secret: registration.device_secret, command_id: crypto.randomUUID(), action: "answer",
+    call_id: "preflight-call", call_uuid: webRTCCallUUID, generation: 1, owner: "iphone", trace_id: "preflight",
+    ...overrides });
+}
+
+test("dial never persists a call or queues a cellular command without current revision-2 readiness", async () => {
+  const cases = [
+    ["unversioned", { media_capability_revision: undefined }, "agent_upgrade_required"],
+    ["previous revision", { media_capability_revision: 1 }, "agent_upgrade_required"],
+    ["unknown future revision", { media_capability_revision: 3 }, "agent_upgrade_required"],
+    ["not ready", { agent_media_ready: false }, "agent_media_unavailable"],
+    ["missing readiness", { agent_media_ready: undefined }, "agent_media_unavailable"],
+    ["nonboolean readiness", { agent_media_ready: "true" }, "agent_media_unavailable"],
+    ["no capability", { agent_media_capabilities: [] }, "agent_media_unavailable"],
+    ["missing capability", { agent_media_capabilities: undefined }, "agent_media_unavailable"],
+    ["old transport", { agent_media_capabilities: ["legacy_pcm"] }, "agent_media_unavailable"],
+    ["stale", { received_at_ms: Date.now() - 90_001 }, "agent_unavailable"],
+    ["future", { received_at_ms: Date.now() + 60_000 }, "agent_unavailable"],
+  ];
+  for (const useRegistry of [false, true]) for (const [label, override, reason] of cases) {
+    const env = testEnvironment();
+    if (useRegistry) env.STATUS = new MemoryStatusNamespace();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await enableReadyMedia(env);
+    await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now(), ...override });
+    // Historical device claims must not rescue an unavailable current service.
+    await putRegisteredDevice(env, { agent_media_capabilities: ["webrtc"], media_transport: "webrtc" });
+    const response = await worker.fetch(dialRequest(), env);
+    assert.equal(response.status, 409, `${useRegistry}: ${label}`);
+    const body = await response.json();
+    assert.equal(body.remote_audio_available, false);
+    assert.equal(body.remote_audio_reason, reason, label);
+    assert.equal(body.media_transport, null);
+    assert.equal(env.COMMANDS.sessions.size, 0, label);
+    assert.equal((await env.DEVICES.list({ prefix: "call:" })).keys.length, 0, label);
+    if (useRegistry) assert.equal((await env.STATUS.storage.list({ prefix: "call:" })).size, 0, label);
+  }
+});
+
+test("relay rollout, TURN, app support and explicit disabled policy fail before dial enqueue", async () => {
+  for (const [override, device, reason] of [
+    [{ WEBRTC_TRANSPORT_READY: "false" }, {}, "relay_media_unavailable"],
+    [{ WEBRTC_ROLLOUT_PERCENT: "0" }, {}, "relay_media_unavailable"],
+    [{ TURN_SHARED_SECRET: "" }, {}, "relay_media_unavailable"],
+    [{}, { app_media_capabilities: [] }, "app_upgrade_required"],
+    [{}, { remote_audio_disabled: true }, "media_disabled"],
+    [{}, { force_legacy_pcm: true }, "media_disabled"],
+  ]) {
+    const env = testEnvironment();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await enableReadyMedia(env);
+    Object.assign(env, override);
+    await putRegisteredDevice(env, device);
+    const response = await worker.fetch(dialRequest(), env);
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).remote_audio_reason, reason);
+    assert.equal(env.COMMANDS.sessions.size, 0);
+  }
+});
+
+test("registration capability claims and an older ready agent in the roster never replace the latest heartbeat", async () => {
+  for (const useRegistry of [false, true]) {
+    const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
+    if (useRegistry) env.STATUS = new MemoryStatusNamespace();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await worker.fetch(post("/v1/devices/register", { ...registration, ...readyHeartbeat(),
+      media_transport: "webrtc", app_media_capabilities: ["webrtc"] }), env);
+    assert.equal((await worker.fetch(dialRequest(), env)).status, 409);
+    await advertiseReadyAgent(env, { agent_id: "ready-native" });
+    await advertiseReadyAgent(env, { agent_id: "old-avf", media_capability_revision: undefined,
+      agent_media_ready: undefined });
+    const denied = await worker.fetch(dialRequest(), env);
+    assert.equal(denied.status, 409);
+    assert.equal((await denied.json()).remote_audio_reason, "agent_upgrade_required");
+    await worker.fetch(post("/v1/devices/register", { ...registration, registration_source: "agent",
+      agent_media_capabilities: ["webrtc"], media_capability_revision: 2, agent_media_ready: true }), env);
+    assert.equal((await worker.fetch(dialRequest(), env)).status, 409);
+    assert.equal(env.COMMANDS.sessions.size, 0);
+  }
+});
+
+test("unavailable authoritative heartbeat cannot fall back to a fresh but revoked KV readiness mirror", async () => {
+  const env = testEnvironment();
+  env.STATUS = new MemoryStatusNamespace();
+  env.COMMANDS = new MemoryCommandNamespace(env);
+  await enableReadyMedia(env);
+  await env.DEVICES.put(`heartbeat:${registration.device_id}`, JSON.stringify({ ...readyHeartbeat(), received_at_ms: Date.now() }));
+  const originalGet = env.STATUS.get.bind(env.STATUS);
+  env.STATUS.get = (id) => ({ fetch: async (request, options) => {
+    if (new URL(request instanceof Request ? request.url : request).pathname.startsWith("/heartbeat/")) {
+      return new Response("registry unavailable", { status: 503 });
+    }
+    return originalGet(id).fetch(request, options);
+  } });
+  const response = await worker.fetch(dialRequest(), env);
+  assert.equal(response.status, 409);
+  assert.equal((await response.json()).remote_audio_reason, "agent_unavailable");
+  assert.equal(env.COMMANDS.sessions.size, 0);
+});
+
+test("force-PCM persistence migrates to disabled without wiping pairing or allowing legacy false to reenable calls", async () => {
+  for (const useRegistry of [false, true]) {
+    const env = testEnvironment();
+    if (useRegistry) env.STATUS = new MemoryStatusNamespace();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await enableReadyMedia(env);
+    await putRegisteredDevice(env, { force_legacy_pcm: true, remote_audio_disabled: undefined });
+    await worker.fetch(post("/v1/devices/register", { ...registration, force_legacy_pcm: false }), env);
+    const key = `device:${registration.device_id}`;
+    let stored = useRegistry ? await env.STATUS.storage.get(key) : JSON.parse(await env.DEVICES.get(key));
+    assert.equal(stored.remote_audio_disabled, true);
+    assert.equal(stored.force_legacy_pcm, undefined);
+    assert.equal(stored.voip_token, registration.voip_token);
+    assert.equal(stored.secret_hash, createHash("sha256").update(registration.device_secret).digest("hex"));
+    assert.equal((await worker.fetch(dialRequest(), env)).status, 409);
+    // A stale paired agent copy cannot undo the app-owned policy.
+    await worker.fetch(post("/v1/devices/register", { ...registration, registration_source: "agent", remote_audio_disabled: false }), env);
+    assert.equal((await worker.fetch(dialRequest(), env)).status, 409);
+    await worker.fetch(post("/v1/devices/register", { ...registration, remote_audio_disabled: false }), env);
+    assert.equal((await worker.fetch(dialRequest(), env)).status, 202);
+  }
+});
+
+test("remote answer requires supported call media, current service readiness and iPhone audio ownership", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace(env);
+  await enableReadyMedia(env);
+  for (const transport of [null, "legacy_pcm", ""]) {
+    await seedControlCall(env, { media_transport: transport });
+    assert.equal((await worker.fetch(answerRequest(), env)).status, 409);
+  }
+  await seedControlCall(env);
+  const watch = await worker.fetch(answerRequest({ owner: "watch" }), env);
+  assert.equal(watch.status, 409);
+  assert.equal((await watch.json()).remote_audio_reason, "iphone_audio_required");
+  await advertiseReadyAgent(env, { agent_media_ready: false });
+  assert.equal((await worker.fetch(answerRequest(), env)).status, 409);
+  assert.equal(env.COMMANDS.sessions.size, 0);
+  // Carrier control remains available without claiming remote audio is possible.
+  assert.equal((await worker.fetch(answerRequest({ action: "reject" }), env)).status, 202);
+  assert.equal((await worker.fetch(answerRequest({ action: "end" }), env)).status, 202);
+  await advertiseReadyAgent(env);
+  assert.equal((await worker.fetch(answerRequest(), env)).status, 202);
+});
+
+test("queued dial and answer are rejected on pull, reconnect and alarm after native readiness is revoked", async () => {
+  for (const type of ["dial", "answer"]) for (const delivery of ["pull", "reconnect", "alarm"]) {
+    const env = testEnvironment();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await enableReadyMedia(env);
+    if (type === "answer") await seedControlCall(env);
+    const commandID = crypto.randomUUID();
+    const accepted = await worker.fetch(type === "dial" ? dialRequest({ command_id: commandID }) : answerRequest({ command_id: commandID }), env);
+    assert.equal(accepted.status, 202);
+    await advertiseReadyAgent(env, { agent_media_ready: false });
+    const agent = env.COMMANDS.addAgent(registration.device_id);
+    const session = env.COMMANDS.session(registration.device_id);
+    if (delivery === "pull") {
+      const pulled = await worker.fetch(post("/v1/commands/pull", registration), env);
+      assert.deepEqual((await pulled.json()).commands, []);
+    } else if (delivery === "reconnect") await session.flushPending(agent);
+    else await session.alarm();
+    assert.equal(agent.sent.length, 0, `${type}: ${delivery}`);
+    const result = await worker.fetch(post("/v1/commands/result", { ...registration, command_id: commandID }), env);
+    assert.equal((await result.json()).status, "failed");
+    await advertiseReadyAgent(env);
+    await session.flushPending(agent);
+    assert.equal(agent.sent.length, 0, "restored readiness must not revive a failed command");
+  }
+});
+
+test("unsupported inbound calls do not expose media secrets, send answerable pushes or end the carrier call", async (t) => {
+  for (const [heartbeat, transport, tokens] of [
+    [{ agent_media_ready: false }, "webrtc", {}],
+    [{}, "legacy_pcm", {}],
+    [{ media_capability_revision: 1 }, "webrtc", { alert_token: "" }],
+  ]) {
+    const env = testEnvironment();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await enableReadyMedia(env, tokens);
+    await advertiseReadyAgent(env, heartbeat);
+    const captured = [];
+    const mock = t.mock.method(globalThis, "fetch", async (url, options) => {
+      captured.push({ type: options.headers["apns-push-type"], payload: JSON.parse(options.body) });
+      return new Response("", { status: 200 });
+    });
+    const response = await worker.fetch(post("/v1/events/call", { ...registration, event: "incoming_call",
+      call_id: "preflight-call", call_uuid: webRTCCallUUID, call_secret: "unsupported-inbound-call-secret",
+      generation: 1, media_transport: transport, expires_at: new Date(Date.now() + 45_000).toISOString() }), env);
+    mock.mock.restore();
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).remote_audio_available, false);
+    assert.equal(captured.length, tokens.alert_token === "" ? 0 : 1);
+    for (const push of captured) {
+      assert.equal(push.type, "alert");
+      assert.equal(push.payload.remote_audio_available, false);
+      assert.equal(push.payload.call_secret, undefined);
+      assert.equal(push.payload.media_url, undefined);
+    }
+    const lifecycle = JSON.parse(await env.DEVICES.get(`call-lifecycle:${registration.device_id}`));
+    assert.equal(lifecycle.phase, "ringing");
+    assert.equal(lifecycle.failure, null);
+    assert.equal(env.COMMANDS.sessions.size, 0);
+    assert.equal((await worker.fetch(answerRequest(), env)).status, 409);
+    let mediaConnected = false;
+    env.MEDIA = { idFromName: name => name, get: () => ({ fetch: async () => { mediaConnected = true; return new Response("ok"); } }) };
+    const connect = await worker.fetch(new Request(`https://push.airsim.example/v1/calls/${webRTCCallUUID}/connect?role=iphone`,
+      { headers: { upgrade: "websocket", authorization: "Bearer unsupported-inbound-call-secret" } }), env);
+    assert.equal(connect.status, 409);
+    assert.equal(mediaConnected, false);
+  }
+});
+
+test("WebSocket answer cannot claim ownership or flush a queued answer after readiness loss", async () => {
+  const env = mediaUnitEnvironment();
+  const iphone = new MemoryMediaSocket("iphone");
+  const otherPhone = new MemoryMediaSocket("iphone");
+  const state = new MemoryMediaState([iphone, otherPhone]);
+  const relay = new CallMediaSession(state, env);
+  await putHeartbeatRecord(env, { ...readyHeartbeat(), agent_media_ready: false, received_at_ms: Date.now() });
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  assert.equal(iphone.attachment.owner, false);
+  assert.equal(otherPhone.closed, false);
+  assert.equal(iphone.attachment.pendingControl, "");
+  assert.equal(JSON.parse(iphone.sent.at(-1)).status, "action_rejected");
+  await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now() });
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  assert.equal(iphone.attachment.owner, true);
+  const agent = new MemoryMediaSocket("agent");
+  state.sockets.push(agent);
+  await putHeartbeatRecord(env, { ...readyHeartbeat(), agent_media_ready: false, received_at_ms: Date.now() });
+  await relay.flushPendingControls(agent);
+  assert.equal(agent.sent.length, 0);
+  assert.equal(iphone.attachment.owner, false);
+  assert.equal(iphone.attachment.pendingControl, "");
+});
+
+test("cancel or terminal state wins while WebSocket answer is awaiting readiness", async () => {
+  for (const cancellation of ["reject", "terminal", "replacement"]) {
+    const env = mediaUnitEnvironment();
+    const iphone = new MemoryMediaSocket("iphone");
+    Object.assign(iphone.attachment, { callID: "preflight-call", callUUID: webRTCCallUUID, generation: 1 });
+    const agent = new MemoryMediaSocket("agent");
+    const state = new MemoryMediaState([iphone, agent]);
+    const relay = new CallMediaSession(state, env);
+    await relay.ready;
+    const originalGet = env.DEVICES.get.bind(env.DEVICES);
+    let release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    let started;
+    const readStarted = new Promise(resolve => { started = resolve; });
+    env.DEVICES.get = async key => {
+      if (key.startsWith("heartbeat:")) { started(); await delayed; }
+      return originalGet(key);
+    };
+    const answering = relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    await readStarted;
+    if (cancellation === "reject") await relay.webSocketMessage(iphone, JSON.stringify({ action: "reject" }));
+    else if (cancellation === "terminal") await relay.receiveTerminal({ status: "remote_ended",
+      call_id: "preflight-call", call_uuid: webRTCCallUUID, generation: 1 });
+    else iphone.close();
+    release();
+    await answering;
+    assert.equal(iphone.attachment.owner, false, cancellation);
+    assert.equal(agent.sent.some(value => JSON.parse(value).action === "answer"), false, cancellation);
+  }
+});
+
+test("ICE credentials reject legacy calls and query secrets even with a valid bearer header", async () => {
+  const env = await iceTestEnvironment();
+  for (const role of ["iphone", "agent"]) {
+    const response = await worker.fetch(new Request(
+      `https://push.airsim.example/v1/calls/${webRTCCallUUID}/ice?role=${role}&token=call-secret`,
+      { headers: { authorization: "Bearer call-secret" } }), env);
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  const call = JSON.parse(await env.DEVICES.get(`call:${webRTCCallUUID}`));
+  for (const media_transport of [null, "legacy_pcm"]) {
+    await env.DEVICES.put(`call:${webRTCCallUUID}`, JSON.stringify({ ...call, media_transport }));
+    const response = await worker.fetch(iceRequest(), env);
+    assert.equal(response.status, 409);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+});
+
+test("readiness revocation between dial preflight and queue delivery returns failure without call credentials", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace(env);
+  await enableReadyMedia(env);
+  const originalGet = env.COMMANDS.get.bind(env.COMMANDS);
+  env.COMMANDS.get = id => ({ fetch: async (request, options) => {
+    await advertiseReadyAgent(env, { agent_media_ready: false });
+    return originalGet(id).fetch(request, options);
+  } });
+  const response = await worker.fetch(dialRequest(), env);
+  assert.equal(response.status, 409);
+  const body = await response.json();
+  assert.equal(body.call, undefined);
+  assert.equal(body.remote_audio_available, false);
+  assert.equal(body.remote_audio_reason, "agent_media_unavailable");
+  assert.equal((await env.DEVICES.list({ prefix: "call:" })).keys.length, 0);
+});
+
+test("hibernated socket wrappers keep bounded new and legacy identity keys without accepting impostors", async () => {
+  for (const key of ["connectionKey", "pcmTraceKey"]) {
+    const { relay, state, iphone, agent } = await webRTCSession();
+    iphone.attachment[key] = crypto.randomUUID();
+    const wrapper = new MemoryMediaSocket("iphone");
+    wrapper.deserializeAttachment = () => iphone.attachment;
+    wrapper.serializeAttachment = value => { iphone.attachment = value; };
+    await relay.webSocketMessage(wrapper, signaling("webrtc_offer"));
+    assert.equal(JSON.parse(agent.sent.at(-1)).action, "webrtc_offer");
+    const impostor = new MemoryMediaSocket("iphone");
+    impostor.attachment = { ...iphone.attachment, [key]: crypto.randomUUID() };
+    const count = agent.sent.length;
+    await relay.webSocketMessage(impostor, signaling("webrtc_offer", crypto.randomUUID()));
+    assert.equal(agent.sent.length, count);
+    assert.equal(state.getWebSockets("iphone").length, 1);
+  }
+});
+
+test("duplicate dial reuses its durable call identity and failed retries never manufacture a new call", async () => {
+  const env = testEnvironment();
+  env.COMMANDS = new MemoryCommandNamespace(env);
+  await enableReadyMedia(env);
+  const commandID = crypto.randomUUID();
+  const first = await worker.fetch(dialRequest({ command_id: commandID }), env);
+  const accepted = await first.json();
+  const duplicate = await worker.fetch(dialRequest({ command_id: commandID }), env);
+  const repeated = await duplicate.json();
+  assert.equal(repeated.duplicate, true);
+  assert.deepEqual(repeated.call, accepted.call);
+  assert.equal((await env.DEVICES.list({ prefix: "call:" })).keys.length, 1);
+  await advertiseReadyAgent(env, { agent_media_ready: false });
+  await env.COMMANDS.session(registration.device_id).alarm();
+  await advertiseReadyAgent(env);
+  const failedRetry = await worker.fetch(dialRequest({ command_id: commandID }), env);
+  const failed = await failedRetry.json();
+  assert.equal(failed.duplicate, true);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.call, undefined);
+  assert.equal((await env.DEVICES.list({ prefix: "call:" })).keys.length, 1);
 });

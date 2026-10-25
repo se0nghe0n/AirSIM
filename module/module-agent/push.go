@@ -37,7 +37,9 @@ type pushRegistration struct {
 	RelayURL                     string   `json:"relay_url"`
 	MediaTransport               string   `json:"media_transport,omitempty"`
 	AppMediaCapabilities         []string `json:"app_media_capabilities,omitempty"`
-	AgentMediaCapabilities       []string `json:"agent_media_capabilities,omitempty"`
+	AgentMediaCapabilities       []string `json:"agent_media_capabilities"`
+	AgentMediaReady              bool     `json:"agent_media_ready"`
+	MediaCapabilityRevision      int      `json:"media_capability_revision"`
 	ForceLegacyPCM               bool     `json:"force_legacy_pcm,omitempty"`
 	AndroidAgentID               string   `json:"android_agent_id,omitempty"`
 	AndroidAgentKind             string   `json:"android_agent_kind,omitempty"`
@@ -121,23 +123,25 @@ type agentHeartbeatSnapshot struct {
 }
 
 type agentHeartbeatEvent struct {
-	Event                  string   `json:"event"`
-	DeviceID               string   `json:"device_id"`
-	DeviceSecret           string   `json:"device_secret"`
-	AgentVersion           string   `json:"agent_version"`
-	AgentID                string   `json:"agent_id,omitempty"`
-	AgentKind              string   `json:"agent_kind,omitempty"`
-	DeviceName             string   `json:"device_name,omitempty"`
-	Manufacturer           string   `json:"manufacturer,omitempty"`
-	Model                  string   `json:"model,omitempty"`
-	PhoneNumber            string   `json:"phone_number,omitempty"`
-	ATOK                   bool     `json:"at_ok"`
-	CellularState          string   `json:"cellular_state"`
-	CellularRegistration   string   `json:"cellular_registration,omitempty"`
-	CellularRecovery       string   `json:"cellular_recovery,omitempty"`
-	ECMCarrier             string   `json:"ecm_carrier,omitempty"`
-	SignalDBM              *int     `json:"signal_dbm,omitempty"`
-	AgentMediaCapabilities []string `json:"agent_media_capabilities,omitempty"`
+	Event                   string   `json:"event"`
+	DeviceID                string   `json:"device_id"`
+	DeviceSecret            string   `json:"device_secret"`
+	AgentVersion            string   `json:"agent_version"`
+	AgentID                 string   `json:"agent_id,omitempty"`
+	AgentKind               string   `json:"agent_kind,omitempty"`
+	DeviceName              string   `json:"device_name,omitempty"`
+	Manufacturer            string   `json:"manufacturer,omitempty"`
+	Model                   string   `json:"model,omitempty"`
+	PhoneNumber             string   `json:"phone_number,omitempty"`
+	ATOK                    bool     `json:"at_ok"`
+	CellularState           string   `json:"cellular_state"`
+	CellularRegistration    string   `json:"cellular_registration,omitempty"`
+	CellularRecovery        string   `json:"cellular_recovery,omitempty"`
+	ECMCarrier              string   `json:"ecm_carrier,omitempty"`
+	SignalDBM               *int     `json:"signal_dbm,omitempty"`
+	AgentMediaCapabilities  []string `json:"agent_media_capabilities"`
+	AgentMediaReady         bool     `json:"agent_media_ready"`
+	MediaCapabilityRevision int      `json:"media_capability_revision"`
 }
 
 type pushManager struct {
@@ -187,6 +191,7 @@ func newPushManager(configPath string) *pushManager {
 	} else if !os.IsNotExist(err) {
 		manager.lastError = "Failed to read push configuration: " + err.Error()
 	}
+	normalizeAVFMediaCapabilities(&manager.config)
 	return manager
 }
 
@@ -333,7 +338,16 @@ func validatePushRegistration(registration pushRegistration) error {
 	return nil
 }
 
+func normalizeAVFMediaCapabilities(registration *pushRegistration) {
+	registration.AgentMediaCapabilities = []string{}
+	registration.AgentMediaReady = false
+	registration.MediaCapabilityRevision = agentMediaCapabilityRevision
+	registration.MediaTransport = ""
+	registration.ForceLegacyPCM = false // Decode old saved policy without carrying it forward.
+}
+
 func (p *pushManager) store(registration pushRegistration) error {
+	normalizeAVFMediaCapabilities(&registration)
 	registration.DeviceID = strings.TrimSpace(registration.DeviceID)
 	registration.BundleID = strings.TrimSpace(registration.BundleID)
 	registration.RelayURL = strings.TrimRight(strings.TrimSpace(registration.RelayURL), "/")
@@ -449,7 +463,7 @@ func (p *pushManager) status() pushStatus {
 	return pushStatus{
 		CloudEnabled:     cloudEnabled,
 		Configured:       p.config.LocalMode || baseReady && (p.config.VoIPToken != "" || p.config.AlertToken != "" || p.config.WatchVoIPToken != ""),
-		CallPushReady:    baseReady && (p.config.VoIPToken != "" || p.config.WatchVoIPToken != ""),
+		CallPushReady:    false, // AVF must not present remote voice as answerable.
 		MessagePushReady: baseReady && p.config.AlertToken != "",
 		DeviceID:         p.config.DeviceID,
 		Environment:      p.config.Environment,
@@ -472,12 +486,7 @@ func (p *pushManager) sendRegistration() error {
 	if registration.RelayURL == "" {
 		return errors.New("Cloud push relay not configured")
 	}
-	registration.AgentMediaCapabilities = []string{cloudMediaTransportWebRTC}
-	registration.MediaTransport = resolveCloudMediaTransport(
-		registration.MediaTransport,
-		registration.AgentMediaCapabilities,
-		registration.ForceLegacyPCM,
-	)
+	normalizeAVFMediaCapabilities(&registration)
 	return p.postJSON(client, registration.RelayURL+"/v1/devices/register", registration)
 }
 
@@ -533,12 +542,8 @@ func (p *pushManager) sendIncoming(call callRecord, now time.Time) (bool, error)
 		DeviceSecret: registration.DeviceSecret, CallID: call.ID, CallUUID: uuid,
 		Generation: generation, CallSecret: secret,
 		Number: call.Number, IssuedAt: now.UTC().Format(time.RFC3339Nano),
-		ExpiresAt: now.Add(45 * time.Second).UTC().Format(time.RFC3339Nano),
-		MediaTransport: resolveCloudMediaTransport(
-			registration.MediaTransport,
-			[]string{cloudMediaTransportWebRTC},
-			registration.ForceLegacyPCM,
-		),
+		ExpiresAt:      now.Add(45 * time.Second).UTC().Format(time.RFC3339Nano),
+		MediaTransport: "",
 	}
 	if err := p.postJSON(client, registration.RelayURL+"/v1/events/call", payload); err != nil {
 		p.mu.Lock()
@@ -687,7 +692,8 @@ func (p *pushManager) sendHeartbeat(snapshot agentHeartbeatSnapshot) error {
 		CellularRegistration: snapshot.CellularRegistration,
 		CellularRecovery:     snapshot.CellularRecovery, ECMCarrier: snapshot.ECMCarrier,
 		SignalDBM:              snapshot.SignalDBM,
-		AgentMediaCapabilities: []string{cloudMediaTransportWebRTC},
+		AgentMediaCapabilities: []string{},
+		AgentMediaReady:        false, MediaCapabilityRevision: agentMediaCapabilityRevision,
 	})
 }
 
@@ -755,7 +761,7 @@ func (p *pushManager) postJSONResponse(client *http.Client, endpoint string, val
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "AirSIM-QDC507/"+agentVersion)
+	request.Header.Set("User-Agent", "AirSIM-AVF/"+agentVersion)
 	response, err := client.Do(request)
 	if err != nil {
 		return err

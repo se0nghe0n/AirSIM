@@ -96,7 +96,7 @@ func TestAndroidPairRegistrationStoresValidatedPushIdentityWithoutEchoingSecrets
 		t.Fatalf("pair response missing safe identity hint: %s", response.Body.String())
 	}
 	status := a.push.status()
-	if !status.Configured || !status.CallPushReady || !status.MessagePushReady {
+	if !status.Configured || status.CallPushReady || !status.MessagePushReady {
 		t.Fatalf("pair registration was not stored: %#v", status)
 	}
 }
@@ -258,38 +258,6 @@ func TestAndroidIncomingSMSEventFeedsSharedQueueAndDeduplicates(t *testing.T) {
 	}
 }
 
-func TestAndroidProfileDialUsesTelecomInsteadOfATPort(t *testing.T) {
-	a := testAndroidAgent("secret-value")
-	resultChannel := make(chan struct {
-		value map[string]any
-		err   error
-	}, 1)
-	go func() {
-		value, err := a.dialNumber("10086")
-		resultChannel <- struct {
-			value map[string]any
-			err   error
-		}{value: value, err: err}
-	}()
-
-	command, ok := a.android.next(context.Background(), time.Second)
-	if !ok || command.Action != "dial" || command.Number != "10086" || command.CallID != "" {
-		t.Fatalf("Android dial was not routed to Telecom: ok=%v command=%#v", ok, command)
-	}
-	if err := a.android.complete(androidCommandResult{ID: command.ID, Success: true}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case result := <-resultChannel:
-		if result.err != nil || result.value["dialing"] != true || result.value["number"] != "10086" {
-			t.Fatalf("unexpected Android dial result: value=%#v err=%v", result.value, result.err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Android dial did not finish after Telecom acknowledgement")
-	}
-}
-
 func TestAndroidProfileHangupUsesTelecomInsteadOfATPort(t *testing.T) {
 	a := testAndroidAgent("secret-value")
 	a.calls.Active = &callRecord{
@@ -312,34 +280,6 @@ func TestAndroidProfileHangupUsesTelecomInsteadOfATPort(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Android hangup did not finish after Telecom acknowledgement")
-	}
-}
-
-func TestAndroidProfileAnswerUsesTelecomInsteadOfATPort(t *testing.T) {
-	a := testAndroidAgent("secret-value")
-	a.calls.Active = &callRecord{
-		ID: "agent-call-answer", AndroidID: "telecom-answer", Direction: "incoming", State: "incoming",
-	}
-	result := make(chan error, 1)
-	go func() { result <- a.answerCall() }()
-
-	command, ok := a.android.next(context.Background(), time.Second)
-	if !ok || command.Action != "answer" || command.CallID != "telecom-answer" {
-		t.Fatalf("Android answer was not routed to Telecom: ok=%v command=%#v", ok, command)
-	}
-	if err := a.android.complete(androidCommandResult{ID: command.ID, Success: true}); err != nil {
-		t.Fatal(err)
-	}
-	a.applyAndroidCallEvent(androidCallEvent{
-		EventID: "event-answer-active", CallID: "telecom-answer", Direction: "incoming", State: "active",
-	}, time.Now())
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("Android answer did not finish after Telecom acknowledgement")
 	}
 }
 
@@ -471,59 +411,6 @@ func TestAndroidProfileDTMFUsesTelecomInsteadOfATPort(t *testing.T) {
 	}
 }
 
-func TestCloudAnswerUsesAndroidTelecomAndWaitsForResult(t *testing.T) {
-	descriptor := cloudCallDescriptor{
-		CallID: "agent-call-7", CallUUID: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9",
-		Generation: 2, Direction: "incoming",
-	}
-	a := testAndroidAgent("secret-value")
-	a.calls.Active = &callRecord{
-		ID: descriptor.CallID, AndroidID: "telecom-7", Direction: "incoming", State: "incoming",
-	}
-	a.cloudCallCurrent = &descriptor
-	results := make(chan cloudCommandResult, 1)
-	go func() {
-		results <- a.executeCloudCommand(cloudDeviceCommand{
-			CommandID: "9f9dc60b-3a36-4a0a-b87a-63a3ffb27145",
-			Type:      "call_control", Action: "answer", Owner: "iphone",
-			ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
-			Call: &cloudCommandCall{
-				CallID: descriptor.CallID, CallUUID: descriptor.CallUUID,
-				Generation: descriptor.Generation, Direction: descriptor.Direction,
-			},
-		})
-	}()
-	command, ok := a.android.next(context.Background(), time.Second)
-	if !ok || command.Action != "answer" || command.CallID != "telecom-7" {
-		t.Fatalf("cloud command was not routed to Telecom: ok=%v command=%#v", ok, command)
-	}
-	select {
-	case result := <-results:
-		t.Fatalf("cloud result completed before Telecom acknowledgement: %#v", result)
-	default:
-	}
-	if err := a.android.complete(androidCommandResult{ID: command.ID, Success: true}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case result := <-results:
-		t.Fatalf("cloud result completed before Android reported active: %#v", result)
-	default:
-	}
-	a.applyAndroidCallEvent(androidCallEvent{
-		EventID: "event-active", CallID: "telecom-7", Direction: "incoming", State: "active",
-	}, time.Now())
-	select {
-	case result := <-results:
-		if result.Status != "completed" || result.Result["answered"] != true {
-			t.Fatalf("unexpected cloud result: %#v", result)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cloud command did not complete after Android reported active")
-	}
-}
-
 func TestCloudRejectDoesNotTargetNewAndroidCall(t *testing.T) {
 	descriptor := cloudCallDescriptor{
 		CallID: "old-call", CallUUID: "d9b59660-05bb-4ea8-9aeb-4505b35c93f9",
@@ -586,44 +473,6 @@ func TestCloudMediaRejectDoesNotTargetNewAndroidCall(t *testing.T) {
 	}
 	if _, ok := a.android.next(context.Background(), 10*time.Millisecond); ok {
 		t.Fatal("stale media reject dispatched an Android Telecom command")
-	}
-}
-
-func TestIncomingCloudMediaAnswerUsesAndroidTelecomAndWaitsForActive(t *testing.T) {
-	a := testAndroidAgent("secret-value")
-	a.calls.Active = &callRecord{
-		ID: "agent-call-8", AndroidID: "telecom-8", Direction: "incoming", State: "incoming",
-	}
-	result := make(chan error, 1)
-	go func() {
-		result <- a.executeIncomingCloudCallAction(cloudCallAction{
-			Action: "answer", CallID: "agent-call-8",
-			CommandID: "dc7c37df-ae31-4d4b-aef4-893a92c58c86", Owner: "iphone",
-		}, "answer")
-	}()
-	command, ok := a.android.next(context.Background(), time.Second)
-	if !ok || command.Action != "answer" || command.CallID != "telecom-8" {
-		t.Fatalf("media answer was not routed to Telecom: ok=%v command=%#v", ok, command)
-	}
-	if err := a.android.complete(androidCommandResult{ID: command.ID, Success: true}); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	select {
-	case err := <-result:
-		t.Fatalf("media answer completed before Android active: %v", err)
-	default:
-	}
-	a.applyAndroidCallEvent(androidCallEvent{
-		EventID: "event-media-active", CallID: "telecom-8", Direction: "incoming", State: "active",
-	}, time.Now())
-	select {
-	case err := <-result:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("media answer did not complete after Android active")
 	}
 }
 

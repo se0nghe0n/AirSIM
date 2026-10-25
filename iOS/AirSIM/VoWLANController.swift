@@ -4,15 +4,13 @@ import Network
 struct VoWLANEndpoint: Equatable, Hashable, Sendable {
     let host: String
     let controlPort: UInt16
-    let pcmPort: UInt16
 
-    init(host: String, controlPort: UInt16, pcmPort: UInt16) throws {
-        guard Self.isPrivateIPv4(host), controlPort >= 1024, pcmPort == 0 || pcmPort >= 1024 else {
+    init(host: String, controlPort: UInt16) throws {
+        guard Self.isPrivateIPv4(host), controlPort >= 1024 else {
             throw VoWLANControllerError.invalidAdvertisement
         }
         self.host = host
         self.controlPort = controlPort
-        self.pcmPort = pcmPort
     }
 
     var controlBaseURL: URL { URL(string: "http://\(host):\(controlPort)/")! }
@@ -383,7 +381,7 @@ final class VoWLANController {
                     await AgentVerboseTraceRecorder.shared.recordEvent(
                         source: "ios", category: "vowlan", phase: "discovered",
                         title: "VoWLAN Discovered",
-                        fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort), "pcm_port": String(endpoint.pcmPort)]
+                        fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort)]
                     )
                     await self.probeNow()
                 } else if self.discoveredEndpoint != nil {
@@ -541,8 +539,7 @@ final class VoWLANController {
         guard case let .bonjour(record) = result.metadata,
               record["v"] == "1", let host = record["host"],
               let controlText = record["control_port"], let control = UInt16(controlText) else { return nil }
-        let pcm = UInt16(record["pcm_port"] ?? "0") ?? 0
-        guard let endpoint = try? VoWLANEndpoint(host: host, controlPort: control, pcmPort: pcm) else {
+        guard let endpoint = try? VoWLANEndpoint(host: host, controlPort: control) else {
             return nil
         }
         let fallbackID = "vowlan-\(host)-\(control)"

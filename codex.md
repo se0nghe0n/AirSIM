@@ -1,5 +1,8 @@
 # AirSIM whole-project Codex deployment guide
 
+> Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. AVF voice is upgrade-required; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](docs/webrtc-only-migration.md).
+
+
 This document gives AI coding agents the source of truth, build order, deployment boundaries, and security constraints for the whole AirSIM repository. Before starting a task, read the root `README.md`, then the README and actual source of the component being changed. For AVF install, pairing, or recovery, also read `docs/AVF_INSTALL_GUIDE.md` and `LLM.txt`. Source and tests are the protocol source of truth; this document does not replace them.
 
 Current release baseline (2026-10-14): Apps `v0.9.7.1`, Android `0.9.7.1 (81)`, iOS `0.9.7 (81)`. For the Android 10–13 fix, installing Standalone is recommended. The compatible AVF Agent stays at `v0.4.6` (Debian `0.4.6-1`), and the Relay protocol stays at `0.2.1`. The GitHub IPA is an unsigned package meant for re-signing. The maintainer uploads TestFlight separately through Xcode; upload, processing, and review status must not be conflated. The maintainer AirSIM Relay is `https://airsim-push.remotepilot.site`. DJOneHub's `https://push.remotepilot.site` must not be used for AirSIM. Old version numbers in historical Release documents are archival facts and must not be mechanically replaced.

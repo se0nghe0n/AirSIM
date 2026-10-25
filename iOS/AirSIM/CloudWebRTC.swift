@@ -2,6 +2,22 @@ import AVFoundation
 import Foundation
 import WebRTC
 
+/// CallKit owns the system session for both local and cloud native peers.
+/// Forward each activation exactly once, even before a peer has been created.
+enum WebRTCCallAudioSession {
+    static func didActivate(_ session: AVAudioSession) {
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.useManualAudio = true
+        rtc.audioSessionDidActivate(session)
+        rtc.isAudioEnabled = true
+    }
+    static func didDeactivate(_ session: AVAudioSession) {
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.isAudioEnabled = false
+        rtc.audioSessionDidDeactivate(session)
+    }
+}
+
 /// Shared v1 wire format. SDP and ICE are deliberately never included in diagnostics.
 struct CloudWebRTCSignal: Codable, Equatable, Sendable {
     enum Action: String, Codable, Sendable { case offer = "webrtc_offer", answer = "webrtc_answer", ice = "webrtc_ice" }
@@ -95,6 +111,10 @@ struct CloudWebRTCReadiness: Equatable, Sendable {
     mutating func nativeConnected(_ sessionID: UUID) {
         guard self.sessionID == sessionID else { return }
         nativeReady = true
+    }
+    mutating func nativeDisconnected(_ sessionID: UUID) {
+        guard self.sessionID == sessionID else { return }
+        nativeReady = false
     }
     mutating func agentConnected(_ sessionID: UUID) {
         guard self.sessionID == sessionID else { return }
@@ -365,18 +385,14 @@ struct CloudWebRTCStatistics {
 /// All peer operations and callbacks run on the owning transport's serial queue.
 /// Native WebRTC owns capture, Opus, AEC, jitter buffering, PLC and playout.
 final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sendable {
-    private static let recordingAudio = CloudWebRTCRecordingAudio()
-    private static let factory: RTCPeerConnectionFactory = {
+    private static let initializeNative: Void = {
         RTCInitializeSSL()
         RTCSetMinDebugLogLevel(.none)
-        return RTCPeerConnectionFactory(
-            audioDeviceModuleType: .platformDefault, bypassVoiceProcessing: false,
-            encoderFactory: RTCVideoEncoderFactoryH264(), decoderFactory: RTCVideoDecoderFactoryH264(),
-            audioProcessingModule: recordingAudio.module)
     }()
-    /// Initializes shared native resources only. Manual audio remains disabled
-    /// until the normal CallKit/answer acknowledgement gates permit it.
-    static func prepareFactory() { _ = factory }
+    /// Native setup never activates capture; CallKit or the in-app call owns it.
+    static func prepareFactory() { _ = initializeNative }
+    private var recordingAudio: CloudWebRTCRecordingAudio?
+    private var ownedFactory: RTCPeerConnectionFactory?
 
     let sessionID: UUID
     private let callUUID: UUID
@@ -385,6 +401,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     private let signal: (CloudWebRTCSignal) -> Void
     private let failure: () -> Void
     private let connected: () -> Void
+    private let disconnected: () -> Void
     private let statistics: ([String: String]) -> Void
     private var peer: RTCPeerConnection?
     private var track: RTCAudioTrack?
@@ -404,9 +421,10 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     let usesHostICE: Bool
 
     init(callUUID: UUID, generation: UInt64, sessionID: UUID = UUID(), servers: [RTCIceServer],
-         queue: DispatchQueue, factory: RTCPeerConnectionFactory? = nil, relayOnly: Bool = false,
+         queue: DispatchQueue, factory factoryOverride: RTCPeerConnectionFactory? = nil, relayOnly: Bool = false,
          hostOnly: Bool = false,
          signal: @escaping (CloudWebRTCSignal) -> Void, connected: @escaping () -> Void,
+         disconnected: @escaping () -> Void = {},
          failure: @escaping () -> Void, statistics: @escaping ([String: String]) -> Void) throws {
         self.callUUID = callUUID
         self.generation = generation
@@ -414,12 +432,26 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         self.queue = queue
         self.signal = signal
         self.connected = connected
+        self.disconnected = disconnected
         self.failure = failure
         self.statistics = statistics
         self.hostOnly = hostOnly
         self.usesHostICE = hostOnly && !relayOnly
         super.init()
-        let factory = factory ?? Self.factory
+        Self.prepareFactory()
+        let factory: RTCPeerConnectionFactory
+        if let providedFactory = factoryOverride {
+            factory = providedFactory
+        } else {
+            let audio = CloudWebRTCRecordingAudio(source: .init(callUUID: callUUID))
+            let native = RTCPeerConnectionFactory(
+                audioDeviceModuleType: .platformDefault, bypassVoiceProcessing: false,
+                encoderFactory: RTCVideoEncoderFactoryH264(), decoderFactory: RTCVideoDecoderFactoryH264(),
+                audioProcessingModule: audio.module)
+            recordingAudio = audio
+            ownedFactory = native
+            factory = native
+        }
         let config = RTCConfiguration()
         Self.configurePlayout(config)
         config.iceServers = servers
@@ -447,7 +479,6 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     }
 
     func setMuted(_ muted: Bool) {
-        CallAudioRecorder.shared.setMuted(muted)
         track?.isEnabled = !muted
     }
     func close() {
@@ -636,6 +667,9 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             if newState == .connected, !self.isConnected {
                 self.isConnected = true
                 self.connected()
+            } else if newState == .disconnected {
+                self.isConnected = false
+                self.disconnected()
             } else if newState == .failed {
                 self.fail()
             }

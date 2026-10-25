@@ -2,136 +2,21 @@ package main
 
 import (
 	"errors"
-	"fmt"
-	"net"
-	"strconv"
-	"strings"
+	"net/http"
 )
 
-type voiceBackendKind string
+// AVF retains pairing, SMS, state and terminal call control, but has no native
+// WebRTC peer. Never advertise a transport or dispatch dial/answer on its behalf.
+const agentMediaCapabilityRevision = 2
+const avfVoiceUpgradeMessage = "upgrade_required: AVF is control-only; use Android Standalone with native WebRTC for remote calling"
 
-const (
-	voiceBackendQDC507         voiceBackendKind = "qdc507"
-	voiceBackendSamsungAndroid voiceBackendKind = "samsung_android"
-	qdc507PCMEndpoint                           = "192.168.225.1:7580"
-)
+var errAVFVoiceUpgradeRequired = errors.New(avfVoiceUpgradeMessage)
 
-type voiceBackendConfig struct {
-	kind     voiceBackendKind
-	endpoint string
-}
-
-func loadVoiceBackend(getenv func(string) string) (voiceBackendConfig, error) {
-	kind := voiceBackendKind(strings.TrimSpace(getenv("AIRSIM_VOICE_BACKEND")))
-	if kind == "" {
-		kind = voiceBackendSamsungAndroid
-	}
-	switch kind {
-	case voiceBackendQDC507:
-		return voiceBackendConfig{kind: kind, endpoint: qdc507PCMEndpoint}, nil
-	case voiceBackendSamsungAndroid:
-		endpoint := strings.TrimSpace(getenv("AIRSIM_SAMSUNG_PCM_ADDRESS"))
-		if err := validateSamsungPCMEndpoint(endpoint); err != nil {
-			return voiceBackendConfig{}, err
-		}
-		return voiceBackendConfig{kind: kind, endpoint: endpoint}, nil
-	default:
-		return voiceBackendConfig{}, fmt.Errorf("Unsupported voice backend %q", kind)
-	}
-}
-
-func (config voiceBackendConfig) requiresLocalRuntime() bool {
-	return config.kind == voiceBackendQDC507
-}
-
-func (a *agent) voicePCMEndpoint() (string, error) {
-	if a.voiceBackendErr != nil {
-		return "", a.voiceBackendErr
-	}
-	if a.voiceBackend.kind == "" && a.voiceBackend.endpoint == "" {
-		return "", errors.New("AirSIM Samsung PCM endpoint not configured")
-	}
-	if a.voiceBackend.endpoint == "" {
-		return "", errors.New("Voice PCM endpoint not configured")
-	}
-	if a.voiceBackend.kind == voiceBackendSamsungAndroid && a.profile.AndroidTelecom {
-		readRoute := a.defaultRoute
-		if readRoute == nil {
-			readRoute = readDefaultRoute
-		}
-		if endpoint := samsungPCMEndpointForRoute(a.voiceBackend.endpoint, readRoute()); endpoint != "" {
-			return endpoint, nil
-		}
-	}
-	return a.voiceBackend.endpoint, nil
-}
-
-func samsungPCMEndpointForRoute(configured string, route map[string]string) string {
-	_, port, err := net.SplitHostPort(configured)
-	if err != nil {
-		return ""
-	}
-	gateway := strings.TrimSpace(route["gateway"])
-	ip := net.ParseIP(gateway)
-	if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsLoopback() || !ip.IsPrivate() {
-		return ""
-	}
-	endpoint := net.JoinHostPort(ip.String(), port)
-	if validateSamsungPCMEndpoint(endpoint) != nil {
-		return ""
-	}
-	return endpoint
-}
-
-func (a *agent) usesLocalVoiceRuntime() bool {
-	return a.voiceBackendErr == nil &&
-		a.voiceBackend.requiresLocalRuntime()
-}
-
-func (a *agent) voiceBackendName() string {
-	if a.voiceBackendErr != nil {
-		return "invalid"
-	}
-	if a.voiceBackend.kind == "" {
-		return "unconfigured"
-	}
-	return string(a.voiceBackend.kind)
-}
-
-func (a *agent) externalVoiceBackendConfigured() bool {
-	return a.voiceBackendErr == nil && a.voiceBackend.kind == voiceBackendSamsungAndroid
-}
-
-func probeVoicePCMBackend(
-	endpoint string,
-	dial func(network, address string) (net.Conn, error),
-) error {
-	if err := validateSamsungPCMEndpoint(endpoint); err != nil {
-		return err
-	}
-	connection, err := dial("tcp", endpoint)
-	if err != nil {
-		return err
-	}
-	defer connection.Close()
-	return cloudPCMHandshake(connection)
-}
-
-func validateSamsungPCMEndpoint(endpoint string) error {
-	if endpoint == "" {
-		return errors.New("Samsung PCM endpoint must not be empty")
-	}
-	host, portText, err := net.SplitHostPort(endpoint)
-	if err != nil {
-		return fmt.Errorf("Invalid Samsung PCM endpoint format: %w", err)
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsLoopback() || !ip.IsPrivate() {
-		return errors.New("Samsung PCM endpoint must be a non-loopback private IPv4 address")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1024 || port > 65535 {
-		return errors.New("Samsung PCM port must be 1024..65535")
-	}
-	return nil
+func writeVoiceUpgradeRequired(response http.ResponseWriter) {
+	writeJSON(response, http.StatusUpgradeRequired, map[string]any{
+		"error": avfVoiceUpgradeMessage, "code": "upgrade_required",
+		"call_audio": false, "agent_media_ready": false,
+		"agent_media_capabilities":  []string{},
+		"media_capability_revision": agentMediaCapabilityRevision,
+	})
 }

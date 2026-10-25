@@ -66,7 +66,6 @@ CLASSPATH="$ANDROID_JAR:$(IFS=:; echo "${SHIZUKU_JARS[*]}")"
 
 SOURCES=()
 while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/src" -name '*.java' -print0)
-while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/../phone-audio-bridge/src" -name '*.java' -print0)
 "$JAVA_HOME/bin/javac" -source 17 -target 17 -Xlint:all -classpath "$CLASSPATH" -d "$CLASSES" "${SOURCES[@]}"
 
 sh "$ROOT/verify-io-api.sh" "$CLASSES"

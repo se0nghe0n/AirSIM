@@ -75,14 +75,14 @@ public final class MainActivity extends Activity {
     private static final int DANGER = Color.rgb(255, 99, 99);
 
     private enum Page { STATUS, CALLS, DEBUG, SETTINGS }
-    private enum Feature { VOWLAN, AGENT, PCM, PUSH, SHIZUKU }
+    private enum Feature { VOWLAN, AGENT, MEDIA, PUSH, SHIZUKU }
 
     private FrameLayout contentHost;
     private LinearLayout bottomBar;
     private final List<TextView> navigationItems = new ArrayList<>();
     private Page currentPage = Page.STATUS;
-    private HealthTile pcmHealthTile;
-    private LiveStatusPoller pcmStatusPoller;
+    private HealthTile mediaHealthTile;
+    private LiveStatusPoller mediaStatusPoller;
     private boolean resumed;
 
     private EditText endpoint;
@@ -140,11 +140,11 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         shizukuStartupPolicy = new ShizukuStartupPolicy(
                 state != null && state.getBoolean(SHIZUKU_STARTUP_CHECKED, false));
-        pcmStatusPoller = new LiveStatusPoller(() -> {
+        mediaStatusPoller = new LiveStatusPoller(() -> {
             ShizukuBridgeManager bridge = ShizukuBridgeManager.get(this);
             bridge.refreshBridgeStatus();
             return bridge.bridgeRunning();
-        }, this::renderPCMStatus, new LiveStatusPoller.Scheduler() {
+        }, this::renderMediaStatus, new LiveStatusPoller.Scheduler() {
             @Override public void postDelayed(Runnable task, long delayMillis) {
                 handler.postDelayed(task, delayMillis);
             }
@@ -284,8 +284,8 @@ public final class MainActivity extends Activity {
     }
 
     private void showPage(Page page) {
-        if (pcmStatusPoller != null) pcmStatusPoller.stop();
-        pcmHealthTile = null;
+        if (mediaStatusPoller != null) mediaStatusPoller.stop();
+        mediaHealthTile = null;
         currentPage = page;
         handler.removeCallbacks(debugRefresh);
         bottomBar.setVisibility(View.VISIBLE);
@@ -302,7 +302,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         updateNavigation();
         if (page == Page.DEBUG && realtimeLogging) handler.post(debugRefresh);
-        if (page == Page.STATUS && resumed) pcmStatusPoller.start();
+        if (page == Page.STATUS && resumed) mediaStatusPoller.start();
     }
 
     private void updateNavigation() {
@@ -362,11 +362,11 @@ public final class MainActivity extends Activity {
                 android.R.drawable.ic_menu_manage, agentOnline);
         agentTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.AGENT));
         firstHealthRow.addView(agentTile.view, weightedWithEnd(5));
-        pcmHealthTile = healthTile(
-                "PCM audio bridge", pcmBridgeRunning() ? "Running" : "Not running",
-                android.R.drawable.ic_media_play, pcmBridgeRunning());
-        pcmHealthTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.PCM));
-        firstHealthRow.addView(pcmHealthTile.view, weightedWithStart(5));
+        mediaHealthTile = healthTile(
+                "WebRTC media service", mediaServiceReady() ? "Running" : "Not running",
+                android.R.drawable.ic_media_play, mediaServiceReady());
+        mediaHealthTile.view.setOnClickListener(ignored -> showFeatureDetails(Feature.MEDIA));
+        firstHealthRow.addView(mediaHealthTile.view, weightedWithStart(5));
         root.addView(firstHealthRow, matchWithTop(12));
 
         LinearLayout secondHealthRow = row();
@@ -650,13 +650,13 @@ public final class MainActivity extends Activity {
 		refreshInstallerStatus();
 		}
 
-        root.addView(sectionTitle("Shizuku permission and PCM bridge"), matchWithTop(22));
+        root.addView(sectionTitle("Shizuku permission and WebRTC service"), matchWithTop(22));
         LinearLayout shizukuCard = card(SURFACE, 22);
         shizukuCard.setOrientation(LinearLayout.VERTICAL);
         shizukuCard.setPadding(dp(16), dp(16), dp(16), dp(16));
         shizukuStatus = label("", 14, TEXT, Gravity.START);
         shizukuCard.addView(shizukuStatus);
-        shizukuCard.addView(description("Start Shizuku with wireless debugging and authorize AirSIM once. AirSIM then restores the PCM bridge automatically."), matchWithTop(6));
+        shizukuCard.addView(description("Start Shizuku with wireless debugging and authorize AirSIM once. AirSIM then restores the WebRTC service automatically."), matchWithTop(6));
         LinearLayout shizukuActions = row();
         TextView authorize = secondaryButton("Authorize and start");
         authorize.setOnClickListener(ignored -> {
@@ -771,7 +771,7 @@ public final class MainActivity extends Activity {
         HorizontalScrollView scroll = new HorizontalScrollView(this);
         scroll.setHorizontalScrollBarEnabled(false);
         LinearLayout filterRow = row();
-        String[] filters = {"All", "Agent", "VoWLAN", "PCM", "Telecom"};
+        String[] filters = {"All", "Agent", "VoWLAN", "WebRTC", "Telecom"};
         for (String filter : filters) {
             boolean selected = filter.equals(activeDebugFilter);
             TextView chip = label(filter, 13, selected ? BG : TEXT, Gravity.CENTER);
@@ -854,8 +854,8 @@ public final class MainActivity extends Activity {
         return new HealthTile(tile, icon, state);
     }
 
-    private void renderPCMStatus(boolean running) {
-        HealthTile tile = pcmHealthTile;
+    private void renderMediaStatus(boolean running) {
+        HealthTile tile = mediaHealthTile;
         if (tile == null || currentPage != Page.STATUS) return;
         int color = running ? PRIMARY : WARNING;
         tile.state.setText(running ? "Running" : "Not running");
@@ -1293,7 +1293,7 @@ public final class MainActivity extends Activity {
         return switch (feature) {
             case VOWLAN -> "VoWLAN connection details";
             case AGENT -> RuntimeMode.agentLabel(this) + " details";
-            case PCM -> "PCM audio bridge details";
+            case MEDIA -> "WebRTC media service details";
             case PUSH -> "Push / Relay details";
             case SHIZUKU -> "Shizuku details";
         };
@@ -1309,12 +1309,12 @@ public final class MainActivity extends Activity {
             case VOWLAN -> {
                 boolean paired = VoWLANPairingStore.configured(this);
                 String address = localVoWLANAddress();
-                String pcmBackend = RuntimeMode.isStandalone(this) ? "Local PCM port 7580" : "AVF PCM port 7580";
+                String mediaBackend = RuntimeMode.isStandalone(this) ? "Privileged WebRTC service" : "AVF voice upgrade required";
                 String reason = !paired ? "Not paired with iPhone"
                         : address.isEmpty() ? "No address available on the same Wi-Fi or Android hotspot"
                         : currentVoWLAN.contains("avf=missing") ? "AVF virtual network interface not found"
                         : currentVoWLAN.contains("agent_ready=false") ? "Agent failed the VoWLAN readiness check"
-                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + "Not ready"
+                        : currentVoWLAN.contains("media_ready=false") ? mediaBackend + "Not ready"
                         : !vowlanReady() ? "VoWLAN service has not completed the current check: " + currentVoWLAN
                         : "Current checks pass; an actual call is still needed to verify";
                 details = "Pairing: " + (paired ? "Key saved" : "Not paired")
@@ -1336,18 +1336,18 @@ public final class MainActivity extends Activity {
                         + "\n" + agentRefreshMessage;
                 keywords = new String[]{"agent", "watchdog", "http_request", "avf"};
             }
-            case PCM -> {
+            case MEDIA -> {
                 String shizuku = ShizukuBridgeManager.get(this).status();
-                String pcmBackend = RuntimeMode.isStandalone(this) ? "Local PCM port 7580" : "AVF PCM port 7580";
-                String reason = !shizukuReady() ? "Shizuku is disconnected or unauthorized; PCM user service unavailable"
-                        : currentVoWLAN.contains("pcm_ready=false") ? pcmBackend + " did not respond"
-                        : !pcmBridgeRunning() ? "PCM audio bridge process is not running"
+                String mediaBackend = RuntimeMode.isStandalone(this) ? "Privileged WebRTC service" : "AVF voice upgrade required";
+                String reason = !shizukuReady() ? "Shizuku is disconnected or unauthorized; WebRTC user service unavailable"
+                        : currentVoWLAN.contains("media_ready=false") ? mediaBackend + " did not respond"
+                        : !mediaServiceReady() ? "Native WebRTC service is unavailable"
                         : "Current checks pass; verify two-way audio with an actual call";
-                details = "Shizuku: " + shizuku + "\nBridge status: " + (pcmBridgeRunning() ? "Running" : "Not running")
+                details = "Shizuku: " + shizuku + "\nBridge status: " + (mediaServiceReady() ? "Running" : "Not running")
                         + "\nStatus reason: " + reason
                         + "\nCurrent VoWLAN check: " + currentVoWLAN
                         + "\nLatest VoWLAN check: " + (latestVoWLAN.isEmpty() ? "None" : latestVoWLAN);
-                keywords = new String[]{"pcm", "shizuku", "vowlan_state"};
+                keywords = new String[]{"webrtc", "shizuku", "vowlan_state"};
             }
             case PUSH -> {
                 details = "Status: " + pushDetail + "\n" + pushDiagnostic
@@ -1358,8 +1358,8 @@ public final class MainActivity extends Activity {
             case SHIZUKU -> {
                 String shizuku = ShizukuBridgeManager.get(this).status();
                 details = "Status: " + shizuku + "\nReason: " + (shizukuReady()
-                        ? "Binder connected; check PCM routing to verify audio"
-                        : "Check Shizuku is running, AirSIM is authorized, and PCM user service is bound");
+                        ? "Binder connected; check carrier audio routing to verify audio"
+                        : "Check Shizuku is running, AirSIM is authorized, and WebRTC user service is bound");
                 keywords = new String[]{"shizuku", "local_output"};
             }
             default -> throw new IllegalStateException("Unknown feature");
@@ -1750,7 +1750,7 @@ public final class MainActivity extends Activity {
         return value.contains("Shizuku connected");
     }
 
-    private boolean pcmBridgeRunning() {
+    private boolean mediaServiceReady() {
         return ShizukuBridgeManager.get(this).bridgeRunning();
     }
 
@@ -1934,7 +1934,7 @@ public final class MainActivity extends Activity {
         super.onResume();
         resumed = true;
         if (startupSetupPending) scheduleStartupSetup();
-        if (currentPage == Page.STATUS && pcmStatusPoller != null) pcmStatusPoller.start();
+        if (currentPage == Page.STATUS && mediaStatusPoller != null) mediaStatusPoller.start();
         refreshShizukuStatus();
 		startSMSInboxBaselineIfAuthorized();
         if (startupSetupCompleted && !startupSetupPending && !startupSetupInFlight) {
@@ -1944,7 +1944,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onPause() {
         resumed = false;
-        if (pcmStatusPoller != null) pcmStatusPoller.stop();
+        if (mediaStatusPoller != null) mediaStatusPoller.stop();
         super.onPause();
     }
 
@@ -1967,7 +1967,7 @@ public final class MainActivity extends Activity {
             shizukuStartupDialog.setOnDismissListener(null);
             shizukuStartupDialog.dismiss();
         }
-        if (pcmStatusPoller != null) pcmStatusPoller.stop();
+        if (mediaStatusPoller != null) mediaStatusPoller.stop();
         handler.removeCallbacks(debugRefresh);
         stopPairingServer();
         super.onDestroy();

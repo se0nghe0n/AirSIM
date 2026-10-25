@@ -1,10 +1,20 @@
 import { constantTimeEqual, sha256Hex } from "./auth-crypto.mjs";
 
-export function retainStoredWebRTCCapability(stored, advertised) {
-  const previous = Array.isArray(stored) && stored.includes("webrtc");
-  const next = Array.isArray(advertised) && advertised.includes("webrtc");
-  if (previous || next) return ["webrtc"];
-  return [];
+// Revision 2 means native media lives in the privileged Android service.
+// A historical capability is never a lease on the current implementation.
+export const MEDIA_CAPABILITY_REVISION = 2;
+export const MEDIA_HEARTBEAT_MAX_AGE_MS = 90_000;
+
+export function currentAgentMedia(record) {
+  const revision = Number.isSafeInteger(record?.media_capability_revision)
+    ? record.media_capability_revision : 0;
+  const ready = revision === MEDIA_CAPABILITY_REVISION && record?.agent_media_ready === true &&
+    Array.isArray(record?.agent_media_capabilities) && record.agent_media_capabilities.includes("webrtc");
+  return {
+    media_capability_revision: revision,
+    agent_media_ready: ready,
+    agent_media_capabilities: ready ? ["webrtc"] : [],
+  };
 }
 
 const HEARTBEAT_PREFIX = "heartbeat:";
@@ -33,14 +43,6 @@ export class AgentStatusRegistry {
         return Response.json({ error: "unauthorized" }, { status: 401 });
       }
       const normalizedDeviceID = deviceID.trim();
-      const deviceKey = `${DEVICE_PREFIX}${normalizedDeviceID}`;
-      const device = await this.storage.get(deviceKey);
-      const mergedCapabilities = retainStoredWebRTCCapability(
-        device?.agent_media_capabilities, record.agent_media_capabilities,
-      );
-      if (JSON.stringify(device?.agent_media_capabilities) !== JSON.stringify(mergedCapabilities)) {
-        await this.storage.put(deviceKey, { ...device, agent_media_capabilities: mergedCapabilities });
-      }
       await this.storage.put(`${HEARTBEAT_PREFIX}${normalizedDeviceID}:agent:${agentID}`, record);
       await this.storage.put(`${HEARTBEAT_PREFIX}${normalizedDeviceID}`, record);
       return Response.json({ received: true }, { status: 202 });
@@ -322,6 +324,21 @@ async function readKVAgentRoster(env, deviceID) {
     console.warn("KV heartbeat roster read failed; using latest heartbeat", safeError(error));
   }
   return [];
+}
+
+// Media decisions fail closed if the authoritative registry is unavailable.
+// A KV recovery mirror must not revive an older ready claim after revocation.
+export async function readCurrentAgentHeartbeat(env, deviceID) {
+  const stub = registryStub(env);
+  if (!stub) return readKVRecord(env.DEVICES, `${HEARTBEAT_PREFIX}${deviceID}`);
+  try {
+    const response = await stub.fetch(
+      `https://status.internal/heartbeat/${encodeURIComponent(deviceID)}`,
+    );
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function readAgentHeartbeat(env, deviceID) {

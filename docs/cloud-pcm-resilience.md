@@ -1,5 +1,8 @@
 # Cloud PCM Reliability and Latency
 
+> Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. AVF voice is upgrade-required; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](webrtc-only-migration.md).
+
+
 This change preserves the existing Relay WebSocket, authentication, CallKit/PushKit, and raw PCM protocols. It does not change media implementations for VoWLAN, VoBLE, or the legacy Linux Agent.
 
 ## Finalizing hang-up

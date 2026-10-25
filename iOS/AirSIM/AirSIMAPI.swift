@@ -183,16 +183,20 @@ struct AirSIMAPI: Sendable {
     }
     func sendDTMF(_ digit: String) async throws { try await post("api/calls/dtmf", ["digit": digit]) }
     func setAudioMuted(_ muted: Bool) async throws { try await post("api/calls/audio/mute", ["muted": muted]) }
-    func setAudioHostEnabled(_ enabled: Bool) async throws {
-        try await post("api/calls/audio/host/register", ["enabled": enabled])
-    }
     func warmAudioHost() async throws {
         try await post("api/calls/audio/host/warmup", EmptyBody())
     }
 
     func exchangeVoWLANWebRTC(_ signal: CloudWebRTCSignal) async throws -> CloudWebRTCSignal {
-        let data = try await raw(method: "POST", path: "api/calls/webrtc", body: signal, timeout: 20)
+        let data = try await raw(method: "POST", path: "api/calls/webrtc", body: signal, timeout: 25)
         return try Self.decode(CloudWebRTCSignal.self, from: data)
+    }
+    func voWLANWebRTCStatus(_ session: VoWLANWebRTCSession) async throws -> VoWLANWebRTCStatus {
+        let data = try await raw(method: "POST", path: "api/calls/webrtc/status", body: session, timeout: 5)
+        return try Self.decode(VoWLANWebRTCStatus.self, from: data)
+    }
+    func stopVoWLANWebRTC(_ session: VoWLANWebRTCSession) async throws {
+        try await post("api/calls/webrtc/stop", session, timeout: 5)
     }
     func audioHostConfig() async throws -> MaVoAudioHostConfig { try await get("api/calls/audio/host/config") }
 

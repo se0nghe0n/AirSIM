@@ -22,7 +22,6 @@ public final class WebRTCMediaTests {
         require(aged.poll(100_000_000L)[0] == 2 && aged.drops() == 1, "expired frame is not encoded");
         require(Arrays.equals(aged.poll(100_000_000L), new byte[160]) && aged.underruns() == 1, "empty pull is silence");
         require(WebRTCPlayout.JITTER_BUFFER_MAX_PACKETS == 50 && WebRTCPlayout.FAST_ACCELERATE, "NetEq caps one second and accelerates");
-        require(WebRTCPcmBuffer.LOOPBACK_SOCKET_BYTES == 4096, "loopback socket hint is 4 KB");
         queue.close(); require(queue.take() == null, "close clears queued speech");
         queue.offer(twenty, 0, 320); require(queue.size() == 0, "closed queue rejects late callback");
         WebRTCPcmBuffer waiting = new WebRTCPcmBuffer(); AtomicBoolean woke = new AtomicBoolean();

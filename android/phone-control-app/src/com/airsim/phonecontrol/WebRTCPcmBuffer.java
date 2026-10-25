@@ -3,12 +3,10 @@ package com.airsim.phonecontrol;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 
-/** Bounded 8 kHz mono PCM16 bridge. Native WebRTC pulls exactly 10 ms per callback. */
+/** Bounded in-process 8 kHz device-clock adapter. Never serialized or sent across IPC. */
 final class WebRTCPcmBuffer {
     static final int FRAME_BYTES = 160;
     static final int MAX_FRAMES = 6;
-    /** Hint for the loopback socket. 8 kHz PCM16 is 16 KB/s, so 4 KB is about a quarter second. */
-    static final int LOOPBACK_SOCKET_BYTES = 4096;
     /** Four 20 ms Opus packets. Older telephony audio is not encoded or played. */
     static final long MAX_AGE_NANOS = 80_000_000L;
     private final ArrayDeque<Frame> frames = new ArrayDeque<>();

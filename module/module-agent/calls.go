@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,16 +55,7 @@ func (a *agent) applyAndroidCallEvent(event androidCallEvent, now time.Time) {
 		if a.push != nil {
 			go func() { _ = a.push.sendCallState(endedID, "ended") }()
 		}
-		appendVoiceDiagnosticEvent("Android call state changed: " + previousState + " -> ended")
-		go func() {
-			time.Sleep(1500 * time.Millisecond)
-			a.mu.RLock()
-			stillIdle := a.calls.Active == nil
-			a.mu.RUnlock()
-			if stillIdle {
-				a.stopVoiceRoute()
-			}
-		}()
+		appendCallDiagnosticEvent("Android call state changed: " + previousState + " -> ended")
 		return
 	}
 	if active == nil || active.AndroidID != event.CallID {
@@ -91,9 +81,6 @@ func (a *agent) applyAndroidCallEvent(event androidCallEvent, now time.Time) {
 				go func() { _ = a.push.sendCallState(callID, phase) }()
 			}
 		}
-		if event.State == "active" {
-			go a.ensureVoiceRouteIfHostEnabled()
-		}
 		return
 	}
 	previousState := active.State
@@ -112,9 +99,6 @@ func (a *agent) applyAndroidCallEvent(event androidCallEvent, now time.Time) {
 		if phase := lifecyclePhaseForModemState(event.State); phase != "" {
 			go func() { _ = a.push.sendCallState(callID, phase) }()
 		}
-	}
-	if event.State == "active" && previousState != "active" {
-		go a.ensureVoiceRouteIfHostEnabled()
 	}
 }
 
@@ -345,7 +329,7 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 		if age >= 0 && age <= endedCallTombstoneRetention &&
 			tombstone.Index == selected.Index && tombstone.Direction == selected.Direction && sameNumber {
 			a.mu.Unlock()
-			appendVoiceDiagnosticEvent("ignoring stale CLCC after hangup: " + selected.State)
+			appendCallDiagnosticEvent("ignoring stale CLCC after hangup: " + selected.State)
 			return
 		}
 		if age > endedCallTombstoneRetention || tombstone.Index != selected.Index ||
@@ -378,17 +362,7 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 		if a.push != nil {
 			go func() { _ = a.push.sendCallState(endedCallID, "ended") }()
 		}
-		appendVoiceDiagnosticEvent("call state changed: " + endedState + " -> ended")
-		// Roll back the UAC route only after the baseband has fully ended the call, so the tail of the audio is not cut off.
-		go func() {
-			time.Sleep(1500 * time.Millisecond)
-			a.mu.RLock()
-			stillIdle := a.calls.Active == nil
-			a.mu.RUnlock()
-			if stillIdle {
-				a.stopVoiceRoute()
-			}
-		}()
+		appendCallDiagnosticEvent("call state changed: " + endedState + " -> ended")
 		return
 	}
 
@@ -411,14 +385,7 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 				go func() { _ = a.push.sendCallState(callID, phase) }()
 			}
 		}
-		appendVoiceDiagnosticEvent("call state changed: idle -> " + selected.State)
-		if selected.State == "active" {
-			go a.ensureVoiceRouteIfHostEnabled()
-		} else {
-			// Load drivers and run ACDB calibration during ringing or dialing. After
-			// connect, only the D4/D5/D6 route remains, so module cold-start time stays off the user path.
-			go a.ensureVoiceRuntimeWarm()
-		}
+		appendCallDiagnosticEvent("call state changed: idle -> " + selected.State)
 		return
 	}
 	previousState := a.calls.Active.State
@@ -442,15 +409,12 @@ func (a *agent) applyCallPoll(calls []parsedCall, now time.Time) {
 		a.scheduleIncomingPush(callID)
 	}
 	if selected.State != previousState {
-		appendVoiceDiagnosticEvent("call state changed: " + previousState + " -> " + selected.State)
+		appendCallDiagnosticEvent("call state changed: " + previousState + " -> " + selected.State)
 		if a.push != nil {
 			if phase := lifecyclePhaseForModemState(selected.State); phase != "" {
 				go func() { _ = a.push.sendCallState(callID, phase) }()
 			}
 		}
-	}
-	if selected.State == "active" && previousState != "active" {
-		go a.ensureVoiceRouteIfHostEnabled()
 	}
 }
 
@@ -645,47 +609,14 @@ func (a *agent) dial(response http.ResponseWriter, request *http.Request) {
 	}
 	result, err := a.dialNumber(body.Number)
 	if err != nil {
-		writeError(response, http.StatusBadGateway, err.Error())
+		writeVoiceUpgradeRequired(response)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
 }
 
 func (a *agent) dialNumber(raw string) (map[string]any, error) {
-	number := normalizeDialNumber(raw)
-	if number == "" || len(number) > 82 {
-		return nil, errors.New("Number is empty, too long, or contains invalid characters")
-	}
-	a.mu.RLock()
-	active := a.calls.Active
-	if active != nil {
-		copy := *active
-		active = &copy
-	}
-	a.mu.RUnlock()
-	if active != nil && active.Direction == "outgoing" &&
-		(active.Number == "" || normalizeDialNumber(active.Number) == number) &&
-		(active.State == "dialing" || active.State == "alerting" || active.State == "active") {
-		return map[string]any{"dialing": true, "number": number, "deduplicated": true}, nil
-	}
-	if a.profile.AndroidTelecom {
-		commandID, err := randomUUID()
-		if err != nil {
-			return nil, fmt.Errorf("create Android Telecom dial command: %w", err)
-		}
-		result := a.android.execute(context.Background(), androidCommand{
-			ID: commandID, Action: "dial", Number: number,
-		}, 12*time.Second)
-		if !result.Success {
-			return nil, errors.New(result.Error)
-		}
-		return map[string]any{"dialing": true, "number": number, "android_confirmed": true}, nil
-	}
-	response, err := a.at.command("ATD"+number+";", 8*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"dialing": true, "number": number, "response": response}, nil
+	return nil, errAVFVoiceUpgradeRequired
 }
 
 func normalizeDialNumber(raw string) string {
@@ -712,46 +643,24 @@ func (a *agent) answer(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := a.answerCallForID(callID); err != nil {
+		if errors.Is(err, errAVFVoiceUpgradeRequired) {
+			writeVoiceUpgradeRequired(response)
+			return
+		}
 		writeError(response, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeJSON(response, http.StatusOK, map[string]bool{"answered": true})
 }
 
-func (a *agent) answerCall() error {
-	return a.answerCallForID("")
-}
-
 func (a *agent) answerCallForID(expectedID string) error {
-	a.mu.Lock()
-	if expectedID != "" && (a.calls.Active == nil || a.calls.Active.ID != expectedID) {
-		a.mu.Unlock()
+	a.mu.RLock()
+	stale := expectedID != "" && (a.calls.Active == nil || a.calls.Active.ID != expectedID)
+	a.mu.RUnlock()
+	if stale {
 		return errors.New("Call ID is no longer valid")
 	}
-	if time.Since(a.calls.LastAnswerAt) < 2*time.Second {
-		a.mu.Unlock()
-		return nil
-	}
-	a.calls.LastAnswerAt = time.Now()
-	a.mu.Unlock()
-	if a.profile.AndroidTelecom {
-		commandID, err := randomUUID()
-		if err != nil {
-			return fmt.Errorf("create Android Telecom answer command: %w", err)
-		}
-		result := a.executeAndroidCallCommandForID(commandID, "answer", expectedID)
-		if !result.Success {
-			return errors.New(result.Error)
-		}
-		return nil
-	}
-	appendVoiceSystemSnapshot("answer-before")
-	if _, err := a.at.command("ATA", 5*time.Second); err != nil {
-		appendVoiceSystemSnapshot("answer-failed")
-		return err
-	}
-	appendVoiceSystemSnapshot("answer-after")
-	return nil
+	return errAVFVoiceUpgradeRequired
 }
 
 func (a *agent) reject(response http.ResponseWriter, request *http.Request) {
@@ -788,12 +697,12 @@ func (a *agent) rejectCallForID(expectedID string) error {
 	if err := a.requireActiveCallID(expectedID); err != nil {
 		return err
 	}
-	appendVoiceSystemSnapshot("reject-before")
+	appendCallSystemSnapshot("reject-before")
 	if _, err := a.at.command("AT+CHUP", 5*time.Second); err != nil {
-		appendVoiceSystemSnapshot("reject-failed")
+		appendCallSystemSnapshot("reject-failed")
 		return err
 	}
-	appendVoiceSystemSnapshot("reject-after")
+	appendCallSystemSnapshot("reject-after")
 	return nil
 }
 
@@ -859,14 +768,14 @@ func (a *agent) hangupCallForID(expectedID string) error {
 	if err := a.requireActiveCallID(expectedID); err != nil {
 		return err
 	}
-	appendVoiceSystemSnapshot("hangup-before")
+	appendCallSystemSnapshot("hangup-before")
 	if _, err := a.at.command("ATH", 5*time.Second); err != nil {
 		if _, fallbackErr := a.at.command("AT+CHUP", 5*time.Second); fallbackErr != nil {
-			appendVoiceSystemSnapshot("hangup-failed")
+			appendCallSystemSnapshot("hangup-failed")
 			return fallbackErr
 		}
 	}
-	appendVoiceSystemSnapshot("hangup-after")
+	appendCallSystemSnapshot("hangup-after")
 	return nil
 }
 
@@ -912,7 +821,7 @@ func hangupAndConfirmCall(
 }
 
 func (a *agent) hangupCallConfirmed() (int, string, error) {
-	appendVoiceSystemSnapshot("hangup-confirm-before")
+	appendCallSystemSnapshot("hangup-confirm-before")
 	command := a.callControlCommand
 	if command == nil {
 		command = a.at.command
@@ -927,11 +836,11 @@ func (a *agent) hangupCallConfirmed() (int, string, error) {
 	}
 	attempts, lastCLCC, err := hangupAndConfirmCall(command, sleep, delays)
 	if err != nil {
-		appendVoiceSystemSnapshot("hangup-confirm-failed")
+		appendCallSystemSnapshot("hangup-confirm-failed")
 		return attempts, lastCLCC, err
 	}
 	a.applyCallPoll(nil, time.Now())
-	appendVoiceSystemSnapshot("hangup-confirmed")
+	appendCallSystemSnapshot("hangup-confirmed")
 	return attempts, lastCLCC, nil
 }
 
@@ -1013,93 +922,28 @@ func (a *agent) recording(response http.ResponseWriter, request *http.Request) {
 		writeError(response, http.StatusBadRequest, "action must be start or stop")
 		return
 	}
-	// The module agent must not pretend recording succeeded. This endpoint opens only after the voice bridge emits bidirectional PCM.
-	a.unsupported(response, "Module-side bidirectional PCM recording is not supported yet")
+	// Recordings belong to the supported native WebRTC client, never AVF.
+	writeVoiceUpgradeRequired(response)
 }
 
 func (a *agent) audioHostRegister(response http.ResponseWriter, request *http.Request) {
 	if !requireMethod(response, request, http.MethodPost) {
 		return
 	}
-	var body struct {
-		Enabled bool `json:"enabled"`
-	}
-	if !decodeJSON(response, request, &body) {
-		return
-	}
-	if body.Enabled {
-		a.mu.RLock()
-		callActive := a.calls.Active != nil && a.calls.Active.State == "active"
-		a.mu.RUnlock()
-		if !callActive {
-			writeError(response, http.StatusConflict, "Call is not connected; cannot start network PCM")
-			return
-		}
-		a.voice.mu.Lock()
-		a.voice.hostEnabled = true
-		a.voice.mu.Unlock()
-		go a.ensureVoiceRoute()
-	} else {
-		a.voice.mu.Lock()
-		a.voice.hostEnabled = false
-		a.voice.mu.Unlock()
-		go a.stopVoiceRoute()
-	}
-	writeJSON(response, http.StatusOK, map[string]bool{"enabled": body.Enabled})
+	writeVoiceUpgradeRequired(response)
 }
 
-// audioHostWarmup only preloads the voice driver and calibration. It does not open the D4/D5/D6 media route.
-// That is safe during dialing or a lock-screen incoming call. audioHostRegister still starts the full PCM bridge after the call connects.
+// Legacy audio endpoints fail explicitly without creating a listener or route.
 func (a *agent) audioHostWarmup(response http.ResponseWriter, request *http.Request) {
 	if !requireMethod(response, request, http.MethodPost) {
 		return
 	}
-	a.mu.RLock()
-	hasCall := a.calls.Active != nil
-	a.mu.RUnlock()
-	if !hasCall {
-		writeError(response, http.StatusConflict, "No active call; cannot warm up voice runtime")
-		return
-	}
-	go a.ensureVoiceRuntimeWarm()
-	writeJSON(response, http.StatusOK, map[string]bool{"warming": true})
+	writeVoiceUpgradeRequired(response)
 }
 
 func (a *agent) audioHostConfig(response http.ResponseWriter, request *http.Request) {
 	if !requireMethod(response, request, http.MethodGet) {
 		return
 	}
-	snapshot := a.voice.snapshot()
-	routeReady := snapshot.Ready
-	routeSessionReady := snapshot.RouteReady
-	routeError := snapshot.LastError
-	routeRunning := snapshot.Starting || snapshot.Command != nil || snapshot.RouteCommand != nil
-	helperPID := 0
-	if snapshot.Command != nil && snapshot.Command.Process != nil {
-		helperPID = snapshot.Command.Process.Pid
-	}
-	routeHelperPID := 0
-	if snapshot.RouteCommand != nil && snapshot.RouteCommand.Process != nil {
-		routeHelperPID = snapshot.RouteCommand.Process.Pid
-	}
-	startedAt := snapshot.StartedAt
-	logOffset := snapshot.LogOffset
-	stats, statsAvailable, logTail := voiceDiagnosticSnapshot(logOffset)
-	startedAtText := ""
-	if !startedAt.IsZero() {
-		startedAtText = startedAt.UTC().Format(time.RFC3339Nano)
-	}
-	writeJSON(response, http.StatusOK, map[string]any{
-		"vendor_id": 0x2c7c, "product_id": 0x0125, "location_id": 0,
-		"transport": "tcp_pcm_s16le", "host": "192.168.225.1", "port": 7580,
-		"sample_rate": 8000, "channels": 1,
-		"route_ready": routeReady, "route_listening": snapshot.Listening,
-		"route_error":   routeError,
-		"route_running": routeRunning, "helper_pid": helperPID,
-		"route_starting":      snapshot.Starting,
-		"route_session_ready": routeSessionReady, "route_helper_pid": routeHelperPID,
-		"session_started_at":   startedAtText,
-		"statistics_available": statsAvailable, "statistics": stats,
-		"diagnostic_log": voiceRouteLogFile, "log_tail": logTail,
-	})
+	writeVoiceUpgradeRequired(response)
 }

@@ -1,5 +1,8 @@
 # AirSIM Android Standalone
 
+> Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. AVF voice is upgrade-required; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](../docs/webrtc-only-migration.md).
+
+
 AirSIM Android Standalone is designed for compatible Android phones across device models. This fork is verified on Zinwa Q25 and Pixel 8 Pro; other hardware and feature/OS combinations require validation. See [Android compatibility and verification](../README.md#android-compatibility-and-verification) for requirements and scope.
 
 AirSIM Android Standalone is the recommended Android deployment. It moves the Agent previously hosted in Android AVF Linux into an Android foreground service, providing a single APK. After installation, Linux Terminal, Debian, the AVF private network, and `airsim-installerd` are no longer required, and Agent/installer ports `8575` and `8576` are not used.
@@ -158,23 +161,19 @@ Project-wide results, disconnected devices, and failures are recorded in the [Vo
 
 ### Native WebRTC cloud audio
 
-The standalone Agent advertises `webrtc` and `legacy_pcm`. Relay selects the
-transport using both endpoints' capabilities and the owning iPhone/Watch;
-Watch and older peers retain the PCM WebSocket path. In WebRTC mode the call
-WebSocket carries authenticated SDP/ICE and lifecycle messages only. The iPhone
-offers and Android answers, using ephemeral ICE servers from the call's
-`/ice?role=agent` endpoint. Existing deployments must configure the Relay's TURN
-service before enabling normal WebRTC selection.
+The standalone Agent reports only native WebRTC, with capability revision 2 and
+fresh service readiness. Watch controls iPhone audio; AVF and old unsupported
+clients fail clearly without a fallback. The authenticated WebSocket carries
+SDP/ICE and call lifecycle only. The app fetches ephemeral ICE credentials and
+passes those, never the account secret, to the privileged peer.
 
-Android uses pinned WebRTC SDK `144.7559.15`. Its microphone is disabled via the
-SDK's external audio buffer API; `WebRtcAudioTrack` is replaced with a small
-JNI-compatible external output adapter. Both directions use the rooted
-`AIRSIMPCM1`/`AIRSIMREADY` TCP bridge on loopback port 7580, at 8 kHz mono PCM16.
-The adapter runs at 10 ms; arbitrary bridge reads, including existing 20 ms
-frames, are split into bounded 10 ms units and discarded after 80 ms. Native
-Opus/NetEq owns network jitter, loss concealment and FEC, with a 50-packet cap
-and fast accelerate. The legacy PCM jitter/time-scaling pump is not used. No
-physical Android microphone or speaker is opened by the WebRTC layer.
+Android keeps pinned WebRTC SDK `144.7559.15`. Native WebRTC and the 8 kHz carrier
+audio device share the Shizuku process. Local samples remain in bounded 10 ms
+buffers; no TCP bridge or audio IPC is used. Opus/NetEq owns jitter and loss
+concealment. Current route verification requires a visible telephony sink, so
+hidden Samsung VOICE_TX routes need a separately verified capability adapter.
+Neither Q25 nor Pixel 8 Pro has yet accepted this new architecture on hardware.
+See the [draft migration gate](../docs/webrtc-only-migration.md).
 
 Builds verify the AAR SHA-256, package all four supplied ABIs, align shared
 libraries to 16 KB, and include dependency notices as APK assets. See

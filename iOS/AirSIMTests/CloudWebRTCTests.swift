@@ -5,6 +5,67 @@ import AudioToolbox
 @testable import AirSIM
 
 struct CloudWebRTCTests {
+    @Test func `Local readiness is versioned and bound to the exact call negotiation`() throws {
+        let session = VoWLANWebRTCSession(callUUID: UUID(), generation: 4, sessionID: UUID())
+        let body = try JSONEncoder().encode(session)
+        var payload = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(payload["version"] as? Int == 1)
+        #expect(payload["call_uuid"] as? String == session.callUUID.uuidString.lowercased())
+        #expect(payload["session_id"] as? String == session.sessionID.uuidString.lowercased())
+        payload["status"] = "ready"
+        func status() throws -> VoWLANWebRTCStatus {
+            try JSONDecoder().decode(VoWLANWebRTCStatus.self,
+                from: JSONSerialization.data(withJSONObject: payload))
+        }
+        #expect(try status().matches(session))
+        payload["session_id"] = UUID().uuidString
+        #expect(try !status().matches(session))
+        payload["session_id"] = session.sessionID.uuidString
+        payload["generation"] = 3
+        #expect(try !status().matches(session))
+        payload["generation"] = 4
+        payload["call_uuid"] = UUID().uuidString
+        #expect(try !status().matches(session))
+        payload["call_uuid"] = session.callUUID.uuidString
+        payload["version"] = 2
+        #expect(try !status().matches(session))
+    }
+
+    @Test func `Local host ICE alone never claims ready carrier audio`() {
+        var readiness = CloudWebRTCReadiness()
+        let session = UUID()
+        readiness.begin(session)
+        readiness.nativeConnected(session)
+        #expect(!readiness.isReady)
+        readiness.agentConnected(UUID())
+        #expect(!readiness.isReady)
+        readiness.agentConnected(session)
+        #expect(readiness.isReady)
+        readiness.nativeDisconnected(UUID())
+        #expect(readiness.isReady)
+        readiness.nativeDisconnected(session)
+        #expect(!readiness.isReady)
+        readiness.nativeConnected(session)
+        #expect(readiness.isReady)
+        readiness.agentRecovering()
+        #expect(!readiness.isReady)
+        readiness.reset()
+        readiness.agentConnected(session)
+        readiness.nativeConnected(session)
+        #expect(!readiness.isReady)
+    }
+
+    @Test(arguments: ["failed", "closed"])
+    func `Local terminal status is not readiness`(_ terminal: String) throws {
+        let session = VoWLANWebRTCSession(callUUID: UUID(), generation: 1, sessionID: UUID())
+        var payload = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(session)) as? [String: Any])
+        payload["status"] = terminal
+        let status = try JSONDecoder().decode(VoWLANWebRTCStatus.self,
+            from: JSONSerialization.data(withJSONObject: payload))
+        #expect(status.matches(session))
+        #expect(status.status != .ready)
+    }
+
     @Test @MainActor
     func `ICE prefetch and concurrent audio starts share one request`() async throws {
         let gate = ICEFetchGate()
@@ -342,7 +403,7 @@ struct CloudWebRTCTests {
         #expect(!CloudWebRTCReadiness.shouldRenegotiatePeer(role: "watch"))
         #expect(!CloudWebRTCReadiness.shouldRenegotiatePeer(role: nil))
         let id = UUID()
-        let decoded = try CloudPCMControlMessage.decode("{\"status\":\"webrtc_ready\",\"session_id\":\"\(id.uuidString.lowercased())\",\"role\":\"agent\"}")
+        let decoded = try CloudCallControlMessage.decode("{\"status\":\"webrtc_ready\",\"session_id\":\"\(id.uuidString.lowercased())\",\"role\":\"agent\"}")
         let control = try #require(decoded)
         #expect(control.sessionID == id)
         #expect(control.role == "agent")

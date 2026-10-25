@@ -55,7 +55,7 @@ struct WatchCallView: View {
         .alert("Connection Status", isPresented: $showConnectionStatus) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("\(session.pushStatus)\n\(session.microphoneStatus)\nCalling requires a reachable paired iPhone and an available VoWLAN or cloud connection. Call audio uses the watch microphone and speaker. When a Bluetooth device is connected, watchOS chooses the output.")
+            Text("\(session.pushStatus)\n\(session.audioStatus)\nCalling requires a reachable paired iPhone and an available VoWLAN or cloud connection. The watch controls calls; the paired iPhone microphone, speaker, or connected headset carries the audio.")
         }
         .alert("Call Failed", isPresented: Binding(
             get: { session.errorMessage != nil },

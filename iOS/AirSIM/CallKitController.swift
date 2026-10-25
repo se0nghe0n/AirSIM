@@ -530,7 +530,7 @@ final class CallKitController: NSObject {
                 prepare: { try handler.callKitPrepareAudioSession() },
                 fulfill: {
                     self.currentState = "connecting"
-                    // The system transaction confirms only that the user accepted the call. Cloud WebSocket, ATA, and PCM
+                    // The system transaction confirms only that the user accepted the call. Cloud WebSocket, Telecom, and WebRTC
                     // are established asynchronously afterward and must not block CallKit from activating AVAudioSession.
                     action.fulfill()
                 },
@@ -651,6 +651,9 @@ extension CallKitController: CXProviderDelegate {
     nonisolated func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            if self.audioSessionIsActive {
+                WebRTCCallAudioSession.didDeactivate(AVAudioSession.sharedInstance())
+            }
             self.audioSessionIsActive = false
             await self.handler?.callKitProviderDidReset()
             self.resetCurrentCall()
@@ -698,8 +701,10 @@ extension CallKitController: CXProviderDelegate {
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            if !self.audioSessionIsActive {
+                WebRTCCallAudioSession.didActivate(audioSession)
+            }
             self.audioSessionIsActive = true
-            IPhoneCloudCallSession.shared.callKitAudioDidActivate(audioSession)
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "APP",
                 category: "callkit-audio",
@@ -717,8 +722,10 @@ extension CallKitController: CXProviderDelegate {
     ) {
         Task { @MainActor [weak self] in
             guard let self else { return }
+            if self.audioSessionIsActive {
+                WebRTCCallAudioSession.didDeactivate(audioSession)
+            }
             self.audioSessionIsActive = false
-            IPhoneCloudCallSession.shared.callKitAudioDidDeactivate(audioSession)
             await AgentVerboseTraceRecorder.shared.recordEvent(
                 source: "APP",
                 category: "callkit-audio",

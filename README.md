@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-7c3aed)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/kai-wu-cortex/AirSIM?style=flat&logo=github&label=Stars)](https://github.com/kai-wu-cortex/AirSIM/stargazers)
 
-**AirSIM is a source-available cross-device communication project that uses an Android phone as the cellular endpoint, allowing an iPhone and Apple Watch to make and receive calls and send and receive SMS remotely.** The recommended Android Standalone APK handles Android Telecom, SMS, device identity, Relay heartbeats, cloud commands, and media orchestration in one foreground service. It requires no AVF Linux, Terminal, Debian, `8575/8576`, or `airsim-installerd`. Apple clients use CallKit, PushKit, ActivityKit, and VoWLAN; an optional Cloudflare Workers Relay provides public-network events, APNs push, command queues, and media relay.
+**AirSIM is a source-available cross-device communication project that uses an Android phone as the cellular endpoint, allowing an iPhone and Apple Watch to make and receive calls and send and receive SMS remotely.** The recommended Android Standalone APK handles Android Telecom, SMS, device identity, Relay heartbeats, cloud commands, and media orchestration in one foreground service. It requires no AVF Linux, Terminal, Debian, `8575/8576`, or `airsim-installerd`. Apple clients use CallKit, PushKit, ActivityKit, and VoWLAN; an optional Cloudflare Workers Relay provides public-network events, APNs push, command queues, and media signaling.
 
 AirSIM is a source-available, noncommercial cross-device calling and messaging project that connects Android phones, iPhone, Apple Watch, legacy Android AVF Linux, CallKit, PushKit, VoWLAN, APNs, and Cloudflare Workers.
 
@@ -29,14 +29,14 @@ This fork at [se0nghe0n/AirSIM](https://github.com/se0nghe0n/AirSIM) develops th
 
 - English is the default app language. The existing language preference and Chinese option remain available; caller names, SMS content, and operating-system messages keep their original language.
 - The current Android build uses package `com.airsim.phonecontrol.pixel8pro` and the label “AirSIM Pixel 8 Pro” (formerly `com.airsim.phonecontrol.q25`). These are build identity and branding, not a device-model allowlist. Apple signing and Relay settings in this branch are configured for the fork owner; use your own identities and credentials for a separate installation. A `workers.dev` Relay endpoint can be used without a custom domain.
-- Native WebRTC/Opus cloud calls are available for rooted Android Standalone and iPhone, with authenticated signaling and expiring TURN credentials. See the [WebRTC setup and validation guide](docs/webrtc.md). Older clients and Apple Watch retain PCM.
+- Native WebRTC/Opus cloud calls are available for rooted Android Standalone and iPhone, with authenticated signaling and expiring TURN credentials. See the [WebRTC setup and validation guide](docs/webrtc.md). There is no PCM fallback; Watch controls iPhone audio. The new privileged-peer migration is draft and awaits physical validation on both reference phones.
 - iPhone call recording saves both sides locally when you tap Record. Open Recents → Recordings to play, share, or delete files. See the [recording guide](docs/call-recording.md).
-- The legacy iPhone PCM receive buffer adapts to observed delivery stalls and preserves queued speech during recovery. Native WebRTC uses its own playout and bypasses that PCM buffer. Local tests do not establish real carrier-call quality.
+- Native WebRTC owns jitter, concealment and codec timing. The dormant iPhone network-PCM engine is removed. See the [migration gates](docs/webrtc-only-migration.md); local tests do not establish real carrier-call quality.
 - Release links below point to upstream binaries. They do not include this fork's additional changes; build this branch to use them.
 
 ## Android compatibility and verification
 
-AirSIM is designed for compatible Android phones across device models. The maintainer has verified this fork on **Zinwa Q25** and **Pixel 8 Pro**. Verification is limited to these devices; individual features, Android versions, OEM audio behavior, and network conditions still need validation on the intended phone.
+AirSIM is designed for compatible Android phones across device models. The maintainer verified the preceding architecture on **Zinwa Q25** and **Pixel 8 Pro**. The new privileged-native-peer architecture still requires validation on both. Verification is limited to these devices; individual features, Android versions, OEM audio behavior, and network conditions still need validation on the intended phone.
 
 - **Requirements:** the current Standalone Manifest requires Android 10 / API 29 or later (target API 35). Calling and SMS need the appropriate system roles and permissions. Call-audio features require the necessary Shizuku/root privileges and OEM audio routes for the chosen transport; see the [Standalone guide](android-standalone/README.md) and [WebRTC guide](docs/webrtc.md).
 - **Device-specific setup:** Pixel/Q25 build names, privilege workarounds, and Samsung/non-Samsung audio-route handling reflect deployment history and capability differences. They do not define an exclusive list of compatible hardware.
@@ -61,7 +61,7 @@ https://t.me/+TRDazm-qnXlhNGRl
 - **Cloud Relay:** A separately deployed Cloudflare Worker, KV, and Durable Objects connect the built-in Android Agent and Apple clients.
 - **Visible connection modes and diagnostics:** The Android home screen and iOS settings show VoWLAN/cloud status. iOS can validate push credentials, AirSIM Relay identity, device registration, and an Android Agent heartbeat within 90 seconds.
 - **Automatic HyperOS setup:** If the default-phone-role screen is unavailable, an authorized Shizuku connection can configure the role for the APK.
-- **Android call audio bridge:** Shizuku `UserService` and system `TYPE_TELEPHONY` routes forward bidirectional PCM in memory without saving call audio.
+- **Android call audio bridge:** Shizuku `UserService` owns native WebRTC beside capability-based carrier devices, with in-process samples only and no audio IPC.
 
 ## Architecture
 
@@ -74,7 +74,7 @@ iPhone / Apple Watch
 Android AirSIM Standalone APK
         ├─ Built-in Agent: identity, heartbeats, commands, and media orchestration
         ├─ Android Telecom / SMS
-        └─ Shizuku call PCM bridge
+        └─ Shizuku native WebRTC + in-process carrier audio
 ```
 
 The legacy AVF architecture remains available for compatibility and fallback, but is no longer recommended for new installations.
@@ -89,7 +89,7 @@ Each call selects VoWLAN or Relay when established and keeps that transport unti
 | --- | --- | --- |
 | [`android-standalone`](android-standalone/README.md) | Android Standalone APK | Recommended entry point; combines Agent, Telecom, SMS, VoWLAN, Relay, and media orchestration in one APK |
 | [`android/phone-control-app`](android/phone-control-app/README.md) | Android control app | Default phone role, Android Telecom, pairing, SMS, VoWLAN, and foreground service |
-| [`android/phone-audio-bridge`](android/phone-audio-bridge/README.md) | Android call audio bridge | Bidirectional PCM through Shizuku with capability-based audio routes; legacy AVF uses private interfaces |
+| [`android/phone-audio-bridge`](android/phone-audio-bridge/README.md) | Android call audio bridge | Historical route reference, not compiled or launched by current APKs; pending physical-gate deletion |
 | [`module/module-agent`](module/module-agent/README.md) | Android AVF Agent | Control API, device status, Relay heartbeats, commands, and media orchestration |
 | [`module/avf-installerd`](module/avf-installerd) | AVF recovery installer | Signed Debian package verification, health checks, and failure rollback |
 | [`module/packaging`](module/packaging/README.md) | AVF Debian releases | Single `arm64` package, systemd units, and bootstrap scripts |
@@ -251,10 +251,10 @@ Automation does not replace end-to-end acceptance on the intended Android phone,
 
 ## Security and privacy
 
-- AVF Agent, installer, and PCM ports may bind only to the device's internal private network or loopback.
+- AVF Agent and installer control ports may bind only to the device's internal private network or loopback. Current voice has no raw-audio port.
 - VoWLAN control requests must validate timestamps, nonces, and HMAC; pairing keys reside in platform secure storage.
 - Never commit device secrets, Agent tokens, APNs `.p8`, `DASHBOARD_TOKEN`, signing private keys, real phone numbers, or production configuration.
-- Call PCM is kept in memory and on the network unless the user explicitly starts a local iPhone recording. Recordings are private, excluded from backups, and never uploaded to Relay. Logs must omit PCM, complete SMS messages, push tokens, and authentication material.
+- Uncompressed call samples stay in process memory; network call audio is WebRTC/Opus unless the user explicitly starts a local iPhone recording. Recordings are private, excluded from backups, and never uploaded to Relay. Logs must omit PCM, complete SMS messages, push tokens, and authentication material.
 - Emergency calls must use system telephony; AirSIM is not an emergency communications guarantee.
 - The Android app cannot bypass OEM firmware or system-signature restrictions to enable hidden or removed AVF Linux features.
 

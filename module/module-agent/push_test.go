@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -117,7 +116,7 @@ func TestPushRegistrationPersistsWithoutLeakingTokensOrSecretInStatus(t *testing
 	}
 
 	status := newPushManager(path).status()
-	if !status.Configured || !status.CallPushReady || !status.MessagePushReady {
+	if !status.Configured || status.CallPushReady || !status.MessagePushReady {
 		t.Fatalf("status mismatch after persistence: %#v", status)
 	}
 	encoded, _ := json.Marshal(status)
@@ -139,7 +138,7 @@ func TestPushManagerRestoresLastGoodRegistrationWhenPrimaryIsTruncated(t *testin
 	}
 
 	restored := newPushManager(path).status()
-	if !restored.Configured || !restored.CallPushReady || !restored.MessagePushReady {
+	if !restored.Configured || restored.CallPushReady || !restored.MessagePushReady {
 		t.Fatalf("truncated primary config did not restore the last valid registration: %#v", restored)
 	}
 	if restored.LastError != "" {
@@ -238,7 +237,7 @@ func TestPushRegistrationValidatesWatchVoIPIdentity(t *testing.T) {
 	}
 }
 
-func TestCloudMediaURLRequiresTLSAndCarriesAgentRole(t *testing.T) {
+func TestCloudCallURLRequiresTLSAndCarriesRoleWithoutSecret(t *testing.T) {
 	got, err := cloudMediaURL(
 		"https://push.airsim.example", "D9B59660-05BB-4EA8-9AEB-4505B35C93F9",
 		"call-secret-0123456789abcdef",
@@ -246,7 +245,7 @@ func TestCloudMediaURLRequiresTLSAndCarriesAgentRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "wss://push.airsim.example/v1/calls/d9b59660-05bb-4ea8-9aeb-4505b35c93f9/connect?role=agent&token=call-secret-0123456789abcdef"
+	want := "wss://push.airsim.example/v1/calls/d9b59660-05bb-4ea8-9aeb-4505b35c93f9/connect?role=agent"
 	if got != want {
 		t.Fatalf("media address=%q, want %q", got, want)
 	}
@@ -323,21 +322,6 @@ func TestExpiredCloudCommandIsRejectedAndDeduplicatedBeforeAT(t *testing.T) {
 		t.Fatalf("expired command result is unstable: first=%#v second=%#v", first, second)
 	}
 }
-
-func TestCloudPCMReadTimeoutTriggersVoiceRouteRecovery(t *testing.T) {
-	if !shouldRecoverCloudPCM(&net.OpError{Op: "read", Err: timeoutError{}}, 0) {
-		t.Fatal("voice bridge must restart when a PCM connection stays up with no downlink bytes")
-	}
-	if shouldRecoverCloudPCM(io.EOF, 12_800) {
-		t.Fatal("a normal EOF after downlink has flowed should be left to connection retry and must not reset the media route immediately")
-	}
-}
-
-type timeoutError struct{}
-
-func (timeoutError) Error() string   { return "timeout" }
-func (timeoutError) Timeout() bool   { return true }
-func (timeoutError) Temporary() bool { return true }
 
 func TestCallOwnershipPreservesAuthenticatedIPhoneOwner(t *testing.T) {
 	var received callOwnerPushEvent
@@ -453,12 +437,12 @@ func TestAgentHeartbeatReportsCellularStateWithoutSecrets(t *testing.T) {
 		received.DeviceSecret == "" || received.SignalDBM == nil || *received.SignalDBM != -91 {
 		t.Fatalf("heartbeat payload mismatch: %#v", received)
 	}
-	if len(received.AgentMediaCapabilities) != 1 || received.AgentMediaCapabilities[0] != "webrtc" {
-		t.Fatalf("heartbeat media capabilities=%v, want [webrtc]", received.AgentMediaCapabilities)
+	if received.AgentMediaCapabilities == nil || len(received.AgentMediaCapabilities) != 0 || received.AgentMediaReady || received.MediaCapabilityRevision != 2 {
+		t.Fatalf("heartbeat falsely advertised media: %#v", received)
 	}
 }
 
-func TestSendRegistrationAdvertisesOnlyWebRTC(t *testing.T) {
+func TestAVFRegistrationExplicitlyClearsMediaCapabilities(t *testing.T) {
 	var received pushRegistration
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/devices/register" {
@@ -480,11 +464,11 @@ func TestSendRegistrationAdvertisesOnlyWebRTC(t *testing.T) {
 	if err := manager.sendRegistration(); err != nil {
 		t.Fatal(err)
 	}
-	if len(received.AgentMediaCapabilities) != 1 || received.AgentMediaCapabilities[0] != "webrtc" {
-		t.Fatalf("registration media capabilities=%v, want [webrtc]", received.AgentMediaCapabilities)
+	if received.AgentMediaCapabilities == nil || len(received.AgentMediaCapabilities) != 0 || received.AgentMediaReady || received.MediaCapabilityRevision != 2 {
+		t.Fatalf("registration falsely advertised media: %#v", received)
 	}
-	if received.MediaTransport != "webrtc" {
-		t.Fatalf("registration transport=%q, want webrtc", received.MediaTransport)
+	if received.MediaTransport != "" {
+		t.Fatalf("registration transport=%q, want none for AVF", received.MediaTransport)
 	}
 }
 

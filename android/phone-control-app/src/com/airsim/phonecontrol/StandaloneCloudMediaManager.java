@@ -275,6 +275,11 @@ final class StandaloneCloudMediaManager implements Closeable {
                 }
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
                 if ("answer".equals(action)) mediaTransport = control.optString("media_transport", descriptor.mediaTransport);
+                if ("answer".equals(action) && (!CloudCallMedia.WEBRTC.equals(mediaTransport)
+                        || !ShizukuBridgeManager.get(context).mediaAvailable())) {
+                    owner.writeText(status("action_error", "privileged_media_unavailable"));
+                    continue;
+                }
                 JSONObject command = new JSONObject().put("command_id",
                                 control.optString("command_id", UUID.randomUUID().toString()))
                         .put("type", "call_control").put("action", action)

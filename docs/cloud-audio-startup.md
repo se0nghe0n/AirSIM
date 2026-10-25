@@ -1,5 +1,8 @@
 # Cloud audio startup on iPhone
 
+> Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. AVF voice is upgrade-required; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](webrtc-only-migration.md).
+
+
 The iPhone prepares the current call's TURN credentials and shared native WebRTC factory while its control WebSocket connects and the Android agent confirms the answer. This removes those preparation steps from the serial path after answer acknowledgement. No Android update or Relay protocol change is required.
 
 Preparation does not create a peer, send SDP, or start recording/playback. The existing answer acknowledgement, current call identity, CallKit activation, microphone permission, and native/agent readiness checks still control audio startup. Codec, packet duration, jitter buffering, and playback behavior are unchanged.

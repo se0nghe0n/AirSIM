@@ -38,29 +38,6 @@ func TestRequestAdmissionReservesCallControlCapacity(t *testing.T) {
 	criticalRelease()
 }
 
-func TestAudioHostConfigExposesListenerReadinessBeforeHandshake(t *testing.T) {
-	service := &agent{}
-	service.voice.mu.Lock()
-	service.voice.listening = true
-	service.voice.ready = false
-	service.voice.mu.Unlock()
-
-	request := httptest.NewRequest(http.MethodGet, "/api/calls/audio/host/config", nil)
-	response := httptest.NewRecorder()
-	service.audioHostConfig(response, request)
-
-	var payload map[string]any
-	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["route_listening"] != true {
-		t.Fatalf("route_listening=%v, want true", payload["route_listening"])
-	}
-	if payload["route_ready"] != false {
-		t.Fatalf("route_ready=%v, want false before AIRSIMREADY", payload["route_ready"])
-	}
-}
-
 func TestRequestAdmissionSeparatesLongPolls(t *testing.T) {
 	admission := newRequestAdmission(1, 1, 1)
 	release, ok := admission.acquire(context.Background(), "/api/events")
@@ -129,29 +106,6 @@ func TestOperationFlightCoalescesConcurrentHangups(t *testing.T) {
 	defer mu.Unlock()
 	if runs != 1 {
 		t.Fatalf("concurrent hangup ran %d times, want 1", runs)
-	}
-}
-
-func TestVoiceRuntimeValidatorCachesStreamingValidation(t *testing.T) {
-	directory := t.TempDir()
-	payload := strings.Repeat("voice-runtime", 100_000)
-	path := filepath.Join(directory, "runtime.bin")
-	if err := os.WriteFile(path, []byte(payload), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256([]byte(payload))
-	files := map[string]string{"runtime.bin": hex.EncodeToString(digest[:])}
-	var validator voiceRuntimeValidator
-	installed, err := validator.validate(directory, files)
-	if err != nil || !installed {
-		t.Fatalf("initial streaming validation failed: installed=%v err=%v", installed, err)
-	}
-	if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	installed, err = validator.validate(directory, files)
-	if err != nil || !installed {
-		t.Fatalf("a passed validation result should be reused in the same process: installed=%v err=%v", installed, err)
 	}
 }
 
@@ -244,38 +198,6 @@ func TestValidateModuleUpdateManifestRejectsIncompleteOrWrongTarget(t *testing.T
 	manifest.Files[0].Target = "bin/unsafe"
 	if err := validateModuleUpdateManifest(manifest); err == nil {
 		t.Fatal("an out-of-bounds target in the update manifest was not rejected")
-	}
-}
-
-func TestWriteVoiceMediaRoutePreservesCommands(t *testing.T) {
-	path := t.TempDir() + "/voc_svr"
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeVoiceMediaRoute(path, "S\n"); err != nil {
-		t.Fatalf("failed to write the voice start command: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "S\n" {
-		t.Fatalf("voice start command=%q, want %q", data, "S\\n")
-	}
-}
-
-func TestVoiceHelperChecksumMatchesBuiltArtifact(t *testing.T) {
-	path := filepath.Join("pcm-bridge", voiceHelperName)
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		t.Skip("PCM helper has not been built yet")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest := sha256.Sum256(data)
-	if actual := hex.EncodeToString(digest[:]); actual != voiceHelperSHA256 {
-		t.Fatalf("PCM helper SHA-256=%s, Agent allowlist=%s", actual, voiceHelperSHA256)
 	}
 }
 
@@ -869,131 +791,6 @@ func TestProfilePayloadKeepsEUICCState(t *testing.T) {
 	})
 	if payload.ICCID != "8944305293607172968" || payload.State != 1 || payload.StateText != "Enabled" {
 		t.Fatalf("profile mapping mismatch: %#v", payload)
-	}
-}
-
-func TestParseVoicePCMStatsUsesLatestCompleteLine(t *testing.T) {
-	logData := []byte(
-		"mavo-pcm-bridge[stats]: uplink_bytes=320 uplink_frames=1 uplink_peak=12 downlink_bytes=640 downlink_frames=2 downlink_peak=34 downlink_dropped_frames=0\n" +
-			"qdc507-agent[event]: time=2026-08-16T00:00:00Z still-running\n" +
-			"mavo-pcm-bridge[stats]: uplink_bytes=960 uplink_frames=3 uplink_peak=1234 downlink_bytes=1280 downlink_frames=4 downlink_peak=2345 downlink_dropped_frames=2\n",
-	)
-	stats, ok := parseVoicePCMStats(logData)
-	if !ok {
-		t.Fatal("voice PCM stats were not parsed")
-	}
-	if stats.UplinkBytes != 960 || stats.UplinkFrames != 3 || stats.UplinkPeak != 1234 {
-		t.Fatalf("uplink stats parse mismatch: %#v", stats)
-	}
-	if stats.DownlinkBytes != 1280 || stats.DownlinkFrames != 4 ||
-		stats.DownlinkPeak != 2345 || stats.DownlinkDroppedFrame != 2 {
-		t.Fatalf("downlink stats parse mismatch: %#v", stats)
-	}
-}
-
-func TestVoiceRouteMarkersRequireD4AndNetworkBridge(t *testing.T) {
-	data := []byte("mavo-pcm-bridge[info]: network PCM listening on 192.168.225.1:7580\n" +
-		"mavo-pcm-bridge[info]: network PCM client connected\n" +
-		"mavo-pcm-bridge[info]: bridge active on 192.168.225.1:7580\n")
-	if voiceRouteLogReady(data) {
-		t.Fatal("a log missing the D4 route session must not be treated as a complete route")
-	}
-	data = append(data, []byte("mavo-pcm-bridge[info]: VoLTE route session active on hw:0,4\n")...)
-	if !voiceRouteLogReady(data) {
-		t.Fatal("a log with both the D4 route session and the network bridge marker should be treated as a complete route")
-	}
-}
-
-func TestVoiceRoutePhaseSeparatesListenerFromClient(t *testing.T) {
-	listening := []byte("mavo-pcm-bridge[info]: VoLTE route session active on hw:0,4\n" +
-		"mavo-pcm-bridge[info]: network PCM listening on 192.168.225.1:7580\n")
-	if !voiceRouteListeningLogReady(listening) {
-		t.Fatal("7580 listener marker should be independently observable")
-	}
-	if voiceRouteLogReady(listening) {
-		t.Fatal("listener readiness must not be reported as a completed PCM handshake")
-	}
-	connected := append(listening,
-		[]byte("mavo-pcm-bridge[info]: network PCM client connected\n"+
-			"mavo-pcm-bridge[info]: bridge active on 192.168.225.1:7580\n")...)
-	if !voiceRouteLogReady(connected) {
-		t.Fatal("full route should be ready after handshake and worker startup")
-	}
-}
-
-func TestVoiceListenerReadyTimeoutAllowsHelperStartup(t *testing.T) {
-	// Wait only for the helper to start listening, not for a client connection that runs later.
-	if voiceListenerReadyTimeout < 5*time.Second {
-		t.Fatalf("network PCM listen wait=%s, need at least 5s", voiceListenerReadyTimeout)
-	}
-}
-
-func TestVoiceRouteStartLeaseDoesNotBlockStateSnapshots(t *testing.T) {
-	tracker := voiceTracker{}
-	release, started := tracker.beginRouteStart(time.Now())
-	if !started {
-		t.Fatal("the first voice bridge start should take the lifecycle lease")
-	}
-	defer release()
-
-	done := make(chan voiceRouteSnapshot, 1)
-	go func() { done <- tracker.snapshot() }()
-	select {
-	case snapshot := <-done:
-		if !snapshot.Starting {
-			t.Fatal("the snapshot should show starting during a cold start")
-		}
-	case <-time.After(100 * time.Millisecond):
-		t.Fatal("voice bridge cold start must not block status and diagnostic queries")
-	}
-}
-
-func TestVoiceRouteStartLeaseSerializesConcurrentStarts(t *testing.T) {
-	tracker := voiceTracker{}
-	release, started := tracker.beginRouteStart(time.Now())
-	if !started {
-		t.Fatal("the first voice bridge start should succeed")
-	}
-	defer release()
-	if _, duplicate := tracker.beginRouteStart(time.Now()); duplicate {
-		t.Fatal("a second D4/D5/D6 route must not start while a cold start is already in progress")
-	}
-}
-
-func TestStopVoiceRouteIsIdempotentWhileCleanupIsRunning(t *testing.T) {
-	a := &agent{}
-	a.voice.stopping = true
-
-	a.stopVoiceRoute()
-
-	a.voice.mu.Lock()
-	stillStopping := a.voice.stopping
-	a.voice.mu.Unlock()
-	if !stillStopping {
-		t.Fatal("a concurrent second voice cleanup must not take over or finish the first cleanup early")
-	}
-}
-
-func TestSamsungStopVoiceRouteNeverTouchesQDC507Media(t *testing.T) {
-	original := stopVoiceMediaRouteForLifecycle
-	defer func() { stopVoiceMediaRouteForLifecycle = original }()
-	stops := 0
-	stopVoiceMediaRouteForLifecycle = func() { stops++ }
-
-	withoutPCM := &agent{}
-	withoutPCM.stopVoiceRoute()
-	if stops != 0 {
-		t.Fatalf("a reject path that never started PCM should not clean up media, got=%d", stops)
-	}
-
-	withPCM := &agent{voiceBackend: voiceBackendConfig{kind: voiceBackendSamsungAndroid}}
-	withPCM.voice.mediaRouteStarted = true
-	withPCM.stopVoiceRoute()
-	if stops != 0 {
-		t.Fatalf("stopping Samsung PCM must not run QDC507 media cleanup, got=%d", stops)
-	}
-	if withPCM.voice.mediaRouteStarted {
-		t.Fatal("mediaRouteStarted must be reset after cleanup")
 	}
 }
 

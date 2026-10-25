@@ -41,7 +41,6 @@ func runtimeProfileFrom(value string) runtimeProfile {
 			Platform:            "qdc507-armv7",
 			RequiresModem:       true,
 			DirectModule:        true,
-			CallAudio:           true,
 			NativeContacts:      true,
 			NetworkPolicyNative: true,
 			WRTLite:             true,

@@ -26,10 +26,10 @@ Main targets:
 - CallKit dialing, incoming calls, answer, hang-up, mute, and DTMF
 - PushKit, notification APNs, and ActivityKit
 - Microphone permission is requested first on entering the foreground. Local discovery and notification authorization start only after the microphone permission decision. If the system defers the prompt, it retries on the next foreground entry without requiring re-pairing.
-- Apple Watch dialing, answering, and call media
+- Apple Watch companion dialing, answering, mute, and hang-up. Call audio uses the paired iPhone microphone, speaker, or headset; independent Watch voice is not supported.
 - SMS list, sending, notifications, and contact integration
 - VoWLAN and cloud Relay transport selection. Automatic mode selects only actually available dialing routes, with fixed priority VoWLAN, then cloud.
-- Cloud call audio uses native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. The older PCM jitter buffer and time-pitch node are not on this path. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
+- Both cloud and local VoWLAN call audio use native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. Dormant PCM network engines, resampling, framing, and time-pitch helpers have been removed. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
 - Settings show current VoWLAN/cloud mode and Agent heartbeat status.
 - Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
 - Four-stage cloud diagnostics: local push credentials, Relay identity, device registration, and Agent heartbeat
@@ -110,14 +110,14 @@ The GitHub Release `AirSIM-iOS-<version>-unsigned.ipa` is a re-signing package w
 - Store the VoWLAN secret in Keychain, never UserDefaults or logs.
 - Pairing uses X25519, HKDF-SHA256, and AES-256-GCM.
 - Control requests use HMAC-SHA256, time windows, and nonces for replay protection.
-- Keep call PCM in memory and network streams unless the user explicitly starts an iPhone recording. Protect saved files, exclude them from backups, and never upload them or include audio in diagnostics.
+- Keep uncompressed call samples inside the native audio device and WebRTC processing callbacks unless the user explicitly starts an iPhone recording. Protect saved files, exclude them from backups, and never upload them or include audio in diagnostics.
 - Logs and error screens must not expose device secrets, HMAC, push tokens, or complete media URLs.
 
 ## Current status
 
 Simulator builds and tests cover the main protocol and transport-selection logic. A release still requires Apple signing, installation on physical iPhone/Apple Watch devices, Samsung dialing and answering, bidirectional voice, SMS, and background-push acceptance.
 
-## Native cloud WebRTC audio
+## Native WebRTC-only audio
 
 The iPhone advertises and requests only `webrtc`. `legacy_pcm` is not an iPhone
 cloud carrier, and `airsim.cloud-media-force-legacy-pcm` does not select PCM.
@@ -130,12 +130,31 @@ v1 JSON SDP/ICE envelope. Each negotiation has a new UUID, remote ICE is bounded
 128 candidates, and callbacks are fenced by connection, call and session identity.
 Only an agent reconnect triggers a new offer; a late Watch connection does not.
 Connected audio requires both native DTLS readiness and the agent's session-scoped
-`webrtc_ready` after its phone PCM bridge is ready. Peer reconnect and failed ICE
+`webrtc_ready` after its verified Android carrier route is ready. Peer reconnect and failed ICE
 use the existing bounded media recovery. Hangup,
 CallKit deactivation, mute and system route changes retain the existing lifecycle.
 Native WebRTC owns the device audio, Opus, 20 ms packetization, FEC/DTX, AEC, PLC and
 jitter handling; it never feeds the legacy PCM resampler/time-pitch graph. Stats
 contain only numeric media counters and session identity, never SDP or ICE secrets.
+
+Local VoWLAN uses host-only ICE and the same native peer. After the SDP exchange,
+iPhone polls authenticated `POST /api/calls/webrtc/status` with `version: 1`,
+`call_uuid`, `generation`, and `session_id`. Responses must echo the exact identity
+and report `preparing`, `ready`, `failed`, or `closed`. ICE connectivity alone is
+not readiness. Startup and recovery are bounded to 30 seconds; teardown cancels
+polling and posts the same identity to `/api/calls/webrtc/stop`. A failed local
+session never silently changes to cloud or hangs up the carrier call.
+
+CallKit forwards activation/deactivation once for either transport. User-started
+recordings use a call-UUID-bound native processing observer for both directions,
+so local/cloud source labels cannot discard local recordings or admit callbacks
+from a previous call. Existing recording files and privacy protections are unchanged.
+Watch is a companion controller only: it never opens a media socket or captures
+microphone audio; mute and local-answer controls reach the iPhone peer.
+
+These changes require a fresh Xcode build/test and real-device acceptance. Source
+and simulator checks cannot prove privileged carrier routing or locked/background
+CallKit and Watch behavior.
 
 `WebRTCDependency/Package.swift` pins the official `webrtc-sdk/Specs` 144.7559.15
 XCFramework URL and SHA-256 (SPM verifies every downloaded binary). The manifest

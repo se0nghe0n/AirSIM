@@ -1,5 +1,8 @@
 # AirSIM Android Control App
 
+> Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. AVF voice is upgrade-required; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](../../docs/webrtc-only-migration.md).
+
+
 This directory contains the shared Android implementation and legacy AVF compatibility Manifest. New installations should use the root [Android Standalone APK](../../android-standalone/README.md), which includes the Agent in the same APK. Use this AVF build entry point only for legacy deployments.
 
 The documented release is [`v0.9.7.1`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.9.7.1) (Android `versionCode 81`), with Android 10–13 compatibility fixes; upgrading is recommended. Prefer Standalone for new installs. The companion Linux AVF Agent remains [`v0.4.6`](https://github.com/kai-wu-cortex/AirSIM/releases/tag/v0.4.6). The upstream maintainer's cloud mode uses `https://airsim-push.remotepilot.site`, not DJOneHub's `https://push.remotepilot.site`. Self-signed Apple clients need a separate Relay matching their Bundle ID and APNs credentials.

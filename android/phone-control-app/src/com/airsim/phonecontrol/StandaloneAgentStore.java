@@ -27,7 +27,8 @@ final class StandaloneAgentStore {
         String encoded = preferences.getString(REGISTRATION, "");
         if (encoded == null || encoded.isBlank()) return null;
         try { return new JSONObject(encoded)
-                .put("agent_media_capabilities", mediaCapabilities()); }
+                .put("agent_media_capabilities", mediaCapabilities())
+                .put("media_capability_revision", 2).put("agent_media_ready", false); }
         catch (Exception error) {
             BridgeLog.error("standalone_registration_corrupt", error);
             return null;
@@ -153,6 +154,14 @@ final class StandaloneAgentStore {
         }
         // Capabilities describe this installed Agent, not the older pairing payload.
         value.put("agent_media_capabilities", mediaCapabilities());
+        value.put("media_capability_revision", 2).put("agent_media_ready", false);
+    }
+
+    /** Write both heartbeat fields from one live readiness snapshot. */
+    static JSONObject applyMediaHeartbeat(JSONObject heartbeat, boolean ready) throws Exception {
+        return heartbeat.put("media_capability_revision", 2)
+                .put("agent_media_ready", ready)
+                .put("agent_media_capabilities", ready ? mediaCapabilities() : new JSONArray());
     }
 
     static JSONArray mediaCapabilities() {

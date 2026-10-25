@@ -19,7 +19,7 @@ import rikka.shizuku.Shizuku;
 
 /** App-local fallback for ROMs whose LoadedApk.makeApplication breaks UserService startup. */
 final class PrivilegedProcessTransport {
-    static final String PREFIX = "AIRSIM_PIXEL_RPC ";
+    static final String PREFIX = "AIRSIM_MEDIA_RPC ";
     private final IRemoteProcess remote;
     private final BufferedWriter commands;
     private final ArrayBlockingQueue<String> responses = new ArrayBlockingQueue<>(16);
@@ -61,13 +61,13 @@ final class PrivilegedProcessTransport {
         Thread reader = new Thread(() -> {
             try (BufferedReader lines = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
                 String line;
-                while ((line = lines.readLine()) != null) {
+                while ((line = PrivilegedMediaProtocol.readLine(lines)) != null) {
                     if (protocol && line.startsWith(PREFIX)) {
-                        if (line.length() > 16384 || !responses.offer(line.substring(PREFIX.length()))) {
+                        if (!responses.offer(line.substring(PREFIX.length()))) {
                             responses.clear(); responses.offer("EOF"); return;
                         }
                     } else if (!protocol) {
-                        processError = DebugRedactor.sanitize(line.substring(0, Math.min(line.length(), 1500)));
+                        processError = "privileged runtime diagnostics suppressed";
                     }
                 }
             } catch (Exception ignored) {
@@ -89,17 +89,37 @@ final class PrivilegedProcessTransport {
         return result;
     }
 
+    boolean isAlive() {
+        try { return !closed && remote.alive(); } catch (Exception error) { return false; }
+    }
+
     synchronized String request(int code, boolean value) throws Exception {
         if (closed || !remote.alive()) throw new IllegalStateException("bridge process not running");
         if (code < 1 || code > 4) throw new IllegalArgumentException("unknown bridge command");
         commands.write(code + " " + (value ? "1" : "0") + "\n");
         commands.flush();
+        String line;
+        try { line = awaitResponse(); }
+        catch (Exception error) { close(); throw error; }
+        if (line.startsWith("ERR ")) throw new IllegalStateException("privileged_operation_rejected");
         try {
-            String line = awaitResponse();
-            if (line.length() < 4) throw new IllegalStateException("invalid bridge response");
-            String result = new String(Base64.decode(line.substring(4), Base64.NO_WRAP), StandardCharsets.UTF_8);
-            if (!line.startsWith("OK  ")) throw new IllegalStateException(result);
-            return result;
+            if (!line.startsWith("OK  ")) throw new IllegalStateException("invalid_bridge_response");
+            return new String(Base64.decode(line.substring(4), Base64.NO_WRAP), StandardCharsets.UTF_8);
+        } catch (Exception error) { close(); throw error; }
+    }
+
+    synchronized String mediaRequest(String payload) throws Exception {
+        if (closed || !remote.alive()) throw new IllegalStateException("media_process_unavailable");
+        commands.write("5 " + PrivilegedMediaProtocol.bounded(payload) + "\n");
+        commands.flush();
+        String response;
+        try { response = awaitResponse(); }
+        catch (Exception error) { close(); throw error; }
+        // A rejected competing owner is not a dead transport. Keep the incumbent peer alive.
+        if (response.startsWith("ERR ")) throw new IllegalStateException("media_request_rejected");
+        try {
+            if (!response.startsWith("DATA ")) throw new IllegalStateException("invalid_media_response");
+            return PrivilegedMediaProtocol.bounded(response.substring(5));
         } catch (Exception error) { close(); throw error; }
     }
 

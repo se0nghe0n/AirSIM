@@ -8,7 +8,7 @@ The Agent release documented here is [`v0.4.6`](https://github.com/kai-wu-cortex
 airsim-avf-agent_<version>-<release>_arm64.deb
 ```
 
-Samsung, Qualcomm, and MediaTek devices use the same Agent package. The Android app detects the AVF private network, Terminal, Shizuku, audio bridge, and system permissions at runtime. The Debian package contains only Linux services independent of the SoC vendor.
+Samsung, Qualcomm, and MediaTek devices use the same Agent package. The Android app detects the AVF private network, Terminal, Shizuku, and system permissions at runtime. The Debian package contains only Linux services independent of the SoC vendor. Current source is control-only: pairing, SMS, call state, terminal call control, installation and recovery remain available, but remote dial/answer requires Android Standalone with native WebRTC. AVF does not carry audio or run a PCM helper.
 
 ## Package layout
 
@@ -21,7 +21,7 @@ Samsung, Qualcomm, and MediaTek devices use the same Agent package. The Android 
 /usr/lib/systemd/system/airsim-installerd.service
 ```
 
-Persistent state resides in `/var/lib/airsim` and `/var/lib/airsim-installerd`. User configuration is in `/etc/airsim/agent.env` and survives upgrades. Service logs go to journald by default.
+Persistent state resides in `/var/lib/airsim` and `/var/lib/airsim-installerd`. User configuration is in `/etc/airsim/agent.env` and survives upgrades. Legacy voice-backend/PCM-address variables in that file are ignored; no data reset or identity rotation is required. Service logs go to journald by default.
 
 ## Build and sign
 

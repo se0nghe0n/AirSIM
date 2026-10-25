@@ -70,14 +70,13 @@ public final class VoWLANGatewayService extends Service {
                         && roleManager.isRoleAvailable(RoleManager.ROLE_DIALER)
                         && roleManager.isRoleHeld(RoleManager.ROLE_DIALER);
                 boolean agentReady = false;
-                boolean pcmReady = false;
+                boolean mediaReady = false;
                 if (hotspot != null && avf != null && paired && AppConfig.configured(this)) {
                     boolean sameRunningGateway = hotspot.getHostAddress().equals(activeHotspot)
                             && control != null && control.localPort() > 0;
                     if (sameRunningGateway) {
-                        // The telephony bridge on 7580 stays up for the WebRTC peer.
                         agentReady = true;
-                        pcmReady = true;
+                        mediaReady = ShizukuBridgeManager.get(this).mediaAvailable();
                     } else {
                         try {
                             String status = new AgentClient(this).status();
@@ -85,12 +84,12 @@ public final class VoWLANGatewayService extends Service {
                         } catch (Exception error) {
                             BridgeLog.error("vowlan_agent_probe_failed", error);
                         }
-                        pcmReady = portOpen(avf, 7580);
+                        mediaReady = RuntimeMode.isStandalone(this) && ShizukuBridgeManager.get(this).mediaAvailable();
                     }
                 }
-                diagnosticState(hotspot, avf, paired, agentReady, pcmReady, dialerRoleHeld);
+                diagnosticState(hotspot, avf, paired, agentReady, mediaReady, dialerRoleHeld);
                 if (VoWLANNetworkPolicy.shouldAdvertise(
-                        hotspot != null, paired, agentReady, pcmReady, dialerRoleHeld)) {
+                        hotspot != null, paired, agentReady, mediaReady, dialerRoleHeld)) {
                     ensureStarted(hotspot, avf);
                     update("VoWLAN ready · " + hotspot.getHostAddress());
                 } else {
@@ -98,7 +97,7 @@ public final class VoWLANGatewayService extends Service {
                     update(!dialerRoleHeld ? "Set AirSIM as the default phone app"
                             : !paired ? "VoWLAN not paired"
                             : hotspot == null ? "Waiting for the same Wi-Fi or Android hotspot"
-                            : !agentReady ? RuntimeMode.agentLabel(this) + " not ready" : "PCM audio bridge not ready");
+                            : !agentReady ? RuntimeMode.agentLabel(this) + " not ready" : "Privileged WebRTC service not ready");
                 }
                 Thread.sleep(5_000);
             } catch (InterruptedException interrupted) {
@@ -128,7 +127,7 @@ public final class VoWLANGatewayService extends Service {
         }
         advertise();
         BridgeLog.info("vowlan_ready hotspot=" + host + " control_port=" + control.localPort()
-                + " audio=webrtc_host_ice telephony_pcm=" + avf.getHostAddress() + ":7580");
+                + " audio=webrtc_host_ice carrier_device=in_process");
     }
 
     private void advertise() {
@@ -174,9 +173,9 @@ public final class VoWLANGatewayService extends Service {
     }
 
     private void diagnosticState(Inet4Address hotspot, Inet4Address avf, boolean paired,
-                                 boolean agentReady, boolean pcmReady, boolean dialerRoleHeld) {
+                                 boolean agentReady, boolean mediaReady, boolean dialerRoleHeld) {
         String value = "hotspot=" + address(hotspot) + " avf=" + address(avf) + " paired=" + paired
-                + " agent_ready=" + agentReady + " pcm_ready=" + pcmReady
+                + " agent_ready=" + agentReady + " media_ready=" + mediaReady
                 + " dialer_role=" + dialerRoleHeld;
         currentDiagnosticState = value;
         if (!value.equals(lastDiagnosticState)) {
@@ -210,16 +209,7 @@ public final class VoWLANGatewayService extends Service {
         return hotspot ? wifiFallback : null;
     }
 
-    private static boolean portOpen(InetAddress address, int port) {
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(address, port), 500);
-            return true;
-        } catch (Exception error) {
-            BridgeLog.debug("pcm_probe_failed address=" + address.getHostAddress() + " port=" + port
-                    + " error=" + error.getClass().getSimpleName());
-            return false;
-        }
-    }
+
 
     private void update(String detail) {
         long now = System.currentTimeMillis();

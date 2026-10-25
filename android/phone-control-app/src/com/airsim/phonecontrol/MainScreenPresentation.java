@@ -22,7 +22,7 @@ public final class MainScreenPresentation {
             boolean cloudEnabled,
             boolean relayConfigured,
             String lastError) {
-        if (vowlanReady) return "Android local network control and PCM ready; calls prefer VoWLAN";
+        if (vowlanReady) return "Android local network control and WebRTC service ready; calls prefer VoWLAN";
         if (cloudEnabled && relayConfigured && lastError != null && !lastError.isBlank()) {
             return "Latest Relay / Agent error: " + lastError;
         }
@@ -99,7 +99,7 @@ public final class MainScreenPresentation {
         if (value.contains("watchdog_created")) return "Agent watchdog started";
         if (value.contains("watchdog_configuration_available")) return "Linux Agent settings loaded";
         if (value.contains("application_started")) return "App service started";
-        if (value.contains("shizuku_user_service_connected")) return "Shizuku PCM bridge connected";
+        if (value.contains("shizuku_user_service_connected")) return "Shizuku WebRTC service connected";
         if (value.contains("shizuku_binder_received")) return "Shizuku connected";
         if (value.contains("shizuku_permission_granted")) return "Shizuku permission granted";
         if (value.contains("vowlan_service_created")) return "VoWLAN service started";

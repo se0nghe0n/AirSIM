@@ -34,9 +34,9 @@ assert_not_contains "$MANIFEST" 'AgentWatchdogService' \
   'standalone APK must not declare the AVF watchdog'
 
 "$ROOT/../android/phone-control-app/test.sh"
-"$ROOT/../android/phone-audio-bridge/build.sh"
 
 "$ROOT/build.sh" >/dev/null
+"$ROOT/../android/phone-control-app/test-peer-disposal.sh"
 APK="$ROOT/build/android/AirSIM-Android-Standalone-debug.apk"
 APKANALYZER=${APKANALYZER:-$(command -v apkanalyzer || true)}
 if [ -z "$APKANALYZER" ]; then

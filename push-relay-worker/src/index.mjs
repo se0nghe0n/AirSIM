@@ -11,7 +11,6 @@ import {
   authenticateAndReadAgentHeartbeats,
   authenticateAndWriteAgentHeartbeat,
   deleteRelayState,
-  readAgentHeartbeat,
   readAgentHeartbeats,
   readAgentHeartbeatsFromKV,
   claimQuota,
@@ -20,7 +19,10 @@ import {
   writeAgentHeartbeat,
   writeDeviceRecord,
   writeRelayState,
-  retainStoredWebRTCCapability,
+  currentAgentMedia,
+  MEDIA_CAPABILITY_REVISION,
+  MEDIA_HEARTBEAT_MAX_AGE_MS,
+  readCurrentAgentHeartbeat,
 } from "./status-store.mjs";
 export { AgentStatusRegistry } from "./status-store.mjs";
 
@@ -185,9 +187,9 @@ async function enqueueDeviceCommand(request, env) {
     const callSecret = randomToken(32);
     const callID = `outgoing-${command.command_id}`;
     const origin = new URL(request.url).origin;
-    const mediaTransport = assignedMediaTransport(
-      authenticated.device, env, value.media_transport || ""
-    );
+    const availability = await remoteMediaAvailability(authenticated.device, env, value.media_transport || "");
+    if (!availability.remote_audio_available) return unavailableMediaResponse(availability);
+    const mediaTransport = availability.media_transport;
     command.call = {
       call_id: callID,
       call_uuid: callUUID,
@@ -221,18 +223,27 @@ async function enqueueDeviceCommand(request, env) {
   const stub = env.COMMANDS.get(env.COMMANDS.idFromName(authenticated.device.device_id));
   const response = await stub.fetch("https://commands.internal/enqueue", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-airsim-device-id": authenticated.device.device_id },
     body: JSON.stringify(command),
   });
-  const result = await response.json();
+  const { call: queuedCall, ...result } = await response.json();
+  if (call && (!response.ok || result.duplicate)) {
+    await deleteRelayState(env, `call:${call.call_uuid}`);
+    call = response.ok && queuedCall?.media_transport === "webrtc"
+      ? { call_id: queuedCall.call_id, call_uuid: queuedCall.call_uuid, generation: queuedCall.generation,
+        call_secret: queuedCall.call_secret, media_transport: "webrtc",
+        media_url: `${new URL(request.url).origin.replace(/^http/, "ws")}/v1/calls/${queuedCall.call_uuid}/connect` }
+      : null;
+  }
   await recordDashboardEvent(env, {
     type: value.type === "dial" ? "call" : "sms",
     device_id: authenticated.device.device_id,
-    status: "queued",
+    status: !response.ok || ["failed", "expired"].includes(result.status)
+      ? "failed" : result.status === "completed" ? "delivered" : "queued",
     channel: "relay",
     environment: authenticated.device.environment,
   });
-  return jsonResponse(response.status, { ...result, ...(call ? { call } : {}) });
+  return jsonResponse(response.status, { ...result, ...(response.ok && call ? { call } : {}) });
 }
 
 async function readDeviceCommandResult(request, env) {
@@ -295,6 +306,13 @@ async function enqueueCallAction(request, env, pathCallUUID) {
     : 1;
   const validation = validateCallAction(value, call, callUUID, generation);
   if (validation.status) return jsonResponse(validation.status, { error: validation.error });
+  if (value.action === "answer") {
+    const availability = call.media_transport === "webrtc"
+      ? await remoteMediaAvailability(authenticated.device, env, "webrtc")
+      : unavailableMedia("unsupported_call_media");
+    if (value.owner === "watch") return unavailableMediaResponse(unavailableMedia("iphone_audio_required"));
+    if (!availability.remote_audio_available) return unavailableMediaResponse(availability);
+  }
 
   const now = Date.now();
   const callDeadline = Date.parse(call.media_expires_at || call.expires_at || "");
@@ -316,12 +334,13 @@ async function enqueueCallAction(request, env, pathCallUUID) {
       call_uuid: callUUID,
       generation,
       direction: call.direction || "incoming",
+      media_transport: call.media_transport || null,
     },
   };
   const stub = env.COMMANDS.get(env.COMMANDS.idFromName(authenticated.device.device_id));
   return stub.fetch("https://commands.internal/enqueue", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "x-airsim-device-id": authenticated.device.device_id },
     body: JSON.stringify(command),
   });
 }
@@ -430,8 +449,9 @@ function randomToken(byteCount) {
 }
 
 export class DeviceCommandSession {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
     this.storage = state.storage;
   }
 
@@ -459,19 +479,24 @@ export class DeviceCommandSession {
         if (!sameCommandIntent(existing.command, command)) {
           return jsonResponse(409, { error: "command id belongs to another operation" });
         }
+        if (["pending", "delivered"].includes(existing.status)) await this.mediaCommandAvailable(key, existing);
         return jsonResponse(202, {
           accepted: true,
           command_id: command.command_id,
           status: existing.status,
           agent_connected: this.state.getWebSockets("agent").length > 0,
           duplicate: true,
+          ...(existing.command.type === "dial" && existing.command.call?.media_transport === "webrtc" &&
+            ["pending", "delivered", "completed"].includes(existing.status) ? { call: existing.command.call } : {}),
           ...(existing.rescue_command_id ? { rescue_command_id: existing.rescue_command_id } : {}),
           ...(existing.result ? { result: existing.result } : {}),
           ...(existing.error ? { error: existing.error } : {}),
+          ...(existing.remote_audio_reason ? unavailableMedia(existing.remote_audio_reason) : {}),
         });
       }
       const record = {
         command,
+        device_id: request.headers.get("x-airsim-device-id") || "",
         status: "pending",
         created_at_ms: Date.now(),
         accepted_at: new Date().toISOString(),
@@ -483,6 +508,10 @@ export class DeviceCommandSession {
           : {}),
       };
       await this.storage.put(key, record);
+      if (!await this.mediaCommandAvailable(key, record)) {
+        return jsonResponse(409, { accepted: false, command_id: command.command_id,
+          status: "failed", error: record.error, ...unavailableMedia(record.remote_audio_reason) });
+      }
       const agents = this.state.getWebSockets("agent");
       for (const socket of agents) {
         try {
@@ -518,6 +547,7 @@ export class DeviceCommandSession {
         ...(record.rescue_command_id ? { rescue_command_id: record.rescue_command_id } : {}),
         ...(record.result ? { result: record.result } : {}),
         ...(record.error ? { error: record.error } : {}),
+        ...(record.remote_audio_reason ? unavailableMedia(record.remote_audio_reason) : {}),
       });
     }
     if (url.pathname === "/pending" && request.method === "POST") {
@@ -535,6 +565,7 @@ export class DeviceCommandSession {
           await this.storage.put(key, record);
           continue;
         }
+        if (!await this.mediaCommandAvailable(key, record)) continue;
         record.status = "delivered";
         record.attempts = Number(record.attempts || 0) + 1;
         record.delivered_at = new Date(now).toISOString();
@@ -567,6 +598,30 @@ export class DeviceCommandSession {
     if (!UUID_PATTERN.test(value?.command_id || "") ||
         !["completed", "failed"].includes(value?.status)) return;
     await this.completeCommand(value);
+  }
+
+  async mediaCommandAvailable(key, record) {
+    const command = record.command;
+    if (command?.type !== "dial" && !(command?.type === "call_control" && command.action === "answer")) return true;
+    let availability = unavailableMedia("unsupported_call_media");
+    if (record.device_id && command.call?.media_transport === "webrtc" && command.owner !== "watch") {
+      try {
+        const device = await readDeviceRecord(this.env, record.device_id);
+        if (device) availability = await remoteMediaAvailability(device, this.env, "webrtc");
+      } catch {
+        availability = unavailableMedia("agent_unavailable");
+      }
+    }
+    const latest = await this.storage.get(key);
+    if (!["pending", "delivered"].includes(latest?.status)) return false;
+    if (availability.remote_audio_available) return true;
+    record.status = "failed";
+    record.remote_audio_reason = availability.remote_audio_reason;
+    record.error = "Remote call audio is unavailable; use the Android phone for this call.";
+    record.completed_at_ms = Date.now();
+    record.completed_at = new Date(record.completed_at_ms).toISOString();
+    await this.storage.put(key, record);
+    return false;
   }
 
   async completeCommand(value) {
@@ -630,6 +685,7 @@ export class DeviceCommandSession {
         continue;
       }
       if (!["pending", "delivered"].includes(record?.status)) continue;
+      if (!await this.mediaCommandAvailable(key, record)) continue;
       try {
         socket.send(JSON.stringify(record.command));
         record.status = "delivered";
@@ -655,6 +711,7 @@ export class DeviceCommandSession {
         await this.storage.put(key, record);
         continue;
       }
+      if (!await this.mediaCommandAvailable(key, record)) continue;
       if (this.rescueDue(record, now)) {
         await this.createRescue(record, agents, now);
       }
@@ -847,11 +904,18 @@ async function callICEConfiguration(request, env, callUUID) {
     return response;
   };
   if (!UUID_PATTERN.test(callUUID)) return noStore(jsonResponse(400, { error: "invalid call UUID" }));
-  const role = new URL(request.url).searchParams.get("role");
+  const url = new URL(request.url);
+  const role = url.searchParams.get("role");
   if (!["iphone", "agent"].includes(role)) return noStore(jsonResponse(400, { error: "invalid media role" }));
   const token = (request.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  if (!token || url.searchParams.has("token")) {
+    return noStore(jsonResponse(401, { error: "media authorization header required" }));
+  }
   const auth = await authenticateCall(callUUID, token, env);
   if (auth.response) return noStore(auth.response);
+  if (auth.call.media_transport !== "webrtc") {
+    return noStore(unavailableMediaResponse(unavailableMedia("unsupported_call_media")));
+  }
   if (!turnConfigured(env)) return noStore(jsonResponse(503, { error: "TURN is not configured" }));
   const stun = iceURLs(env.STUN_URLS, "stun");
   if (!stun) return noStore(jsonResponse(503, { error: "invalid STUN configuration" }));
@@ -903,19 +967,15 @@ async function connectCallMedia(request, env, callUUID) {
   if (role !== "agent" && !MEDIA_CLIENT_ROLES.has(role)) {
     return jsonResponse(400, { error: "invalid media role" });
   }
-  const headerToken = (request.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
-  // Older Watch/phone installs still use the URL token for legacy PCM calls.
-  // WebRTC clients must keep credentials out of request URLs.
-  const token = headerToken || (url.searchParams.has("token") ? url.searchParams.get("token") || "" : "");
+  const token = (request.headers.get("authorization") || "").match(/^Bearer\s+(.+)$/i)?.[1] || "";
+  if (!token || url.searchParams.has("token")) {
+    return jsonResponse(401, { error: "media authorization header required" });
+  }
   const auth = await authenticateCall(callUUID, token, env);
   if (auth.response) return auth.response;
   const { call } = auth;
-  const legacyAgentQuery = role === "agent" &&
-    env.WEBRTC_AGENT_QUERY_AUTH_ALLOWED === "true" &&
-    !headerToken && url.searchParams.has("token");
-  if (call.media_transport === "webrtc" &&
-      (!headerToken || url.searchParams.has("token")) && !legacyAgentQuery) {
-    return jsonResponse(401, { error: "media authorization header required" });
+  if (call.media_transport !== "webrtc") {
+    return unavailableMediaResponse(unavailableMedia("unsupported_call_media"));
   }
   if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
 
@@ -925,6 +985,7 @@ async function connectCallMedia(request, env, callUUID) {
   // arbitrary visitor headers into the media Durable Object.
   const headers = new Headers({ upgrade: "websocket" });
   headers.set("x-airsim-role", role);
+  headers.set("x-airsim-device-id", call.device_id || "");
   headers.set("x-airsim-call-id", call.call_id || "");
   headers.set("x-airsim-call-uuid", callUUID.toLowerCase());
   headers.set("x-airsim-generation", String(call.generation || 1));
@@ -976,7 +1037,8 @@ export class CallMediaSession {
     server.serializeAttachment({
       role,
       mediaTransport: request.headers.get("x-airsim-media-transport") === "webrtc" ? "webrtc" : "",
-      pcmTraceKey: crypto.randomUUID(),
+      connectionKey: crypto.randomUUID(),
+      deviceID: request.headers.get("x-airsim-device-id") || "",
       owner: inheritsOwnership,
       pendingControl: inheritedPendingControl,
       callID: request.headers.get("x-airsim-call-id") || "",
@@ -993,7 +1055,7 @@ export class CallMediaSession {
       this.sendTerminal(server);
       return new Response(null, { status: 101, webSocket: client });
     }
-    if (role === "agent") this.flushPendingControls(server);
+    if (role === "agent") await this.flushPendingControls(server);
     this.broadcastStatus("peer_connected", role);
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -1036,7 +1098,7 @@ export class CallMediaSession {
     return jsonResponse(deliveryFailed ? 503 : 202, { delivered: !deliveryFailed });
   }
 
-  webSocketMessage(socket, message) {
+  async webSocketMessage(socket, message) {
     if (this.terminal) {
       try { this.sendTerminal(socket); } catch {}
       return;
@@ -1063,6 +1125,17 @@ export class CallMediaSession {
     if (typeof value?.action === "string" && value.action.startsWith("webrtc_")) {
       this.relayWebRTC(socket, value);
       return;
+    }
+    let controlRevision = attachment.controlRevision || 0;
+    if (role !== "agent" && ["answer", "reject", "end"].includes(value?.action)) {
+      controlRevision += 1;
+      socket.serializeAttachment({ ...attachment, controlRevision });
+    }
+    if (role !== "agent" && value?.action === "answer") {
+      if (!await this.canAnswer(socket, value)) return;
+      // A cancel, terminal event or replacement during the registry read wins.
+      if (this.terminal || !this.isCurrentSocket(socket) ||
+          socket.deserializeAttachment()?.controlRevision !== controlRevision) return;
     }
     if (role !== "agent" && !this.acceptClientMessage(socket, role, message)) return;
     let outbound = role === "agent" ? message : bindMediaOwner(message, role);
@@ -1093,6 +1166,32 @@ export class CallMediaSession {
     }
   }
 
+  isCurrentSocket(socket) {
+    const attachment = socket.deserializeAttachment() || {};
+    const key = attachment.connectionKey || attachment.pcmTraceKey;
+    return this.state.getWebSockets(attachment.role).some((peer) => peer === socket ||
+      (key && key === (peer.deserializeAttachment()?.connectionKey || peer.deserializeAttachment()?.pcmTraceKey)));
+  }
+
+  async canAnswer(socket, value) {
+    const attachment = socket.deserializeAttachment() || {};
+    let availability = unavailableMedia("unsupported_call_media");
+    if (attachment.role === "watch") availability = unavailableMedia("iphone_audio_required");
+    else if (attachment.mediaTransport === "webrtc" && attachment.deviceID) {
+      try {
+        const device = await readDeviceRecord(this.env, attachment.deviceID);
+        if (device) availability = await remoteMediaAvailability(device, this.env, "webrtc");
+      } catch {
+        availability = unavailableMedia("agent_unavailable");
+      }
+    }
+    if (availability.remote_audio_available) return true;
+    try { socket.send(JSON.stringify({ status: "action_rejected",
+      ...callControlMetadata(JSON.stringify(value)), ...availability,
+      error: unavailableMediaMessage(availability.remote_audio_reason) })); } catch {}
+    return false;
+  }
+
   clearNegotiation() {
     for (const peer of this.state.getWebSockets()) {
       const attachment = peer.deserializeAttachment() || {};
@@ -1106,8 +1205,7 @@ export class CallMediaSession {
     const attachment = socket.deserializeAttachment() || {};
     const role = attachment.role;
     // Hibernation may provide a different JS wrapper for the same socket.
-    if (!this.state.getWebSockets(role).some((peer) => peer === socket ||
-      (attachment.pcmTraceKey && peer.deserializeAttachment()?.pcmTraceKey === attachment.pcmTraceKey))) return;
+    if (!this.isCurrentSocket(socket)) return;
     const reject = (error) => {
       try { socket.send(JSON.stringify({ status: "webrtc_failed", error })); } catch {}
     };
@@ -1206,15 +1304,26 @@ export class CallMediaSession {
     catch { return false; }
   }
 
-  flushPendingControls(agentSocket) {
+  async flushPendingControls(agentSocket) {
     if (this.terminal) return;
     for (const role of MEDIA_CLIENT_ROLES) {
       for (const client of this.state.getWebSockets(role)) {
         const attachment = client.deserializeAttachment() || {};
         if (typeof attachment.pendingControl !== "string" || !attachment.pendingControl) continue;
         try {
+          const value = JSON.parse(attachment.pendingControl);
+          if (value.action === "answer" && !await this.canAnswer(client, value)) {
+            const current = client.deserializeAttachment() || {};
+            if (current.pendingControl === attachment.pendingControl) {
+              client.serializeAttachment({ ...current, owner: false, pendingControl: "" });
+            }
+            continue;
+          }
+          if (this.terminal || !this.isCurrentSocket(client) || !this.isCurrentSocket(agentSocket)) return;
+          const current = client.deserializeAttachment() || {};
+          if (current.pendingControl !== attachment.pendingControl || current.controlRevision !== attachment.controlRevision) continue;
           agentSocket.send(attachment.pendingControl);
-          client.serializeAttachment({ ...attachment, pendingControl: "" });
+          client.serializeAttachment({ ...current, pendingControl: "" });
           const control = callControlMetadata(attachment.pendingControl);
           this.logControl("forwarded_after_reconnect", attachment.role, control);
           client.send(callControlReceipt("action_forwarded", control));
@@ -1346,19 +1455,18 @@ async function registerDevice(request, env) {
     app_media_capabilities: normalizedMediaCapabilities(
       device.app_media_capabilities ?? existing?.app_media_capabilities,
     ),
-    agent_media_capabilities: normalizedMediaCapabilities(
-      device.agent_media_capabilities ?? existing?.agent_media_capabilities,
-    ),
-    force_legacy_pcm: device.force_legacy_pcm === undefined
-      ? existing?.force_legacy_pcm === true : device.force_legacy_pcm === true,
+    remote_audio_disabled: device.remote_audio_disabled === true || device.force_legacy_pcm === true ||
+      (device.remote_audio_disabled !== false &&
+        (existing?.remote_audio_disabled === true || existing?.force_legacy_pcm === true)),
   };
   if (device.registration_source === "agent" && existing) {
     // Agent registration can carry an older copy of the paired app settings.
     record.media_transport_requested = existing.media_transport_requested === "webrtc" ? "webrtc" : "";
     record.app_media_capabilities = normalizedMediaCapabilities(existing.app_media_capabilities);
-    record.force_legacy_pcm = existing.force_legacy_pcm === true;
+    record.remote_audio_disabled = existing.remote_audio_disabled === true || existing.force_legacy_pcm === true;
   }
-  record.media_transport = assignedMediaTransport(record, env);
+  const availability = await remoteMediaAvailability(record, env);
+  record.media_transport = availability.media_transport;
   await writeDeviceRecord(env, record.device_id, record);
   await recordDashboardEvent(env, {
     type: "registration", device_id: record.device_id, status: "delivered",
@@ -1395,28 +1503,27 @@ async function receiveCall(request, env) {
   const call = await readJSON(request);
   const authenticated = await authenticate(call, env);
   if (authenticated.response) return authenticated.response;
-  if (!authenticated.device.voip_token && !authenticated.device.watch_voip_token) {
-    return jsonResponse(409, { error: "VoIP token unavailable" });
-  }
 
   const now = Date.now();
   const expiresAt = Date.parse(call.expires_at);
   const callSecretSupplied = typeof call.call_secret === "string" && call.call_secret.length > 0;
-  const mediaReady = typeof call.call_secret === "string" &&
+  const hasMediaSecret = typeof call.call_secret === "string" &&
     call.call_secret.length >= 24 && call.call_secret.length <= 256 &&
     /^[\x21-\x7e]+$/.test(call.call_secret);
   const generation = Number.isSafeInteger(call.generation) && call.generation > 0
     ? call.generation
     : 1;
-  const mediaTransport = call.media_transport && call.media_transport !== "webrtc"
-    ? null
-    : assignedMediaTransport(authenticated.device, env, "");
   if (call.event !== "incoming_call" || !nonEmpty(call.call_id) ||
       !UUID_PATTERN.test(call.call_uuid || "") || !Number.isFinite(expiresAt) ||
-      (callSecretSupplied && !mediaReady) ||
+      (callSecretSupplied && !hasMediaSecret) ||
       expiresAt <= now - 5_000 || expiresAt > now + 120_000) {
     return jsonResponse(400, { error: "invalid incoming call" });
   }
+
+  const availability = !hasMediaSecret || (call.media_transport && call.media_transport !== "webrtc")
+    ? unavailableMedia("unsupported_call_media")
+    : await remoteMediaAvailability(authenticated.device, env);
+  const mediaReady = availability.remote_audio_available;
 
   const lifecycleKey = `call-lifecycle:${authenticated.device.device_id}`;
   const lifecycle = applyCallLifecycle(await readRelayRecord(env, lifecycleKey), {
@@ -1429,6 +1536,7 @@ async function receiveCall(request, env) {
       ? call.issued_at : new Date(now).toISOString(),
     trace_id: nonEmpty(call.trace_id) ? call.trace_id : null,
     failure: null,
+    ...availability,
   });
   if (!lifecycle.accepted) {
     return jsonResponse(409, { accepted: false, reason: lifecycle.reason, lifecycle: lifecycle.snapshot });
@@ -1439,7 +1547,9 @@ async function receiveCall(request, env) {
   const watchDedupeKey = `dedupe:call:watch:${authenticated.device.device_id}:${call.call_uuid}`;
   const alertDedupeKey = `dedupe:call:alert:${authenticated.device.device_id}:${call.call_uuid}`;
   const activityDedupeKey = `dedupe:call:liveactivity:${authenticated.device.device_id}:${call.call_uuid}`;
-  const voipDuplicate = !authenticated.device.voip_token ||
+  // Unsupported inbound carrier calls stay ringing on Android. Do not create
+  // an answerable CallKit/Watch surface or ship unusable media credentials.
+  const voipDuplicate = !mediaReady || !authenticated.device.voip_token ||
     Boolean(await readRelayState(env, voipDedupeKey));
   const watchDuplicate = !mediaReady || !authenticated.device.watch_voip_token ||
     Boolean(await readRelayState(env, watchDedupeKey));
@@ -1451,11 +1561,11 @@ async function receiveCall(request, env) {
   );
   const activityToken = currentActivity?.update_token ||
     authenticated.device.live_activity_push_to_start_token || "";
-  const activityDuplicate = !activityToken || Boolean(await readRelayState(env, activityDedupeKey));
+  const activityDuplicate = !mediaReady || !activityToken || Boolean(await readRelayState(env, activityDedupeKey));
   let activityPushed = false;
 
   const mediaURL = `${new URL(request.url).origin.replace(/^http/, "ws")}/v1/calls/${call.call_uuid}/connect`;
-  if (mediaReady) {
+  if (hasMediaSecret) {
     await writeRelayState(env, `call:${call.call_uuid}`, JSON.stringify({
       device_id: authenticated.device.device_id,
       call_id: call.call_id,
@@ -1465,7 +1575,7 @@ async function receiveCall(request, env) {
       secret_hash: await sha256Hex(call.call_secret),
       expires_at: call.expires_at,
       media_expires_at: new Date(now + 4 * 60 * 60 * 1000).toISOString(),
-      media_transport: mediaTransport,
+      ...availability,
     }), 5 * 60 * 60);
   }
 
@@ -1480,7 +1590,7 @@ async function receiveCall(request, env) {
     issued_at: call.issued_at,
     expires_at: call.expires_at,
     ...(mediaReady ? { call_secret: call.call_secret, media_url: mediaURL } : {}),
-    media_transport: mediaTransport,
+    ...availability,
   };
 
   try {
@@ -1510,9 +1620,9 @@ async function receiveCall(request, env) {
 
     if (!alertDuplicate) {
       const displayName = stringValue(call.caller_name) || stringValue(call.number) || "Unknown number";
-      const alertBody = stringValue(call.caller_name) && stringValue(call.number)
-        ? stringValue(call.number)
-        : "AirSIM incoming call";
+      const alertBody = !mediaReady ? "Remote audio unavailable. Answer on the Android phone."
+        : stringValue(call.caller_name) && stringValue(call.number)
+          ? stringValue(call.number) : "AirSIM incoming call";
       const alertPayload = {
         aps: {
           alert: { title: displayName, body: alertBody },
@@ -1522,6 +1632,7 @@ async function receiveCall(request, env) {
           "interruption-level": "time-sensitive",
         },
         event: "incoming_call_mirror",
+        ...availability,
         call_id: call.call_id,
         call_uuid: call.call_uuid,
         number: stringValue(call.number),
@@ -1570,7 +1681,7 @@ async function receiveCall(request, env) {
     }
 
     if (voipDuplicate && watchDuplicate && alertDuplicate && activityDuplicate) {
-      return jsonResponse(202, { duplicate: true, media_transport: mediaTransport });
+      return jsonResponse(202, { duplicate: true, ...availability });
     }
     await recordDashboardEvent(env, {
       type: "call", device_id: authenticated.device.device_id, status: "delivered",
@@ -1579,7 +1690,7 @@ async function receiveCall(request, env) {
     });
     return jsonResponse(202, {
       pushed: true,
-      media_transport: mediaTransport,
+      ...availability,
       voip_pushed: !voipDuplicate,
       watch_pushed: !watchDuplicate,
       alert_pushed: !alertDuplicate,
@@ -1684,7 +1795,7 @@ async function receiveAgentHeartbeat(request, env) {
     ...(nonEmpty(heartbeat.model) ? { model: heartbeat.model.trim() } : {}),
     ...(nonEmpty(heartbeat.phone_number) ? { phone_number: heartbeat.phone_number.trim() } : {}),
     agent_version: stringValue(heartbeat.agent_version),
-    agent_media_capabilities: normalizedMediaCapabilities(heartbeat.agent_media_capabilities),
+    ...currentAgentMedia(heartbeat),
     at_ok: heartbeat.at_ok,
     cellular_state: heartbeat.cellular_state,
     cellular_registration: stringValue(heartbeat.cellular_registration),
@@ -1697,14 +1808,6 @@ async function receiveAgentHeartbeat(request, env) {
   const authenticated = await authenticate(heartbeat, env);
   if (authenticated.response) return authenticated.response;
   await writeAgentHeartbeat(env, authenticated.device.device_id, agentID, record);
-  const mergedCapabilities = retainStoredWebRTCCapability(
-    authenticated.device.agent_media_capabilities, record.agent_media_capabilities,
-  );
-  if (JSON.stringify(authenticated.device.agent_media_capabilities) !== JSON.stringify(mergedCapabilities)) {
-    await writeDeviceRecord(env, authenticated.device.device_id, {
-      ...authenticated.device, agent_media_capabilities: mergedCapabilities,
-    });
-  }
   return jsonResponse(202, { received: true });
 }
 
@@ -1729,10 +1832,13 @@ async function receiveDeviceStatus(request, env) {
     .sort((left, right) => right.received_at_ms - left.received_at_ms)
     .map((item) => {
       const { received_at_ms: receivedAtMS, ...status } = item;
-      return { ...status, cloud_online: now - receivedAtMS <= 90_000 };
+      const online = now >= receivedAtMS && now - receivedAtMS <= MEDIA_HEARTBEAT_MAX_AGE_MS;
+      return { ...status, ...currentAgentMedia({ ...status, agent_media_ready: online && status.agent_media_ready }),
+        cloud_online: online };
     });
   const heartbeat = heartbeats
-    .filter((item) => item && Number.isFinite(item.received_at_ms) && now - item.received_at_ms <= 90_000)
+    .filter((item) => item && Number.isFinite(item.received_at_ms) && now >= item.received_at_ms &&
+      now - item.received_at_ms <= MEDIA_HEARTBEAT_MAX_AGE_MS)
     .sort((left, right) => right.received_at_ms - left.received_at_ms)[0];
   if (!heartbeat) {
     return jsonResponse(200, { cloud_online: false, agents });
@@ -1741,6 +1847,7 @@ async function receiveDeviceStatus(request, env) {
   return jsonResponse(200, {
     cloud_online: true,
     ...publicStatus,
+    ...currentAgentMedia(publicStatus),
     active_agent_id: publicStatus.agent_id || "legacy",
     agents,
   });
@@ -1978,9 +2085,9 @@ export function selectMediaTransport({
   agentCapabilities = [],
   relayCapabilities = [],
   rolloutPercent = 0,
-  forceLegacy = false,
+  disabled = false,
 } = {}) {
-  if (forceLegacy || requested !== "webrtc") return null;
+  if (disabled || requested !== "webrtc") return null;
   const app = normalizedMediaCapabilities(appCapabilities);
   const agent = normalizedMediaCapabilities(agentCapabilities);
   const relay = normalizedMediaCapabilities(relayCapabilities);
@@ -1992,22 +2099,50 @@ export function selectMediaTransport({
   return stableMediaRolloutBucket(deviceID) < percentage ? "webrtc" : null;
 }
 
-function assignedMediaTransport(device, env, requestedOverride = "") {
-  const relayCapabilities = env.WEBRTC_TRANSPORT_READY === "true" && turnConfigured(env)
-    ? ["webrtc"]
-    : [];
-  const requested = requestedOverride === "webrtc"
-    ? "webrtc"
-    : (requestedOverride ? "" : (device.media_transport_requested === "webrtc" ? "webrtc" : ""));
-  return selectMediaTransport({
-    deviceID: device.device_id,
-    requested,
+function unavailableMedia(reason) {
+  return { media_transport: null, remote_audio_available: false, remote_audio_reason: reason };
+}
+
+function unavailableMediaMessage(reason) {
+  return reason === "iphone_audio_required"
+    ? "Answer on the paired iPhone to use remote call audio."
+    : "Remote call audio is unavailable; use the Android phone for this call.";
+}
+
+function unavailableMediaResponse(availability) {
+  return jsonResponse(409, { error: unavailableMediaMessage(availability.remote_audio_reason), ...availability });
+}
+
+async function remoteMediaAvailability(device, env, requestedOverride = "") {
+  if (device.remote_audio_disabled === true || device.force_legacy_pcm === true) {
+    return unavailableMedia("media_disabled");
+  }
+  const requested = requestedOverride || device.media_transport_requested;
+  if (requested !== "webrtc" || !normalizedMediaCapabilities(device.app_media_capabilities).length) {
+    return unavailableMedia("app_upgrade_required");
+  }
+  if (env.WEBRTC_TRANSPORT_READY !== "true" || !turnConfigured(env)) {
+    return unavailableMedia("relay_media_unavailable");
+  }
+  const heartbeat = await readCurrentAgentHeartbeat(env, device.device_id);
+  const age = Date.now() - heartbeat?.received_at_ms;
+  if (!Number.isFinite(heartbeat?.received_at_ms) || !Number.isFinite(age) || age < 0 || age > MEDIA_HEARTBEAT_MAX_AGE_MS) {
+    return unavailableMedia("agent_unavailable");
+  }
+  const current = currentAgentMedia(heartbeat);
+  if (current.media_capability_revision !== MEDIA_CAPABILITY_REVISION) {
+    return unavailableMedia("agent_upgrade_required");
+  }
+  if (!current.agent_media_ready) return unavailableMedia("agent_media_unavailable");
+  const mediaTransport = selectMediaTransport({
+    deviceID: device.device_id, requested,
     appCapabilities: device.app_media_capabilities,
-    agentCapabilities: device.agent_media_capabilities,
-    relayCapabilities,
-    rolloutPercent: env.WEBRTC_ROLLOUT_PERCENT,
-    forceLegacy: device.force_legacy_pcm === true,
+    agentCapabilities: current.agent_media_capabilities,
+    relayCapabilities: ["webrtc"], rolloutPercent: env.WEBRTC_ROLLOUT_PERCENT,
   });
+  return mediaTransport
+    ? { media_transport: mediaTransport, remote_audio_available: true, remote_audio_reason: null }
+    : unavailableMedia("relay_media_unavailable");
 }
 
 function liveActivityPayload({ event, callID, number, displayName, phase, startedAt }) {

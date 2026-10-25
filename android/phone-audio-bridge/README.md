@@ -1,5 +1,8 @@
 # AirSIM Android Call Audio Bridge
 
+> Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. AVF voice is upgrade-required; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](../../docs/webrtc-only-migration.md).
+
+
 The recommended [Android Standalone APK](../../android-standalone/README.md) does not depend on AVF. Only legacy AVF compatibility mode requires separate verification of `8575`, `8576`, and the control token using the [AVF installation and non-destructive troubleshooting guide](../../docs/AVF_INSTALL_GUIDE.md). A PCM bridge waiting to start does not mean the Debian package is damaged and should not be addressed by clearing AVF data.
 
 This component runs in an Android Shizuku `UserService`, accesses system call audio as the shell UID, and provides bidirectional PCM to the control app's built-in Agent or the legacy AVF Agent.

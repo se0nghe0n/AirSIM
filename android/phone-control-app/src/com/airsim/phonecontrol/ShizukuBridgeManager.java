@@ -109,13 +109,13 @@ final class ShizukuBridgeManager {
         });
         serviceArgs = new Shizuku.UserServiceArgs(new ComponentName(
                 app.getPackageName(), ShizukuBridgeUserService.class.getName()))
-                .daemon(true)
-                .processNameSuffix("pcm_shell")
+                .daemon(false)
+                .processNameSuffix("media_shell")
                 .debuggable(true)
-                .tag("airsim-pcm-v1")
+                .tag("airsim-media-v2")
                 // Bump when the embedded bridge or its lifecycle changes so an
                 // APK update cannot keep Vivo/Samsung running an old daemon.
-                .version(8);
+                .version(9);
         Shizuku.addBinderReceivedListenerSticky(binderReceived);
         Shizuku.addBinderDeadListener(binderDead);
         Shizuku.addRequestPermissionResultListener(permissionResult);
@@ -306,7 +306,7 @@ final class ShizukuBridgeManager {
         if (binding || privilegedClient != null) return;
         binding = true;
         int attempt = ++bindAttempt;
-        status = "Starting Shizuku PCM service";
+        status = "Starting Shizuku WebRTC service";
         try {
             Shizuku.bindUserService(serviceArgs, connection);
             mainHandler.postDelayed(() -> {
@@ -339,6 +339,32 @@ final class ShizukuBridgeManager {
         }
     }
 
+    String mediaRequest(String request) throws Exception {
+        PrivilegedBridgeClient client = privilegedClient;
+        if (client == null) throw new IllegalStateException("privileged_media_unavailable");
+        try { return client.mediaRequest(request); }
+        catch (Exception error) {
+            if (!client.isAlive()) invalidateClient(client);
+            throw error;
+        }
+    }
+
+    private synchronized void invalidateClient(PrivilegedBridgeClient failed) {
+        if (privilegedClient != failed) return;
+        privilegedClient = null; binding = false;
+        coordinator.disconnect(); failed.close();
+        status = "Privileged media service disconnected";
+        worker.execute(this::ensureStarted);
+    }
+
+    boolean mediaAvailable() {
+        PrivilegedBridgeClient current = privilegedClient;
+        if (current == null) return false;
+        if (!current.isAlive()) { invalidateClient(current); return false; }
+        // Media/control workers need a current response, not the UI's last successful status.
+        return coordinator.mediaAvailable();
+    }
+
     String status() {
         return status;
     }
@@ -355,8 +381,10 @@ final class ShizukuBridgeManager {
                     status = "Shizuku connected · " + coordinator.refreshStatus();
                 }
             } catch (Exception error) {
-                status = "Shizuku PCM status check failed";
-                BridgeLog.error("shizuku_pcm_status_refresh_failed", error);
+                status = "Shizuku media status check failed";
+                PrivilegedBridgeClient current = privilegedClient;
+                if (current != null && !current.isAlive()) invalidateClient(current);
+                BridgeLog.info("shizuku_media_status_refresh_failed");
             } finally {
                 statusRefreshInFlight.set(false);
             }

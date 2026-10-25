@@ -16,7 +16,6 @@ import (
 var (
 	agentDataDirectory = agentDataDirectoryFrom(os.Getenv)
 	notesFilePath      = agentDataDirectory + "/esim-notes.json"
-	voiceRuntimePath   = agentDataDirectory + "/voice-runtime"
 )
 
 type esimNote struct {
@@ -404,20 +403,11 @@ func (a *agent) voiceStatus(response http.ResponseWriter, request *http.Request)
 }
 
 func (a *agent) currentVoiceStatus() map[string]any {
-	runtimeInstalled, validationError := validateVoiceRuntime()
-	a.voice.mu.Lock()
-	routeReady := a.voice.ready
-	lastError := a.voice.lastError
-	a.voice.mu.Unlock()
-	detail := "Module voice runtime not installed"
-	if runtimeInstalled {
-		detail = "Module voice runtime installed; the on-module helper starts ECM network PCM when a call connects"
-	} else if validationError != nil {
-		detail = validationError.Error()
-	}
 	return map[string]any{
-		"ready": routeReady || runtimeInstalled, "runtime_installed": runtimeInstalled,
-		"runtime_source": "moluncn/mavo@0443dfd", "runtime_detail": detail, "last_error": lastError,
+		"ready": false, "runtime_installed": false, "state": "upgrade_required",
+		"runtime_detail":    avfVoiceUpgradeMessage,
+		"agent_media_ready": false, "agent_media_capabilities": []string{},
+		"media_capability_revision": agentMediaCapabilityRevision,
 	}
 }
 
@@ -425,19 +415,5 @@ func (a *agent) voiceProvision(response http.ResponseWriter, request *http.Reque
 	if !requireMethod(response, request, http.MethodPost) {
 		return
 	}
-	var body struct {
-		Confirm bool `json:"confirm"`
-	}
-	if !decodeJSON(response, request, &body) {
-		return
-	}
-	if !body.Confirm {
-		writeError(response, http.StatusBadRequest, "Explicit confirmation is required to install the voice runtime")
-		return
-	}
-	if installed, _ := validateVoiceRuntime(); installed {
-		writeJSON(response, http.StatusOK, a.currentVoiceStatus())
-		return
-	}
-	writeError(response, http.StatusConflict, "Agent package does not include the restricted voice runtime; install the local user cache from Mac during initial deployment")
+	writeVoiceUpgradeRequired(response)
 }

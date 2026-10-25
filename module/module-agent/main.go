@@ -43,10 +43,6 @@ type agent struct {
 	muted                bool
 	isRecording          bool
 	force4GOff           bool
-	voice                voiceTracker
-	voiceBackend         voiceBackendConfig
-	voiceBackendErr      error
-	defaultRoute         func() map[string]string
 	esimMu               sync.Mutex
 	rxStart              uint64
 	txStart              uint64
@@ -80,7 +76,6 @@ type agent struct {
 }
 
 func newAgent(atPath string) *agent {
-	voiceBackend, voiceBackendErr := loadVoiceBackend(os.Getenv)
 	androidToken, androidTokenErr := loadAndroidControlToken(os.Getenv)
 	service := &agent{
 		at: newATPort(atPath), profile: currentRuntimeProfile(), started: time.Now(), smsAuto: true,
@@ -93,8 +88,6 @@ func newAgent(atPath string) *agent {
 		cellularRecovery:    newCellularRecoveryTracker(time.Now()),
 		router:              newRouterManager(agentDataDirectory),
 		android:             newAndroidControl(androidToken),
-		voiceBackend:        voiceBackend,
-		voiceBackendErr:     voiceBackendErr,
 	}
 	service.at.setURCHandler(service.handleURC)
 	service.pairRegistrationSync = service.syncPushRegistration
@@ -104,13 +97,7 @@ func newAgent(atPath string) *agent {
 		service.debug.add("at", direction, summary, payload, nil)
 	})
 	service.debug.add("system", "", "agent initialized", "", map[string]string{"version": agentVersion})
-	if voiceBackendErr != nil {
-		service.debug.add("voice-backend", "error", "invalid voice backend configuration", voiceBackendErr.Error(), nil)
-	} else {
-		service.debug.add("voice-backend", "configured", "voice backend selected", "", map[string]string{
-			"backend": string(voiceBackend.kind),
-		})
-	}
+	service.debug.add("voice-backend", "control-only", avfVoiceUpgradeMessage, "", nil)
 	if androidTokenErr != nil {
 		service.debug.add("android-telecom", "error", "failed to read Android control token", androidTokenErr.Error(), nil)
 	}
@@ -151,16 +138,10 @@ func main() {
 	if !service.profile.AndroidTelecom {
 		logger.Fatal("AirSIM only supports the android-avf runtime profile and does not start QDC507 module mode")
 	}
-	if service.voiceBackendErr != nil || service.voiceBackend.kind != voiceBackendSamsungAndroid {
-		logger.Fatalf("AirSIM requires a valid Samsung private-network PCM address: %v", service.voiceBackendErr)
-	}
 	modemAvailable := false
 	if modemAvailable {
 		defer service.at.close()
 		service.at.startURCMonitor()
-		// If network PCM needs the USB audio gate, set it once at Agent startup.
-		// Leave it unchanged across answer and hangup so ECM and f_audio are not re-enumerated while composed together.
-		service.initializeVoiceAudioGateAtStartup()
 
 		service.rxStart, service.txStart, _ = readInterfaceCounters("ecm0")
 		// The first AT query can take tens of seconds just after the factory service releases the SMD port.
@@ -217,7 +198,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		return false, nil
 	}
 	if len(os.Args) != 3 {
-		return true, errors.New("Usage: --startup-probe runtime|routes|listen|voice-backend|at-open|esim-read")
+		return true, errors.New("Usage: --startup-probe runtime|routes|listen|at-open|esim-read")
 	}
 
 	fmt.Println("startup probe marker: stage-entry")
@@ -225,8 +206,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 	fmt.Println("startup probe marker: service-created")
 	switch os.Args[2] {
 	case "runtime":
-		// The deployer uses this to check the Agent's embedded allowlist against the helper from the same build, and to block a mismatched artifact.
-		fmt.Printf("__VOICE_HELPER_SHA256__%s\n", voiceHelperSHA256)
+		fmt.Printf("__MEDIA_CAPABILITY_REVISION__%d\n", agentMediaCapabilityRevision)
 		logger.Printf("startup probe passed: runtime")
 	case "routes":
 		_ = service.routes(logger)
@@ -241,16 +221,7 @@ func runStartupProbe(logger *log.Logger) (bool, error) {
 		}
 		logger.Printf("startup probe passed: listen")
 	case "voice-backend":
-		endpoint, err := service.voicePCMEndpoint()
-		if err != nil {
-			return true, err
-		}
-		if err := probeVoicePCMBackend(endpoint, func(network, address string) (net.Conn, error) {
-			return net.DialTimeout(network, address, 3*time.Second)
-		}); err != nil {
-			return true, fmt.Errorf("Samsung PCM backend handshake failed: %w", err)
-		}
-		logger.Printf("startup probe passed: voice-backend")
+		return true, errAVFVoiceUpgradeRequired
 	case "at-open":
 		if err := service.at.open(); err != nil {
 			return true, err
@@ -503,15 +474,7 @@ func localIPv4Networks() []*net.IPNet {
 func (a *agent) pollLoop() {
 	go a.callPollLoop()
 	go a.modemPollLoop()
-	go a.smsPollLoop()
-
-	voiceTicker := time.NewTicker(time.Second)
-	defer voiceTicker.Stop()
-	for {
-		<-voiceTicker.C
-		// During a call the voice bridge can exit if a kernel device is briefly unavailable. While the call is still up, the next round restores the media path.
-		a.maintainVoiceRoute()
-	}
+	a.smsPollLoop()
 }
 
 func (a *agent) callPollLoop() {
@@ -609,7 +572,7 @@ func (a *agent) health(response http.ResponseWriter, request *http.Request) {
 	atHealth := a.at.healthSnapshot()
 	hardwareAvailable := a.profile.RequiresModem
 	agentHealthy := hardwareAvailable && atHealth.ConsecutiveFailures < 3
-	if !hardwareAvailable && a.externalVoiceBackendConfigured() {
+	if !hardwareAvailable && a.profile.AndroidTelecom {
 		agentHealthy = true
 	}
 	if hardwareAvailable && atHealth.ConsecutiveFailures < 3 {
@@ -620,23 +583,26 @@ func (a *agent) health(response http.ResponseWriter, request *http.Request) {
 		lastSuccess = atHealth.LastSuccess.UTC().Format(time.RFC3339Nano)
 	}
 	writeJSON(response, http.StatusOK, map[string]any{
-		"product":                 "airsim",
-		"ok":                      agentHealthy,
-		"version":                 agentVersion,
-		"platform":                a.profile.Platform,
-		"runtime_profile":         a.profile.Name,
-		"voice_backend":           a.voiceBackendName(),
-		"hardware_available":      hardwareAvailable,
-		"at_device":               atDevice,
-		"uptime_seconds":          int(time.Since(a.started).Seconds()),
-		"last_poll_error":         lastError,
-		"last_at_success_at":      lastSuccess,
-		"at_consecutive_failures": atHealth.ConsecutiveFailures,
-		"at_reopen_count":         atHealth.ReopenCount,
-		"control_plane":           "local-agent-reachable",
-		"cellular_state":          cellularState,
-		"cellular_registration":   registrationText,
-		"cellular_recovery":       cellularRecovery,
+		"product":                   "airsim",
+		"ok":                        agentHealthy,
+		"version":                   agentVersion,
+		"platform":                  a.profile.Platform,
+		"runtime_profile":           a.profile.Name,
+		"voice_backend":             "control_only",
+		"agent_media_ready":         false,
+		"agent_media_capabilities":  []string{},
+		"media_capability_revision": agentMediaCapabilityRevision,
+		"hardware_available":        hardwareAvailable,
+		"at_device":                 atDevice,
+		"uptime_seconds":            int(time.Since(a.started).Seconds()),
+		"last_poll_error":           lastError,
+		"last_at_success_at":        lastSuccess,
+		"at_consecutive_failures":   atHealth.ConsecutiveFailures,
+		"at_reopen_count":           atHealth.ReopenCount,
+		"control_plane":             "local-agent-reachable",
+		"cellular_state":            cellularState,
+		"cellular_registration":     registrationText,
+		"cellular_recovery":         cellularRecovery,
 	})
 }
 
@@ -647,8 +613,12 @@ func (a *agent) platform(response http.ResponseWriter, request *http.Request) {
 	writeJSON(response, http.StatusOK, map[string]any{
 		"os": "linux", "version": agentVersion, "platform": a.profile.Platform,
 		"runtime_profile": a.profile.Name, "direct_module": a.profile.DirectModule,
-		"voice_backend": a.voiceBackendName(),
-		"call_audio":    a.profile.CallAudio || a.externalVoiceBackendConfigured(), "direct_usb_at": false, "native_contacts": a.profile.NativeContacts,
+		"voice_backend":             "control_only",
+		"voice_status":              "upgrade_required",
+		"agent_media_ready":         false,
+		"agent_media_capabilities":  []string{},
+		"media_capability_revision": agentMediaCapabilityRevision,
+		"call_audio":                false, "direct_usb_at": false, "native_contacts": a.profile.NativeContacts,
 		"network_policy_native": a.profile.NetworkPolicyNative, "wrt_lite": a.profile.WRTLite, "esim_full": false,
 	})
 }

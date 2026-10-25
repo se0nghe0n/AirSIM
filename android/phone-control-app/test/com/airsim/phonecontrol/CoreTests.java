@@ -253,7 +253,7 @@ public final class CoreTests {
 			}
 
 			@Override public String status() {
-				return "pcm=running";
+				return "media=ready";
 			}
 
 			@Override public String setLocalOutputMuted(boolean muted) {
@@ -540,7 +540,7 @@ public final class CoreTests {
 						"2026-09-25T10:11:12Z http_request_finished method=GET path=/api/android/status status=200"));
 		assertEquals("VoWLAN pairing complete",
 				MainScreenPresentation.activitySummary("pairing_completed peer=iphone"));
-		assertEquals("Shizuku PCM bridge connected",
+		assertEquals("Shizuku WebRTC service connected",
 				MainScreenPresentation.activitySummary("shizuku_user_service_connected uid=2000"));
 		assertEquals("Agent watchdog started",
 				MainScreenPresentation.activitySummary("watchdog_created"));
@@ -684,13 +684,19 @@ public final class CoreTests {
 		assertTrue(storeSource.contains("CloudCallMedia.start(mediaTransport, startWebRTC)"));
 		assertTrue(storeSource.contains("new JSONArray().put(CloudCallMedia.WEBRTC)"));
 		assertTrue(!serviceSource.contains("legacy_pcm"));
-		assertTrue(serviceSource.contains("StandaloneAgentStore.mediaCapabilities()"));
+		assertTrue(serviceSource.contains("StandaloneAgentStore.applyMediaHeartbeat(identity(registration), mediaReady)"));
+        assertTrue(storeSource.contains("ready ? mediaCapabilities() : new JSONArray()"));
+        String bridgeSource = java.nio.file.Files.readString(phoneControlSource("ShizukuBridgeManager.java"));
+        assertTrue(bridgeSource.contains("return coordinator.mediaAvailable();"));
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
-		assertTrue(peer.contains("connectPCM"));
-		assertTrue(peer.contains("127.0.0.1"));
-		assertTrue(peer.contains("7580"));
-		assertTrue(peer.contains("AIRSIMPCM1"));
-		assertTrue(peer.contains("pcmConnected"));
+        assertTrue(!peer.contains("connectPCM"));
+        assertTrue(!peer.contains("7580"));
+        assertTrue(!peer.contains("AIRSIMPCM1"));
+        assertTrue(peer.contains("mediaRequest"));
+        String nativePeer = java.nio.file.Files.readString(phoneControlSource("TelephonyWebRTCPeer.java"));
+        assertTrue(nativePeer.contains("TelephonyAudioDevice"));
+        assertTrue(nativePeer.contains("readiness.deviceReady()"));
+        assertTrue(!nativePeer.contains("new Socket"));
 	}
 
 	private static java.nio.file.Path phoneControlSource(String name) {
@@ -740,9 +746,11 @@ public final class CoreTests {
 			throw new AssertionError("VoWLAN gateway still listens for PCM");
 		}
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
-		if (!peer.contains("AIRSIMPCM1") || !peer.contains("127.0.0.1") || !peer.contains("7580")) {
-			throw new AssertionError("telephony samples must still handshake AIRSIMPCM1 on 127.0.0.1:7580");
-		}
+		if (peer.contains("AIRSIMPCM1") || peer.contains("127.0.0.1") || peer.contains("7580")) {
+            throw new AssertionError("telephony samples must not cross a socket");
+        }
+        assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/status"));
+        assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/stop"));
 		assertTrue(VoWLANWebRTCControl.CONTROL_PORT == 7592);
 		assertTrue(!VoWLANWebRTCControl.LISTENS_ON_PCM_PORT);
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc"));
@@ -911,9 +919,9 @@ public final class CoreTests {
 		try {
 			Class<?> type = Class.forName("com.airsim.phonecontrol.PCMBridgeStatus");
 			java.lang.reflect.Method running = type.getDeclaredMethod("isRunning", String.class);
-			assertTrue((boolean) running.invoke(null, "uid=2000 pcm=running local_output=normal"));
-			assertTrue(!(boolean) running.invoke(null, "uid=2000 pcm=stopped local_output=normal"));
-			assertTrue(!(boolean) running.invoke(null, "uid=2000 pcm=runningish local_output=normal"));
+			assertTrue((boolean) running.invoke(null, "uid=2000 media=ready local_output=normal"));
+			assertTrue(!(boolean) running.invoke(null, "uid=2000 media=unavailable local_output=normal"));
+			assertTrue(!(boolean) running.invoke(null, "uid=2000 media=readyish local_output=normal"));
 			assertTrue(!(boolean) running.invoke(null, (String) null));
 		} catch (ClassNotFoundException | NoSuchMethodException error) {
 			throw new AssertionError("PCM readiness must use the privileged bridge process status", error);
@@ -928,8 +936,8 @@ public final class CoreTests {
 			java.util.concurrent.atomic.AtomicBoolean processAlive = new java.util.concurrent.atomic.AtomicBoolean(true);
 			Object transport = java.lang.reflect.Proxy.newProxyInstance(
 					transportType.getClassLoader(), new Class<?>[]{transportType},
-					(proxy, method, arguments) -> "uid=2000 pcm="
-							+ (processAlive.get() ? "running" : "stopped") + " local_output=normal");
+					(proxy, method, arguments) -> "uid=2000 media="
+							+ (processAlive.get() ? "ready" : "unavailable") + " local_output=normal");
 			Object coordinator = coordinatorType.getDeclaredConstructor().newInstance();
 			coordinatorType.getDeclaredMethod("connect", transportType).invoke(coordinator, transport);
 			java.lang.reflect.Method running = coordinatorType.getDeclaredMethod("bridgeRunning");
@@ -950,8 +958,8 @@ public final class CoreTests {
 
 	private static void assertMuteResultDoesNotHideRunningPCMBridge() throws Exception {
 		PrivilegedBridgeCoordinator.Transport transport = new PrivilegedBridgeCoordinator.Transport() {
-			@Override public String startBridge() { return "uid=2000 pcm=running local_output=normal"; }
-			@Override public String status() { return "uid=2000 pcm=running local_output=muted"; }
+			@Override public String startBridge() { return "uid=2000 media=ready local_output=normal"; }
+			@Override public String status() { return "uid=2000 media=ready local_output=muted"; }
 			@Override public String setLocalOutputMuted(boolean muted) {
 				return "local_output_muted previous_muted=false verified=true";
 			}

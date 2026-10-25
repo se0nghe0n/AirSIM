@@ -308,7 +308,7 @@ final class AppModel {
     @ObservationIgnored private var currentCallTransport: CallTransport?
     @ObservationIgnored private var lockedCallTransport: LockedCallTransport?
     @ObservationIgnored private var currentLocalAPI: AirSIMAPI?
-    @ObservationIgnored private var currentPCMRoute: PCMRoute?
+    @ObservationIgnored private var currentLocalWebRTCRoute: LocalWebRTCRoute?
     @ObservationIgnored private var lastSuccessfulLocalAPI: AirSIMAPI?
     @ObservationIgnored private var observedCallLocalAPI: (callID: String, service: AirSIMAPI)?
     @ObservationIgnored private var callLifecycleStore = CallLifecycleStore()
@@ -346,7 +346,7 @@ final class AppModel {
     }
 
     var callAudioIsActive: Bool {
-        audio.active || cloudCallAudioState.isConnected || isVirtualCallTTSPrepared
+        audio.transportReady || cloudCallAudioState.isConnected || isVirtualCallTTSPrepared
     }
 
     var connectionModePresentation: ConnectionModePresentation {
@@ -644,7 +644,7 @@ final class AppModel {
 
     var callAudioStatusText: String {
         CallAudioStatusPresentation.text(
-            transport: currentCallTransport, localAudioActive: audio.active,
+            transport: currentCallTransport, localAudioActive: audio.transportReady,
             cloudState: cloudCallAudioState)
     }
 
@@ -906,9 +906,6 @@ final class AppModel {
         audio.deactivate()
         backgroundStandby.setEnabled(false)
         Task { await liveActivity.stop() }
-        if let samsungAPI = verifiedVoWLANAPI() {
-            Task { try? await samsungAPI.setAudioHostEnabled(false) }
-        }
     }
 
     private func poll(generation: Int) async {
@@ -1004,7 +1001,7 @@ final class AppModel {
             let callerName = (systemCall ?? lifecycleCall).map { contacts.displayName(for: $0.number) }
             // Request CallKit before deciding whether to post a local notification, otherwise background incoming calls would show
             // both the system call UI and a banner with an Answer button; fall back on the next poll if CallKit reporting fails.
-            if !WatchCallCoordinator.shared.ownsMedia(callID: systemCall?.id) {
+            if !WatchCallCoordinator.shared.ownsCallPresentation(callID: systemCall?.id) {
                 callKit.synchronize(
                     // Preserve real Agent state except for identities explicitly
                     // ending/ended locally; a late poll must not create a new CXCall.
@@ -1049,7 +1046,7 @@ final class AppModel {
             // AirSIM neither bundles nor auto-flashes the QDC507 Agent.
 
             // Continuously verify that local audio is still running during an active call. After a CallKit or media server reset,
-            // the next poll must be able to rebuild network PCM even if module state did not change.
+            // the next poll must be able to rebuild local WebRTC even if module state did not change.
             if status.active?.state == "active" {
                 await startCallAudioIfReady()
             } else if status.active == nil, previousCall != nil {
@@ -1057,7 +1054,7 @@ final class AppModel {
                 // during media teardown is not misreported as full module offline.
                 beginCallTransitionProtection()
                 // A cloud fallback call may remain active after local module state disappears; do not let local polling
-                // clear the shared AVAudioSession speaker override or interrupt cloud PCM.
+                // clear the shared AVAudioSession speaker override or interrupt cloud WebRTC.
                 if currentCallTransport != .cloud,
                    !IPhoneCloudCallSession.shared.hasActiveCall {
                     audio.deactivate()
@@ -1307,7 +1304,7 @@ final class AppModel {
         )
     }
 
-    private static func pcmRoute(for route: LocalAgentRoute) -> PCMRoute {
+    private static func webRTCRoute(for route: LocalAgentRoute) -> LocalWebRTCRoute {
         switch route {
         case .moduleLocal:
             return .moduleLocal
@@ -1604,14 +1601,14 @@ final class AppModel {
                     errorMessage = "Recording is available once the call is connected"
                     return
                 }
-                guard !WatchCallCoordinator.shared.ownsMedia(callID: callID) else {
-                    errorMessage = "Recording is available when call audio is on this iPhone"
-                    return
-                }
-                let source: CallRecordingSource
+                let source: CallRecordingSource?
                 switch currentCallTransport {
                 case .cloud: source = IPhoneCloudCallSession.shared.recordingSource
-                default: source = .localPCM
+                default: source = audio.recordingSource
+                }
+                guard let source else {
+                    errorMessage = "Recording is available once WebRTC audio is ready"
+                    return
                 }
                 CallAudioRecorder.shared.setMuted(isMuted)
                 try await recordings.start(callID: callID, source: source)
@@ -1928,11 +1925,6 @@ final class AppModel {
     }
 
     private func startCallAudioIfReady() async {
-        if WatchCallCoordinator.shared.ownsMedia(callID: activeCall?.id)
-            || WatchCallCoordinator.shared.ownsMedia(callID: remoteCall?.id)
-            || WatchCallCoordinator.shared.ownsMedia(callID: callLifecycleSnapshot.callID) {
-            return
-        }
         let managedByCallKit = callKit.managesCurrentCall
         let cloudSession = IPhoneCloudCallSession.shared
         if cloudSession.call != nil, cloudSession.answered {
@@ -1956,57 +1948,49 @@ final class AppModel {
         defer { startingCallAudio = false }
         backgroundStandby.suspendForCall()
 
-        do {
-            guard let localAPI = reachableLocalAPI else {
-                backgroundStandby.resumeAfterCall()
-                errorMessage = "Local audio route is not locked yet"
-                return
-            }
-            let pcmRoute = currentPCMRoute ?? Self.pcmRoute(for: localAPI.route)
-            let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
-            let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
-            // Complete microphone authorization and WebRTC startup before registering the audio host.
-            let outcome = try await LocalCallAudioStartupCoordinator.start(
-                activatePhoneAudio: { [audio] in
-                    await audio.activateForCall(
-                        route: pcmRoute,
-                        sessionAlreadyActive: managedByCallKit,
-                        callUUID: vowlanCallUUID,
-                        generation: vowlanGeneration
-                    )
-                },
-                registerAgentAudio: {
-                    try await CallAudioRegistrationCoordinator.register(service: localAPI)
-                },
-                rollbackPhoneAudio: { [audio] in
-                    audio.deactivate()
-                    try? await localAPI.setAudioHostEnabled(false)
-                }
-            )
-            guard outcome == .started else {
-                backgroundStandby.resumeAfterCall()
-                return
-            }
-            if currentCallTransport == nil {
-                let transport: CallTransport
-                switch localAPI.route {
-                case .moduleLocal: transport = .moduleLocal
-                case .vowlan: transport = .vowlan
-                }
-                lockLocalTransport(transport, api: localAPI, pcmRoute: pcmRoute)
-            }
-        } catch {
-            audio.deactivate()
-            if let localAPI = reachableLocalAPI {
-                try? await localAPI.setAudioHostEnabled(false)
-            }
+        guard let localAPI = reachableLocalAPI else {
             backgroundStandby.resumeAfterCall()
-            errorMessage = "Unable to register call audio: \(error.localizedDescription)"
+            errorMessage = "Local audio route is not locked yet"
             return
+        }
+        let webRTCRoute = currentLocalWebRTCRoute ?? Self.webRTCRoute(for: localAPI.route)
+        let vowlanCallUUID = callLifecycleSnapshot.callUUID ?? UUID()
+        let vowlanGeneration = max(UInt64(1), callLifecycleSnapshot.generation)
+        // The session-scoped offer owns Android carrier activation. Generic
+        // register/unregister requests could otherwise stop the next call.
+        guard await audio.activateForCall(
+            route: webRTCRoute, sessionAlreadyActive: managedByCallKit,
+            callUUID: vowlanCallUUID, generation: vowlanGeneration
+        ) else {
+            backgroundStandby.resumeAfterCall()
+            return
+        }
+        guard !Task.isCancelled, callLifecycleSnapshot.callUUID == vowlanCallUUID,
+              callLifecycleSnapshot.generation == vowlanGeneration,
+              callLifecycleSnapshot.state == .active else {
+            audio.deactivate()
+            backgroundStandby.resumeAfterCall()
+            return
+        }
+        if currentCallTransport == nil {
+            guard case .vowlan = localAPI.route else { audio.deactivate(); return }
+            lockLocalTransport(.vowlan, api: localAPI, webRTCRoute: webRTCRoute)
         }
     }
 
-    func readyVoWLANRoute() async -> (AirSIMAPI, PCMRoute)? {
+    /// A Watch is only a controller. Start the same iPhone media path used by
+    /// in-app calls instead of merely registering an Android audio host.
+    func startWatchLocalAudio(call: CallRecord, api: AirSIMAPI) async {
+        guard case .vowlan = api.route, call.state == "active",
+              !callLifecycleStore.suppressesPresentation(callID: call.id) else { return }
+        guard applyAgentCallRecord(call) || callLifecycleSnapshot.callID == call.id else { return }
+        activeCall = call
+        observedCallLocalAPI = (callID: call.id, service: api)
+        lockLocalTransport(.vowlan, api: api, webRTCRoute: Self.webRTCRoute(for: api.route))
+        await startCallAudioIfReady()
+    }
+
+    func readyVoWLANRoute() async -> (AirSIMAPI, LocalWebRTCRoute)? {
         vowlan.startBrowsing()
         await vowlan.probeNow()
         if vowlan.availability.isReady(),
@@ -2029,11 +2013,11 @@ final class AppModel {
     private func lockLocalTransport(
         _ transport: CallTransport,
         api: AirSIMAPI,
-        pcmRoute: PCMRoute
+        webRTCRoute: LocalWebRTCRoute
     ) {
         currentCallTransport = transport
         currentLocalAPI = api
-        currentPCMRoute = pcmRoute
+        currentLocalWebRTCRoute = webRTCRoute
         lockedCallTransport = LockedCallTransport(
             transport: transport,
             generation: callLifecycleSnapshot.generation
@@ -2052,7 +2036,7 @@ final class AppModel {
     private func clearLockedTransport() {
         currentCallTransport = nil
         currentLocalAPI = nil
-        currentPCMRoute = nil
+        currentLocalWebRTCRoute = nil
         lockedCallTransport = nil
     }
 
@@ -2213,87 +2197,10 @@ final class AppModel {
 
 protocol OutgoingCallServicing: Sendable {
     func warmAudioHost() async throws
-    func setAudioHostEnabled(_ enabled: Bool) async throws
     func dial(number: String) async throws
 }
 
 extension AirSIMAPI: OutgoingCallServicing {}
-
-protocol CallAudioRegistrationServicing: Sendable {
-    func setAudioHostEnabled(_ enabled: Bool) async throws
-    func callStatus() async throws -> CallStatus
-}
-
-extension AirSIMAPI: CallAudioRegistrationServicing {}
-
-enum CallAudioRegistrationOutcome: Equatable, Sendable {
-    case registered
-    case callNoLongerActive
-    case temporarilyUnavailable
-}
-
-enum CallAudioRegistrationCoordinator {
-    static func register(
-        service: any CallAudioRegistrationServicing,
-        retryDelay: Duration = .milliseconds(250)
-    ) async throws -> CallAudioRegistrationOutcome {
-        do {
-            try await service.setAudioHostEnabled(true)
-            return .registered
-        } catch APIError.http(409, _) {
-            // Call events and media registration are separate requests. If an older Agent finishes a CLCC refresh in between,
-            // re-read status so a brief race is not treated as a fatal dial error.
-            let latest = try await service.callStatus()
-            guard latest.active?.state == "active" else {
-                return .callNoLongerActive
-            }
-            if retryDelay > .zero {
-                try await Task.sleep(for: retryDelay)
-            }
-            do {
-                try await service.setAudioHostEnabled(true)
-                return .registered
-            } catch APIError.http(409, _) {
-                // In 0.3.39, DSCI and CLCC can briefly interleave at the moment a call connects. Keep the CallKit call alive
-                // and let the next event poll retry rather than surfacing unready media as a dial failure.
-                return .temporarilyUnavailable
-            }
-        }
-    }
-}
-
-enum LocalCallAudioStartupOutcome: Equatable, Sendable {
-    case started
-    case phoneAudioUnavailable
-    case callNoLongerActive
-    case temporarilyUnavailable
-}
-
-@MainActor
-enum LocalCallAudioStartupCoordinator {
-    static func start(
-        activatePhoneAudio: () async -> Bool,
-        registerAgentAudio: () async throws -> CallAudioRegistrationOutcome,
-        rollbackPhoneAudio: () async -> Void
-    ) async rethrows -> LocalCallAudioStartupOutcome {
-        guard await activatePhoneAudio() else { return .phoneAudioUnavailable }
-        do {
-            switch try await registerAgentAudio() {
-            case .registered:
-                return .started
-            case .callNoLongerActive:
-                await rollbackPhoneAudio()
-                return .callNoLongerActive
-            case .temporarilyUnavailable:
-                await rollbackPhoneAudio()
-                return .temporarilyUnavailable
-            }
-        } catch {
-            await rollbackPhoneAudio()
-            throw error
-        }
-    }
-}
 
 enum OutgoingCommandAvailability {
     static func isAvailable(
@@ -2446,10 +2353,10 @@ extension AppModel: CallKitActionHandling {
 
             switch routeResult {
             case .vowlan:
-                guard let (vowlanAPI, pcmRoute) = vowlanRoute else {
+                guard let (vowlanAPI, webRTCRoute) = vowlanRoute else {
                     throw CloudCommandError.unavailable
                 }
-                lockLocalTransport(.vowlan, api: vowlanAPI, pcmRoute: pcmRoute)
+                lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
             case let .cloud(outgoing):
                 guard applyCallLifecycle(CallLifecycleEvent(
                     callID: outgoing.callID, callUUID: outgoing.uuid,
@@ -2514,19 +2421,19 @@ extension AppModel: CallKitActionHandling {
             )
             switch transport {
             case .vowlan:
-                guard let (vowlanAPI, pcmRoute) = vowlanRoute else {
+                guard let (vowlanAPI, webRTCRoute) = vowlanRoute else {
                     throw CallKitBridgeError.noReachableTransport
                 }
                 try audio.prepareForCallKit()
                 try await vowlanAPI.answerCall(callID: activeCall?.id)
-                lockLocalTransport(.vowlan, api: vowlanAPI, pcmRoute: pcmRoute)
+                lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
             case .moduleLocal:
                 throw CallKitBridgeError.noReachableTransport
             case .cloud:
                 guard let pushedCall else { throw CallKitBridgeError.noReachableTransport }
                 try await IPhoneCloudCallSession.shared.answer(pushedCall)
                 currentLocalAPI = nil
-                currentPCMRoute = nil
+                currentLocalWebRTCRoute = nil
                 currentCallTransport = .cloud
                 lockedCallTransport = LockedCallTransport(
                     transport: .cloud, generation: callLifecycleSnapshot.generation
@@ -2625,7 +2532,7 @@ extension AppModel: CallKitActionHandling {
         }
         audio.setMuted(muted)
         IPhoneCloudCallSession.shared.setMuted(muted)
-        // CallKit mute actions apply directly to the local PCM encoder; module AT+CMUT failures must not affect bidirectional audio.
+        // CallKit mute actions apply directly to the native WebRTC track; module AT+CMUT failures must not affect bidirectional audio.
         if currentCallTransport != .cloud {
             if let localAPI = reachableLocalAPI {
                 Task { try? await localAPI.setAudioMuted(muted) }

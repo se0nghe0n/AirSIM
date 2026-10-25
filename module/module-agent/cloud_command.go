@@ -53,6 +53,7 @@ func cloudCommandURL(registration pushRegistration) (string, error) {
 	relay.Scheme = "wss"
 	relay.Path = "/v1/devices/" + url.PathEscape(registration.DeviceID) + "/commands/connect"
 	relay.RawQuery = ""
+	relay.RawPath, relay.Fragment = "", ""
 	return relay.String(), nil
 }
 
@@ -99,7 +100,7 @@ func (a *agent) cloudCommandLoop() {
 			continue
 		}
 		connectedAt := time.Now()
-		a.debug.add("cloud-command", "event", "Cloud dialing and SMS channel connected", "", nil)
+		a.debug.add("cloud-command", "event", "Cloud control and SMS channel connected", "", nil)
 		a.serveCloudCommands(ctx, socket)
 		_ = socket.Close()
 		cancel()
@@ -184,22 +185,8 @@ func (a *agent) executeCloudCommand(command cloudDeviceCommand) cloudCommandResu
 	result := cloudCommandResult{CommandID: command.CommandID, Status: "completed"}
 	switch command.Type {
 	case "dial":
-		value, err := a.dialNumber(command.Number)
-		if err != nil {
-			result.Status, result.Error = "failed", err.Error()
-			break
-		}
-		result.Result = value
-		if command.Call == nil || command.Call.Direction != "outgoing" {
-			result.Status, result.Error = "failed", "Cloud outgoing-call media credentials missing"
-			break
-		}
-		a.startCloudCall(cloudCallDescriptor{
-			CallID: command.Call.CallID, CallUUID: command.Call.CallUUID,
-			Generation: command.Call.Generation,
-			CallSecret: command.Call.CallSecret, RelayURL: command.Call.RelayURL,
-			Direction: "outgoing", MediaTransport: command.Call.MediaTransport, StartedAt: time.Now(),
-		})
+		result.Status, result.Error = "failed", avfVoiceUpgradeMessage
+		result.Result = map[string]any{"code": "upgrade_required"}
 	case "send_sms":
 		segments, err := a.sendSMSMessage(command.Number, command.Message)
 		if err != nil {
@@ -225,6 +212,11 @@ func (a *agent) executeCloudCommand(command cloudDeviceCommand) cloudCommandResu
 			TraceID: command.TraceID, Owner: command.Owner,
 		})
 		a.debug.add("cloud-call-control", "received", "Call command received on independent control channel", "", fields)
+		if command.Action == "answer" {
+			result.Status, result.Error = "failed", avfVoiceUpgradeMessage
+			result.Result = map[string]any{"code": "upgrade_required"}
+			break
+		}
 		if a.profile.AndroidTelecom {
 			androidAction := command.Action
 			if androidAction == "rescue_hangup" {
@@ -237,8 +229,6 @@ func (a *agent) executeCloudCommand(command cloudDeviceCommand) cloudCommandResu
 				break
 			}
 			switch command.Action {
-			case "answer":
-				result.Result = map[string]any{"answered": true, "android_confirmed": true}
 			case "end", "reject", "rescue_hangup":
 				result.Result = map[string]any{"ended": true, "android_confirmed": true}
 				a.retireCloudCallDescriptor(descriptor)
@@ -269,12 +259,6 @@ func (a *agent) executeCloudCommand(command cloudDeviceCommand) cloudCommandResu
 			if a.push != nil {
 				go func() { _ = a.push.sendCallOwner(descriptor.CallID, descriptor.CallUUID, command.Owner, "ended") }()
 			}
-		case "answer":
-			if err := a.answerCall(); err != nil {
-				result.Status, result.Error = "failed", err.Error()
-				break
-			}
-			result.Result = map[string]any{"answered": true}
 		default:
 			result.Status, result.Error = "failed", "Unsupported cloud call control action"
 		}
@@ -297,8 +281,11 @@ func (a *agent) executeAndroidCallCommandWithNumber(commandID, action, number st
 }
 
 func (a *agent) executeAndroidCallCommandWithNumberForID(commandID, action, number, expectedID string) androidCommandResult {
+	if action == "answer" || action == "dial" {
+		return androidCommandResult{ID: commandID, Error: avfVoiceUpgradeMessage}
+	}
 	switch action {
-	case "answer", "reject", "end", "dtmf":
+	case "reject", "end", "dtmf":
 	default:
 		return androidCommandResult{ID: commandID, Error: "unsupported Android Telecom action"}
 	}
@@ -318,37 +305,8 @@ func (a *agent) executeAndroidCallCommandWithNumberForID(commandID, action, numb
 	result := a.android.execute(context.Background(), androidCommand{
 		ID: commandID, Action: action, CallID: callID, Number: number,
 	}, 12*time.Second)
-	if action == "answer" && result.Success {
-		if err := a.waitForAndroidCallState(callID, "active", 8*time.Second); err != nil {
-			result.Success = false
-			result.Error = err.Error()
-		}
-	}
-	return result
-}
 
-func (a *agent) waitForAndroidCallState(androidCallID, expectedState string, timeout time.Duration) error {
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	for {
-		a.mu.RLock()
-		active := a.calls.Active
-		changed := a.callChanged
-		if active != nil && active.AndroidID == androidCallID && active.State == expectedState {
-			a.mu.RUnlock()
-			return nil
-		}
-		callStillExists := active != nil && active.AndroidID == androidCallID
-		a.mu.RUnlock()
-		if !callStillExists {
-			return errors.New("Android Telecom call ended before state confirmation")
-		}
-		select {
-		case <-changed:
-		case <-timer.C:
-			return fmt.Errorf("Android Telecom did not confirm call state %s", expectedState)
-		}
-	}
+	return result
 }
 
 func (a *agent) cachedCloudCommandResult(commandID string) (cloudCommandResult, bool) {

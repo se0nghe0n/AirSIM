@@ -34,26 +34,26 @@ type cloudCallDescriptor struct {
 func cloudMediaURL(relayURL, callUUID, callSecret string) (string, error) {
 	relay, err := url.Parse(strings.TrimSpace(relayURL))
 	if err != nil || relay.Scheme != "https" || relay.Host == "" || relay.User != nil {
-		return "", errors.New("Cloud media requires a credential-free HTTPS Relay")
+		return "", errors.New("Cloud call control requires a credential-free HTTPS Relay")
 	}
 	if strings.TrimSpace(callUUID) == "" || len(callSecret) < 24 {
-		return "", errors.New("Invalid call media identity")
+		return "", errors.New("Invalid cloud call control identity")
 	}
 	relay.Scheme = "wss"
 	relay.Path = "/v1/calls/" + strings.ToLower(callUUID) + "/connect"
-	relay.RawQuery = url.Values{"role": {"agent"}, "token": {callSecret}}.Encode()
+	relay.RawQuery = url.Values{"role": {"agent"}}.Encode()
+	relay.RawPath, relay.Fragment = "", ""
 	return relay.String(), nil
 }
 
 type cloudCallAction struct {
-	Action        string `json:"action"`
-	CallID        string `json:"call_id"`
-	CallUUID      string `json:"call_uuid,omitempty"`
-	Generation    uint64 `json:"generation,omitempty"`
-	CommandID     string `json:"command_id,omitempty"`
-	TraceID       string `json:"trace_id,omitempty"`
-	Owner         string `json:"owner"`
-	MediaProtocol string `json:"media_protocol,omitempty"`
+	Action     string `json:"action"`
+	CallID     string `json:"call_id"`
+	CallUUID   string `json:"call_uuid,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
+	CommandID  string `json:"command_id,omitempty"`
+	TraceID    string `json:"trace_id,omitempty"`
+	Owner      string `json:"owner"`
 }
 
 func decodeCloudCallAction(data []byte, expectedCallID string) (cloudCallAction, error) {
@@ -111,12 +111,8 @@ func cloudCallTraceFields(descriptor cloudCallDescriptor, action cloudCallAction
 	}
 	fields := map[string]string{
 		"call_id": descriptor.CallID, "call_uuid": strings.ToLower(descriptor.CallUUID),
-		"generation": fmt.Sprintf("%d", generation),
-		"media_transport": resolveCloudMediaTransport(
-			descriptor.MediaTransport,
-			[]string{cloudMediaTransportWebRTC},
-			false,
-		),
+		"generation":   fmt.Sprintf("%d", generation),
+		"media_status": "upgrade_required",
 	}
 	if action.Action != "" {
 		fields["action"] = action.Action
@@ -129,9 +125,6 @@ func cloudCallTraceFields(descriptor cloudCallDescriptor, action cloudCallAction
 	}
 	if action.Owner != "" {
 		fields["owner"] = action.Owner
-	}
-	if action.MediaProtocol != "" {
-		fields["media_protocol"] = normalizedCloudPCMProtocol(action.MediaProtocol)
 	}
 	return fields
 }
@@ -154,17 +147,18 @@ func cloudStatusForAction(status, message string, descriptor cloudCallDescriptor
 	if action.TraceID != "" {
 		value["trace_id"] = action.TraceID
 	}
-	if protocol := normalizedCloudPCMProtocol(action.MediaProtocol); protocol != "" {
-		value["media_protocol"] = protocol
-	}
 	if message != "" {
 		value["message"] = message
+	}
+	if message == avfVoiceUpgradeMessage {
+		value["code"] = "upgrade_required"
 	}
 	data, _ := json.Marshal(value)
 	return data
 }
 
 func (a *agent) startCloudCall(descriptor cloudCallDescriptor) {
+	descriptor.MediaTransport = ""
 	if descriptor.Generation == 0 {
 		descriptor.Generation = 1
 	}
@@ -209,47 +203,45 @@ func (a *agent) retireCloudCallDescriptor(descriptor cloudCallDescriptor) {
 }
 
 func (a *agent) runCloudCall(ctx context.Context, descriptor cloudCallDescriptor) {
-	descriptor.MediaTransport = resolveCloudMediaTransport(
-		descriptor.MediaTransport,
-		[]string{cloudMediaTransportWebRTC},
-		false,
-	)
+	descriptor.MediaTransport = ""
 	endpoint, err := cloudMediaURL(descriptor.RelayURL, descriptor.CallUUID, descriptor.CallSecret)
 	if err != nil {
-		a.debug.add("cloud-call", "error", "Invalid cloud media address", err.Error(), cloudCallTraceFields(descriptor, cloudCallAction{}))
+		a.debug.add("cloud-call", "error", "Invalid cloud call control address", err.Error(), cloudCallTraceFields(descriptor, cloudCallAction{}))
 		return
 	}
-	health := newCloudMediaHealthTracker(time.Now(), descriptor)
+	retries := 0
 	deadline := time.Now().Add(3 * time.Minute)
 	for ctx.Err() == nil && time.Now().Before(deadline) && a.cloudCallDescriptorAlive(descriptor) {
-		socket, err := dialCloudWebSocket(ctx, endpoint)
+		socket, err := dialCloudWebSocketAuthorized(ctx, endpoint, descriptor.CallSecret)
 		if err != nil {
-			a.debug.add("cloud-call", "error", "Failed to connect cloud media", err.Error(), cloudCallTraceFields(descriptor, cloudCallAction{}))
-			if !health.beginRebuild(cloudMediaRebuildConnectionLost, time.Now()) {
+			a.debug.add("cloud-call", "error", "Failed to connect cloud call control", err.Error(), cloudCallTraceFields(descriptor, cloudCallAction{}))
+			if retries >= 3 {
 				a.debug.add(
-					"cloud-call", "failed", "Cloud media reached the limit of three rebuilds per call", err.Error(),
+					"cloud-call", "failed", "Cloud call control reached its reconnect limit", err.Error(),
 					cloudCallTraceFields(descriptor, cloudCallAction{}),
 				)
 				return
 			}
+			retries++
 			if !waitCloudRetry(ctx, 2*time.Second) {
 				return
 			}
 			continue
 		}
-		a.debug.add("cloud-call", "connected", "Cloud media connected", "", cloudCallTraceFields(descriptor, cloudCallAction{}))
-		terminal := a.serveCloudCall(ctx, socket, descriptor, health)
+		a.debug.add("cloud-call", "connected", "Cloud call control connected", "", cloudCallTraceFields(descriptor, cloudCallAction{}))
+		terminal := a.serveCloudCall(ctx, socket, descriptor)
 		_ = socket.Close()
 		if terminal {
 			return
 		}
-		if !health.beginRebuild(cloudMediaRebuildConnectionLost, time.Now()) {
+		if retries >= 3 {
 			a.debug.add(
-				"cloud-call", "failed", "Cloud media reached the limit of three rebuilds per call", "",
+				"cloud-call", "failed", "Cloud call control reached its reconnect limit", "",
 				cloudCallTraceFields(descriptor, cloudCallAction{}),
 			)
 			return
 		}
+		retries++
 		if !waitCloudRetry(ctx, time.Second) {
 			return
 		}
@@ -290,10 +282,8 @@ func (a *agent) serveCloudCall(
 	ctx context.Context,
 	socket *cloudWebSocket,
 	descriptor cloudCallDescriptor,
-	health *cloudMediaHealthTracker,
 ) bool {
-	answered := false
-	_ = socket.WriteText(cloudStatusForAction("agent_ready", "", descriptor, cloudCallAction{}))
+	_ = socket.WriteText(cloudStatusForAction("upgrade_required", avfVoiceUpgradeMessage, descriptor, cloudCallAction{}))
 
 	watchEnded := make(chan struct{})
 	go func() {
@@ -335,12 +325,13 @@ func (a *agent) serveCloudCall(
 	for ctx.Err() == nil {
 		opcode, payload, err := socket.ReadMessage()
 		if err != nil {
-			a.debug.add("cloud-call", "disconnected", "Cloud media disconnected", err.Error(), cloudCallTraceFields(descriptor, cloudCallAction{}))
+			a.debug.add("cloud-call", "disconnected", "Cloud call control disconnected", err.Error(), cloudCallTraceFields(descriptor, cloudCallAction{}))
 			return false
 		}
 		switch opcode {
 		case cloudOpcodeBinary:
-			a.debug.add("cloud-call", "rejected", "Cloud PCM frames are closed", "", cloudCallTraceFields(descriptor, cloudCallAction{}))
+			a.debug.add("cloud-call", "rejected", "Binary media frames are not supported", "", cloudCallTraceFields(descriptor, cloudCallAction{}))
+			return true
 		case cloudOpcodeText:
 			control, err := decodeCloudCallActionForDescriptor(payload, descriptor)
 			if err != nil {
@@ -352,28 +343,8 @@ func (a *agent) serveCloudCall(
 			a.debug.add("cloud-call-control", "received", "Cloud call control received", "", fields)
 			switch control.Action {
 			case "answer":
-				if !answered {
-					answered = true
-					if descriptor.Direction != "outgoing" {
-						a.debug.add("cloud-call-control", "modem_executing", "Executing answer command", a.callControlBackendDescription(), fields)
-						if err := a.executeIncomingCloudCallAction(control, "answer"); err != nil {
-							answered = false
-							_ = socket.WriteText(cloudStatusForAction("action_error", err.Error(), descriptor, control))
-							a.debug.add("cloud-call-control", "failed", "Cloud answer failed", err.Error(), fields)
-							continue
-						}
-					}
-				}
-				health.markAnswerAcknowledged(time.Now())
-				_ = socket.WriteText(cloudStatusForAction(cloudPCMMilestoneAnswerOK, "", descriptor, control))
-				a.debug.add("cloud-call-control", "completed", "Cloud answer command executed", "", fields)
-				if descriptor.Direction != "outgoing" {
-					go func() {
-						if err := a.push.sendCallOwner(descriptor.CallID, descriptor.CallUUID, control.Owner, "active"); err != nil {
-							a.debug.add("cloud-call", "error", "Failed to synchronize answer ownership", err.Error(), map[string]string{"call_id": descriptor.CallID, "owner": control.Owner})
-						}
-					}()
-				}
+				_ = socket.WriteText(cloudStatusForAction("action_error", avfVoiceUpgradeMessage, descriptor, control))
+				a.debug.add("cloud-call-control", "rejected", avfVoiceUpgradeMessage, "", fields)
 			case "reject":
 				a.debug.add("cloud-call-control", "modem_executing", "Executing decline command", a.callControlBackendDescription(), fields)
 				if err := a.executeIncomingCloudCallAction(control, "reject"); err != nil {
@@ -424,10 +395,11 @@ func (a *agent) callControlBackendDescription() string {
 }
 
 func (a *agent) executeIncomingCloudCallAction(control cloudCallAction, action string) error {
+	if action == "answer" {
+		return errAVFVoiceUpgradeRequired
+	}
 	if !a.profile.AndroidTelecom {
 		switch action {
-		case "answer":
-			return a.answerCall()
 		case "reject":
 			return a.rejectCall()
 		default:
@@ -458,184 +430,6 @@ func cloudStatus(status, message string) []byte {
 }
 
 const (
-	cloudPCMMilestoneAnswerOK   = "answer_ok"
-	cloudPCMMilestoneListening  = "pcm_listening"
-	cloudPCMMilestoneActive     = "active"
-	cloudPCMMilestoneReady      = "pcm_ready"
-	cloudPCMMilestoneFirstFrame = "pcm_first_frame"
-)
-
-func validateCloudPCMMilestoneOrder(statuses []string) error {
-	ranks := map[string]int{
-		cloudPCMMilestoneAnswerOK: 1, cloudPCMMilestoneListening: 2,
-		cloudPCMMilestoneActive: 3, cloudPCMMilestoneReady: 4,
-		cloudPCMMilestoneFirstFrame: 5,
-	}
-	last := 0
-	for _, status := range statuses {
-		rank, ok := ranks[status]
-		if !ok {
-			return fmt.Errorf("unknown cloud PCM milestone %q", status)
-		}
-		if rank < last {
-			return fmt.Errorf("cloud PCM milestone %q regressed after rank %d", status, last)
-		}
-		last = rank
-	}
-	return nil
-}
-
-type cloudPCMTransmissionStats struct {
-	DownlinkBytes             uint64 `json:"downlink_bytes"`
-	DownlinkFrames            uint64 `json:"downlink_frames"`
-	DownlinkPeak              uint64 `json:"downlink_peak"`
-	UplinkBytes               uint64 `json:"uplink_bytes"`
-	UplinkFrames              uint64 `json:"uplink_frames"`
-	UplinkPeak                uint64 `json:"uplink_peak"`
-	DroppedFrames             uint64 `json:"dropped_frames"`
-	JitterBufferHighWatermark int    `json:"jitter_buffer_high_watermark"`
-	RebuildCount              int    `json:"rebuild_count"`
-	AudioRoute                string `json:"audio_route"`
-	MediaProtocol             string `json:"media_protocol,omitempty"`
-	UplinkBufferTargetMS      int    `json:"uplink_buffer_target_ms"`
-	UplinkBufferFrames        int    `json:"uplink_buffer_frames"`
-	UplinkUnderruns           uint64 `json:"uplink_underruns"`
-}
-
-func cloudPCMStatus(status, message string, stats cloudPCMTransmissionStats) []byte {
-	value := map[string]any{
-		"status":                       status,
-		"downlink_bytes":               stats.DownlinkBytes,
-		"downlink_frames":              stats.DownlinkFrames,
-		"downlink_peak":                stats.DownlinkPeak,
-		"uplink_bytes":                 stats.UplinkBytes,
-		"uplink_frames":                stats.UplinkFrames,
-		"uplink_peak":                  stats.UplinkPeak,
-		"dropped_frames":               stats.DroppedFrames,
-		"jitter_buffer_high_watermark": stats.JitterBufferHighWatermark,
-		"rebuild_count":                stats.RebuildCount,
-		"audio_route":                  stats.AudioRoute,
-		"media_protocol":               stats.MediaProtocol,
-		"uplink_buffer_target_ms":      stats.UplinkBufferTargetMS,
-		"uplink_buffer_frames":         stats.UplinkBufferFrames,
-		"uplink_underruns":             stats.UplinkUnderruns,
-	}
-	if message != "" {
-		value["message"] = message
-	}
-	data, _ := json.Marshal(value)
-	return data
-}
-
-func cloudPCMTransmissionStatsFromHealth(snapshot cloudMediaHealthSnapshot) cloudPCMTransmissionStats {
-	return cloudPCMTransmissionStats{
-		DownlinkBytes: snapshot.DownlinkBytes, DownlinkFrames: snapshot.DownlinkFrames,
-		DownlinkPeak: snapshot.DownlinkPeak, UplinkBytes: snapshot.UplinkBytes,
-		UplinkFrames: snapshot.UplinkFrames, UplinkPeak: snapshot.UplinkPeak,
-		DroppedFrames:             snapshot.DroppedFrames,
-		JitterBufferHighWatermark: snapshot.JitterBufferHighWatermark,
-		RebuildCount:              snapshot.RebuildCount, AudioRoute: snapshot.AudioRoute,
-		MediaProtocol:        snapshot.MediaProtocol,
-		UplinkBufferTargetMS: snapshot.UplinkBufferTargetMS,
-		UplinkBufferFrames:   snapshot.UplinkBufferFrames,
-		UplinkUnderruns:      snapshot.UplinkUnderruns,
-	}
-}
-
-func cloudPCMMilestoneFields(snapshot cloudMediaHealthSnapshot) map[string]string {
-	fields := map[string]string{}
-	if !snapshot.AnswerAcknowledgedAt.IsZero() && !snapshot.ListeningAt.IsZero() {
-		fields["answer_to_listen_ms"] = fmt.Sprintf("%d", snapshot.ListeningAt.Sub(snapshot.AnswerAcknowledgedAt).Milliseconds())
-	}
-	if !snapshot.ListeningAt.IsZero() && !snapshot.HandshakeAt.IsZero() {
-		fields["listen_to_handshake_ms"] = fmt.Sprintf("%d", snapshot.HandshakeAt.Sub(snapshot.ListeningAt).Milliseconds())
-	}
-	if !snapshot.HandshakeAt.IsZero() && !snapshot.FirstDownlinkAt.IsZero() {
-		fields["handshake_to_first_downlink_ms"] = fmt.Sprintf("%d", snapshot.FirstDownlinkAt.Sub(snapshot.HandshakeAt).Milliseconds())
-	}
-	return fields
-}
-
-func cloudPCM16LEPeak(data []byte) uint64 {
-	var peak uint64
-	for offset := 0; offset+1 < len(data); offset += 2 {
-		bits := uint16(data[offset]) | uint16(data[offset+1])<<8
-		sample := int64(int16(bits))
-		if sample < 0 {
-			sample = -sample
-		}
-		if uint64(sample) > peak {
-			peak = uint64(sample)
-		}
-	}
-	return peak
-}
-
-func shouldRecoverCloudPCM(readError error, _ uint64) bool {
-	var networkError net.Error
-	return errors.As(readError, &networkError) && networkError.Timeout()
-}
-
-type cloudPCMRecoveryAction string
-
-const (
-	cloudPCMKeepVoiceRoute    cloudPCMRecoveryAction = "keep_voice_route"
-	cloudPCMReconnectOnly     cloudPCMRecoveryAction = "reconnect_only"
-	cloudPCMRebuildVoiceRoute cloudPCMRecoveryAction = "rebuild_voice_route"
-)
-
-func cloudPCMRecoveryForTimeout(consecutiveTimeouts int) cloudPCMRecoveryAction {
-	if consecutiveTimeouts <= 1 {
-		return cloudPCMReconnectOnly
-	}
-	return cloudPCMRebuildVoiceRoute
-}
-
-func cloudPCMRecoveryForHealth(decision cloudMediaHealthDecision) cloudPCMRecoveryAction {
-	if decision == cloudMediaRebuildUplinkStalled {
-		return cloudPCMKeepVoiceRoute
-	}
-	return cloudPCMRebuildVoiceRoute
-}
-
-func cloudPCMRecoveryTouchesUSB(action cloudPCMRecoveryAction) bool {
-	switch action {
-	case cloudPCMKeepVoiceRoute, cloudPCMReconnectOnly, cloudPCMRebuildVoiceRoute:
-		return false
-	default:
-		// Unknown future recovery actions must fail the USB-safety invariant.
-		return true
-	}
-}
-
-const (
-	cloudPCMFrameBytes       = 320 // 20 ms, 8 kHz, mono PCM16LE
-	cloudPCMProtocolFramedV1 = "airsim-pcm-v1"
-)
-
-func normalizedCloudPCMProtocol(value string) string {
-	if strings.EqualFold(strings.TrimSpace(value), cloudPCMProtocolFramedV1) {
-		return cloudPCMProtocolFramedV1
-	}
-	return ""
-}
-
-func cloudPCMHandshake(connection net.Conn) error {
-	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
-	if _, err := connection.Write([]byte("AIRSIMPCM1\n")); err != nil {
-		return err
-	}
-	acknowledgement := make([]byte, len("AIRSIMREADY"))
-	if _, err := io.ReadFull(connection, acknowledgement); err != nil {
-		return err
-	}
-	if string(acknowledgement) != "AIRSIMREADY" {
-		return errors.New("Invalid module PCM handshake")
-	}
-	return connection.SetDeadline(time.Time{})
-}
-
-const (
 	cloudOpcodeText   = byte(1)
 	cloudOpcodeBinary = byte(2)
 	cloudOpcodeClose  = byte(8)
@@ -650,14 +444,13 @@ type cloudWebSocket struct {
 	closeOnce sync.Once
 }
 
-func dialCloudWebSocket(ctx context.Context, endpoint string) (*cloudWebSocket, error) {
-	return dialCloudWebSocketAuthorized(ctx, endpoint, "")
-}
-
 func dialCloudWebSocketAuthorized(ctx context.Context, endpoint, bearerToken string) (*cloudWebSocket, error) {
 	target, err := url.Parse(endpoint)
-	if err != nil || target.Scheme != "wss" || target.Host == "" {
+	if err != nil || target.Scheme != "wss" || target.Host == "" || target.User != nil {
 		return nil, errors.New("Invalid WSS address")
+	}
+	if bearerToken == "" || strings.ContainsAny(bearerToken, "\r\n") {
+		return nil, errors.New("A valid bearer credential is required")
 	}
 	host := target.Host
 	if !strings.Contains(host, ":") {
@@ -702,7 +495,7 @@ func dialCloudWebSocketAuthorized(ctx context.Context, endpoint, bearerToken str
 		authorization = "Authorization: Bearer " + bearerToken + "\r\n"
 	}
 	request := fmt.Sprintf(
-		"GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%sUser-Agent: AirSIM-QDC507/%s\r\n\r\n",
+		"GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%sUser-Agent: AirSIM-AVF/%s\r\n\r\n",
 		path, target.Host, key, authorization, agentVersion,
 	)
 	if _, err := io.WriteString(connection, request); err != nil {
@@ -720,7 +513,7 @@ func dialCloudWebSocketAuthorized(ctx context.Context, endpoint, bearerToken str
 		!strings.EqualFold(response.Header.Get("Upgrade"), "websocket") ||
 		response.Header.Get("Sec-WebSocket-Accept") != cloudWebSocketAccept(key) {
 		_ = connection.Close()
-		return nil, fmt.Errorf("Cloud media handshake returned HTTP %d", response.StatusCode)
+		return nil, fmt.Errorf("Cloud WebSocket handshake returned HTTP %d", response.StatusCode)
 	}
 	_ = connection.SetDeadline(time.Time{})
 	return &cloudWebSocket{conn: connection, reader: reader}, nil
@@ -734,11 +527,10 @@ func cloudWebSocketAccept(key string) string {
 func (socket *cloudWebSocket) WriteText(data []byte) error {
 	return socket.writeMessage(cloudOpcodeText, data)
 }
-func (socket *cloudWebSocket) WriteBinary(data []byte) error {
-	return socket.writeMessage(cloudOpcodeBinary, data)
-}
-
 func (socket *cloudWebSocket) writeMessage(opcode byte, payload []byte) error {
+	if opcode == cloudOpcodeBinary {
+		return errors.New("Binary media frames are not supported")
+	}
 	if len(payload) > 65_535 {
 		return errors.New("WebSocket frame too large")
 	}

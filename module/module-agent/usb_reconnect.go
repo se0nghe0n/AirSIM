@@ -358,10 +358,7 @@ func (a *agent) tryMissingECMGadgetRecovery(logger *log.Logger, trigger string) 
 	a.mu.RLock()
 	callActive := a.calls.Active != nil
 	a.mu.RUnlock()
-	a.voice.mu.Lock()
-	voiceActive := a.voice.command != nil || a.voice.routeCommand != nil ||
-		a.voice.mediaRouteStarted || a.voice.stopping
-	a.voice.mu.Unlock()
+	voiceActive := false // AVF owns no media runtime; active carrier calls still fence recovery.
 	functionsData, functionsErr := os.ReadFile(usbGadgetPath + "/functions")
 	enabledData, enabledErr := os.ReadFile(usbGadgetPath + "/enable")
 	if functionsErr != nil || enabledErr != nil {
@@ -397,7 +394,7 @@ func (a *agent) tryMissingECMGadgetRecovery(logger *log.Logger, trigger string) 
 	fields := map[string]string{"trigger": trigger, "functions": functions, "scope": "android-usb-gadget"}
 	a.debug.add("usb", "event", "Missing ECM gadget recovery started", "", fields)
 	a.recordUSBFault("gadget-rebind-start", trigger, "ecm0 missing; reloading existing ECM function")
-	appendVoiceSystemSnapshot("ecm-gadget-rebind-before")
+	appendCallSystemSnapshot("ecm-gadget-rebind-before")
 	write := func(path, value string) error {
 		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
 			return fmt.Errorf("Failed to write %s: %w", path, err)
@@ -410,7 +407,7 @@ func (a *agent) tryMissingECMGadgetRecovery(logger *log.Logger, trigger string) 
 		return usbFailureOutcome(err.Error())
 	}
 	a.debug.add("usb", "event", "Missing ECM gadget recovery completed", "", fields)
-	appendVoiceSystemSnapshot("ecm-gadget-rebind-after")
+	appendCallSystemSnapshot("ecm-gadget-rebind-after")
 	a.recordUSBFault("gadget-rebind-complete", trigger, "ECM function reloaded; waiting for ecm0")
 	return usbRebindOutcome{Retry: true, RetryAfter: usbVerifyRetryDelay, Reason: "Checking whether ecm0 reappears"}
 }
@@ -430,10 +427,7 @@ func (a *agent) tryECMLinkPowerCycle(logger *log.Logger, trigger string) usbRebi
 	a.mu.RLock()
 	callActive := a.calls.Active != nil
 	a.mu.RUnlock()
-	a.voice.mu.Lock()
-	voiceActive := a.voice.command != nil || a.voice.routeCommand != nil ||
-		a.voice.mediaRouteStarted || a.voice.stopping
-	a.voice.mu.Unlock()
+	voiceActive := false // AVF owns no media runtime; active carrier calls still fence recovery.
 	functionsData, err := os.ReadFile(usbGadgetPath + "/functions")
 	if err != nil {
 		a.debug.add("usb", "event", "USB software rebind skipped", "", map[string]string{"reason": err.Error()})
@@ -469,7 +463,7 @@ func (a *agent) tryECMLinkPowerCycle(logger *log.Logger, trigger string) usbRebi
 	fields := map[string]string{"trigger": trigger, "functions": functions, "scope": "ecm0-netdev"}
 	a.debug.add("usb", "event", "Linux ECM interface power cycle started", "", fields)
 	a.recordUSBFault("rebind-start", trigger, "ecm0 link power cycle started; USB gadget and modem remain enabled")
-	appendVoiceSystemSnapshot("usb-rebind-before")
+	appendCallSystemSnapshot("usb-rebind-before")
 	run := func(name string, arguments ...string) error {
 		output, err := exec.Command(name, arguments...).CombinedOutput()
 		if err != nil {
@@ -483,7 +477,7 @@ func (a *agent) tryECMLinkPowerCycle(logger *log.Logger, trigger string) usbRebi
 		return usbFailureOutcome(err.Error())
 	}
 	a.debug.add("usb", "event", "Linux ECM interface power cycle completed", "", fields)
-	appendVoiceSystemSnapshot("usb-rebind-after")
+	appendCallSystemSnapshot("usb-rebind-after")
 	a.recordUSBFault("rebind-complete", trigger, "ecm0 restarted without USB gadget re-enumeration")
 	return usbRebindOutcome{Retry: true, RetryAfter: usbVerifyRetryDelay, Reason: "Checking ECM recovery"}
 }

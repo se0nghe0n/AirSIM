@@ -51,9 +51,6 @@ var moduleUpdateTargets = map[string]struct {
 }{
 	"qdc507-agent":            {target: "bin/qdc507-agent", mode: 0o755},
 	"qdc507_data11_bridge.ko": {target: "kernel/qdc507_data11_bridge.ko", mode: 0o644},
-	"qdc507_aprv3.ko":         {target: "voice-runtime/qdc507_aprv3.ko", mode: 0o644},
-	"qdc507_voice.ko":         {target: "voice-runtime/qdc507_voice.ko", mode: 0o644},
-	voiceHelperName:           {target: "voice-runtime/" + voiceHelperName, mode: 0o755},
 }
 
 func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request) {
@@ -105,12 +102,9 @@ func (a *agent) systemUpdate(response http.ResponseWriter, request *http.Request
 	a.mu.RLock()
 	callActive := a.calls.Active != nil
 	a.mu.RUnlock()
-	a.voice.mu.Lock()
-	voiceActive := a.voice.command != nil || a.voice.routeCommand != nil
-	a.voice.mu.Unlock()
-	if callActive || voiceActive {
-		updateModuleInstallState(operationID, mode, "failed", "", 100, "Installation refused while a call or voice runtime is active", errors.New("Cannot update module while a call or voice bridge is active"), false)
-		writeError(response, http.StatusConflict, "Cannot update module while a call or voice bridge is active")
+	if callActive {
+		updateModuleInstallState(operationID, mode, "failed", "", 100, "Installation refused while a call is active", errors.New("Cannot update module while a call is active"), false)
+		writeError(response, http.StatusConflict, "Cannot update module while a call is active")
 		return
 	}
 	// Automatic upgrades and manual repairs can both follow a failed install. First
@@ -447,9 +441,6 @@ func installModuleUpdate(path string, manifest moduleUpdateManifest) (string, er
 	}
 	if output, err := exec.Command(probePath("qdc507-agent"), "--startup-probe", "runtime").CombinedOutput(); err != nil {
 		return "", fmt.Errorf("New Agent startup probe failed: %v (%s)", err, strings.TrimSpace(string(output)))
-	}
-	if output, err := exec.Command(probePath(voiceHelperName), "--check").CombinedOutput(); err != nil {
-		return "", fmt.Errorf("New PCM helper self-test failed: %v (%s)", err, strings.TrimSpace(string(output)))
 	}
 
 	backupDirectory := filepath.Join(agentDataDirectory, "backup", fmt.Sprintf("app-update-%d", time.Now().Unix()))

@@ -65,6 +65,10 @@ done
 payload_dir="$test_root/payload"
 mkdir -p "$payload_dir"
 tar -xzf "$extract_dir/data.tar.gz" -C "$payload_dir"
+if grep -Eq '^AIRSIM_(VOICE_BACKEND|SAMSUNG_PCM_ADDRESS)=' "$payload_dir/usr/lib/airsim/agent.env.default"; then
+    printf 'Retired audio transport configuration must not be packaged\n' >&2
+    exit 1
+fi
 file "$payload_dir/usr/bin/airsim-agent" | grep -Eq 'ARM aarch64|ARM64'
 file "$payload_dir/usr/lib/airsim/airsim-installerd" | grep -Eq 'ARM aarch64|ARM64'
 for script in "$script_dir"/debian/postinst "$script_dir"/debian/prerm \

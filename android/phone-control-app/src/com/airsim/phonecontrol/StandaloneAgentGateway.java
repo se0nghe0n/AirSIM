@@ -109,9 +109,9 @@ final class StandaloneAgentGateway {
                 case "/api/sms/status" -> ok(new JSONObject().put("auto_cleanup_me", true)
                         .put("count", smsStore.pendingCount()).put("last_poll_error", "").toString());
                 case "/api/calls/audio/host/config" -> ok(new JSONObject()
-                        .put("transport", "tcp_pcm_s16le").put("host", "127.0.0.1")
-                        .put("port", 7580).put("sample_rate", 8000).put("channels", 1)
-                        .put("route_ready", true).put("route_listening", true).toString());
+                        .put("transport", "webrtc").put("media_capability_revision", 2)
+                        .put("service_ready", ShizukuBridgeManager.get(context).mediaAvailable())
+                        .put("route_ready", false).toString());
                 default -> error(404, "not_found");
             };
         }
@@ -128,7 +128,8 @@ final class StandaloneAgentGateway {
             case "/api/calls/dtmf" -> command("dtmf", CallRepository.idForAction("dtmf"), input.optString("digit", ""), "");
             case "/api/sms/send" -> command("send_sms", "", input.optString("phone", ""),
                     input.optString("message", ""));
-            case "/api/calls/audio/host/warmup" -> ok("{\"warming\":true}");
+            case "/api/calls/audio/host/warmup" -> ShizukuBridgeManager.get(context).mediaAvailable()
+                    ? ok("{\"warming\":true,\"transport\":\"webrtc\"}") : error(409, "privileged_media_unavailable");
             case "/api/calls/audio/host/register" -> ok(new JSONObject()
                     .put("enabled", input.optBoolean("enabled", false)).toString());
             case "/api/calls/audio/mute" -> ok(new JSONObject()
@@ -267,6 +268,10 @@ final class StandaloneAgentGateway {
     }
 
     private AgentCommandDispatcher.Result execute(AgentCommand command) {
+        if (("dial".equals(command.action) || "answer".equals(command.action))
+                && !ShizukuBridgeManager.get(context).mediaAvailable()) {
+            return new AgentCommandDispatcher.Result(false, "privileged_media_unavailable", 0);
+        }
         RoleManager roles = context.getSystemService(RoleManager.class);
         boolean dialer = roles != null && roles.isRoleHeld(RoleManager.ROLE_DIALER);
         return AgentCommandDispatcher.execute(command, dialer,

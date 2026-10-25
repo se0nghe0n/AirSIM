@@ -27,11 +27,12 @@ public final class ShizukuBridgeUserService extends Binder {
     private final Object lock = new Object();
     private String sourceApk = "";
     private String packageName = "";
-    private boolean standalonePCM;
-    private java.lang.Process bridgeProcess;
-    private boolean bridgeDesired;
+    private PrivilegedMediaService media;
+    private boolean bridgeClosing;
+    private IBinder ownerBinder;
     private Context serviceContext;
     private LocalOutputMuteController outputMute;
+    private boolean desiredOutputMuted;
 
     public ShizukuBridgeUserService() {
         Log.i(TAG, "created without context uid=" + Process.myUid());
@@ -41,7 +42,7 @@ public final class ShizukuBridgeUserService extends Binder {
         serviceContext = context;
         sourceApk = context.getApplicationInfo().sourceDir;
         packageName = context.getPackageName();
-        standalonePCM = RuntimeMode.isStandalone(context);
+
         Log.i(TAG, "created uid=" + Process.myUid());
     }
 
@@ -57,8 +58,10 @@ public final class ShizukuBridgeUserService extends Binder {
         }
         data.enforceInterface(PrivilegedBridgeProtocol.DESCRIPTOR);
         try {
+            verifyCaller(data.readStrongBinder());
             String result = switch (code) {
                 case PrivilegedBridgeProtocol.TRANSACTION_START_BRIDGE -> ensureBridgeStarted();
+                case PrivilegedBridgeProtocol.TRANSACTION_MEDIA -> mediaRequest(data.readString());
                 case PrivilegedBridgeProtocol.TRANSACTION_STATUS -> status();
                 case PrivilegedBridgeProtocol.TRANSACTION_SET_LOCAL_OUTPUT_MUTED ->
                         setLocalOutputMuted(data.readInt() != 0);
@@ -70,37 +73,56 @@ public final class ShizukuBridgeUserService extends Binder {
             reply.writeString(result);
             return true;
         } catch (Throwable error) {
-            Log.e(TAG, "transaction failed code=" + code, error);
-            reply.writeException(new IllegalStateException(safeMessage(error)));
+            Log.w(TAG, "privileged transaction rejected code=" + code);
+            reply.writeException(new IllegalStateException("privileged_operation_failed"));
             return true;
         }
     }
 
     private String ensureBridgeStarted() throws IOException {
+        PrivilegedMediaService current;
         synchronized (lock) {
             verifyIdentity();
-            bridgeDesired = true;
-            if (bridgeProcess != null && bridgeProcess.isAlive()) return statusLocked();
-            if (sourceApk.isEmpty()) throw new IOException("application source path unavailable");
-            stopStaleAudioBridges();
-            List<String> command = new ArrayList<>();
-            command.add("/system/bin/app_process");
-            command.add("/system/bin");
-            command.add("com.airsim.bridge.PhoneAudioBridge");
-            command.add(standalonePCM ? "--listen-host" : "--listen-interface");
-            command.add(standalonePCM ? "127.0.0.1" : "avf_tap_fixed");
-            command.add("--listen-port");
-            command.add("7580");
-            ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
-            builder.environment().put("CLASSPATH", sourceApk);
-            bridgeProcess = builder.start();
-            java.lang.Process launched = bridgeProcess;
-            Thread monitor = new Thread(() -> monitorBridge(launched), "airsim-shizuku-pcm-monitor");
-            monitor.setDaemon(true);
-            monitor.start();
-            Log.i(TAG, "PCM bridge process started");
-            return statusLocked();
+            if (bridgeClosing) throw new IOException("media_service_closing");
+            if (serviceContext == null || sourceApk.isEmpty()) throw new IOException("application context unavailable");
+            if (media == null) {
+                stopStaleAudioBridges();
+                media = new PrivilegedMediaService(serviceContext, () -> {
+                    try { applyLocalOutputMuted(false); }
+                    catch (Exception error) { throw new IllegalStateException("local_output_unavailable"); }
+                }, () -> {
+                    try { synchronized (lock) { applyLocalOutputMuted(desiredOutputMuted); } }
+                    catch (Exception error) { throw new IllegalStateException("local_output_unavailable"); }
+                });
+            }
+            current = media;
         }
+        current.initialize();
+        return status();
+    }
+
+    private void verifyCaller(IBinder token) throws RemoteException {
+        if (serviceContext == null || Binder.getCallingUid() != serviceContext.getApplicationInfo().uid)
+            throw new SecurityException("media caller is not the owning APK");
+        if (token == null) throw new SecurityException("owner token required");
+        synchronized (lock) {
+            if (bridgeClosing) throw new IllegalStateException("media_service_closing");
+            if (ownerBinder == null) {
+                token.linkToDeath(this::closeBridge, 0);
+                ownerBinder = token;
+            } else if (!ownerBinder.equals(token)) throw new SecurityException("another owner already attached");
+        }
+    }
+
+    String mediaRequest(String request) throws Exception {
+        verifyIdentity();
+        PrivilegedMediaService current;
+        synchronized (lock) {
+            if (bridgeClosing) throw new IllegalStateException("media_service_closing");
+            current = media;
+        }
+        if (current == null) throw new IllegalStateException("media_service_unavailable");
+        return current.request(request);
     }
 
     String executeCommand(int code, boolean value) throws Exception {
@@ -163,34 +185,14 @@ public final class ShizukuBridgeUserService extends Binder {
         return result;
     }
 
-    private void monitorBridge(java.lang.Process launched) {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                launched.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) Log.i("AirSIMPCM", line);
-        } catch (IOException error) {
-            Log.w(TAG, "PCM log stream ended", error);
-        }
-        int exit = -1;
-        try { exit = launched.waitFor(); }
-        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
-        boolean restart;
+    private String setLocalOutputMuted(boolean muted) throws Exception {
         synchronized (lock) {
-            if (bridgeProcess == launched) bridgeProcess = null;
-            restart = bridgeDesired;
-        }
-        Log.w(TAG, "PCM bridge exited code=" + exit + " restart=" + restart);
-        if (restart) {
-            try {
-                Thread.sleep(1_000);
-                ensureBridgeStarted();
-            } catch (Throwable error) {
-                Log.e(TAG, "PCM bridge restart failed", error);
-            }
+            desiredOutputMuted = muted;
+            return applyLocalOutputMuted(muted);
         }
     }
 
-    private String setLocalOutputMuted(boolean muted) throws Exception {
+    private String applyLocalOutputMuted(boolean muted) throws Exception {
         synchronized (lock) {
             verifyIdentity();
             if (outputMute == null && !muted) return "local_output_unchanged";
@@ -266,7 +268,7 @@ public final class ShizukuBridgeUserService extends Binder {
 
     private String statusLocked() {
         return "uid=" + Process.myUid()
-                + " pcm=" + (bridgeProcess != null && bridgeProcess.isAlive() ? "running" : "stopped")
+                + " media=" + (media != null && media.available() ? "ready" : "unavailable")
                 + " local_output=" + (outputMute != null && outputMute.isVerifiedMuted() ? "muted" : "normal");
     }
 
@@ -277,13 +279,36 @@ public final class ShizukuBridgeUserService extends Binder {
     }
 
     void closeBridge() {
+        PrivilegedMediaService current;
         synchronized (lock) {
-            bridgeDesired = false;
-            if (bridgeProcess != null) bridgeProcess.destroy();
-            bridgeProcess = null;
+            if (bridgeClosing) return;
+            bridgeClosing = true;
+            current = media;
+            ownerBinder = null;
         }
-        try { setLocalOutputMuted(false); }
-        catch (Throwable error) { Log.w(TAG, "restore output during destroy failed", error); }
+        if (current != null) {
+            // Retain the closed service as a process-wide retirement barrier. A new Binder owner
+            // cannot create another native peer while the old service is still disposing one.
+            java.util.concurrent.CompletableFuture<Void> disposal = current.closeAsync();
+            // destroy()/pipe EOF may exit the process immediately after this returns. Restore
+            // global call output now as well as at completion, while the recreation gate is shut.
+            try { setLocalOutputMuted(false); }
+            catch (Throwable error) { Log.w(TAG, "restore output during destroy failed"); }
+            disposal.whenComplete((unused, error) -> {
+                synchronized (lock) {
+                    if (media != current || error != null) return;
+                    try { setLocalOutputMuted(false); }
+                    catch (Throwable restoreError) { Log.w(TAG, "restore output during destroy failed"); return; }
+                    media = null;
+                    bridgeClosing = false;
+                }
+            });
+        } else {
+            synchronized (lock) {
+                try { setLocalOutputMuted(false); bridgeClosing = false; }
+                catch (Throwable error) { Log.w(TAG, "restore output during destroy failed"); }
+            }
+        }
     }
 
     public void destroy() {

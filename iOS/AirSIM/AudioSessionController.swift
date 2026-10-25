@@ -14,31 +14,47 @@ enum VoWLANAudioPlan {
     }
 }
 
-enum PCMRoute: Equatable, Sendable {
+/// Local media has no socket or sample transport. The legacy route fails closed.
+enum LocalWebRTCRoute: Equatable, Sendable {
     case moduleLocal
     case vowlan(endpoint: VoWLANEndpoint, credential: VoWLANCredential)
+}
 
-    var host: String {
-        switch self {
-        case .moduleLocal: return "192.168.225.1"
-        case let .vowlan(endpoint, _): return endpoint.host
-        }
+struct VoWLANWebRTCSession: Encodable, Equatable, Sendable {
+    let version: Int = 1
+    let callUUID: UUID
+    let generation: UInt64
+    let sessionID: UUID
+    enum CodingKeys: String, CodingKey {
+        case version, generation
+        case callUUID = "call_uuid"
+        case sessionID = "session_id"
     }
-
-    var port: UInt16 {
-        switch self {
-        case .moduleLocal: return 7_580
-        case let .vowlan(endpoint, _): return endpoint.pcmPort
-        }
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(version, forKey: .version)
+        try values.encode(callUUID.uuidString.lowercased(), forKey: .callUUID)
+        try values.encode(generation, forKey: .generation)
+        try values.encode(sessionID.uuidString.lowercased(), forKey: .sessionID)
     }
+}
 
-    var requiresWiFi: Bool {
-        if case .vowlan = self { return true }
-        return false
+struct VoWLANWebRTCStatus: Decodable, Equatable, Sendable {
+    enum State: String, Decodable, Sendable { case preparing, ready, failed, closed }
+    let version: Int
+    let callUUID: UUID
+    let generation: UInt64
+    let sessionID: UUID
+    let status: State
+    let reason: String?
+    enum CodingKeys: String, CodingKey {
+        case version, generation, status, reason
+        case callUUID = "call_uuid"
+        case sessionID = "session_id"
     }
-
-    func handshake() throws -> Data {
-        throw APIError.disabledLegacyRoute
+    func matches(_ session: VoWLANWebRTCSession) -> Bool {
+        version == session.version && callUUID == session.callUUID
+            && generation == session.generation && sessionID == session.sessionID
     }
 }
 
@@ -69,7 +85,7 @@ enum SpeakerRoutePolicy {
     }
 }
 
-/// Manages bidirectional call audio between the iPhone/iPad built-in microphone, speaker, and module ECM network PCM.
+/// Owns the local native WebRTC call, including authenticated carrier readiness.
 @MainActor
 @Observable
 final class AudioSessionController {
@@ -82,9 +98,18 @@ final class AudioSessionController {
     private(set) var speakerRoutePending = false
     var errorMessage: String?
 
-    @ObservationIgnored private var engine: AVAudioEngine?
-    @ObservationIgnored private var player: AVAudioPlayerNode?
     @ObservationIgnored private var vowlanPeer: CloudWebRTCPeer?
+    @ObservationIgnored private var localSession: VoWLANWebRTCSession?
+    @ObservationIgnored private var localAPI: AirSIMAPI?
+    @ObservationIgnored private var localReadiness = CloudWebRTCReadiness()
+    @ObservationIgnored private var signalingTask: Task<Void, Never>?
+    @ObservationIgnored private var statusTask: Task<Void, Never>?
+    @ObservationIgnored private var startupTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var activationID = UUID()
+    var recordingSource: CallRecordingSource? {
+        guard transportReady, let localSession else { return nil }
+        return .init(callUUID: localSession.callUUID)
+    }
     @ObservationIgnored private let vowlanQueue = DispatchQueue(label: "com.example.airsim.vowlan-webrtc")
     @ObservationIgnored private var callTonePlayer: AVAudioPlayer?
     @ObservationIgnored private var currentCallTone: CallTone?
@@ -92,6 +117,7 @@ final class AudioSessionController {
     @ObservationIgnored private var requestedSpeakerOverride = false
     @ObservationIgnored private var speakerRouteRetryTask: Task<Void, Never>?
     @ObservationIgnored private var sessionActivationManagedByCallKit = false
+    @ObservationIgnored private var ownsWebRTCAudioActivation = false
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
 
     init() {
@@ -121,13 +147,20 @@ final class AudioSessionController {
 
     @discardableResult
     func activateForCall(
-        route: PCMRoute = .moduleLocal,
+        route: LocalWebRTCRoute = .moduleLocal,
         sessionAlreadyActive: Bool = false,
         callUUID: UUID = UUID(),
         generation: UInt64 = 1
     ) async -> Bool {
         guard !active else { return true }
+        guard case .vowlan = route else {
+            errorMessage = APIError.disabledLegacyRoute.localizedDescription
+            return false
+        }
+        let attempt = UUID()
+        activationID = attempt
         let permission = await requestMicrophonePermission()
+        guard activationID == attempt, !Task.isCancelled else { return false }
         guard permission else {
             errorMessage = "Microphone access is required for two-way calls"
             return false
@@ -138,14 +171,18 @@ final class AudioSessionController {
             sessionActivationManagedByCallKit = sessionAlreadyActive
             try configureCallAudioSession()
             if !sessionAlreadyActive {
-                try session.setActive(true, options: .notifyOthersOnDeactivation)
+                let rtc = RTCAudioSession.sharedInstance()
+                rtc.useManualAudio = true
+                rtc.lockForConfiguration()
+                defer { rtc.unlockForConfiguration() }
+                try rtc.setActive(true)
+                ownsWebRTCAudioActivation = true
             }
             // Default to the receiver for every call; override the output route only after the user explicitly enables the speaker.
             try session.overrideOutputAudioPort(requestedSpeakerOverride ? .speaker : .none)
             refreshRouteDescription()
             switch route {
             case .moduleLocal:
-                _ = try route.handshake()
                 throw APIError.disabledLegacyRoute
             case let .vowlan(endpoint, credential):
                 guard VoWLANAudioPlan.usesHostICE, !VoWLANAudioPlan.opensNetworkPCM else {
@@ -180,54 +217,166 @@ final class AudioSessionController {
         generation: UInt64
     ) throws {
         let api = AirSIMAPI(route: .vowlan(endpoint: endpoint, credential: credential))
+        let identity = VoWLANWebRTCSession(callUUID: callUUID, generation: generation, sessionID: UUID())
+        localSession = identity
+        localAPI = api
+        localReadiness.begin(identity.sessionID)
         let rtc = RTCAudioSession.sharedInstance()
         rtc.useManualAudio = true
         rtc.isAudioEnabled = true
         let queue = vowlanQueue
-        let peer = try CloudWebRTCPeer(
-            callUUID: callUUID,
-            generation: generation,
-            servers: [],
-            queue: queue,
-            hostOnly: true,
-            signal: { [weak self] signal in
-                Task {
-                    do {
-                        let answer = try await api.exchangeVoWLANWebRTC(signal)
-                        queue.async { self?.vowlanPeer?.receive(answer) }
-                    } catch {
-                        Task { @MainActor [weak self] in
-                            self?.errorMessage = error.localizedDescription
-                            self?.transportReady = false
+        let peer = try queue.sync {
+            try CloudWebRTCPeer(
+                callUUID: callUUID, generation: generation, sessionID: identity.sessionID,
+                servers: [], queue: queue, hostOnly: true,
+                signal: { [weak self] signal in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.localSession == identity else { return }
+                        self.signalingTask = Task { @MainActor [weak self] in
+                            do {
+                                let answer = try await api.exchangeVoWLANWebRTC(signal)
+                                guard let self, !Task.isCancelled, self.localSession == identity,
+                                      let peer = self.vowlanPeer else { return }
+                                guard answer.isValid, answer.action == .answer,
+                                      answer.callUUID == identity.callUUID,
+                                      answer.generation == identity.generation,
+                                      answer.sessionID == identity.sessionID else {
+                                    self.failLocalSession(identity, message: "Invalid VoWLAN WebRTC answer")
+                                    return
+                                }
+                                queue.async { peer.receive(answer) }
+                                self.pollLocalReadiness(identity, api: api)
+                            } catch {
+                                guard !Task.isCancelled else { return }
+                                self?.failLocalSession(identity, message: "VoWLAN WebRTC signaling failed")
+                            }
                         }
                     }
-                }
-            },
-            connected: { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.transportReady = true
-                    self?.routeDescription = "VoWLAN WebRTC"
-                    self?.diagnosticDescription = "\(DeviceContext.displayName) WebRTC host ICE connected"
-                    self?.errorMessage = nil
-                }
-            },
-            failure: { [weak self] in
-                Task { @MainActor [weak self] in
-                    self?.transportReady = false
-                    self?.errorMessage = "VoWLAN WebRTC failed"
-                }
-            },
-            statistics: { _ in }
-        )
-        guard peer.usesHostICE else { throw APIError.disabledLegacyRoute }
+                }, connected: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.localSession == identity else { return }
+                        self.localReadiness.nativeConnected(identity.sessionID)
+                        self.publishLocalReadiness()
+                    }
+                }, disconnected: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.localSession == identity else { return }
+                        self.localReadiness.nativeDisconnected(identity.sessionID)
+                        self.publishLocalReadiness()
+                    }
+                }, failure: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        self?.failLocalSession(identity, message: "VoWLAN WebRTC failed")
+                    }
+                }, statistics: { _ in }
+            )
+        }
         vowlanPeer = peer
-        peer.setMuted(muted)
-        peer.offer()
+        let initiallyMuted = muted
+        queue.async { peer.setMuted(initiallyMuted); peer.offer() }
+        startupTimeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, let self, self.localSession == identity,
+                  !self.localReadiness.isReady else { return }
+            self.failLocalSession(identity, message: "Android call audio was not ready within 30 seconds")
+        }
+    }
+
+    private func pollLocalReadiness(_ identity: VoWLANWebRTCSession, api: AirSIMAPI) {
+        statusTask?.cancel()
+        statusTask = Task { @MainActor [weak self] in
+            var lastResponse = ProcessInfo.processInfo.systemUptime
+            var unreadySince: TimeInterval? = lastResponse
+            while !Task.isCancelled {
+                guard let self, self.localSession == identity else { return }
+                do {
+                    let status = try await api.voWLANWebRTCStatus(identity)
+                    guard !Task.isCancelled, self.localSession == identity else { return }
+                    guard status.matches(identity) else {
+                        self.failLocalSession(identity, message: "VoWLAN audio session changed")
+                        return
+                    }
+                    lastResponse = ProcessInfo.processInfo.systemUptime
+                    switch status.status {
+                    case .ready: self.localReadiness.agentConnected(identity.sessionID)
+                    case .preparing: self.localReadiness.agentRecovering()
+                    case .failed, .closed:
+                        self.failLocalSession(identity, message: "Android call audio is unavailable")
+                        return
+                    }
+                    self.publishLocalReadiness()
+                } catch {
+                    guard !Task.isCancelled, self.localSession == identity else { return }
+                    self.localReadiness.agentRecovering()
+                    self.publishLocalReadiness()
+                    if ProcessInfo.processInfo.systemUptime - lastResponse >= 30 {
+                        self.failLocalSession(identity, message: "Android audio status timed out")
+                        return
+                    }
+                }
+                let now = ProcessInfo.processInfo.systemUptime
+                if self.localReadiness.isReady {
+                    unreadySince = nil
+                } else if let since = unreadySince {
+                    if now - since >= 30 {
+                        self.failLocalSession(identity, message: "Android call audio readiness timed out")
+                        return
+                    }
+                } else {
+                    unreadySince = now
+                }
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func publishLocalReadiness() {
+        transportReady = localReadiness.isReady
+        routeDescription = transportReady ? "VoWLAN WebRTC" : "Connecting VoWLAN WebRTC…"
+        diagnosticDescription = transportReady
+            ? "WebRTC and Android carrier audio ready"
+            : "Waiting for WebRTC and Android carrier audio"
+        if transportReady {
+            startupTimeoutTask?.cancel()
+            startupTimeoutTask = nil
+            errorMessage = nil
+        }
+    }
+
+    private func failLocalSession(_ identity: VoWLANWebRTCSession, message: String) {
+        guard localSession == identity else { return }
+        closeLocalPeer()
+        transportReady = false
+        routeDescription = "VoWLAN WebRTC unavailable"
+        diagnosticDescription = "VoWLAN WebRTC unavailable"
+        errorMessage = message
+        // Keep the cellular call under user control. Do not silently fall back,
+        // redial, or hang up an inbound call because its remote audio failed.
+    }
+
+    private func closeLocalPeer() {
+        activationID = UUID()
+        let previous = localSession
+        let api = localAPI
+        localSession = nil
+        localAPI = nil
+        localReadiness.reset()
+        signalingTask?.cancel(); signalingTask = nil
+        statusTask?.cancel(); statusTask = nil
+        startupTimeoutTask?.cancel(); startupTimeoutTask = nil
+        if let peer = vowlanPeer { vowlanQueue.async { peer.close() } }
+        vowlanPeer = nil
+        if let previous, let api {
+            Task { try? await api.stopVoWLANWebRTC(previous) }
+        }
     }
 
     /// Declares the voice category before CallKit executes an action; actual activation happens when the system invokes didActivate.
     func prepareForCallKit() throws {
         resetSpeakerPreferenceForNewCall()
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.useManualAudio = true
+        rtc.isAudioEnabled = false
         try configureCallAudioSession()
         try AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
         sessionActivationManagedByCallKit = true
@@ -236,10 +385,10 @@ final class AudioSessionController {
     func setMuted(_ muted: Bool) {
         CallAudioRecorder.shared.setMuted(muted)
         self.muted = muted
-        vowlanPeer?.setMuted(muted)
+        if let peer = vowlanPeer { vowlanQueue.async { peer.setMuted(muted) } }
     }
 
-    /// Plays the incoming ringtone or outgoing ringback tone based on module call state, yielding immediately to network PCM once connected.
+    /// Plays the incoming ringtone or outgoing ringback tone based on module call state, yielding immediately to native WebRTC once connected.
     func updateCallTone(for call: CallRecord?) {
         guard !active else {
             stopCallTone()
@@ -353,20 +502,20 @@ final class AudioSessionController {
         }
     }
 
-    /// Merges module-side D5/D6 statistics to avoid mistaking TCP connectivity for actual voice presence.
+    /// Aggregate carrier-device diagnostics are not the session readiness signal.
     func updateModuleDiagnostics(_ config: MaVoAudioHostConfig) {
         var details: [String] = []
         if let routeError = config.routeError, !routeError.isEmpty {
             details.append("Module audio bridge error: \(routeError)")
         } else if config.routeRunning != true {
-            details.append("Module PCM has not started")
+            details.append("Android carrier audio has not started")
         } else if config.routeSessionReady == false || config.routeReady == false {
             details.append("Module audio route is not ready")
         }
         if let statistics = config.statistics, config.statisticsAvailable == true {
             details.append("D5 ↑\(statistics.uplinkBytes)B peak \(statistics.uplinkPeak) · D6 ↓\(statistics.downlinkBytes)B peak \(statistics.downlinkPeak)")
         } else if config.routeRunning == true {
-            details.append("Module PCM started, waiting for statistics")
+            details.append("Android carrier audio started, waiting for statistics")
         }
         // Show only the last log line to preserve the root startup failure reason without flooding the call screen.
         if let lastLog = config.logTail?.last, !lastLog.isEmpty {
@@ -377,28 +526,28 @@ final class AudioSessionController {
 
     func deactivate() {
         let callKitManagedSession = sessionActivationManagedByCallKit
-        sessionActivationManagedByCallKit = false
         muted = false
         requestedSpeakerOverride = false
         speakerRouteRetryTask?.cancel()
         speakerRouteRetryTask = nil
         speakerRoutePending = false
         stopCallTone()
-        vowlanPeer?.close()
-        vowlanPeer = nil
-        RTCAudioSession.sharedInstance().isAudioEnabled = false
-        if let engine {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
+        sessionActivationManagedByCallKit = false
+        let ownedLocalAudio = active || localSession != nil || vowlanPeer != nil || ownsWebRTCAudioActivation
+        closeLocalPeer()
+        if ownedLocalAudio { RTCAudioSession.sharedInstance().isAudioEnabled = false }
+        if ownsWebRTCAudioActivation {
+            ownsWebRTCAudioActivation = false
+            let rtc = RTCAudioSession.sharedInstance()
+            rtc.lockForConfiguration()
+            try? rtc.setActive(false)
+            rtc.unlockForConfiguration()
         }
-        player?.stop()
-        player = nil
-        engine = nil
         do {
             let session = AVAudioSession.sharedInstance()
             // Clear the speaker override for this call so it does not affect the next call or other apps.
             try session.overrideOutputAudioPort(.none)
-            if !callKitManagedSession {
+            if ownedLocalAudio, !callKitManagedSession {
                 try session.setActive(
                     false,
                     options: .notifyOthersOnDeactivation
@@ -478,56 +627,6 @@ final class AudioSessionController {
         speakerRoutePending = false
     }
 
-}
-
-struct PlaybackQueueTracker {
-    let maximumFrames: Int
-    private(set) var scheduledFrames = 0
-    private(set) var droppedFrames = 0
-
-    mutating func reserve(frames: Int) -> Bool {
-        guard frames > 0 else { return false }
-        guard scheduledFrames + frames <= maximumFrames else {
-            droppedFrames += frames
-            return false
-        }
-        scheduledFrames += frames
-        return true
-    }
-
-    mutating func complete(frames: Int) {
-        scheduledFrames = max(0, scheduledFrames - max(0, frames))
-    }
-
-    mutating func reset() {
-        scheduledFrames = 0
-        droppedFrames = 0
-    }
-}
-
-struct PCMFrameAccumulator {
-    let frameBytes: Int
-    private var bytes = Data()
-
-    init(frameBytes: Int) {
-        self.frameBytes = frameBytes
-    }
-
-    var pendingByteCount: Int { bytes.count }
-
-    mutating func append(_ data: Data) -> Data? {
-        guard frameBytes > 0, !data.isEmpty else { return nil }
-        bytes.append(data)
-        let completeByteCount = (bytes.count / frameBytes) * frameBytes
-        guard completeByteCount > 0 else { return nil }
-        let batch = Data(bytes.prefix(completeByteCount))
-        bytes.removeFirst(completeByteCount)
-        return batch
-    }
-
-    mutating func reset() {
-        bytes.removeAll(keepingCapacity: false)
-    }
 }
 
 /// Tone type used during call waiting; the associated value also detects whether the user switched the incoming ringtone.
@@ -658,101 +757,11 @@ private enum SynthesizedCallTone {
 }
 
 
-/// Applies voice band-limiting and linear downsampling to microphone input, outputting 8 kHz PCM16LE required by the module.
-final class VoicePCMEncoder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var conditioner = VoiceCaptureConditioner()
-    private var samples: [Float] = []
-    private var position = 0.0
-    private var sampleRate = 0.0
-    private var muted = false
-
-    func setMuted(_ muted: Bool) {
-        lock.lock()
-        self.muted = muted
-        lock.unlock()
-    }
-
-    func encode(_ buffer: AVAudioPCMBuffer) -> Data {
-        guard let input = buffer.floatChannelData?[0] else { return Data() }
-        let frameCount = Int(buffer.frameLength)
-        let copied = Array(UnsafeBufferPointer(start: input, count: frameCount))
-        let rate = buffer.format.sampleRate
-
-        lock.lock()
-        defer { lock.unlock() }
-        if sampleRate != rate {
-            sampleRate = rate
-            samples.removeAll(keepingCapacity: true)
-            position = 0
-            conditioner.reset(sampleRate: rate)
-        }
-        samples.append(contentsOf: conditioner.process(copied, sampleRate: rate))
-        let step = rate / 8_000
-        var pcm = Data()
-        pcm.reserveCapacity(frameCount / max(1, Int(step)) * 2 + 4)
-
-        while position + 1 < Double(samples.count) {
-            let lower = Int(position)
-            let fraction = Float(position - Double(lower))
-            let value = samples[lower] * (1 - fraction) + samples[lower + 1] * fraction
-            let scaled = muted ? Int16(0) : Int16(max(-1, min(1, value)) * 32_767)
-            var littleEndian = scaled.littleEndian
-            withUnsafeBytes(of: &littleEndian) { pcm.append(contentsOf: $0) }
-            position += step
-        }
-        let consumed = max(0, min(Int(position), samples.count - 1))
-        if consumed > 0 {
-            samples.removeFirst(consumed)
-            position -= Double(consumed)
-        }
-        return pcm
-    }
-}
-
-/// Two-stage low-pass filtering prevents downsampling aliasing, while high-pass filtering removes DC offset and low-frequency desk rumble.
-private struct VoiceCaptureConditioner {
-    private var sampleRate = 0.0
-    private var previousInput: Float = 0
-    private var highPassOutput: Float = 0
-    private var lowPassStage1: Float = 0
-    private var lowPassStage2: Float = 0
-
-    mutating func process(_ samples: [Float], sampleRate: Double) -> [Float] {
-        guard sampleRate > 0, !samples.isEmpty else { return [] }
-        if self.sampleRate != sampleRate { reset(sampleRate: sampleRate) }
-        let timeStep = 1 / sampleRate
-        let highPassRC = 1 / (2 * Double.pi * 80)
-        let highPassAlpha = Float(highPassRC / (highPassRC + timeStep))
-        let lowPassCutoff = min(3_400, sampleRate * 0.45)
-        let lowPassAlpha = Float(1 - exp(-2 * Double.pi * lowPassCutoff / sampleRate))
-        return samples.map { sample in
-            highPassOutput = highPassAlpha * (highPassOutput + sample - previousInput)
-            previousInput = sample
-            lowPassStage1 += lowPassAlpha * (highPassOutput - lowPassStage1)
-            lowPassStage2 += lowPassAlpha * (lowPassStage1 - lowPassStage2)
-            return max(-1, min(1, lowPassStage2))
-        }
-    }
-
-    mutating func reset(sampleRate: Double = 0) {
-        self.sampleRate = sampleRate
-        previousInput = 0
-        highPassOutput = 0
-        lowPassStage1 = 0
-        lowPassStage2 = 0
-    }
-}
-
 enum VoiceAudioError: LocalizedError {
-    case microphoneUnavailable
-    case invalidPlaybackFormat
     case tonePlaybackFailed
 
     var errorDescription: String? {
         switch self {
-        case .microphoneUnavailable: return "No microphone input available"
-        case .invalidPlaybackFormat: return "Unable to create 8 kHz call playback format"
         case .tonePlaybackFailed: return "System could not start the tone player"
         }
     }

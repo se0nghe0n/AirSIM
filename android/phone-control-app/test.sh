@@ -210,15 +210,15 @@ mkdir -p "$SMS_OUT"
   "$ROOT"/test/com/airsim/phonecontrol/StandaloneWebSocketTests.java
 "$JAVA" -cp "$OUT:$ANDROID_JAR" com.airsim.phonecontrol.StandaloneWebSocketTests
 
-assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+assert_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
   'config.audioJitterBufferMaxPackets = WebRTCPlayout.JITTER_BUFFER_MAX_PACKETS' \
   'Android WebRTC peer does not cap NetEq'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
+assert_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
   'config.audioJitterBufferFastAccelerate = WebRTCPlayout.FAST_ACCELERATE' \
   'Android WebRTC peer does not enable NetEq fast accelerate'
-assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
-  'connection.setSendBufferSize(WebRTCPcmBuffer.LOOPBACK_SOCKET_BYTES)' \
-  'WebRTC loopback does not bound its send buffer'
+assert_not_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
+  'new Socket' \
+  'Native carrier audio must remain in process'
 "$JAVAC" --release 17 -cp "$OUT" -d "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayout.java \
@@ -244,3 +244,40 @@ assert_contains "$ROOT/src/com/airsim/phonecontrol/WebRTCCloudPeer.java" \
   "$ROOT"/src/com/airsim/phonecontrol/NativeCallHistoryRecord.java \
   "$ROOT"/test/com/airsim/phonecontrol/NativeCallHistoryTests.java
 "$JAVA" -cp "$OUT" com.airsim.phonecontrol.NativeCallHistoryTests
+
+# Run the real IPC owner/state machine with a fake native peer, never a hardware audio route.
+JSON_JAR="$ROOT/build/dependencies/json-test-20240303.jar"
+mkdir -p "$(dirname "$JSON_JAR")"
+if [ ! -f "$JSON_JAR" ]; then
+  curl -fsSL https://repo.maven.apache.org/maven2/org/json/json/20240303/json-20240303.jar -o "$JSON_JAR"
+fi
+if [ "$(shasum -a 256 "$JSON_JAR" | awk '{print $1}')" != 3cf6cd6892e32e2b4c1c39e0f52f5248a2f5b37646fdfbb79a66b46b618414ed ]; then
+  echo 'FAIL: test JSON dependency checksum mismatch' >&2; exit 1
+fi
+MEDIA_OUT="$OUT/privileged-media"
+mkdir -p "$MEDIA_OUT"
+"$JAVAC" --release 17 -cp "$JSON_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/test/media/android/content/Context.java \
+  "$ROOT"/test/media/android/os/SystemClock.java \
+  "$ROOT"/test/media/com/airsim/phonecontrol/TelephonyWebRTCPeer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaService.java \
+  "$ROOT"/test/media/com/airsim/phonecontrol/PrivilegedMediaTests.java
+"$JAVA" -cp "$MEDIA_OUT:$JSON_JAR" com.airsim.phonecontrol.PrivilegedMediaTests
+
+# Compile the real Binder service against Android, then replace only host runtime boundaries.
+"$JAVAC" --release 17 -cp "$ANDROID_JAR:$MEDIA_OUT:$OUT:$JSON_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/ShizukuBridgeUserService.java
+"$JAVAC" --release 17 -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/test/media/android/os/Binder.java \
+  "$ROOT"/test/media/android/os/Process.java \
+  "$ROOT"/test/android/util/Log.java \
+  "$ROOT"/test/media/com/airsim/phonecontrol/PrivilegedBridgeDisposalTests.java
+"$JAVA" -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" com.airsim.phonecontrol.PrivilegedBridgeDisposalTests
+
+# Readiness is a live admission signal, separate from the owner's continuing control channel.
+"$JAVAC" --release 17 -cp "$ANDROID_JAR:$MEDIA_OUT:$OUT:$JSON_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/StandaloneAgentStore.java
+"$JAVAC" --release 17 -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" -d "$MEDIA_OUT" \
+  "$ROOT"/test/media/com/airsim/phonecontrol/PrivilegedMediaReadinessTests.java
+"$JAVA" -cp "$MEDIA_OUT:$OUT:$JSON_JAR:$ANDROID_JAR" com.airsim.phonecontrol.PrivilegedMediaReadinessTests
