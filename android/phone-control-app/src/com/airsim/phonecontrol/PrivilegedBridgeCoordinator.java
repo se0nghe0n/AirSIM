@@ -34,10 +34,6 @@ final class PrivilegedBridgeCoordinator {
         }
     }
 
-    synchronized boolean desiredMuted() {
-        return desiredMuted;
-    }
-
     synchronized String lastResult() {
         return lastResult;
     }

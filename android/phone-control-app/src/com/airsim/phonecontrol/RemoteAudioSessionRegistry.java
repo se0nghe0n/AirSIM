@@ -1,6 +1,5 @@
 package com.airsim.phonecontrol;
 
-/** Tracks whether a remote PCM owner has actually completed its handshake. */
 public final class RemoteAudioSessionRegistry {
     private static boolean vowlan;
 
@@ -12,6 +11,4 @@ public final class RemoteAudioSessionRegistry {
     }
 
     public static synchronized boolean active() { return vowlan; }
-
-    static synchronized void resetForTests() { vowlan = false; }
 }

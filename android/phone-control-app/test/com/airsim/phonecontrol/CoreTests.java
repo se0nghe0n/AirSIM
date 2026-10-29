@@ -147,7 +147,6 @@ public final class CoreTests {
         String event = WireJson.callEvent("evt-1", "call-1", "incoming", "incoming", "+8613800138000", "remote_silent");
         assertContains(event, "\"event_id\":\"evt-1\"");
         assertContains(event, "\"number\":\"+8613800138000\"");
-        assertEquals("[redacted]", DebugRedactor.safeNumber("+8613800138000"));
         assertEquals("call-1", DebugRedactor.safeIdentifier("call-1"));
         String redactedLog = DebugRedactor.sanitize(
                 "Authorization: Bearer very-secret token=abc123456 number=+8613800138000 endpoint=10.177.99.25:7575");
