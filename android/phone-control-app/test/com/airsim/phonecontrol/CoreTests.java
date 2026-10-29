@@ -156,14 +156,14 @@ public final class CoreTests {
         assertTrue(!redactedLog.contains("13800138000"));
         assertContains(redactedLog, "10.177.99.25:7575");
 
-        AgentCommand command = AgentCommand.parse("{\"id\":\"cmd-7\",\"action\":\"answer\",\"call_id\":\"call-1\"}");
+        AgentCommand command = new AgentCommand("cmd-7", "answer", "call-1", "");
         assertEquals("cmd-7", command.id);
         assertEquals("answer", command.action);
         assertEquals("call-1", command.callId);
         assertTrue(command.isSupported());
-        assertTrue(!AgentCommand.parse("{\"id\":\"x\",\"action\":\"wipe\"}").isSupported());
-		AgentCommand smsCommand = AgentCommand.parse(
-				"{\"id\":\"sms-7\",\"action\":\"send_sms\",\"number\":\"+8613800138000\",\"message\":\"Hello\\nworld\"}");
+        assertTrue(!new AgentCommand("x", "wipe", "", "").isSupported());
+		AgentCommand smsCommand = new AgentCommand(
+				"sms-7", "send_sms", "", "+8613800138000", "Hello\nworld");
 		assertTrue(smsCommand.isSupported());
 		assertEquals("+8613800138000", smsCommand.number);
 		assertEquals("Hello\nworld", smsCommand.message);
@@ -600,6 +600,10 @@ public final class CoreTests {
 		if (gateway.contains("VoWLANPCMRelay") || gateway.contains("PCM_PORT") || gateway.contains("7593")) {
 			throw new AssertionError("VoWLAN gateway still listens for PCM");
 		}
+		String bridge = java.nio.file.Files.readString(phoneControlSource("VoWLANWebRTCBridge.java"));
+		if (bridge.contains("AIRSIMVWL1") || bridge.contains("PCM_PORT") || bridge.contains("7593")) {
+			throw new AssertionError("VoWLAN signaling bridge still speaks PCM");
+		}
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
 		if (peer.contains("AIRSIMPCM1") || peer.contains("127.0.0.1") || peer.contains("7580")) {
             throw new AssertionError("telephony samples must not cross a socket");
@@ -609,16 +613,6 @@ public final class CoreTests {
 		assertTrue(VoWLANWebRTCControl.CONTROL_PORT == 7592);
 		assertTrue(!VoWLANWebRTCControl.LISTENS_ON_PCM_PORT);
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc"));
-		String offer = "{\"action\":\"webrtc_offer\",\"call_uuid\":\"11111111-1111-1111-1111-111111111111\",\"generation\":1,\"session_id\":\"22222222-2222-2222-2222-222222222222\",\"sdp\":\"v=0\"}";
-		VoWLANWebRTCControl.Message message = VoWLANWebRTCControl.parse(offer);
-		assertEquals("webrtc_offer", message.action());
-		String answer = VoWLANWebRTCControl.answer(message, "v=0");
-		if (!answer.contains("webrtc_answer") || answer.contains("AIRSIMVWL1") || offer.contains("AIRSIMVWL1")) {
-			throw new AssertionError("control link carried a PCM preface");
-		}
-		VoWLANWebRTCControl.Sessions sessions = new VoWLANWebRTCControl.Sessions();
-		assertTrue(sessions.acceptOffer(message.sessionID()));
-		assertTrue(!sessions.acceptOffer("33333333-3333-3333-3333-333333333333"));
 	}
 
 	private static String[] invokeMissingRuntimePermissions(

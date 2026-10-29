@@ -13,15 +13,6 @@ public final class WireJson {
                 field("mode", mode) + "}";
     }
 
-    public static String commandResult(String id, boolean success, String error) {
-        return "{" + field("id", id) + ",\"success\":" + success + "," + field("error", error) + "}";
-    }
-
-	public static String commandResult(String id, boolean success, String error, int segments) {
-		return "{" + field("id", id) + ",\"success\":" + success + "," + field("error", error)
-				+ ",\"segments\":" + Math.max(0, segments) + "}";
-	}
-
 	public static String smsEvent(String eventId, String deliveryId, String sender, String content, String timestamp) {
 		String displaySender = sender == null || sender.isBlank() ? "Unknown number" : sender;
 		return "{" + field("event_id", eventId) + "," + field("delivery_id", deliveryId) + ","
