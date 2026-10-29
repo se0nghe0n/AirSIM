@@ -600,9 +600,15 @@ public final class CoreTests {
 		if (gateway.contains("VoWLANPCMRelay") || gateway.contains("PCM_PORT") || gateway.contains("7593")) {
 			throw new AssertionError("VoWLAN gateway still listens for PCM");
 		}
+		if (!gateway.contains("CONTROL_PORT = 7592")) {
+			throw new AssertionError("VoWLAN gateway does not bind control port 7592");
+		}
 		String bridge = java.nio.file.Files.readString(phoneControlSource("VoWLANWebRTCBridge.java"));
 		if (bridge.contains("AIRSIMVWL1") || bridge.contains("PCM_PORT") || bridge.contains("7593")) {
 			throw new AssertionError("VoWLAN signaling bridge still speaks PCM");
+		}
+		if (!bridge.contains("MAX_SDP_CHARS") || !bridge.contains("webrtc_offer")) {
+			throw new AssertionError("VoWLAN signaling bridge is not the live offer handler");
 		}
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
 		if (peer.contains("AIRSIMPCM1") || peer.contains("127.0.0.1") || peer.contains("7580")) {
@@ -610,8 +616,6 @@ public final class CoreTests {
         }
         assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/status"));
         assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/stop"));
-		assertTrue(VoWLANWebRTCControl.CONTROL_PORT == 7592);
-		assertTrue(!VoWLANWebRTCControl.LISTENS_ON_PCM_PORT);
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc"));
 	}
 
