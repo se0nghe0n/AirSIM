@@ -2282,10 +2282,6 @@ async function readRelayRecord(env, key) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-function deviceKey(deviceID) {
-  return `device:${deviceID.trim()}`;
-}
-
 async function boundedCollapseID(value) {
   const text = stringValue(value);
   if (encoder.encode(text).byteLength <= 64) return text;
