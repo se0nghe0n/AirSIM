@@ -1,5 +1,4 @@
 import CryptoKit
-import CoreBluetooth
 import AVFoundation
 import Testing
 import AppIntents
@@ -555,12 +554,8 @@ struct AirSIMTests {
     }
 
     @Test func `Pending SMS is fetched even when revision was already observed`() {
-        #expect(AgentEventPollingPolicy.shouldFetchSMS(
-            pending: 1, eventRevision: 7, observedSMSRevision: 7))
-        #expect(AgentEventPollingPolicy.shouldFetchSMS(
-            pending: 1, eventRevision: 0, observedSMSRevision: 7))
-        #expect(!AgentEventPollingPolicy.shouldFetchSMS(
-            pending: 0, eventRevision: 8, observedSMSRevision: 7))
+        #expect(AgentEventPollingPolicy.shouldFetchSMS(pending: 1))
+        #expect(!AgentEventPollingPolicy.shouldFetchSMS(pending: 0))
     }
 
     @Test func `SMS fetch uses reporting agent after discovery switches phones`() async throws {
@@ -579,17 +574,11 @@ struct AirSIMTests {
         #expect(fetched.agent.name == "Samsung")
     }
 
-    @Test func `VoWLAN control carries offer not PCM`() throws {
-        #expect(VoWLANAudioPlan.controlPath == "/api/calls/webrtc")
+    @Test func `VoWLAN audio uses host-only WebRTC, not PCM`() throws {
         #expect(VoWLANAudioPlan.usesHostICE)
         #expect(!VoWLANAudioPlan.opensNetworkPCM)
         let callUUID = UUID()
         let sessionID = UUID()
-        let offer = VoWLANAudioPlan.offerJSON(
-            callUUID: callUUID, generation: 1, sessionID: sessionID, sdp: "v=0"
-        )
-        #expect(offer.contains("\"action\":\"webrtc_offer\""))
-        #expect(!offer.contains("AIRSIMVWL1"))
         let peer = try CloudWebRTCPeer(
             callUUID: callUUID,
             generation: 1,
@@ -673,16 +662,6 @@ struct AirSIMTests {
         }
     }
 
-    @Test func `Dial transport prefers VoWLAN over cloud`() {
-        let route = DialPadTransportPresentation.make(
-            mode: .automatic,
-            vowlanOnline: true,
-
-            cloudOnline: true,
-        )
-        #expect(route?.transport == .vowlan)
-    }
-
     @Test func `Automatic dial route falls back from VoWLAN to cloud`() {
         #expect(DialRouteSelector.preferred(
             mode: .automatic,
@@ -702,17 +681,14 @@ struct AirSIMTests {
     }
 
 
-    @Test func `Android agent binding persists and rejects other routes`() {
+    @Test func `Android agent binding persists and clears`() {
         let suite = "AirSIMTests.agent-binding.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
 
         #expect(AndroidAgentBindingPreference.selected(defaults: defaults) == nil)
-        #expect(AndroidAgentBindingPreference.permits("samsung", defaults: defaults))
         AndroidAgentBindingPreference.set("vivo-x60", defaults: defaults)
         #expect(AndroidAgentBindingPreference.selected(defaults: defaults) == "vivo-x60")
-        #expect(AndroidAgentBindingPreference.permits("vivo-x60", defaults: defaults))
-        #expect(!AndroidAgentBindingPreference.permits("samsung", defaults: defaults))
         AndroidAgentBindingPreference.set(nil, defaults: defaults)
         #expect(AndroidAgentBindingPreference.selected(defaults: defaults) == nil)
     }
@@ -749,32 +725,6 @@ struct AirSIMTests {
             from: Data(#"{"ok":true,"agent_id":"samsung","phone_number":"+10000000002"}"#.utf8))
         #expect(previous.refreshed(with: changed).phoneNumber == "+10000000002")
     }
-
-    @Test func `Authenticated Bluetooth metadata uses current number and rejects another device`() throws {
-        let metadata = try AndroidAgentMetadata.decode(
-            Data(#"{"agent_id":"samsung","device_name":"Flip7","phone_number":"","agent_kind":"standalone"}"#.utf8),
-            expectedID: "samsung")
-        #expect(metadata.phoneNumber == nil)
-        #expect(metadata.deviceName == "Flip7")
-        #expect(throws: (any Error).self) {
-            _ = try AndroidAgentMetadata.decode(
-                Data(#"{"agent_id":"other","device_name":"Other"}"#.utf8), expectedID: "samsung")
-        }
-    }
-
-    @Test func `Deleted Bluetooth advertisement cannot automatically reconnect`() {
-        let suite = "AirSIMTests.deleted-peripheral.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-        PairedAndroidDeviceStore.rememberPeripheral("peripheral-samsung", for: "samsung", defaults: defaults)
-        PairedAndroidDeviceStore.rememberPeripheral("peripheral-vivo", for: "vivo", defaults: defaults)
-        PairedAndroidDeviceStore.forget("samsung", defaults: defaults)
-        #expect(!PairedAndroidDeviceStore.permitsPeripheral("peripheral-samsung", defaults: defaults))
-        #expect(PairedAndroidDeviceStore.permitsPeripheral("peripheral-vivo", defaults: defaults))
-        PairedAndroidDeviceStore.allowPairing("samsung", defaults: defaults)
-        #expect(PairedAndroidDeviceStore.permitsPeripheral("peripheral-samsung", defaults: defaults))
-    }
-
 
     @Test func `Cloud status decodes multiple Android agents and current route`() throws {
         let data = Data(#"""
@@ -994,9 +944,9 @@ struct AirSIMTests {
     @Test func `Relay health requires AirSIM service identity`() {
         let airSIM = Data(#"{"ok":true,"service":"airsim-push-relay","version":"0.2.1"}"#.utf8)
         let djonehub = Data(#"{"ok":true,"service":"djonehub-push-relay","version":"1.0.0"}"#.utf8)
-        #expect(RelayHealthValidation.accepts(statusCode: 200, data: airSIM))
-        #expect(!RelayHealthValidation.accepts(statusCode: 200, data: djonehub))
-        #expect(!RelayHealthValidation.accepts(statusCode: 503, data: airSIM))
+        #expect(RelayHealthValidation.version(statusCode: 200, data: airSIM) == "0.2.1")
+        #expect(RelayHealthValidation.version(statusCode: 200, data: djonehub) == nil)
+        #expect(RelayHealthValidation.version(statusCode: 503, data: airSIM) == nil)
     }
 
     @Test func `Relay quota response explains registration failure`() {

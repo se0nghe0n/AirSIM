@@ -117,7 +117,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         keepAlive = self
 #if DEBUG
         connection.pathUpdateHandler = { [weak self] path in
-            guard let self else { return }
+            guard self != nil else { return }
             let interfaces = path.availableInterfaces.map { "\($0.name):\($0.type)" }.joined(separator: ",")
             print("[AirSIM Network] route=wifi status=\(path.status) reason=\(path.unsatisfiedReason) available=\(interfaces)")
         }

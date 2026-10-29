@@ -2,16 +2,8 @@ import AVFoundation
 import WebRTC
 
 enum VoWLANAudioPlan {
-    static let controlPath = "/api/calls/webrtc"
     static let usesHostICE = true
     static let opensNetworkPCM = false
-
-    static func offerJSON(callUUID: UUID, generation: UInt64, sessionID: UUID, sdp: String) -> String {
-        let escaped = sdp
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return #"{"action":"webrtc_offer","call_uuid":"\#(callUUID.uuidString.lowercased())","generation":\#(generation),"session_id":"\#(sessionID.uuidString.lowercased())","sdp":"\#(escaped)"}"#
-    }
 }
 
 /// Local media uses native WebRTC over an authenticated VoWLAN connection.
@@ -125,8 +117,8 @@ final class AudioSessionController {
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
             queue: .main
-        ) { [weak self] notification in
-            Task { @MainActor [weak self] in self?.handleRouteChange(notification) }
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleRouteChange() }
         }
     }
 
@@ -388,8 +380,6 @@ final class AudioSessionController {
             return
         }
         guard let call else {
-            // Settings ringtone preview is not part of call state; idle polling must not stop it early.
-            if case .preview? = currentCallTone { return }
             stopCallTone()
             return
         }
@@ -402,17 +392,6 @@ final class AudioSessionController {
         } else {
             stopCallTone()
         }
-    }
-
-    /// Previews the ringtone once in Settings rather than looping indefinitely like a real incoming call.
-    func previewRingtone(named ringtone: String) {
-        guard !active else { return }
-        playCallTone(.preview(ringtone), looping: false)
-    }
-
-    func stopRingtonePreview() {
-        guard case .preview? = currentCallTone else { return }
-        stopCallTone()
     }
 
     func stopCallTone(deactivateSession: Bool = true) {
@@ -610,7 +589,7 @@ final class AudioSessionController {
         IPhoneCloudCallSession.shared.recordAudioRoute(output.isEmpty ? "unknown" : output)
     }
 
-    private func handleRouteChange(_ notification: Notification) {
+    private func handleRouteChange() {
         refreshRouteDescription()
         guard speakerRouteRetryTask == nil else { return }
         requestedSpeakerOverride = SpeakerRoutePolicy.requestedSpeakerAfterSystemRouteChange(
@@ -626,11 +605,10 @@ final class AudioSessionController {
 private enum CallTone: Equatable {
     case incoming(String)
     case outgoingWaiting
-    case preview(String)
 
     var ringtoneName: String {
         switch self {
-        case let .incoming(name), let .preview(name): return name
+        case let .incoming(name): return name
         case .outgoingWaiting: return "Waiting for Outgoing Call"
         }
     }
@@ -638,7 +616,7 @@ private enum CallTone: Equatable {
     var volume: Float {
         switch self {
         case .outgoingWaiting: return 0.55
-        case .incoming, .preview: return 0.85
+        case .incoming: return 0.85
         }
     }
 }

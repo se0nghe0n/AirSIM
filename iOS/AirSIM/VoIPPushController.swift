@@ -131,26 +131,6 @@ struct IncomingVoIPCall: Equatable, Sendable {
         }
     }
 
-    init(
-        bluetoothCallID: String,
-        uuid: UUID,
-        generation: UInt64,
-        number: String?
-    ) {
-        callID = bluetoothCallID
-        self.uuid = uuid
-        self.generation = max(1, generation)
-        self.number = number
-        callerName = nil
-        expiresAt = Date().addingTimeInterval(5 * 60 * 60)
-        isVirtual = false
-        isOutgoing = false
-        ttsText = nil
-        authenticatedMediaURL = nil
-        mediaSecret = nil
-        requestedMediaTransport = .legacyPCM
-    }
-
     func matches(backendID: String?, uuid: UUID?) -> Bool {
         backendID == callID || uuid == self.uuid
     }
@@ -201,15 +181,9 @@ enum CallTransport: Equatable, Sendable {
     case cloud
 }
 
-enum CallTransportPathLossAction: Equatable, Sendable {
-    case endCurrentCall
-}
-
 struct LockedCallTransport: Equatable, Sendable {
     let transport: CallTransport
     let generation: UInt64
-
-    func onPathLoss() -> CallTransportPathLossAction { .endCurrentCall }
 }
 
 enum CloudModePreference {
@@ -267,10 +241,6 @@ enum RelayHealthValidation {
         let ok: Bool
         let service: String
         let version: String
-    }
-
-    static func accepts(statusCode: Int, data: Data) -> Bool {
-        version(statusCode: statusCode, data: data) != nil
     }
 
     static func version(statusCode: Int, data: Data) -> String? {
@@ -389,20 +359,6 @@ struct CloudSelfTestReport: Equatable, Sendable {
             steps[index].detail = "Skipped: a previous check failed"
         }
         completedAt = Date()
-    }
-}
-
-struct CloudModeCapabilities: Equatable, Sendable {
-    let usbCallingAndSMS = true
-    let pushKitAndCallKit = true
-    let apnsSMSNotifications = true
-    let notificationRelay = true
-    let publicPCM: Bool
-    let remoteModuleAccess: Bool
-
-    init(isEnabled: Bool) {
-        publicPCM = isEnabled
-        remoteModuleAccess = isEnabled
     }
 }
 
@@ -585,10 +541,6 @@ enum VoIPPushToken {
 }
 
 enum APNsEnvironment {
-    static func relayValue(entitlement: String?) -> String {
-        entitlement == "production" ? "production" : "sandbox"
-    }
-
     static var current: String {
         let configured = Bundle.main.object(forInfoDictionaryKey: "AirSIMAPNSEnvironment") as? String
         return configured == "production" ? "production" : "sandbox"
@@ -1128,12 +1080,6 @@ final class VoIPPushController: NSObject {
         }
     }
 
-    /// Ignores the in-process registration fingerprint cache when the user manually triggers cloud repair.
-    func forceRegistrationSync(with api: AirSIMAPI = AirSIMAPI()) async {
-        resetRegistrationBackoff()
-        await syncRegistration(with: api)
-    }
-
     func registrationReadiness() -> PushRegistrationReadiness {
         let defaults = UserDefaults.standard
         let secret = Self.loadOrCreateDeviceSecret()
@@ -1232,20 +1178,6 @@ final class VoIPPushController: NSObject {
             registrationRetryTask = nil
             await syncRegistration(with: latestRegistrationAPI)
         }
-    }
-
-    func setCloudModeEnabled(_ enabled: Bool, with api: AirSIMAPI = AirSIMAPI()) async {
-        guard !LocalModePreference.isEnabled() else { return }
-        resetRegistrationBackoff()
-        WatchCallCoordinator.shared.refreshMediaPolicy()
-        // PushKit, CallKit, and APNs form the notification control plane for local USB mode and must not be turned off
-        // with the cloud PCM toggle. The Agent stays registered with the notification relay; the preference controls only
-        // cloud status polling and network PCM media channels.
-        try? await api.setPushCloudEnabled(true)
-        if !enabled {
-            await IPhoneCloudCallSession.shared.end()
-        }
-        await syncRegistration(with: api)
     }
 
     /// Checks whether the Agent is still online via the latest Relay heartbeat when local USB/ECM is unreachable.
@@ -1446,13 +1378,6 @@ final class VoIPPushController: NSObject {
         return decoded
     }
 
-    /// Verifies the HTTPS control plane from this iPhone to the Relay without sending device secrets.
-    func relayHealthReachable() async -> Bool {
-        guard let registration = currentRegistration(),
-              (try? await fetchRelayHealthVersion(registration: registration)) != nil else { return false }
-        return true
-    }
-
     private func fetchRelayHealthVersion(registration: AgentPushRegistration) async throws -> String {
         guard let url = RelayEndpoint.url(base: registration.relayURL, path: "healthz") else {
             throw CloudAgentStatusError.invalidRelayURL
@@ -1572,9 +1497,9 @@ final class VoIPPushController: NSObject {
         let deviceID = PushDeviceIdentity.deviceID(deviceSecret: secret)
         defaults.set(deviceID, forKey: Keys.deviceID)
         let relayURL = configuredRelayURL()
-        let capabilities = CloudModeCapabilities(isEnabled: CloudModePreference.isEnabled())
         return AgentPushRegistration(
-            cloudModeEnabled: capabilities.notificationRelay,
+            // The notification relay stays registered in every connection mode.
+            cloudModeEnabled: true,
             localMode: false,
             deviceID: deviceID,
             deviceSecret: secret,

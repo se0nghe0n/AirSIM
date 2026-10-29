@@ -123,25 +123,6 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
     let moduleName: String
 }
 
-extension AirSIMCallActivityAttributes.ContentState {
-    /// ActivityKit staleness only means the main app has not submitted new content recently; it does not prove the USB module is offline.
-    /// Module offline state is explicitly written as `.offline` by the main app after actual HTTP probe failures.
-    func liveActivityDisplayState(isStale: Bool) -> Self {
-        self
-    }
-}
-
-enum LiveActivityVisualPolicy {
-    static func usesGlass(
-        for phase: AirSIMCallActivityAttributes.ContentState.Phase
-    ) -> Bool {
-        switch phase {
-        case .standby, .cloudStandby, .incoming, .active, .held, .offline:
-            return true
-        }
-    }
-}
-
 enum LiveActivityVisibilityPreference {
     static let key = "airsim.live-activity-enabled"
 

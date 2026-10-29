@@ -19,14 +19,11 @@ enum CallHistoryPolicy {
 
 /// Persists local call history and SMS on the phone independent of whether the module is online.
 final class LocalHistoryStore {
-    private let fileManager: FileManager
-    private let directoryURL: URL
     private let callHistoryURL: URL
     private let messagesURL: URL
     private let deletedCallIDsURL: URL
 
     init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
-        self.fileManager = fileManager
         let durableRoot = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -36,7 +33,6 @@ final class LocalHistoryStore {
                 .appendingPathComponent("Documents", isDirectory: true)
         let resolvedDirectoryURL = directoryURL
             ?? durableRoot.appendingPathComponent("AirSIM", isDirectory: true)
-        self.directoryURL = resolvedDirectoryURL
         callHistoryURL = resolvedDirectoryURL.appendingPathComponent("call-history.json")
         messagesURL = resolvedDirectoryURL.appendingPathComponent("messages.json")
         deletedCallIDsURL = resolvedDirectoryURL.appendingPathComponent("deleted-call-ids.json")

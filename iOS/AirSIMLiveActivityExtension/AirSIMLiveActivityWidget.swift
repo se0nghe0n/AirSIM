@@ -14,13 +14,14 @@ struct AirSIMLiveActivityBundle: WidgetBundle {
 struct AirSIMLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AirSIMCallActivityAttributes.self) { context in
-            let state = context.state.liveActivityDisplayState(isStale: context.isStale)
+            // ActivityKit staleness does not prove the module is offline; the app writes `.offline` after failed probes.
+            let state = context.state
             lockScreenView(state)
                 .foregroundStyle(.white)
-                .activityBackgroundTint(activityBackgroundTint(for: state))
+                .activityBackgroundTint(activityBackgroundTint)
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
-            let state = context.state.liveActivityDisplayState(isStale: context.isStale)
+            let state = context.state
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     islandIdentity(for: state)
@@ -513,9 +514,7 @@ struct AirSIMLiveActivityWidget: Widget {
         }
     }
 
-    private func activityBackgroundTint(
-        for state: AirSIMCallActivityAttributes.ContentState
-    ) -> Color {
+    private var activityBackgroundTint: Color {
         if #available(iOSApplicationExtension 26.0, *) {
             // Let the lock-screen wallpaper serve as the sampling backdrop for system Liquid Glass across all phases.
             return .clear

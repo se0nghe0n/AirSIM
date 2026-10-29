@@ -222,11 +222,9 @@ final class ContactStore {
 
 /// Contact cache is stored only inside the app sandbox and is never uploaded to the module or Push Relay.
 private final class ContactCacheStore {
-    private let fileManager: FileManager
     private let fileURL: URL
 
     init(fileManager: FileManager = .default) {
-        self.fileManager = fileManager
         let durableRoot = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask

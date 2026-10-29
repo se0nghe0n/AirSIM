@@ -101,10 +101,6 @@ enum VoWLANCredentialStore {
         return try? VoWLANCredential(secret: data)
     }
 
-    static func remove() {
-        SecItemDelete(queryWithoutValue() as CFDictionary)
-    }
-
     private static func queryWithoutValue() -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

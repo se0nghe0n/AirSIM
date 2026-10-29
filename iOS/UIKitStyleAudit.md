@@ -146,3 +146,21 @@ iPhone Duo / iOS 27.1. All 35 preview definitions remain; these captures verify
 representative presentation after the fixes, not pixel equality or live service
 behavior. Physical calls, PushKit wakeups, audio and carrier acceptance remain
 outside this simulator review. Unrelated Android changes were preserved.
+
+## Dead-code cleanup
+
+After the migration, unused SwiftUI-era and legacy code was removed. This included
+unread TCA presentation state, SwiftUI-only `Identifiable` IDs, and unused presentation
+helpers. Legacy module/router/eSIM/GPS/update API models were removed, along with
+Bluetooth helpers and PCM-era media-health counters. Unused relay, ringtone-preview and
+language settings code was also removed. Retained API models keep their decoded fields; only
+unread PCM statistics were dropped from the cloud control message. Persisted keys and
+Live Activity content-state fields are unchanged.
+The connected-call audio badge again uses the cloud audio state
+(failed shown in red), matching the original SwiftUI color mapping.
+
+Periphery 3.8.0 reports no remaining unused declarations except intentional
+retainers, equality identity fields, and Codable or ActivityKit wire fields.
+Debug and Release simulator builds passed. The native suite passed with
+**159 passed, 0 failed, 1 skipped** across 160 test functions; the skip is the TURN case above.
+All 35 previews remain. Tests only for removed code were deleted.

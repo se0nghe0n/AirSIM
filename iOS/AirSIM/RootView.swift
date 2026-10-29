@@ -28,14 +28,12 @@ enum SystemCommunicationURL {
     }
 }
 
-enum PhoneTab: String, CaseIterable, Identifiable {
+enum PhoneTab: String, CaseIterable {
     case dial = "Dial"
     case recents = "Recents"
     case messages = "Messages"
     case contacts = "Contacts"
     case settings = "Settings"
-
-    var id: String { rawValue }
 
     var icon: String {
         switch self {
@@ -44,14 +42,6 @@ enum PhoneTab: String, CaseIterable, Identifiable {
         case .messages: return "message.fill"
         case .contacts: return "person.crop.circle.fill"
         case .settings: return "gearshape.fill"
-        }
-    }
-
-    var tabTitle: String {
-        switch self {
-        case .recents: return "Recents"
-        case .contacts: return "Contacts"
-        default: return rawValue
         }
     }
 }
@@ -370,12 +360,6 @@ extension UIViewController {
         present(nav, animated: animated, completion: completion)
         return nav
     }
-    func phoneAlert(_ title: String, message: String) {
-        guard presentedViewController == nil else { return }
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
-        present(alert, animated: true)
-    }
     func confirmPhoneAction(_ title: String, message: String? = nil, actionTitle: String = "Delete", action: @escaping () -> Void) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: actionTitle, style: .destructive) { _ in action() })
@@ -420,7 +404,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         tabs.viewControllers = zip(PhoneTab.allCases, controllers).map { tab, controller in
             let nav = UINavigationController(rootViewController: controller)
             nav.navigationBar.prefersLargeTitles = true
-            nav.tabBarItem = UITabBarItem(title: tab.tabTitle, image: UIImage(systemName: tab.icon), tag: 0)
+            nav.tabBarItem = UITabBarItem(title: tab.rawValue, image: UIImage(systemName: tab.icon), tag: 0)
             return nav
         }
         tabs.delegate = self
@@ -562,7 +546,7 @@ final class PhoneBackdropView: UIView {
 }
 
 @MainActor
-func phoneEmptyState(_ title: String, image: String, detail: String, minimumHeight: CGFloat = 300, action: UIView? = nil, iconSize: CGFloat = 44, detailSize: CGFloat = 20, spacing: CGFloat = 8, verticalPadding: CGFloat = 24, headingSize: CGFloat = 20) -> UIView {
+func phoneEmptyState(_ title: String, image: String, detail: String, minimumHeight: CGFloat = 300, iconSize: CGFloat = 44, detailSize: CGFloat = 20, spacing: CGFloat = 8, verticalPadding: CGFloat = 24, headingSize: CGFloat = 20) -> UIView {
     let container = UIView()
     let symbol = UIImageView(image: UIImage(systemName: image)); symbol.tintColor = .secondaryLabel; symbol.contentMode = .scaleAspectFit
     symbol.heightAnchor.constraint(equalToConstant: iconSize).isActive = true
@@ -570,7 +554,6 @@ func phoneEmptyState(_ title: String, image: String, detail: String, minimumHeig
     let subtitle = phoneLabel(detail, size: detailSize, color: .secondaryLabel); subtitle.textAlignment = .center
     let stack = UIStackView(arrangedSubviews: [symbol, heading, subtitle]); stack.axis = .vertical; stack.spacing = spacing; stack.alignment = .center
     heading.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true; subtitle.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-    if let action { stack.addArrangedSubview(action) }
     stack.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(stack)
     NSLayoutConstraint.activate([container.heightAnchor.constraint(greaterThanOrEqualToConstant: minimumHeight), stack.centerYAnchor.constraint(equalTo: container.centerYAnchor), stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16), stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16), stack.topAnchor.constraint(greaterThanOrEqualTo: container.topAnchor, constant: verticalPadding), stack.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -verticalPadding)])
     return container
@@ -592,13 +575,6 @@ final class PhoneListContentView: UIView {
         NSLayoutConstraint.activate([heightAnchor.constraint(greaterThanOrEqualToConstant: 74), row.leadingAnchor.constraint(equalTo: leadingAnchor), row.trailingAnchor.constraint(equalTo: trailingAnchor), row.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 6), row.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6), row.centerYAnchor.constraint(equalTo: centerYAnchor)])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-
-extension UIFont {
-    func withTraits(_ traits: UIFontDescriptor.SymbolicTraits) -> UIFont {
-        guard let descriptor = fontDescriptor.withSymbolicTraits(traits) else { return self }
-        return UIFont(descriptor: descriptor, size: pointSize)
-    }
 }
 
 extension UIFont {

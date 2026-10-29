@@ -403,13 +403,11 @@ struct AirSIMFeature {
         var contactPickerSearch = ""
         var keypadDigits = ""
         var keypadPresented = false
-        var agentsPresented = false
-        var selectedRecentCallID: String?
     }
     enum Action {
         case start, stop, snapshot(AirSIMSnapshot), selectTab(PhoneTab), completeOnboarding
         case numberChanged(String), command(AirSIMCommand), commandFailed(String)
-        case openURL(URL), openSMS(String), contactSearchChanged(String), keypad(Bool), dtmf(String), agents(Bool), recentDetails(String?)
+        case openURL(URL), openSMS(String), contactSearchChanged(String), keypad(Bool), dtmf(String)
         case contactPickerSearchChanged(String)
         case messages(MessagesFeature.Action), settings(SettingsFeature.Action), pairing(PairingFeature.Action)
         case recordings(RecordingsFeature.Action), trace(TraceFeature.Action)
@@ -466,8 +464,6 @@ struct AirSIMFeature {
             case .contactPickerSearchChanged(let value): state.contactPickerSearch = value; return .none
             case .keypad(let presented): state.keypadPresented = presented; if presented { state.keypadDigits = "" }; return .none
             case .dtmf(let digit): state.keypadDigits = String((state.keypadDigits + digit).suffix(18)); return .send(.command(.dtmf(digit)))
-            case .agents(let value): state.agentsPresented = value; return .none
-            case .recentDetails(let id): state.selectedRecentCallID = id; return .none
             case .messages(.clearError): state.snapshot.errorMessage = nil; return .none
             case .messages, .settings, .pairing, .recordings, .trace: return .none
             }
@@ -541,16 +537,13 @@ final class AirSIMPresentation {
     func toggleMute() async { await perform(.mute) }
     func toggleSpeaker() { store.send(.command(.speaker)) }
     func toggleRecording() async { await perform(.recording) }
-    func sendDTMF(_ digit: String) async { await store.send(.dtmf(digit)).finish() }
     func bindAndroidAgent(_ id: String) { store.send(.command(.bindAgent(id))) }
     func refreshCallHistory() async { await perform(.refreshHistory) }
     func deleteCallHistory(ids: [String]) { store.send(.command(.deleteHistory(ids))) }
     func refreshMessages() async { await perform(.refreshMessages) }
-    func loadMessagesFromAgent(silently: Bool) async { await perform(.loadMessages) }
+    func loadMessagesFromAgent() async { await perform(.loadMessages) }
     func reloadMessagesFromLocalStore() { store.send(.command(.reloadLocalMessages)) }
-    func clearLocalMessages() { store.send(.command(.clearMessages)) }
     func refreshPairedDeviceInformation() async { await perform(.refreshDevices) }
-    func setConnectionMode(_ mode: AirSIMConnectionMode) { store.send(.settings(.modeChanged(mode))) }
     func setLiveActivityEnabled(_ enabled: Bool) { store.send(.settings(.liveActivityChanged(enabled))) }
     func presentCurrentCallInApp() { store.send(.command(.presentCall)) }
 }

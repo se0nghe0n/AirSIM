@@ -828,12 +828,12 @@ struct CloudAudioStatusTests {
     @Test func `First cloud audio startup is not presented as a retry`() {
         #expect(!CloudCallAudioState.starting.isRetrying)
         #expect(CloudCallAudioState.connecting(attempt: 1, maximumAttempts: 4).isRetrying)
-        #expect(CallAudioStatusPresentation.text(transport: .cloud, localAudioActive: false,
-                                                cloudState: .starting) == "Connecting Cloud Audio")
-        #expect(CallAudioStatusPresentation.text(transport: .cloud, localAudioActive: false,
+        #expect(CallAudioStatusPresentation.text(localAudioActive: false, cloudState: .starting)
+                == "Connecting Cloud Audio")
+        #expect(CallAudioStatusPresentation.text(localAudioActive: false,
                                                 cloudState: .connecting(attempt: 1, maximumAttempts: 4))
                 == "Retrying Cloud Audio 1/4")
-        #expect(CallAudioStatusPresentation.text(transport: .cloud, localAudioActive: false,
-                                                cloudState: .connected) == "Cloud Audio Connected")
+        #expect(CallAudioStatusPresentation.text(localAudioActive: false, cloudState: .connected)
+                == "Cloud Audio Connected")
     }
 }

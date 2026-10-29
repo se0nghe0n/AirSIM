@@ -1,12 +1,10 @@
 import Foundation
 
 /// User-selected connection mode. Only `automatic` is allowed to fall back across transports.
-enum AirSIMConnectionMode: String, CaseIterable, Codable, Identifiable, Sendable {
+enum AirSIMConnectionMode: String, CaseIterable, Codable, Sendable {
     case vowlan
     case cloud
     case automatic
-
-    var id: String { rawValue }
 
     /// localization.md: user-facing option labels use LocalizedStringResource for deferred resolution.
     var title: LocalizedStringResource {
@@ -73,11 +71,6 @@ enum AndroidAgentBindingPreference {
         if value.isEmpty { defaults.removeObject(forKey: key) }
         else { defaults.set(value, forKey: key) }
     }
-
-    static func permits(_ candidate: String?, defaults: UserDefaults = .standard) -> Bool {
-        guard let selected = selected(defaults: defaults) else { return true }
-        return candidate == selected
-    }
 }
 
 struct PairedAndroidDeviceRecord: Codable, Equatable, Identifiable, Sendable {
@@ -89,7 +82,6 @@ struct PairedAndroidDeviceRecord: Codable, Equatable, Identifiable, Sendable {
 enum PairedAndroidDeviceStore {
     private static let recordsKey = "airsim.paired-android-devices.v1"
     private static let forgottenKey = "airsim.forgotten-android-devices.v1"
-    private static let peripheralsKey = "airsim.android-device-peripherals.v1"
 
     static func records(defaults: UserDefaults = .standard) -> [PairedAndroidDeviceRecord] {
         guard let data = defaults.data(forKey: recordsKey),
@@ -120,15 +112,6 @@ enum PairedAndroidDeviceStore {
     static func allowPairing(_ id: String, defaults: UserDefaults = .standard) {
         defaults.set((defaults.stringArray(forKey: forgottenKey) ?? []).filter { $0 != id }, forKey: forgottenKey)
     }
-    static func rememberPeripheral(_ peripheralID: String, for id: String, defaults: UserDefaults = .standard) {
-        var values = defaults.dictionary(forKey: peripheralsKey) as? [String: String] ?? [:]
-        values[id] = peripheralID
-        defaults.set(values, forKey: peripheralsKey)
-    }
-    static func permitsPeripheral(_ peripheralID: String, defaults: UserDefaults = .standard) -> Bool {
-        let values = defaults.dictionary(forKey: peripheralsKey) as? [String: String] ?? [:]
-        return !values.contains { $0.value == peripheralID && !permits($0.key, defaults: defaults) }
-    }
 }
 
 struct ConnectionModeRuntimePolicy: Equatable, Sendable {
@@ -136,7 +119,6 @@ struct ConnectionModeRuntimePolicy: Equatable, Sendable {
 
     var startsVoWLAN: Bool { mode == .vowlan || mode == .automatic }
     var startsCloud: Bool { mode == .cloud || mode == .automatic }
-    var allowsCrossModeFallback: Bool { mode == .automatic }
 
     /// Bluetooth incoming calls also rely on the system call UI; CallKit is disabled only in legacy local VoWLAN mode.
     var usesCallKit: Bool { mode != .vowlan }

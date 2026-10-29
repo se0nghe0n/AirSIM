@@ -1,5 +1,4 @@
 import UIKit
-import Observation
 
 enum RecentCallTimeFormatter {
     static func string(
@@ -30,7 +29,7 @@ enum RecentCallTimeFormatter {
 }
 
 /// A contact may store duplicate entries for the same phone number; since duplicate rows are interchangeable
-/// during selection and dialing, deduplicate by number so `ForEach(phones, id: \.self)` has unique IDs (foreach.md).
+/// during selection and dialing, deduplicate by number so phone-derived table row IDs stay unique.
 enum ContactPhoneListPolicy {
     static func displayPhones(for phones: [String]) -> [String] {
         var seen = Set<String>()
@@ -51,85 +50,21 @@ enum DialPadDeletePolicy {
     }
 }
 
-struct DialPadTransportPresentation: Equatable {
-    let title: String
-    let detail: String
-    let systemImage: String
-    let transport: CallTransport
-
-    static func make(
-        mode: AirSIMConnectionMode = .automatic,
-        vowlanOnline: Bool,
-        cloudOnline: Bool
-    ) -> DialPadTransportPresentation? {
-        let selected = DialRouteSelector.preferred(
-            mode: mode,
-            vowlanReady: vowlanOnline,
-            cloudReady: cloudOnline
-        )
-        if selected == .vowlan {
-            return DialPadTransportPresentation(
-                title: "VoWLAN",
-                detail: "Calls and audio use the same Wi-Fi or Android hotspot",
-                systemImage: "wifi",
-                transport: .vowlan
-            )
-        }
-        if selected == .cloud {
-            return DialPadTransportPresentation(
-                title: "Cloud",
-                detail: "Calls and audio use the cloud Relay",
-                systemImage: "cloud.fill",
-                transport: .cloud
-            )
-        }
-        return nil
-    }
-}
-
-enum AvatarFallbackContent: Equatable {
-    case person
-    case initial(String)
-}
-
-enum RecentAvatarPolicy {
-    static func content(contactName: String?) -> AvatarFallbackContent {
-        let trimmed = contactName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard let first = trimmed.first else { return .person }
-        return .initial(String(first))
-    }
-}
-
 enum CallSurfacePhase: Equatable {
     case incoming
     case connected
 }
 
-enum CallSurfaceAction: Equatable {
-    case decline
-    case answer
-    case mute
-    case end
-    case keypad
-    case speaker
-}
-
 struct CallSurfaceContent: Equatable {
     let phase: CallSurfacePhase
-    let primaryActions: [CallSurfaceAction]
-    let secondaryActions: [CallSurfaceAction]
     let showsDuration: Bool
 
     init(state: String) {
         if ["incoming", "waiting"].contains(state) {
             phase = .incoming
-            primaryActions = [.decline, .answer]
-            secondaryActions = []
             showsDuration = false
         } else {
             phase = .connected
-            primaryActions = [.end]
-            secondaryActions = [.mute, .keypad, .speaker]
             showsDuration = true
         }
     }
@@ -146,9 +81,7 @@ enum CallProximityPolicy {
 private struct DialPadLayoutMetrics {
     let keySize: CGFloat
     let keySpacing: CGFloat
-    let rowSpacing: CGFloat
     let sectionSpacing: CGFloat
-    let verticalPadding: CGFloat
     let numberFontSize: CGFloat
     let numberHeight: CGFloat
     let contactHeight: CGFloat
@@ -157,7 +90,6 @@ private struct DialPadLayoutMetrics {
     var digitFontSize: CGFloat { min(31, max(23, keySize * 0.34)) }
     var letterFontSize: CGFloat { min(10, max(8, keySize * 0.115)) }
     var callIconSize: CGFloat { min(30, max(23, keySize * 0.33)) }
-    var deleteIconSize: CGFloat { min(24, max(19, keySize * 0.27)) }
 
     init(availableHeight: CGFloat, availableWidth: CGFloat, compactWidth: Bool) {
         let compactHeight = availableHeight < 700
@@ -173,9 +105,7 @@ private struct DialPadLayoutMetrics {
             desiredKeySpacing,
             max(14, (contentWidth - keySize * 3) / 2)
         )
-        rowSpacing = compactHeight ? 8 : (compactWidth ? 12 : 16)
         sectionSpacing = compactHeight ? 8 : (compactWidth ? 12 : 16)
-        verticalPadding = compactHeight ? 6 : 10
         numberFontSize = compactHeight ? 32 : (compactWidth ? 36 : 42)
         numberHeight = compactHeight ? 40 : 46
         contactHeight = compactHeight ? 18 : 20
@@ -229,7 +159,7 @@ final class DialPadViewController: ObservingViewController {
         numberHeight = number.heightAnchor.constraint(equalToConstant: 46); numberHeight.isActive = true
         contactHeight = contact.heightAnchor.constraint(equalToConstant: 20); contactHeight.isActive = true
         agentButton.titleLabel?.numberOfLines = 3
-        agentButton.addAction(UIAction { [weak self] _ in guard let self else { return }; self.model.store.send(.agents(true)); self.showPhoneSheet(PairedAndroidAgentsViewController(model: self.model)) }, for: .touchUpInside)
+        agentButton.addAction(UIAction { [weak self] _ in guard let self else { return }; self.showPhoneSheet(PairedAndroidAgentsViewController(model: self.model)) }, for: .touchUpInside)
         stack.addArrangedSubview(agentButton)
         agentButton.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         agentHeight = agentButton.heightAnchor.constraint(equalToConstant: 94); agentHeight.isActive = true
@@ -357,7 +287,6 @@ final class PairedAndroidAgentsViewController: PhoneTableController {
     init(model: AirSIMPresentation) { self.model = model; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() { super.viewDidLoad(); title = "Paired Android Agents" }
-    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); model.store.send(.agents(false)) }
     override func render() {
         let rows = model.pairedAndroidAgents.map { agent in
             PhoneRow(id: agent.id, title: agent.deviceName, detail: "\(agent.phoneNumber ?? "Number unavailable")\nVoWLAN \(agent.vowlanOnline ? "Online" : "Offline") · Cloud \(!CloudModePreference.isEnabled() ? "Off" : (agent.cloudOnline ? "Online" : "Offline")) · \(String(localized: agent.agentKindTitle))", image: agent.isCurrent ? "checkmark.circle.fill" : "circle", color: agent.isCurrent ? .systemGreen : .label, action: { [weak self] in self?.model.bindAndroidAgent(agent.id) })
@@ -412,12 +341,10 @@ final class RecentsViewController: PhoneTableController {
     private func showDetails(_ call: CallRecord) {
         guard let number = RecentCallDialPolicy.numberToDial(call.number) else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        model.store.send(.recentDetails(call.id))
         let detail = RecentCallDetailsViewController(call: call, model: model, onCall: { [weak self] in self?.onCall(number) }, onMessage: { [weak self] in self?.onMessage(number) }, onDelete: { [weak self] in self?.model.deleteCallHistory(ids: [call.id]) })
         detail.modalPresentationStyle = .overFullScreen; detail.modalTransitionStyle = .crossDissolve
         present(detail, animated: true)
     }
-    override func tableView(_ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? { super.tableView(tableView, contextMenuConfigurationForRowAt: indexPath, point: point) }
     func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard let id = row(at: indexPath)?.id, let call = model.callHistory.first(where: { $0.id == id }) else { return nil }
         var actions = [UIContextualAction(style: .destructive, title: "Delete") { [weak self] _, _, done in self?.model.deleteCallHistory(ids: [call.id]); done(true) }]
@@ -464,7 +391,7 @@ final class MessagesViewController: PhoneTableController, UINavigationController
     }
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated); navigationController?.delegate = self
-        Task { await model.loadMessagesFromAgent(silently: true) }
+        Task { await model.loadMessagesFromAgent() }
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -912,8 +839,15 @@ final class ActiveCallViewController: ObservingViewController {
             status.text = online ? "Module Online" : "Connecting to Module"
             if let signal = model.modemStatus?.signalDBM ?? model.cloudAgentStatus?.signalDBM { status.text = "\(status.text ?? "") · Signal \(signal) dBm" }
         } else {
-            dot.backgroundColor = model.callAudioIsActive ? .systemGreen : .systemOrange
-            statusBadge.contentView.backgroundColor = (model.callAudioIsActive ? UIColor.systemGreen : .systemOrange).withAlphaComponent(0.1)
+            let audioColor: UIColor
+            switch model.cloudCallAudioState {
+            case .failed: audioColor = .systemRed
+            case .connected: audioColor = .systemGreen
+            case .starting, .connecting: audioColor = .systemOrange
+            case .idle: audioColor = model.audio.active ? .systemGreen : .systemOrange
+            }
+            dot.backgroundColor = model.callAudioIsActive ? .systemGreen : audioColor
+            statusBadge.contentView.backgroundColor = audioColor.withAlphaComponent(0.1)
             status.text = model.callAudioStatusText + (model.audio.active && !model.audio.routeDescription.isEmpty ? " · \(model.audio.routeDescription)" : "") + (model.audio.errorMessage.map { "\n\($0)" } ?? "")
         }
         updateDuration(); if !isPresentationPreview { UIDevice.current.isProximityMonitoringEnabled = CallProximityPolicy.shouldMonitor(state: call.state, speakerEnabled: model.audio.speakerEnabled) }
@@ -979,7 +913,6 @@ private final class RecentCallDetailsViewController: UIViewController {
         let preferred = card.widthAnchor.constraint(equalToConstant: 340); preferred.priority = .defaultHigh
         NSLayoutConstraint.activate([card.centerXAnchor.constraint(equalTo: view.centerXAnchor), card.centerYAnchor.constraint(equalTo: view.centerYAnchor), preferred, card.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 28), card.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -28), stack.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: 22), stack.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -22), stack.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: 22), stack.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -22)])
     }
-    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); model.store.send(.recentDetails(nil)) }
     @objc private func close() { dismiss(animated: true) }
 }
 

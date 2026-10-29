@@ -6,11 +6,7 @@ enum LiveActivityCreationPolicy {
         localModeEnabled ? nil : .token
     }
 
-    static func shouldCreate(
-        appIsActive: Bool,
-        moduleOnline: Bool,
-        hasActivity: Bool
-    ) -> Bool {
+    static func shouldCreate(appIsActive: Bool, hasActivity: Bool) -> Bool {
         !hasActivity && appIsActive
     }
 }
@@ -21,7 +17,6 @@ struct LiveActivityAgentSnapshot: Equatable {
     let agentKind: String?
     let pairedAgentCount: Int
     let vowlanOnline: Bool
-    let bluetoothOnline: Bool
     let cloudOnline: Bool
 
     init(agent: AndroidAgentPresentation?, pairedAgentCount: Int) {
@@ -30,7 +25,6 @@ struct LiveActivityAgentSnapshot: Equatable {
         agentKind = agent?.agentKind
         self.pairedAgentCount = pairedAgentCount
         vowlanOnline = agent?.vowlanOnline == true
-        bluetoothOnline = agent?.bluetoothOnline == true
         cloudOnline = agent?.cloudOnline == true
     }
 }
@@ -44,9 +38,7 @@ enum LiveActivityStateBuilder {
         transport: AirSIMCallActivityAttributes.ContentState.Transport? = nil,
         radio: ModemStatus?,
         agent: LiveActivityAgentSnapshot? = nil,
-        idleStartedAt: Date,
-        downloadBytesPerSecond: Double? = nil,
-        uploadBytesPerSecond: Double? = nil
+        idleStartedAt: Date
     ) -> AirSIMCallActivityAttributes.ContentState {
         // Show offline only when both local control and Relay heartbeat are unreachable; use a dedicated
         // cloud standby state while the cloud heartbeat is fresh to avoid misreporting a VoWLAN disconnect as full module offline.
@@ -62,7 +54,6 @@ enum LiveActivityStateBuilder {
                 agentKind: agent?.agentKind,
                 pairedAgentCount: agent?.pairedAgentCount,
                 vowlanOnline: agent?.vowlanOnline,
-                bluetoothOnline: agent?.bluetoothOnline,
                 cloudOnline: agent?.cloudOnline
             )
         }
@@ -79,14 +70,11 @@ enum LiveActivityStateBuilder {
                 operatorName: radio?.operatorName,
                 networkMode: radio?.networkMode,
                 radioBand: radio?.radioBand,
-                downloadBytesPerSecond: nil,
-                uploadBytesPerSecond: nil,
                 agentDeviceName: agent?.deviceName,
                 agentPhoneNumber: agent?.phoneNumber,
                 agentKind: agent?.agentKind,
                 pairedAgentCount: agent?.pairedAgentCount,
                 vowlanOnline: agent?.vowlanOnline,
-                bluetoothOnline: agent?.bluetoothOnline,
                 cloudOnline: agent?.cloudOnline
             )
         }
@@ -112,7 +100,6 @@ enum LiveActivityStateBuilder {
             agentKind: agent?.agentKind,
             pairedAgentCount: agent?.pairedAgentCount,
             vowlanOnline: agent?.vowlanOnline,
-            bluetoothOnline: agent?.bluetoothOnline,
             cloudOnline: agent?.cloudOnline
         )
     }
@@ -149,9 +136,7 @@ final class LiveActivityController {
         transport: AirSIMCallActivityAttributes.ContentState.Transport? = nil,
         radio: ModemStatus?,
         agent: LiveActivityAgentSnapshot? = nil,
-        appIsActive: Bool,
-        downloadBytesPerSecond: Double? = nil,
-        uploadBytesPerSecond: Double? = nil
+        appIsActive: Bool
     ) async {
         guard enabled, UIDevice.current.userInterfaceIdiom == .phone else { return }
         resolveExistingActivity()
@@ -163,11 +148,7 @@ final class LiveActivityController {
         if activity == nil {
             // iOS does not guarantee local activity creation in the background. Allow creation while offline in the foreground
             // to replace orphaned activities still displayed by the system after an app upgrade when Activity.activities no longer returns handles.
-            guard LiveActivityCreationPolicy.shouldCreate(
-                      appIsActive: appIsActive,
-                      moduleOnline: moduleOnline,
-                      hasActivity: false
-                  ),
+            guard LiveActivityCreationPolicy.shouldCreate(appIsActive: appIsActive, hasActivity: false),
                   ActivityAuthorizationInfo().areActivitiesEnabled else { return }
             do {
                 let initialState = LiveActivityStateBuilder.make(
@@ -178,9 +159,7 @@ final class LiveActivityController {
                     transport: transport,
                     radio: radio,
                     agent: agent,
-                    idleStartedAt: idleStartedAt,
-                    downloadBytesPerSecond: downloadBytesPerSecond,
-                    uploadBytesPerSecond: uploadBytesPerSecond
+                    idleStartedAt: idleStartedAt
                 )
                 activity = try Activity.request(
                     attributes: AirSIMCallActivityAttributes(moduleName: "AirSIM"),
@@ -214,9 +193,7 @@ final class LiveActivityController {
                 transport: transport,
                 radio: radio,
                 agent: agent,
-                idleStartedAt: idleStartedAt,
-                downloadBytesPerSecond: downloadBytesPerSecond,
-                uploadBytesPerSecond: uploadBytesPerSecond
+                idleStartedAt: idleStartedAt
             )
             // Online/offline state is determined by actual module requests; do not use ActivityKit stale as a connectivity probe.
             guard nextState != lastState else { return }

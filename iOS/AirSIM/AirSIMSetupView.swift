@@ -1,5 +1,4 @@
 import UIKit
-import Observation
 
 @MainActor
 final class AirSIMFirstConnectionViewController: ObservingViewController {

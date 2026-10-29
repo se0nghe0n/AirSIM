@@ -55,78 +55,19 @@ enum CloudCallAudioStartupPolicy {
 
 enum CloudMediaHealthIssue: String, Equatable, Sendable {
     case connectionLost = "connection_lost"
-    case downlinkStalled = "downlink_stalled"
-    case downlinkSilent = "downlink_silent"
-    case uplinkStalled = "uplink_stalled"
-}
-
-enum CloudMediaHealthDecision: Equatable, Sendable {
-    case none
-    case rebuild(CloudMediaHealthIssue)
-    case failed(CloudMediaHealthIssue)
 }
 
 struct CloudMediaHealthSnapshot: Equatable, Sendable {
-    var firstDownlinkAt: Date?
-    var lastDownlinkAt: Date?
-    var lastUplinkAt: Date?
-    var downlinkBytes: UInt64 = 0
-    var downlinkFrames: UInt64 = 0
-    var downlinkPeak: Int = 0
-    var uplinkBytes: UInt64 = 0
-    var uplinkFrames: UInt64 = 0
-    var uplinkPeak: Int = 0
-    var droppedFrames: UInt64 = 0
-    var jitterBufferHighWatermark: Int = 0
     var rebuildCount: Int = 0
     var audioRoute = "unknown"
-    var lastIssue: CloudMediaHealthIssue?
 }
 
 struct CloudMediaHealthTracker: Sendable {
-    private static let stallInterval: TimeInterval = 2
-    private static let silentFrameThreshold = 50
-    private static let audiblePeakThreshold = 32
-
-    private var windowStartedAt: Date
-    private var consecutiveSilentFrames = 0
     private let maximumRebuilds: Int
     private(set) var snapshot = CloudMediaHealthSnapshot()
 
-    init(startedAt: Date, maximumRebuilds: Int = 3) {
-        windowStartedAt = startedAt
+    init(maximumRebuilds: Int = 3) {
         self.maximumRebuilds = max(0, maximumRebuilds)
-    }
-
-    mutating func recordDownlink(
-        bytes: Int,
-        peak: Int,
-        at timestamp: Date,
-        jitterBufferFrames: Int,
-        droppedFrames: Int = 0
-    ) {
-        guard bytes > 0 else { return }
-        snapshot.firstDownlinkAt = snapshot.firstDownlinkAt ?? timestamp
-        snapshot.lastDownlinkAt = timestamp
-        snapshot.downlinkBytes &+= UInt64(bytes)
-        snapshot.downlinkFrames &+= UInt64(max(1, bytes / 320))
-        snapshot.downlinkPeak = max(snapshot.downlinkPeak, peak)
-        snapshot.droppedFrames &+= UInt64(max(0, droppedFrames))
-        snapshot.jitterBufferHighWatermark = max(
-            snapshot.jitterBufferHighWatermark,
-            max(0, jitterBufferFrames)
-        )
-        consecutiveSilentFrames = peak < Self.audiblePeakThreshold
-            ? consecutiveSilentFrames + max(1, bytes / 320)
-            : 0
-    }
-
-    mutating func recordUplink(bytes: Int, peak: Int, at timestamp: Date) {
-        guard bytes > 0 else { return }
-        snapshot.lastUplinkAt = timestamp
-        snapshot.uplinkBytes &+= UInt64(bytes)
-        snapshot.uplinkFrames &+= UInt64(max(1, bytes / 320))
-        snapshot.uplinkPeak = max(snapshot.uplinkPeak, peak)
     }
 
     mutating func recordRoute(_ route: String) {
@@ -134,31 +75,10 @@ struct CloudMediaHealthTracker: Sendable {
         snapshot.audioRoute = normalized.isEmpty ? "unknown" : normalized
     }
 
-    func evaluate(at timestamp: Date) -> CloudMediaHealthDecision {
-        let issue: CloudMediaHealthIssue?
-        let lastDownlink = snapshot.lastDownlinkAt ?? windowStartedAt
-        if timestamp.timeIntervalSince(lastDownlink) >= Self.stallInterval {
-            issue = .downlinkStalled
-        } else {
-            let lastUplink = snapshot.lastUplinkAt ?? windowStartedAt
-            issue = snapshot.downlinkFrames > 0 &&
-                timestamp.timeIntervalSince(lastUplink) >= Self.stallInterval
-                ? .uplinkStalled
-                : nil
-        }
-        guard let issue else { return .none }
-        return snapshot.rebuildCount < maximumRebuilds ? .rebuild(issue) : .failed(issue)
-    }
-
     @discardableResult
-    mutating func beginRebuild(for issue: CloudMediaHealthIssue, at timestamp: Date) -> Bool {
+    mutating func beginRebuild() -> Bool {
         guard snapshot.rebuildCount < maximumRebuilds else { return false }
         snapshot.rebuildCount += 1
-        snapshot.lastIssue = issue
-        windowStartedAt = timestamp
-        consecutiveSilentFrames = 0
-        snapshot.lastDownlinkAt = nil
-        snapshot.lastUplinkAt = nil
         return true
     }
 }
@@ -190,15 +110,7 @@ enum CloudMediaTransportNegotiator {
 }
 
 enum CloudCallRetryPolicy {
-    /// A brief race can occur between CallKit activating the audio session and AVAudioEngine becoming ready; cover ~12 seconds
-    /// while bounding the retry count so genuine permission errors do not spin in the background.
-    static let audioDelays: [TimeInterval] = [0, 0.35, 0.8, 1.5, 3, 6]
     static let reconnectDelays: [TimeInterval] = [0.4, 1, 2, 4]
-
-    static func shouldRetryAudio(after error: Error) -> Bool {
-        if case IPhoneCloudCallError.microphonePermissionDenied = error { return false }
-        return true
-    }
 }
 
 @MainActor
@@ -265,9 +177,6 @@ struct CloudCallControlMessage: Equatable, Sendable {
     let generation: UInt64?
     let commandID: String?
     let traceID: String?
-    let downlinkBytes: UInt64?
-    let downlinkFrames: UInt64?
-    let downlinkPeak: UInt64?
 
     private struct Payload: Decodable {
         let status: String?
@@ -281,9 +190,6 @@ struct CloudCallControlMessage: Equatable, Sendable {
         let generation: UInt64?
         let commandID: String?
         let traceID: String?
-        let downlinkBytes: UInt64?
-        let downlinkFrames: UInt64?
-        let downlinkPeak: UInt64?
 
         enum CodingKeys: String, CodingKey {
             case status, event, message, role
@@ -293,9 +199,6 @@ struct CloudCallControlMessage: Equatable, Sendable {
             case callUUID = "call_uuid"
             case commandID = "command_id"
             case traceID = "trace_id"
-            case downlinkBytes = "downlink_bytes"
-            case downlinkFrames = "downlink_frames"
-            case downlinkPeak = "downlink_peak"
         }
     }
 
@@ -313,10 +216,7 @@ struct CloudCallControlMessage: Equatable, Sendable {
             callUUID: payload.callUUID,
             generation: payload.generation,
             commandID: payload.commandID,
-            traceID: payload.traceID,
-            downlinkBytes: payload.downlinkBytes,
-            downlinkFrames: payload.downlinkFrames,
-            downlinkPeak: payload.downlinkPeak
+            traceID: payload.traceID
         )
     }
 
@@ -553,11 +453,8 @@ final class IPhoneCloudCallSession {
             onAudioStateChange?(audioState)
         }
     }
-    private(set) var mediaHealthSnapshot = CloudMediaHealthSnapshot() {
-        didSet { onMediaHealthChange?(mediaHealthSnapshot) }
-    }
+    private(set) var mediaHealthSnapshot = CloudMediaHealthSnapshot()
     var onAudioStateChange: ((CloudCallAudioState) -> Void)?
-    var onMediaHealthChange: ((CloudMediaHealthSnapshot) -> Void)?
     var onLifecycleEvent: ((CallLifecycleEvent) -> Void)?
     private var reconnectTask: Task<Void, Never>?
     private var reconnectID = UUID()
@@ -582,7 +479,6 @@ final class IPhoneCloudCallSession {
             (lifecycleState == .connecting || lifecycleState == .active)
     }
     var isRecovering: Bool { reconnectTask != nil }
-    var isAudioRunning: Bool { media.isAudioRunning }
 
     private init() {
         media.onWebRTCState = { connected, connection, negotiation in
@@ -710,7 +606,7 @@ final class IPhoneCloudCallSession {
         // Q25 answer confirmation. Neither creates a peer or opens a mic.
         Task.detached(priority: .userInitiated) { CloudWebRTCPeer.prepareFactory() }
         if callChanged || mediaHealthTracker == nil {
-            mediaHealthTracker = CloudMediaHealthTracker(startedAt: Date(), maximumRebuilds: 3)
+            mediaHealthTracker = CloudMediaHealthTracker(maximumRebuilds: 3)
             mediaHealthTracker?.recordRoute(media.audioRouteDescription)
             publishMediaHealth()
         }
@@ -918,12 +814,6 @@ final class IPhoneCloudCallSession {
         )
     }
 
-    func startAudio() throws {
-        guard usesWebRTC else { return }
-        audioStartupPermitted = true
-        startWebRTCIfReady()
-    }
-
     func startAudioWithRetry() {
         guard canAttemptAudio, usesWebRTC else { return }
         audioStartupPermitted = true
@@ -1129,9 +1019,9 @@ final class IPhoneCloudCallSession {
     private func requestMediaRebuild(_ issue: CloudMediaHealthIssue) {
         guard reconnectTask == nil, let call, answered else { return }
         if mediaHealthTracker == nil {
-            mediaHealthTracker = CloudMediaHealthTracker(startedAt: Date(), maximumRebuilds: 3)
+            mediaHealthTracker = CloudMediaHealthTracker(maximumRebuilds: 3)
         }
-        guard mediaHealthTracker?.beginRebuild(for: issue, at: Date()) == true else {
+        guard mediaHealthTracker?.beginRebuild() == true else {
             audioState = .failed("Cloud media has been rebuilt three times. Automatic retries stopped.")
             publishMediaHealth()
             traceMediaHealth(issue: issue, phase: "rebuild_exhausted", call: call, isFailure: true)
@@ -1165,8 +1055,6 @@ final class IPhoneCloudCallSession {
                     "call_uuid": call.uuid.uuidString.lowercased(),
                     "generation": String(call.generation),
                     "rebuild_count": String(snapshot.rebuildCount),
-                    "downlink_frames": String(snapshot.downlinkFrames),
-                    "uplink_frames": String(snapshot.uplinkFrames),
                     "audio_route": snapshot.audioRoute,
                 ],
                 isFailure: isFailure
@@ -1363,30 +1251,6 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             socket.send(.string(text)) { [weak self] error in
                 guard let error else { return }
                 self?.traceControl(envelope, phase: "send_failed", detail: error.localizedDescription, isFailure: true)
-            }
-        }
-    }
-
-    func sendControlAndWait(_ action: String, call: IncomingVoIPCall) async {
-        await withCheckedContinuation { continuation in
-            queue.async { [weak self] in
-                guard let self, !stopped, let socket = webSocket else {
-                    continuation.resume()
-                    return
-                }
-                guard let (text, envelope) = controlText(action: action, call: call) else {
-                    continuation.resume()
-                    return
-                }
-                traceControl(envelope, phase: "sending")
-                socket.send(.string(text)) { [weak self] error in
-                    if let error {
-                        self?.traceControl(envelope, phase: "send_failed", detail: error.localizedDescription, isFailure: true)
-                    } else {
-                        self?.traceControl(envelope, phase: "socket_sent")
-                    }
-                    continuation.resume()
-                }
             }
         }
     }

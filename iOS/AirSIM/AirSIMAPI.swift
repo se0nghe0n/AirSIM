@@ -224,10 +224,6 @@ struct AirSIMAPI: Sendable {
         return try Self.decode(Response.self, from: data)
     }
 
-    private func send<Body: Encodable>(_ method: String, _ path: String, _ body: Body) async throws {
-        _ = try await raw(method: method, path: path, body: body, timeout: 10)
-    }
-
     private func raw<Body: Encodable>(method: String, path: String, body: Body, timeout: TimeInterval) async throws -> Data {
         var request = URLRequest(url: try endpoint(path))
         request.httpMethod = method

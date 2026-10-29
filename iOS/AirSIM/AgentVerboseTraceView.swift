@@ -1,15 +1,12 @@
-import Observation
 import UIKit
 
-enum AgentVerboseTraceFilter: String, CaseIterable, Identifiable {
+enum AgentVerboseTraceFilter: String, CaseIterable {
     case all = "All"
     case failures = "Errors"
     case calls = "Calls"
     case relay = "Relay"
     case at = "AT"
     case usb = "USB"
-
-    var id: String { rawValue }
 
     /// localization.md: filter labels are user-visible copy and use LocalizedStringResource for deferred resolution.
     var title: LocalizedStringResource {

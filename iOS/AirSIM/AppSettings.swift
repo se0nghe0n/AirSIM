@@ -6,16 +6,11 @@ enum DeviceContext {
     static var displayName: String {
         UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : "iPad"
     }
-
-    static var symbolName: String {
-        UIDevice.current.userInterfaceIdiom == .phone ? "iphone" : "ipad"
-    }
 }
 
 /// Retains the Mac version's appearance options on iPhone/iPad.
-enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
+enum AppAppearance: String, CaseIterable, Sendable {
     case system, light, dark
-    var id: String { rawValue }
 
     var title: String {
         switch self {
@@ -34,46 +29,22 @@ enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
-    case system, zh, en
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .system: return L10n.t("Follow System")
-        case .zh: return L10n.t("Simplified Chinese")
-        case .en: return "English"
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class AppSettings {
     var appearance: AppAppearance {
         didSet { UserDefaults.standard.set(appearance.rawValue, forKey: L10n.appearanceKey) }
     }
-    var language: AppLanguage {
-        didSet { UserDefaults.standard.set(language.rawValue, forKey: L10n.languageKey) }
-    }
 
     init() {
         let defaults = UserDefaults.standard
         appearance = AppAppearance(rawValue: defaults.string(forKey: L10n.appearanceKey) ?? "") ?? .system
-        language = AppLanguage(rawValue: defaults.string(forKey: L10n.languageKey) ?? "") ?? .en
     }
 }
 
 /// Lightweight localization helper shared across iOS/iPadOS views.
 enum L10n {
     static let appearanceKey = "airsim.appearance"
-    static let languageKey = "airsim.language"
-
-    static var effectiveLanguage: AppLanguage {
-        let saved = AppLanguage(rawValue: UserDefaults.standard.string(forKey: languageKey) ?? "") ?? .en
-        if saved != .system { return saved }
-        return (Locale.preferredLanguages.first ?? "").lowercased().hasPrefix("zh") ? .zh : .en
-    }
 
     static func t(_ key: String) -> String {
         key

@@ -52,8 +52,7 @@ enum CallPresentationSurface: Equatable, Sendable {
 }
 
 enum CallAudioStatusPresentation {
-    static func text(transport: CallTransport?, localAudioActive: Bool,
-                     cloudState: CloudCallAudioState) -> String {
+    static func text(localAudioActive: Bool, cloudState: CloudCallAudioState) -> String {
         switch cloudState {
         case .idle: return localAudioActive ? "Audio Connected" : "Connecting Audio"
         case .starting: return "Connecting Cloud Audio"
@@ -153,8 +152,8 @@ enum AgentEventPollingPolicy {
         hasActiveCall ? 3 : 15
     }
 
-    static func shouldFetchSMS(pending: Int, eventRevision: UInt64, observedSMSRevision: UInt64) -> Bool {
-        // An earlier fetch or local save may have failed after this revision was observed.
+    static func shouldFetchSMS(pending: Int) -> Bool {
+        // Do not gate on the SMS revision: an earlier fetch or local save may have failed after it was observed.
         // The Agent's unacknowledged queue is authoritative, including after a restart.
         pending > 0
     }
@@ -305,7 +304,6 @@ final class AppModel {
     @ObservationIgnored private let initialPermissionCoordinator = InitialPermissionCoordinator()
     @ObservationIgnored private var initialPermissionTask: Task<Void, Never>?
     @ObservationIgnored private var eventRevision: UInt64 = AgentEventCursor.initial
-    @ObservationIgnored private var smsRevision: UInt64 = 0
     @ObservationIgnored private var eventStreamSupported: Bool?
     @ObservationIgnored private var pollingGeneration = 0
     @ObservationIgnored private var hasStarted = false
@@ -368,7 +366,6 @@ final class AppModel {
                 agentKind: agent.agentKind,
                 cloudOnline: cloudStatusIsFresh && agent.cloudOnline,
                 vowlanOnline: false,
-                bluetoothOnline: false,
                 isCurrent: false
             )
         }
@@ -383,7 +380,6 @@ final class AppModel {
                 agentKind: local.agentKind ?? previous?.agentKind,
                 cloudOnline: previous?.cloudOnline ?? false,
                 vowlanOnline: vowlan.availability.isOnlineForDisplay && vowlan.availability.endpoint == local.endpoint,
-                bluetoothOnline: false,
                 isCurrent: false
             )
         }
@@ -398,7 +394,6 @@ final class AppModel {
                 agentKind: nil,
                 cloudOnline: true,
                 vowlanOnline: false,
-                bluetoothOnline: false,
                 isCurrent: false
             )
         }
@@ -431,13 +426,12 @@ final class AppModel {
                 agentKind: item.agentKind,
                 cloudOnline: item.cloudOnline,
                 vowlanOnline: item.vowlanOnline,
-                bluetoothOnline: item.bluetoothOnline,
                 isCurrent: item.id == currentID
             )
         }.sorted {
             if $0.isCurrent != $1.isCurrent { return $0.isCurrent }
-            let leftOnline = $0.vowlanOnline || $0.bluetoothOnline || $0.cloudOnline
-            let rightOnline = $1.vowlanOnline || $1.bluetoothOnline || $1.cloudOnline
+            let leftOnline = $0.vowlanOnline || $0.cloudOnline
+            let rightOnline = $1.vowlanOnline || $1.cloudOnline
             if leftOnline != rightOnline { return leftOnline }
             return $0.deviceName.localizedCaseInsensitiveCompare($1.deviceName) == .orderedAscending
         }
@@ -456,7 +450,7 @@ final class AppModel {
         })
         let registeredCloudIDs = Set((cloudAgentDirectory ?? cloudAgentStatus)?.agents.map(\.id) ?? [])
         for agent in pairedAndroidAgents where values[agent.id] != nil || registeredCloudIDs.contains(agent.id)
-                || agent.cloudOnline || agent.bluetoothOnline || agent.vowlanOnline {
+                || agent.cloudOnline || agent.vowlanOnline {
             values[agent.id] = agent
         }
         return values.values.filter { PairedAndroidDeviceStore.permits($0.id) }
@@ -466,7 +460,7 @@ final class AppModel {
     private func rememberVerifiedDevices() {
         let registeredCloudIDs = Set((cloudAgentDirectory ?? cloudAgentStatus)?.agents.map(\.id) ?? [])
         for agent in pairedAndroidAgents where registeredCloudIDs.contains(agent.id)
-                || agent.cloudOnline || agent.bluetoothOnline
+                || agent.cloudOnline
                 || (agent.vowlanOnline && vowlan.availability.isOnlineForDisplay
                     && vowlan.discoveredAgents.contains { $0.id == agent.id && $0.endpoint == vowlan.availability.endpoint }) {
             PairedAndroidDeviceStore.remember(.init(id: agent.id, deviceName: agent.deviceName, agentKind: agent.agentKind))
@@ -604,19 +598,6 @@ final class AppModel {
         }
     }
 
-    var callUsesVoWLAN: Bool { currentCallTransport == .vowlan }
-
-    var dialPadTransportPresentation: DialPadTransportPresentation? {
-        _ = preferenceRevision
-        return DialPadTransportPresentation.make(
-            mode: ConnectionModePreference.selected(),
-            vowlanOnline: permitsVoWLANEndpoint(vowlan.availability.endpoint)
-                && vowlan.availability.isOnlineForDisplay,
-
-            cloudOnline: boundCloudReady
-        )
-    }
-
     /// The dial view cannot rely solely on `isOnline`: that property represents the local VoWLAN link and is intentionally
     /// false when the module only maintains a Relay heartbeat. Allow dialing when cloud mode is enabled and the heartbeat is fresh;
     /// actual execution still re-authenticates and verifies state inside the CallKit action.
@@ -633,8 +614,7 @@ final class AppModel {
 
     var callAudioStatusText: String {
         CallAudioStatusPresentation.text(
-            transport: currentCallTransport, localAudioActive: audio.transportReady,
-            cloudState: cloudCallAudioState)
+            localAudioActive: audio.transportReady, cloudState: cloudCallAudioState)
     }
 
     init(api: AirSIMAPI = AirSIMAPI()) {
@@ -778,18 +758,6 @@ final class AppModel {
         }
     }
 
-    func setBackgroundStandbyEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: backgroundStandbyKey)
-        backgroundStandby.setEnabled(enabled)
-    }
-
-    func setLowPowerModeEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: lowPowerModeKey)
-        lowPowerModeEnabled = enabled
-        // Recreate the polling task immediately so user switches do not wait for the previous sleep interval to finish.
-        if hasStarted { restartPolling() }
-    }
-
     func setLiveActivityEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: LiveActivityVisibilityPreference.key)
         liveActivity.setEnabled(enabled)
@@ -818,10 +786,6 @@ final class AppModel {
                 )
             }
         }
-    }
-
-    func setLocalModeEnabled(_ enabled: Bool) {
-        setConnectionMode(enabled ? .vowlan : .automatic)
     }
 
     func setConnectionMode(_ mode: AirSIMConnectionMode) {
@@ -881,20 +845,6 @@ final class AppModel {
         }
         if eventStreamSupported == true { return 0.1 }
         return 1
-    }
-
-    func stop() {
-        scheduledCallHistoryRefreshTask?.cancel()
-        scheduledCallHistoryRefreshTask = nil
-        callHistoryRefreshTask?.cancel()
-        pollingGeneration &+= 1
-        pollingTask?.cancel()
-        pollingTask = nil
-        moduleMetadataTask?.cancel()
-        moduleMetadataTask = nil
-        audio.deactivate()
-        backgroundStandby.setEnabled(false)
-        Task { await liveActivity.stop() }
     }
 
     private func poll(generation: Int) async {
@@ -1213,12 +1163,7 @@ final class AppModel {
                 )
                 eventStreamSupported = true
                 eventRevision = AgentEventCursor.advanced(from: eventRevision, to: event.revision)
-                let shouldFetchSMS = AgentEventPollingPolicy.shouldFetchSMS(
-                    pending: event.smsPending,
-                    eventRevision: event.smsRevision,
-                    observedSMSRevision: smsRevision
-                )
-                smsRevision = event.smsRevision
+                let shouldFetchSMS = AgentEventPollingPolicy.shouldFetchSMS(pending: event.smsPending)
                 return AgentPollResult(
                     call: event.call,
                     smsChanged: shouldFetchSMS,
@@ -2705,17 +2650,5 @@ extension AppModel: CallKitActionHandling {
         VirtualCallTTSController.shared.stop()
         isVirtualCallTTSPrepared = false
         backgroundStandby.resumeAfterCall()
-    }
-}
-
-private enum ModuleSetupError: LocalizedError {
-    case notReady(String)
-    case timeout
-
-    var errorDescription: String? {
-        switch self {
-        case let .notReady(message): return message
-        case .timeout: return "Module did not reconnect after restarting. Reconnect to the same Wi-Fi or Android hotspot."
-        }
     }
 }

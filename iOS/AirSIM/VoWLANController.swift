@@ -90,87 +90,8 @@ enum VoWLANAvailability: Equatable, Sendable {
     var allowsCallAttempt: Bool { isOnlineForDisplay }
 }
 
-enum ConnectionStatusHeadline {
-    static func title(summary: ModuleConnectionSummary, vowlanOnline: Bool) -> String {
-        if vowlanOnline { return "VoWLAN Online" }
-        switch summary {
-        case .localOnline: return L10n.t("Online")
-        case .localOnlineNoService: return "Online · No Cellular Service"
-        case .cloudOnly: return "Cloud Online · Reconnecting USB"
-        case .offline: return L10n.t("Offline")
-        }
-    }
-}
-
-enum ModuleConnectionPresentationLevel: Equatable {
-    case online
-    case warning
-    case cloud
-    case offline
-}
-
-struct ModuleConnectionPresentation: Equatable {
-    let title: String
-    let routeTitle: String
-    let description: String
-    let level: ModuleConnectionPresentationLevel
-    let systemImage: String
-
-    static func make(
-        summary: ModuleConnectionSummary,
-        vowlanOnline: Bool,
-        reconnecting: Bool,
-        message: String?
-    ) -> Self {
-        if vowlanOnline {
-            return Self(
-                title: "VoWLAN Online",
-                routeTitle: "Same Wi-Fi / Android hotspot",
-                description: "VoWLAN connected. Status refreshes automatically.",
-                level: .online,
-                systemImage: "wifi"
-            )
-        }
-        switch summary {
-        case .localOnline:
-            return Self(
-                title: "Module Online", routeTitle: "Direct VoWLAN",
-                description: message ?? "VoWLAN connected. Status refreshes automatically.",
-                level: .online, systemImage: "checkmark.circle.fill"
-            )
-        case .localOnlineNoService:
-            return Self(
-                title: "Module Online · No Service", routeTitle: "VoWLAN Connected",
-                description: message ?? "VoWLAN connected. Cellular network is recovering automatically.",
-                level: .warning, systemImage: "antenna.radiowaves.left.and.right.slash"
-            )
-        case .cloudOnly:
-            return Self(
-                title: "Cloud Online", routeTitle: "Internet Relay",
-                description: message ?? "Local VoWLAN disconnected. The module can still receive calls and messages over the internet.",
-                level: .cloud, systemImage: "icloud.fill"
-            )
-        case .offline:
-            return Self(
-                title: reconnecting ? "Reconnecting" : "Module Offline",
-                routeTitle: reconnecting ? "Restoring Connection" : "Connection Unavailable",
-                description: message ?? "Check module power, cellular service, and the VoWLAN connection",
-                level: reconnecting ? .warning : .offline,
-                systemImage: reconnecting ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle.fill"
-            )
-        }
-    }
-}
-
-enum PushRegistrationRouteSelector {
-    static func select<Route>(primary: Route, verifiedVoWLAN: Route?) -> Route {
-        verifiedVoWLAN ?? primary
-    }
-}
-
 enum VoWLANStatusCopy {
-    static func text(for availability: VoWLANAvailability, activeCall: Bool = false) -> String {
-        if activeCall { return "On Call (VoWLAN)" }
+    static func text(for availability: VoWLANAvailability) -> String {
         switch availability {
         case .unpaired: return "Not Paired"
         case .discovering: return "Discovering"

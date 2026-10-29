@@ -215,16 +215,6 @@ final class WatchCallSession: NSObject {
         ])
     }
 
-    private func finishRemoteCall() {
-        guard let current = voIPCall else { return }
-        recordEnded(current.callID)
-        provider.reportCall(with: current.uuid, endedAt: Date(), reason: .remoteEnded)
-        publishLocalPhase(.ended)
-        voIPCall = nil
-        answered = false
-        activeDialRequestID = nil
-    }
-
     private func receiveMirror(_ dictionary: [String: Any]) {
         if let allowed = dictionary["cloud_media_allowed"] as? Bool {
             UserDefaults.standard.set(allowed, forKey: cloudMediaPreferenceKey)

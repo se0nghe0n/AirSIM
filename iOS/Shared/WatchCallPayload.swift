@@ -273,27 +273,3 @@ enum WatchDialNumber {
         return value
     }
 }
-
-struct WatchIncomingNotificationPlan: Equatable, Sendable {
-    static let maximumDeliveryAge: TimeInterval = 45
-
-    let identifier: String
-    let title: String
-    let body: String
-
-    init?(payload: WatchCallPayload, now: Date = Date()) {
-        guard payload.phase == .incoming, !payload.callID.isEmpty else { return nil }
-        let age = now.timeIntervalSince(payload.updatedAt)
-        guard age >= -5, age <= Self.maximumDeliveryAge else { return nil }
-        let name = payload.callerName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let number = payload.number?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = [name, number]
-            .compactMap { value in value.flatMap { $0.isEmpty ? nil : $0 } }
-            .reduce(into: [String]()) { result, value in
-                if !result.contains(value) { result.append(value) }
-            }
-        identifier = "airsim.watch.incoming.\(payload.callID)"
-        title = "AirSIM Incoming Call"
-        body = parts.isEmpty ? "Incoming call on the module" : parts.joined(separator: " · ")
-    }
-}
