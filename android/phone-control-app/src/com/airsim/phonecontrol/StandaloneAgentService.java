@@ -159,7 +159,7 @@ public final class StandaloneAgentService extends Service {
                 .put("cellular_recovery", "not_required").put("ecm_carrier", "android-default");
         relay.postJSON(registration, "/v1/events/heartbeat", heartbeat, 12_000);
         lastHeartbeat = System.currentTimeMillis();
-        store.recordHeartbeat();
+        store.recordSuccess();
     }
 
     private void pollCommands(JSONObject registration, long generation) throws Exception {

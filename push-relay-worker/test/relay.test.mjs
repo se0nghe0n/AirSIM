@@ -254,6 +254,25 @@ test("temporary enrollment window has a global hourly quota", async () => {
   }), env)).status, 429);
 });
 
+test("a declared Content-Length above the limit rejects a short body", async () => {
+  const body = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new TextEncoder().encode("{}"));
+      controller.close();
+    },
+  });
+  const request = new Request("https://push.airsim.example/v1/devices/register", {
+    method: "POST",
+    headers: { "content-type": "application/json", "content-length": String(64 * 1024 + 1) },
+    body,
+    duplex: "half",
+  });
+  assert.equal(request.headers.get("content-length"), String(64 * 1024 + 1));
+  const response = await worker.fetch(request, testEnvironment());
+  assert.equal(response.status, 413);
+  assert.deepEqual(await response.json(), { error: "request body too large" });
+});
+
 test("request bodies stop at their byte limit before buffering unbounded input", async () => {
   let cancelled = false;
   const body = new ReadableStream({

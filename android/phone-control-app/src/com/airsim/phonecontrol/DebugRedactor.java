@@ -12,10 +12,6 @@ public final class DebugRedactor {
 
     private DebugRedactor() {}
 
-    public static String safeNumber(String ignored) {
-        return "[redacted]";
-    }
-
     public static String safeIdentifier(String value) {
         if (value == null) return "";
         return value.length() <= 128 ? value : value.substring(0, 128);

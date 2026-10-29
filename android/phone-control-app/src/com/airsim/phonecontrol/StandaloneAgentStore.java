@@ -14,7 +14,6 @@ final class StandaloneAgentStore {
     private static final String FILE = "standalone_agent";
     private static final String REGISTRATION = "registration";
     private static final String LAST_ERROR = "last_error";
-    private static final String LAST_HEARTBEAT = "last_heartbeat";
     private static final String LAST_SEEN = "last_seen";
 
     private final SharedPreferences preferences;
@@ -78,18 +77,12 @@ final class StandaloneAgentStore {
         preferences.edit().putLong(LAST_SEEN, System.currentTimeMillis()).remove(LAST_ERROR).apply();
     }
 
-    void recordHeartbeat() {
-        preferences.edit().putLong(LAST_HEARTBEAT, System.currentTimeMillis())
-                .putLong(LAST_SEEN, System.currentTimeMillis()).remove(LAST_ERROR).apply();
-    }
-
     void recordError(String error) {
         preferences.edit().putString(LAST_ERROR, DebugRedactor.sanitize(error)).apply();
     }
 
     String lastError() { return preferences.getString(LAST_ERROR, ""); }
     long lastSeen() { return preferences.getLong(LAST_SEEN, 0L); }
-    long lastHeartbeat() { return preferences.getLong(LAST_HEARTBEAT, 0L); }
 
     JSONObject pushStatus() throws Exception {
         JSONObject registration = registration();

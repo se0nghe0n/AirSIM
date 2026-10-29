@@ -13,7 +13,6 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Owns the single cloud call. WebRTC bridges audio to loopback Shizuku PCM. */
 final class StandaloneCloudMediaManager implements Closeable {
     private static volatile StandaloneCloudMediaManager instance;
 

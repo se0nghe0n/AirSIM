@@ -41,10 +41,6 @@ public final class CallRepository {
         if (id != null) CALLS.remove(id);
     }
 
-    public static String firstId() {
-        return idForAction("end");
-    }
-
     public static int state(String callId) {
         Call call = CALLS.get(callId);
         return call == null ? -1 : call.getState();
