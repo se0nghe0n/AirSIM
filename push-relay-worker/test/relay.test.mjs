@@ -267,6 +267,7 @@ test("a declared Content-Length above the limit rejects a short body", async () 
     body,
     duplex: "half",
   });
+  assert.equal(request.headers.get("content-length"), String(64 * 1024 + 1));
   const response = await worker.fetch(request, testEnvironment());
   assert.equal(response.status, 413);
   assert.deepEqual(await response.json(), { error: "request body too large" });
