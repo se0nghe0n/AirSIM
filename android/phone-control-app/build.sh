@@ -10,6 +10,8 @@ ANDROID_JAR="$SDK/platforms/android-35/android.jar"
 JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home}
 export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$PATH"
+# shellcheck disable=SC1091
+. "$ROOT/kotlin-toolchain.sh"
 OUT=${AIRSIM_ANDROID_OUTPUT_DIR:-"$ROOT/build/android"}
 CLASSES="$OUT/classes"
 DEX="$OUT/dex"
@@ -25,19 +27,7 @@ esac
 
 rm -rf "$OUT"
 mkdir -p "$CLASSES" "$DEX" "$DEPS"
-
-download_verified() {
-  local url=$1
-  local output=$2
-  local expected=$3
-  if [ ! -f "$output" ]; then curl -fsSL "$url" -o "$output"; fi
-  local actual
-  actual=$(shasum -a 256 "$output" | awk '{print $1}')
-  if [ "$actual" != "$expected" ]; then
-    echo "dependency checksum mismatch: $output" >&2
-    exit 1
-  fi
-}
+airsim_prepare_kotlin "$DEPS"
 
 download_verified "https://repo1.maven.org/maven2/dev/rikka/shizuku/api/$SHIZUKU_VERSION/api-$SHIZUKU_VERSION.aar" \
   "$DEPS/shizuku-api.aar" 4def9bde498ef8626614c2fc5db9af4749c86f16f6c33e3f5658d35e70bab59b
@@ -65,14 +55,37 @@ SHIZUKU_JARS+=("$DEPS/androidx-annotation.jar")
 CLASSPATH="$ANDROID_JAR:$(IFS=:; echo "${SHIZUKU_JARS[*]}")"
 
 SOURCES=()
-while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/src" -name '*.java' -print0)
-"$JAVA_HOME/bin/javac" -source 17 -target 17 -Xlint:all -classpath "$CLASSPATH" -d "$CLASSES" "${SOURCES[@]}"
+while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/src" \( -name '*.java' -o -name '*.kt' \) -print0)
+airsim_compile_classes --mode app --dest "$CLASSES" --classpath "$CLASSPATH" -- "${SOURCES[@]}"
 
-sh "$ROOT/verify-io-api.sh" "$CLASSES"
+sh "$ROOT/verify-io-api.sh" "$CLASSES" "$AIRSIM_KOTLIN_STDLIB"
 
 CLASSES_ARGS=()
 while IFS= read -r -d '' class_file; do CLASSES_ARGS+=("$class_file"); done < <(find "$CLASSES" -name '*.class' -print0)
-"$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" --min-api 29 --output "$DEX" "${CLASSES_ARGS[@]}" "${SHIZUKU_JARS[@]}"
+stdlib_dex_input=$AIRSIM_KOTLIN_STDLIB
+d8_log=$(mktemp "${TMPDIR:-/tmp}/airsim-d8.XXXXXX")
+if ! "$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" --min-api 29 --output "$DEX" "${CLASSES_ARGS[@]}" "${SHIZUKU_JARS[@]}" "$stdlib_dex_input" >"$d8_log" 2>&1; then
+  if grep -q module-info "$d8_log"; then
+    echo "d8 failed on kotlin-stdlib module-info; stripping META-INF/versions for the dex input" >&2
+    stdlib_stage=$(mktemp -d "${TMPDIR:-/tmp}/airsim-stdlib-dex.XXXXXX")
+    unzip -q "$AIRSIM_KOTLIN_STDLIB" -d "$stdlib_stage"
+    rm -rf "$stdlib_stage/META-INF/versions"
+    stdlib_dex_input="$OUT/kotlin-stdlib-dex.jar"
+    "$JAVA_HOME/bin/jar" cf "$stdlib_dex_input" -C "$stdlib_stage" .
+    rm -rf "$stdlib_stage" "$DEX"
+    mkdir -p "$DEX"
+    if ! "$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" --min-api 29 --output "$DEX" "${CLASSES_ARGS[@]}" "${SHIZUKU_JARS[@]}" "$stdlib_dex_input" >"$d8_log" 2>&1; then
+      cat "$d8_log" >&2
+      rm -f "$d8_log"
+      exit 1
+    fi
+  else
+    cat "$d8_log" >&2
+    rm -f "$d8_log"
+    exit 1
+  fi
+fi
+rm -f "$d8_log"
 COMPILED_RES="$OUT/compiled-res.zip"
 "$BUILD_TOOLS/aapt2" compile --dir "$ROOT/res" -o "$COMPILED_RES"
 MANIFEST="$OUT/AndroidManifest.xml"
