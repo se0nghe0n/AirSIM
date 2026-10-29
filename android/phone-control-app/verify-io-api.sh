@@ -12,7 +12,7 @@ JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Ho
 REPORT=$(mktemp "${TMPDIR:-/tmp}/airsim-io-api.XXXXXX")
 trap 'rm -f "$REPORT"' EXIT HUP INT TERM
 find "$CLASSES" -name '*.class' -print0 | xargs -0 "$JAVA_HOME/bin/javap" -v -p > "$REPORT"
-if grep -E '= (Methodref|InterfaceMethodref|MethodHandle) ' "$REPORT" | grep -E 'java/io/[^ ]+\.(toString:\(Ljava/nio/charset/Charset;|readNBytes:|writeBytes:\(\[B\)|nullInputStream:)|java/util/[^ ]+\.toArray:\(Ljava/util/function/IntFunction;|java/lang/(CharSequence|StringBuilder|StringBuffer)\.isEmpty:|java/net/(URLEncoder|URLDecoder)\.(encode|decode):\(Ljava/lang/String;Ljava/nio/charset/Charset;|java/util/(List|ArrayList)\.(removeFirst|removeLast|getFirst|getLast|reversed|addFirst|addLast):'; then
+if grep -E '^ *#[0-9]+ = (Methodref|InterfaceMethodref|MethodHandle) ' "$REPORT" | grep -E 'java/io/[^ ]+\.(toString:\(Ljava/nio/charset/Charset;|readNBytes:|writeBytes:\(\[B\)|nullInputStream:)|java/util/[^ ]+\.toArray:\(Ljava/util/function/IntFunction;|java/lang/(CharSequence|StringBuilder|StringBuffer)\.isEmpty:|java/net/(URLEncoder|URLDecoder)\.(encode|decode):\(Ljava/lang/String;Ljava/nio/charset/Charset;|java/util/(List|ArrayList)\.(removeFirst|removeLast|getFirst|getLast|reversed|addFirst|addLast):'; then
     echo 'FAIL: emitted Java calls require newer Android APIs, but AirSIM supports API 29+' >&2
     exit 1
 fi
