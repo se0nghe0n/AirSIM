@@ -1,10 +1,10 @@
-# Shared Kotlin 2.0.21 pin and two-pass compilation for the shell build.
+# Shared Kotlin 2.4.21 pin and two-pass compilation for the shell build.
 # Source this file from build.sh and test.sh. Checksums are sha256 of the
 # downloaded artifacts (kotlin-compiler zip and kotlin-stdlib jar).
 
-airsim_kotlin_version=2.0.21
-airsim_kotlin_compiler_sha256=0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a
-airsim_kotlin_stdlib_sha256=f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09
+airsim_kotlin_version=2.4.21
+airsim_kotlin_compiler_sha256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
+airsim_kotlin_stdlib_sha256=bd8250210584cb659847dce9cda660f8e9906e5def7fbebcea93dc6dcb6a88a3
 
 download_verified() {
   local url=$1
@@ -15,6 +15,8 @@ download_verified() {
   actual=$(shasum -a 256 "$output" | awk '{print $1}')
   if [ "$actual" != "$expected" ]; then
     echo "dependency checksum mismatch: $output" >&2
+    # Drop a partial or corrupt download so the next run fetches it again.
+    rm -f "$output"
     exit 1
   fi
 }

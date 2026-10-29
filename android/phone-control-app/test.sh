@@ -16,7 +16,7 @@ compile_test() {
 }
 
 with_stdlib() {
-  printf '%s:%s' "$1" "$AIRSIM_KOTLIN_STDLIB"
+  printf '%s:%s' "$1"
 }
 ANDROID_JAR="${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}/platforms/android-35/android.jar"
 
@@ -138,7 +138,7 @@ compile_test "$OUT" "" \
 compile_test "$OUT" "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/AndroidAgentIdentity.java \
   "$ROOT"/test/com/airsim/phonecontrol/AndroidAgentIdentityTests.java
-sh "$ROOT/verify-io-api.sh" "$OUT" "$AIRSIM_KOTLIN_STDLIB"
+sh "$ROOT/verify-io-api.sh" "$OUT"
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.CoreTests
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.NotificationUpdateGateTests
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.CallRepositoryTests
@@ -153,7 +153,7 @@ compile_test "$DIAGNOSTICS_OUT" "$OUT" \
   "$ROOT"/test/android/util/Log.java \
   "$ROOT"/src/com/airsim/phonecontrol/BridgeLog.java \
   "$ROOT"/test/com/airsim/phonecontrol/DiagnosticFileTests.java
-sh "$ROOT/verify-io-api.sh" "$DIAGNOSTICS_OUT" "$AIRSIM_KOTLIN_STDLIB"
+sh "$ROOT/verify-io-api.sh" "$DIAGNOSTICS_OUT"
 "$JAVA" -cp "$(with_stdlib "$DIAGNOSTICS_OUT:$OUT")" com.airsim.phonecontrol.DiagnosticFileTests
 
 compile_test "$OUT" "$OUT" \

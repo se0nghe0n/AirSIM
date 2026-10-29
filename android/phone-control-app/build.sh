@@ -58,34 +58,11 @@ SOURCES=()
 while IFS= read -r -d '' source; do SOURCES+=("$source"); done < <(find "$ROOT/src" \( -name '*.java' -o -name '*.kt' \) -print0)
 airsim_compile_classes --mode app --dest "$CLASSES" --classpath "$CLASSPATH" -- "${SOURCES[@]}"
 
-sh "$ROOT/verify-io-api.sh" "$CLASSES" "$AIRSIM_KOTLIN_STDLIB"
+sh "$ROOT/verify-io-api.sh" "$CLASSES"
 
 CLASSES_ARGS=()
 while IFS= read -r -d '' class_file; do CLASSES_ARGS+=("$class_file"); done < <(find "$CLASSES" -name '*.class' -print0)
-stdlib_dex_input=$AIRSIM_KOTLIN_STDLIB
-d8_log=$(mktemp "${TMPDIR:-/tmp}/airsim-d8.XXXXXX")
-if ! "$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" --min-api 29 --output "$DEX" "${CLASSES_ARGS[@]}" "${SHIZUKU_JARS[@]}" "$stdlib_dex_input" >"$d8_log" 2>&1; then
-  if grep -q module-info "$d8_log"; then
-    echo "d8 failed on kotlin-stdlib module-info; stripping META-INF/versions for the dex input" >&2
-    stdlib_stage=$(mktemp -d "${TMPDIR:-/tmp}/airsim-stdlib-dex.XXXXXX")
-    unzip -q "$AIRSIM_KOTLIN_STDLIB" -d "$stdlib_stage"
-    rm -rf "$stdlib_stage/META-INF/versions"
-    stdlib_dex_input="$OUT/kotlin-stdlib-dex.jar"
-    "$JAVA_HOME/bin/jar" cf "$stdlib_dex_input" -C "$stdlib_stage" .
-    rm -rf "$stdlib_stage" "$DEX"
-    mkdir -p "$DEX"
-    if ! "$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" --min-api 29 --output "$DEX" "${CLASSES_ARGS[@]}" "${SHIZUKU_JARS[@]}" "$stdlib_dex_input" >"$d8_log" 2>&1; then
-      cat "$d8_log" >&2
-      rm -f "$d8_log"
-      exit 1
-    fi
-  else
-    cat "$d8_log" >&2
-    rm -f "$d8_log"
-    exit 1
-  fi
-fi
-rm -f "$d8_log"
+"$BUILD_TOOLS/d8" --lib "$ANDROID_JAR" --min-api 29 --output "$DEX" "${CLASSES_ARGS[@]}" "${SHIZUKU_JARS[@]}" "$AIRSIM_KOTLIN_STDLIB"
 COMPILED_RES="$OUT/compiled-res.zip"
 "$BUILD_TOOLS/aapt2" compile --dir "$ROOT/res" -o "$COMPILED_RES"
 MANIFEST="$OUT/AndroidManifest.xml"
