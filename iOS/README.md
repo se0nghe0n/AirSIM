@@ -14,7 +14,7 @@ iOS/AirSIM.xcodeproj
 
 Main targets:
 
-- `AirSIM`: main iPhone / iPad app
+- `AirSIM`: native UIKit iPhone / iPad app (`AirSIMIPadApp` application delegate, `AirSIMSceneDelegate`, and `RootViewController`)
 - `AirSIMWatchApp`: Apple Watch App
 - `AirSIMLiveActivityExtension`: Lock Screen and Dynamic Island Live Activities
 - `AirSIMTests`: transport selection and protocol-boundary tests
@@ -181,3 +181,56 @@ still require separately authorized device testing.
 Local requests are HMAC-authenticated over Wi-Fi VoWLAN. An unavailable local API has no destination URL; USB ECM and the fixed QDC507 address are removed. Live Activity answer, decline and hang-up buttons use background `LiveActivityIntent` actions. The system executes them in the app process without opening AirSIM; the widget holds no credentials. Existing CallKit transactions control Cloud/system calls, including the cold-launch handler. Local mode resolves a paired VoWLAN endpoint and sends the exact observed call ID. Empty, replaced and ended targets fail; a stale Decline button cannot hang up an answered call. Typed call-action URLs remain compatible with older activities. Legacy activity transport values decode as unavailable without discarding the rest of the activity payload.
 
 Build both the app and Live Activity extension and verify their generated App Intents metadata contains all three actions with background execution. Unit tests exercise intent dispatch, invalid targets, repeated answers and surfaced failures. Locked-screen taps and cold-launch execution on a physical phone remain device acceptance checks.
+
+## UIKit and TCA presentation
+
+The main app uses native tab, navigation, table, text-input, and sheet controllers.
+The Watch app and Live Activity extension retain SwiftUI. No main-app controller
+embeds SwiftUI. The official `swift-composable-architecture` package is pinned to
+1.26.2; the included `Package.resolved` also locks transitive dependencies, and
+`ThirdPartyNotices.txt` is bundled with the app.
+
+`AirSIMFeature` owns tab/deep-link/onboarding navigation, dial input and call-keypad
+presentation. Its Messages, Settings, Pairing, Recordings and Trace reducers own
+their draft, progress, selection and operation states. UIKit controls read scoped
+Store state and send actions through `AirSIMPresentation`. Network, pairing,
+playback and persistence operations run through an injected `AirSIMClient`.
+`AppModel` remains the existing communications service. Its immutable value
+snapshots enter the Store through a cancellable Observation stream, without a
+polling bridge or a reference model inside reducer State. Dial commands carry the
+number atomically; SMS responses carry an operation ID so old completions cannot
+clear a newer draft or dismiss a newly opened composer.
+
+The notification delegate installs cold-launch CallKit and PushKit handlers before
+foreground scene creation. Background-only scene connections defer AppModel and
+UI construction until foreground entry. Inactive/background audio preparation
+remains a synchronous scene-to-service lifecycle call. Scene teardown cancels the
+Store snapshot stream. `tel:`, `im:`, Live Activity actions and pending SMS routing
+enter the native hierarchy; a cold composer waits until its tab and onboarding are
+ready. The app retains single-window behavior. Live Activity URL commands carry
+their call ID to a gate against current backend state immediately before execution.
+
+`UIKitPresentationTests` exercises input focus/selection across changing rows,
+editor sizing on narrow screens and sheet toolbar preservation. TCA TestStore
+coverage includes failed-send drafts, stale completions, mode-change cancellation,
+deep-link navigation and snapshot isolation. The component styling inventory and
+baseline comparison checklist are in `UIKitStyleAudit.md`. Simulator checks do not
+establish real-device pairing, carrier audio, push delivery or proximity acceptance.
+The adversarial-review record also covers transition cancellation, modal ownership,
+independent contact queries, trace command ordering and stable lazy list content.
+
+## UIKit previews
+
+Each concrete main-app controller and reusable custom view has a named `#Preview`
+at the end of its owning Swift file, under `#if DEBUG`. UIKit controllers are
+returned directly; reusable components use a small native UIKit canvas for an
+explicit display size. These previews cover the main UIKit app.
+
+`AirSIMPreviewSupport.swift` supplies deterministic contacts, calls, messages,
+recording metadata, discovered services and diagnostic traces to in-memory TCA
+stores. Its dependency client does not create AppModel or perform file, network,
+audio, permission or pairing operations. Diagnostic clock time is frozen. In an
+Xcode preview host, DEBUG lifecycle guards skip live notification/watch/service
+bootstrap and the notification delegate's eager discovery/history setup. Normal
+app launches still initialize the cold-call handler and history in their original
+order before `didFinishLaunching`.

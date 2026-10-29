@@ -1,5 +1,5 @@
-import SwiftUI
 import UIKit
+import Observation
 
 enum RecentCallTimeFormatter {
     static func string(
@@ -87,1383 +87,6 @@ struct DialPadTransportPresentation: Equatable {
     }
 }
 
-private enum PhoneListMetrics {
-    static let rowHeight: CGFloat = 74
-    static let avatarSize: CGFloat = 50
-    static let horizontalInset: CGFloat = 16
-    static let avatarSpacing: CGFloat = 11
-    static let trailingSpacing: CGFloat = 8
-    static let timeColumnWidth: CGFloat = 76
-    static let actionSize: CGFloat = 44
-    static let separatorLeading: CGFloat = horizontalInset + avatarSize + avatarSpacing
-}
-
-private struct DialPadLayoutMetrics {
-    let keySize: CGFloat
-    let keySpacing: CGFloat
-    let rowSpacing: CGFloat
-    let sectionSpacing: CGFloat
-    let verticalPadding: CGFloat
-    let numberFontSize: CGFloat
-    let numberHeight: CGFloat
-    let contactHeight: CGFloat
-
-    var keypadWidth: CGFloat { keySize * 3 + keySpacing * 2 }
-    var digitFontSize: CGFloat { min(31, max(23, keySize * 0.34)) }
-    var letterFontSize: CGFloat { min(10, max(8, keySize * 0.115)) }
-    var callIconSize: CGFloat { min(30, max(23, keySize * 0.33)) }
-    var deleteIconSize: CGFloat { min(24, max(19, keySize * 0.27)) }
-
-    init(availableHeight: CGFloat, availableWidth: CGFloat, compactWidth: Bool) {
-        let compactHeight = availableHeight < 700
-        let desiredKeySize: CGFloat = compactWidth ? 84 : 90
-        let desiredKeySpacing: CGFloat = compactWidth ? 28 : 34
-        let reservedHeight: CGFloat = compactHeight ? 205 : 220
-        let verticalKeySize = (availableHeight - reservedHeight) / 5
-        let contentWidth = min(520, max(0, availableWidth - 32))
-        let horizontalKeySize = (contentWidth - desiredKeySpacing * 2) / 3
-
-        keySize = min(desiredKeySize, max(56, min(verticalKeySize, horizontalKeySize)))
-        keySpacing = min(
-            desiredKeySpacing,
-            max(14, (contentWidth - keySize * 3) / 2)
-        )
-        rowSpacing = compactHeight ? 8 : (compactWidth ? 12 : 16)
-        sectionSpacing = compactHeight ? 8 : (compactWidth ? 12 : 16)
-        verticalPadding = compactHeight ? 6 : 10
-        numberFontSize = compactHeight ? 32 : (compactWidth ? 36 : 42)
-        numberHeight = compactHeight ? 40 : 46
-        contactHeight = compactHeight ? 18 : 20
-    }
-}
-
-// MARK: - Dial
-
-struct DialPadView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var deleteRepeatTask: Task<Void, Never>?
-    @State private var pairedAgentListPresentation: PairedAgentListPresentation?
-
-    private let rows = [
-        [("1", ""), ("2", "ABC"), ("3", "DEF")],
-        [("4", "GHI"), ("5", "JKL"), ("6", "MNO")],
-        [("7", "PQRS"), ("8", "TUV"), ("9", "WXYZ")],
-        [("*", ""), ("0", "+"), ("#", "")],
-    ]
-
-    private var matchedName: String? {
-        model.contacts.contact(for: model.numberInput)?.name
-    }
-
-    private var isCompact: Bool { horizontalSizeClass == .compact }
-
-    var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                let metrics = DialPadLayoutMetrics(
-                    availableHeight: proxy.size.height,
-                    availableWidth: proxy.size.width,
-                    compactWidth: isCompact
-                )
-
-                VStack(spacing: metrics.sectionSpacing) {
-                    VStack(spacing: 2) {
-                        Text(model.numberInput.isEmpty ? L10n.t("Enter number") : model.numberInput)
-                            .font(.system(
-                                size: metrics.numberFontSize,
-                                weight: .light,
-                                design: .rounded
-                            ))
-                            .monospacedDigit()
-                            .foregroundStyle(model.numberInput.isEmpty ? .secondary : .primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.45)
-                            .frame(height: metrics.numberHeight)
-
-                        Text(matchedName ?? " ")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.green)
-                            .frame(height: metrics.contactHeight)
-                    }
-                    .padding(.horizontal, 12)
-
-                    if let currentAgent = model.currentAndroidAgent {
-                        DialPadCurrentAgentCard(
-                            agent: currentAgent,
-                            agentCount: model.pairedAndroidAgents.count,
-                            cloudModeEnabled: CloudModePreference.isEnabled()
-                        ) {
-                            pairedAgentListPresentation = PairedAgentListPresentation()
-                        }
-                    } else if !model.pairedAndroidAgents.isEmpty {
-                        Button {
-                            pairedAgentListPresentation = PairedAgentListPresentation()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "smartphone.slash")
-                                    .foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Paired Android Agents · \(model.pairedAndroidAgents.count)")
-                                        .font(.subheadline.weight(.semibold))
-                                    Text("No call route is currently available")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(12)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    DialPadKeyGrid(rows: rows, metrics: metrics)
-                    dialActions(metrics: metrics)
-                }
-                .frame(maxWidth: 520)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .padding(.horizontal, 16)
-                .padding(.vertical, metrics.verticalPadding)
-            }
-            .phoneReportsTabBarCompactState()
-            .background(PhoneBackdrop())
-            .toolbar(.hidden, for: .navigationBar)
-            .sheet(item: $pairedAgentListPresentation) { _ in
-                PairedAndroidAgentsView(
-                    agents: model.pairedAndroidAgents,
-                    cloudModeEnabled: CloudModePreference.isEnabled(),
-                    selectAgent: { agentID in
-                        model.bindAndroidAgent(agentID)
-                    }
-                )
-            }
-            .onDisappear(perform: stopRepeatingDelete)
-        }
-    }
-
-    private func dialActions(metrics: DialPadLayoutMetrics) -> some View {
-        HStack(spacing: metrics.keySpacing) {
-            Color.clear.frame(width: metrics.keySize, height: metrics.keySize)
-            Button {
-                Task { await model.dial() }
-            } label: {
-                Circle()
-                    .fill(.green)
-                    .frame(width: metrics.keySize, height: metrics.keySize)
-                    .overlay {
-                        Image(systemName: "phone.fill")
-                            .font(.system(size: metrics.callIconSize, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-            }
-            .buttonStyle(.plain)
-            .disabled(
-                model.numberInput.isEmpty
-                    || model.isBusy
-                    || !model.canStartOutgoingCommand
-            )
-            .opacity(model.numberInput.isEmpty || !model.canStartOutgoingCommand ? 0.4 : 1)
-
-            Image(systemName: "delete.left")
-                .font(.system(size: metrics.deleteIconSize))
-                .foregroundStyle(.secondary)
-                .frame(width: metrics.keySize, height: metrics.keySize)
-                .contentShape(Rectangle())
-                .gesture(deleteGesture)
-                .allowsHitTesting(!model.numberInput.isEmpty)
-                .opacity(model.numberInput.isEmpty ? 0.4 : 1)
-                .accessibilityLabel(L10n.t("Delete"))
-                .accessibilityHint(L10n.t("Tap to delete one digit; hold to keep deleting"))
-                .accessibilityAddTraits(.isButton)
-        }
-        .frame(width: metrics.keypadWidth)
-    }
-
-    private func deleteLastDigit() {
-        guard !model.numberInput.isEmpty else { return }
-        model.numberInput = DialPadDeletePolicy.removingLast(from: model.numberInput)
-    }
-
-    private func beginDeleting() {
-        guard deleteRepeatTask == nil, !model.numberInput.isEmpty else { return }
-        deleteLastDigit()
-        deleteRepeatTask = Task { @MainActor in
-            do {
-                try await Task.sleep(for: .milliseconds(350))
-            } catch {
-                return
-            }
-            while !Task.isCancelled, !model.numberInput.isEmpty {
-                deleteLastDigit()
-                try? await Task.sleep(for: .milliseconds(90))
-            }
-            deleteRepeatTask = nil
-        }
-    }
-
-    private func stopRepeatingDelete() {
-        deleteRepeatTask?.cancel()
-        deleteRepeatTask = nil
-    }
-
-    private var deleteGesture: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { _ in beginDeleting() }
-            .onEnded { _ in stopRepeatingDelete() }
-    }
-}
-
-/// Isolated subview for the dial keypad: typing digits invalidates only the number text and call button
-/// without rebuilding the 12-key Liquid Glass subtree (structure.md invalidation boundary).
-private struct DialPadKeyGrid: View {
-    @Environment(AppModel.self) private var model
-    @State private var zeroWasLongPressed = false
-    @State private var dialKeyFeedback = DialKeyFeedback()
-    let rows: [[(String, String)]]
-    let metrics: DialPadLayoutMetrics
-
-    var body: some View {
-        dialKeyGrid
-    }
-
-    @ViewBuilder
-    private var dialKeyGrid: some View {
-        if #available(iOS 26.0, *) {
-            // The glass merge distance must be noticeably smaller than the actual key spacing so Liquid Glass does not fuse adjacent circular keys.
-            GlassEffectContainer(spacing: 6) {
-                dialKeyRows
-            }
-        } else {
-            dialKeyRows
-        }
-    }
-
-    private var dialKeyRows: some View {
-        VStack(spacing: metrics.rowSpacing) {
-            // rows is a constant layout table where each row starts with a distinct digit; use it as content identity
-            // instead of positional offset/id identity discouraged by foreach.md.
-            ForEach(rows, id: \.first?.0) { row in
-                HStack(spacing: metrics.keySpacing) {
-                    ForEach(row, id: \.0) { digit, letters in
-                        dialKey(digit: digit, letters: letters)
-                    }
-                }
-            }
-        }
-        .frame(width: metrics.keypadWidth)
-    }
-
-    private func playDialKeySound() {
-        guard !model.isMuted else { return }
-        dialKeyFeedback.play()
-    }
-
-    private func dialKey(
-        digit: String,
-        letters: String
-    ) -> some View {
-        Button {
-            guard !(digit == "0" && zeroWasLongPressed) else {
-                zeroWasLongPressed = false
-                return
-            }
-            model.numberInput.append(digit)
-            playDialKeySound()
-        } label: {
-            VStack(spacing: 0) {
-                Text(digit)
-                    .font(.system(size: metrics.digitFontSize, weight: .regular, design: .rounded))
-                Text(letters)
-                    .font(.system(size: metrics.letterFontSize, weight: .semibold))
-                    .tracking(1.4)
-            }
-            .foregroundStyle(.primary)
-            .frame(width: metrics.keySize, height: metrics.keySize)
-            .dialKeySurface()
-            .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                if digit == "0" {
-                    zeroWasLongPressed = true
-                    model.numberInput.append("+")
-                    playDialKeySound()
-                }
-            }
-        )
-        .accessibilityLabel(letters.isEmpty ? digit : "\(digit) \(letters)")
-    }
-}
-
-private struct PairedAgentListPresentation: Identifiable {
-    let id = "paired-android-agents"
-}
-
-private struct DialPadCurrentAgentCard: View {
-    let agent: AndroidAgentPresentation
-    let agentCount: Int
-    let cloudModeEnabled: Bool
-    let showAll: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: "smartphone")
-                    .font(.headline)
-                    .foregroundStyle(.green)
-                    .frame(width: 34, height: 34)
-                    .background(Color.green.opacity(0.12), in: Circle())
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(agent.deviceName)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        Text("Current")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.12), in: Capsule())
-                    }
-                    Text(agent.phoneNumber ?? "Number unavailable")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 4)
-
-                if agentCount > 1 {
-                    Button("All \(agentCount)", action: showAll)
-                        .font(.caption.weight(.semibold))
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.blue)
-                }
-            }
-
-            HStack(spacing: 8) {
-                AgentTransportPill(title: "VoWLAN", online: agent.vowlanOnline, enabled: true)
-                AgentTransportPill(title: "Cloud", online: agent.cloudOnline, enabled: cloudModeEnabled)
-                Spacer(minLength: 0)
-                Text(agent.agentKindTitle)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 0.5)
-        }
-    }
-}
-
-private struct AgentTransportPill: View {
-    let title: String
-    let online: Bool
-    let enabled: Bool
-
-    private var color: Color { !enabled ? .secondary : (online ? .green : .secondary) }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(title) \(!enabled ? "Off" : (online ? "Online" : "Offline"))")
-                .font(.caption2.weight(.medium))
-        }
-        .foregroundStyle(color)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(color.opacity(0.1), in: Capsule())
-    }
-}
-
-private struct PairedAndroidAgentsView: View {
-    @Environment(\.dismiss) private var dismiss
-    let agents: [AndroidAgentPresentation]
-    let cloudModeEnabled: Bool
-    let selectAgent: (String) -> Void
-
-    var body: some View {
-        NavigationStack {
-            List(agents) { agent in
-                Button {
-                    selectAgent(agent.id)
-                } label: {
-                    VStack(alignment: .leading, spacing: 9) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(agent.deviceName)
-                                .font(.headline)
-                            Text(agent.phoneNumber ?? "Number unavailable")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                            Image(systemName: agent.isCurrent ? "checkmark.circle.fill" : "circle")
-                                .font(.title3)
-                                .foregroundStyle(agent.isCurrent ? .green : .secondary)
-                    }
-                    HStack(spacing: 8) {
-                        AgentTransportPill(title: "VoWLAN", online: agent.vowlanOnline, enabled: true)
-                        AgentTransportPill(title: "Cloud", online: agent.cloudOnline, enabled: cloudModeEnabled)
-                        Spacer()
-                        Text(agent.agentKindTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    }
-                    .padding(.vertical, 5)
-                }
-                .buttonStyle(.plain)
-            }
-            .overlay {
-                if agents.isEmpty {
-                    VStack(spacing: 10) {
-                        Image(systemName: "smartphone.slash")
-                            .font(.system(size: 34))
-                            .foregroundStyle(.secondary)
-                        Text("No paired Android Agents")
-                            .font(.headline)
-                    }
-                }
-            }
-            .navigationTitle("Paired Android Agents")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.t("Done")) { dismiss() }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-}
-
-/// Uses the system input click sound without starting a new audio session so CallKit routing is not disturbed.
-private final class DialKeyFeedback {
-    func play() {
-        UIDevice.current.playInputClick()
-    }
-}
-
-// MARK: - Recents
-
-struct RecentsView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(ContactStore.self) private var contacts
-    let onCall: (String) -> Void
-    let onMessage: (String) -> Void
-    @State private var selectedCall: CallRecord?
-    @State private var suppressNextCallTap = false
-
-    var body: some View {
-        ZStack {
-            NavigationStack {
-                Group {
-                    if model.callHistory.isEmpty {
-                        ScrollView {
-                            EmptyStateView(
-                                title: L10n.t("No Recents"),
-                                systemImage: "phone.arrow.up.right"
-                            )
-                            .frame(maxWidth: .infinity, minHeight: 300)
-                        }
-                    } else {
-                        List(model.callHistory) { call in
-                            let contact = call.number.flatMap { contacts.contact(for: $0) }
-                            Button {
-                                if suppressNextCallTap {
-                                    suppressNextCallTap = false
-                                    return
-                                }
-                                if let number = RecentCallDialPolicy.numberToDial(call.number) {
-                                    onCall(number)
-                                }
-                            } label: {
-                                CallHistoryRow(
-                                    call: call,
-                                    contact: contact,
-                                    displayName: contact?.name ?? contacts.displayName(for: call.number)
-                                )
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(RecentCallDialPolicy.numberToDial(call.number) == nil)
-                            .simultaneousGesture(
-                                LongPressGesture(minimumDuration: 0.38).onEnded { _ in
-                                    guard call.number?.isEmpty == false else { return }
-                                    suppressNextCallTap = true
-                                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.84)) {
-                                        selectedCall = call
-                                    }
-                                }
-                            )
-                            .accessibilityHint("Tap to call back; touch and hold for details")
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(.init(
-                                top: 0,
-                                leading: PhoneListMetrics.horizontalInset,
-                                bottom: 0,
-                                trailing: PhoneListMetrics.horizontalInset
-                            ))
-                            .alignmentGuide(.listRowSeparatorLeading) { _ in
-                                PhoneListMetrics.separatorLeading
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    model.deleteCallHistory(ids: [call.id])
-                                } label: {
-                                    Label(L10n.t("Delete"), systemImage: "trash")
-                                }
-                                if let number = call.number {
-                                    Button { onMessage(number) } label: {
-                                        Label(L10n.t("Messages"), systemImage: "message.fill")
-                                    }
-                                    .tint(.blue)
-                                    Button { onCall(number) } label: {
-                                        Label(L10n.t("Dial"), systemImage: "phone.fill")
-                                    }
-                                    .tint(.green)
-                                }
-                            }
-                        }
-                        .listStyle(.plain)
-                        .scrollContentBackground(.hidden)
-                        .environment(\.defaultMinListRowHeight, PhoneListMetrics.rowHeight)
-                        .phoneReportsTabBarCompactState()
-                    }
-                }
-                .background(PhoneBackdrop())
-                .navigationTitle(L10n.t("Recents"))
-                .refreshable { await model.refreshCallHistory() }
-                .toolbar {
-                    ToolbarItem(placement: .topBarLeading) {
-                        NavigationLink {
-                            CallRecordingsView(store: model.recordings)
-                        } label: {
-                            Label("Recordings", systemImage: "waveform")
-                        }
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        if model.isRefreshingCallHistory {
-                            ProgressView().accessibilityLabel("Refreshing call history")
-                        } else {
-                            Button {
-                                Task { await model.refreshCallHistory() }
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                            }
-                            .accessibilityLabel("Refresh call history")
-                        }
-                    }
-                }
-                .safeAreaInset(edge: .bottom) {
-                    if let message = model.callHistoryMessage {
-                        Text(message)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(.regularMaterial)
-                    }
-                }
-            }
-            .allowsHitTesting(selectedCall == nil)
-
-            if let call = selectedCall,
-               let number = RecentCallDialPolicy.numberToDial(call.number) {
-                Color.black.opacity(0.18)
-                    .ignoresSafeArea()
-                    .onTapGesture(perform: dismissCallDetails)
-                    .transition(.opacity)
-
-                RecentCallDetailsCard(
-                    call: call,
-                    number: number,
-                    onCall: onCall,
-                    onMessage: onMessage,
-                    onDelete: { model.deleteCallHistory(ids: [call.id]) },
-                    onDismiss: dismissCallDetails
-                )
-                .padding(.horizontal, 28)
-                .transition(.scale(scale: 0.88).combined(with: .opacity))
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: selectedCall?.id)
-        .task { await model.refreshCallHistory() }
-    }
-
-    private func dismissCallDetails() {
-        withAnimation(.easeInOut(duration: 0.18)) {
-            selectedCall = nil
-        }
-    }
-
-    /// Isolated subview for the call detail sheet: call history refreshes and other invalidations do not rebuild sheet content
-    /// (structure.md invalidation boundary).
-    private struct RecentCallDetailsCard: View {
-        @Environment(ContactStore.self) private var contacts
-        let call: CallRecord
-        let number: String
-        let onCall: (String) -> Void
-        let onMessage: (String) -> Void
-        let onDelete: () -> Void
-        let onDismiss: () -> Void
-
-        var body: some View {
-            let contact = contacts.contact(for: number)
-            let displayName = contact?.name ?? contacts.displayName(for: number)
-
-            return VStack(spacing: 16) {
-                InitialAvatar(
-                    name: displayName,
-                    photoData: contact?.photoData,
-                    fallbackContent: RecentAvatarPolicy.content(contactName: contact?.name),
-                    size: 58
-                )
-
-                VStack(spacing: 4) {
-                    Text(displayName)
-                        .font(.title3.weight(.semibold))
-                    Text(number)
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    Text(RecentCallTimeFormatter.string(for: call.startedAt))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Button {
-                    onDismiss()
-                    onCall(number)
-                } label: {
-                    Label(L10n.t("Call Back"), systemImage: "phone.fill")
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.large)
-
-                Button {
-                    onDismiss()
-                    onMessage(number)
-                } label: {
-                    Label(L10n.t("Send Message"), systemImage: "message.fill")
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-
-                Button(role: .destructive) {
-                    onDismiss()
-                    onDelete()
-                } label: {
-                    Label(L10n.t("Delete Call Record"), systemImage: "trash")
-                        .frame(maxWidth: .infinity, minHeight: 32)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-
-                Button(L10n.t("Cancel"), action: onDismiss)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .frame(minHeight: 34)
-            }
-            .padding(22)
-            .frame(maxWidth: 340)
-            .phoneGlassSurface(cornerRadius: 28)
-            .shadow(color: .black.opacity(0.14), radius: 20, y: 8)
-        }
-    }
-
-    private struct CallHistoryRow: View {
-        let call: CallRecord
-        let contact: ContactStore.Contact?
-        let displayName: String
-
-        var body: some View {
-            HStack(spacing: PhoneListMetrics.avatarSpacing) {
-                InitialAvatar(
-                    name: displayName,
-                    photoData: contact?.photoData,
-                    fallbackContent: RecentAvatarPolicy.content(contactName: contact?.name),
-                    size: PhoneListMetrics.avatarSize
-                )
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(displayName)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(call.missed ? .red : .primary)
-                    HStack(spacing: 4) {
-                        Image(systemName: call.direction == "incoming" ? "arrow.down.left" : "arrow.up.right")
-                            .font(.caption2.weight(.semibold))
-                        Text(call.missed ? L10n.t("Missed") : "AirSIM Audio")
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(call.missed ? .red : .secondary)
-                }
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(RecentCallTimeFormatter.string(for: call.startedAt))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-                    .frame(width: PhoneListMetrics.timeColumnWidth, alignment: .trailing)
-
-                Image(systemName: "phone.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.blue)
-                    .frame(width: PhoneListMetrics.actionSize, height: PhoneListMetrics.actionSize)
-                    .background(Color(uiColor: .secondarySystemBackground), in: Circle())
-            }
-            .frame(minHeight: PhoneListMetrics.rowHeight)
-        }
-    }
-}
-
-// MARK: - Messages
-
-struct MessagesView: View {
-    @Environment(AppModel.self) private var model
-    @Binding var pendingRecipient: String?
-    @Binding var pendingConversation: String?
-    @State private var conversationPath: [String] = []
-    @State private var showingComposer = false
-    @State private var showingClearConfirmation = false
-
-    var body: some View {
-        NavigationStack(path: $conversationPath) {
-            List {
-                if model.conversations.isEmpty {
-                    EmptyStateView(title: L10n.t("No Messages"), systemImage: "message")
-                        .listRowBackground(Color.clear)
-                } else {
-                    ForEach(model.conversations, id: \.sender) { conversation in
-                        NavigationLink(value: conversation.sender) {
-                            MessageConversationRow(sender: conversation.sender, messages: conversation.messages)
-                                .contentShape(Rectangle())
-                        }
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(.init(
-                            top: 0,
-                            leading: PhoneListMetrics.horizontalInset,
-                            bottom: 0,
-                            trailing: PhoneListMetrics.horizontalInset
-                        ))
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in
-                            PhoneListMetrics.separatorLeading
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .environment(\.defaultMinListRowHeight, PhoneListMetrics.rowHeight)
-            .phoneReportsTabBarCompactState()
-            .background(PhoneBackdrop())
-            .navigationTitle(L10n.t("Messages"))
-            .navigationDestination(for: String.self) { sender in
-                MessageThreadView(sender: sender)
-            }
-            .toolbar {
-                phoneMorphingToolbarItem(placement: .topBarLeading, id: "top-action-leading-more") {
-                    Menu {
-                        Button { Task { await model.refreshMessages() } } label: {
-                            Label(L10n.t("Refresh"), systemImage: "arrow.clockwise")
-                        }
-                        Button(role: .destructive) { showingClearConfirmation = true } label: {
-                            Label(L10n.t("Clear all SMS"), systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.body.weight(.semibold))
-                    }
-                    .accessibilityLabel("Message Actions")
-                }
-                phoneMorphingToolbarItem(placement: .topBarTrailing, id: "top-action-trailing-primary") {
-                    Button { showingComposer = true } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .accessibilityLabel(L10n.t("New Message"))
-                }
-            }
-            .task {
-                await model.loadMessagesFromAgent(silently: true)
-            }
-            .onAppear { showPendingConversation() }
-            .onChange(of: pendingRecipient) { _, recipient in
-                if recipient != nil { showingComposer = true }
-            }
-            .onChange(of: pendingConversation) { showPendingConversation() }
-            .sheet(isPresented: $showingComposer, onDismiss: { pendingRecipient = nil }) {
-                MessageComposer(initialRecipient: pendingRecipient ?? "")
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-            }
-            .confirmationDialog(L10n.t("Clear all SMS"), isPresented: $showingClearConfirmation, titleVisibility: .visible) {
-                Button(L10n.t("Delete"), role: .destructive) {
-                    Task {
-                        try? await model.api.clearModuleSMS()
-                        model.clearLocalMessages()
-                    }
-                }
-                Button(L10n.t("Cancel"), role: .cancel) {}
-            } message: {
-                Text("This permanently deletes local messages and undelivered module messages.")
-            }
-        }
-    }
-
-    private func showPendingConversation() {
-        guard let sender = pendingConversation else { return }
-        conversationPath = [sender]
-        pendingConversation = nil
-    }
-
-    private struct MessageConversationRow: View {
-        @Environment(AppModel.self) private var model
-        let sender: String
-        let messages: [SMSMessage]
-
-        private var contact: ContactStore.Contact? {
-            model.contacts.contact(for: sender)
-        }
-
-        private var displayName: String {
-            contact?.name ?? model.contacts.displayName(for: sender)
-        }
-
-        var body: some View {
-            HStack(spacing: PhoneListMetrics.avatarSpacing) {
-                InitialAvatar(
-                    name: displayName,
-                    photoData: contact?.photoData,
-                    fallbackContent: contact == nil
-                        ? .person
-                        : RecentAvatarPolicy.content(contactName: contact?.name),
-                    size: PhoneListMetrics.avatarSize
-                )
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(displayName)
-                        .font(.body.weight(.semibold))
-                        .lineLimit(1)
-                    Text(messages.last?.content ?? "")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Text(messages.last?.timestamp ?? .now, style: .time)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(width: PhoneListMetrics.timeColumnWidth, alignment: .trailing)
-            }
-            .frame(minHeight: PhoneListMetrics.rowHeight)
-        }
-    }
-}
-
-private struct MessageThreadView: View {
-    @Environment(AppModel.self) private var model
-    let sender: String
-    @State private var reply = ""
-    // foreach.md: in-thread filtering and sorting are recomputed only when the message collection changes.
-    @State private var messages: [SMSMessage] = []
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 9) {
-                        ForEach(messages) { message in
-                            HStack {
-                                if message.isOutgoing { Spacer(minLength: 48) }
-                                VStack(
-                                    alignment: message.isOutgoing ? .trailing : .leading,
-                                    spacing: 3
-                                ) {
-                                    Text(message.content)
-                                        .padding(.horizontal, 14)
-                                        .padding(.vertical, 9)
-                                        .background(
-                                            message.isOutgoing
-                                                ? Color.blue
-                                                : Color(uiColor: .secondarySystemBackground),
-                                            in: RoundedRectangle(cornerRadius: 18)
-                                        )
-                                        .foregroundStyle(message.isOutgoing ? .white : .primary)
-                                    if message.isOutgoing {
-                                        Text(L10n.t("Sent"))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                                if !message.isOutgoing { Spacer(minLength: 48) }
-                            }
-                            .id(message.id)
-                        }
-                    }
-                    .padding()
-                }
-                // review round 2 #3: when messages is still empty on the first frame, scrollTo in onAppear has no row to target;
-                // iOS 17 defaultScrollAnchor(.bottom) anchors the conversation to the latest message immediately on open.
-                .defaultScrollAnchor(.bottom)
-                .onAppear { if let id = messages.last?.id { proxy.scrollTo(id) } }
-            }
-            .onChange(of: model.messages, initial: true) { _, allMessages in
-                messages = allMessages
-                    .filter { $0.sender == sender }
-                    .sorted { $0.timestamp < $1.timestamp }
-            }
-            Divider()
-            HStack(spacing: 10) {
-                TextField(L10n.t("Message"), text: $reply, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    let body = reply
-                    reply = ""
-                    Task { _ = await model.sendSMS(to: sender, content: body) }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.title2)
-                }
-                .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding()
-        }
-        .navigationTitle(model.contacts.displayName(for: sender))
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-private struct MessageComposer: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppModel.self) private var model
-    @State private var recipient: String
-    @State private var content = ""
-    @State private var sending = false
-    @State private var showingContacts = false
-
-    init(initialRecipient: String) { _recipient = State(initialValue: initialRecipient) }
-
-    private var matchedContact: ContactStore.Contact? {
-        model.contacts.contact(for: recipient)
-    }
-
-    private var suggestions: [ContactStore.Contact] {
-        let query = recipient.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty, matchedContact == nil else { return [] }
-        return Array(model.contacts.contacts.filter { contact in
-            contact.name.localizedCaseInsensitiveContains(query)
-                || contact.phones.contains {
-                    $0.localizedCaseInsensitiveContains(query) || $0.hasSuffix(query)
-                }
-        }.prefix(5))
-    }
-
-    private var canSend: Bool {
-        !recipient.trimmingCharacters(in: .whitespaces).isEmpty
-            && !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !sending
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                recipientBar
-
-                if !suggestions.isEmpty {
-                    Divider()
-                    contactSuggestions
-                }
-
-                Divider()
-                Spacer(minLength: 0)
-                Divider()
-                messageInputBar
-            }
-            .background(PhoneBackdrop())
-            .navigationTitle(L10n.t("New Message"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.t("Cancel")) { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.t("Send"), action: sendNow)
-                        .disabled(!canSend)
-                }
-            }
-            .task { await model.contacts.loadIfAuthorized() }
-            .sheet(isPresented: $showingContacts) {
-                MessageContactPicker { phone in
-                    recipient = phone
-                    showingContacts = false
-                }
-                .environment(model)
-            }
-        }
-    }
-
-    private var recipientBar: some View {
-        HStack(spacing: 9) {
-            Button {
-                showingContacts = true
-            } label: {
-                Image(systemName: "plus.circle.fill")
-                    .font(.title2)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(L10n.t("Choose from Contacts"))
-
-            Text(L10n.t("To:"))
-                .foregroundStyle(.secondary)
-
-            TextField(L10n.t("Enter number or name"), text: $recipient)
-                .textFieldStyle(.plain)
-                .keyboardType(.phonePad)
-                .textContentType(.telephoneNumber)
-
-            if let contact = matchedContact {
-                HStack(spacing: 6) {
-                    InitialAvatar(name: contact.name, photoData: contact.photoData, size: 28)
-                    Text(contact.name)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-                .frame(maxWidth: 130, alignment: .trailing)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Recognized contact: \(contact.name)")
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 52)
-        .background(Color(uiColor: .secondarySystemGroupedBackground))
-    }
-
-    private var contactSuggestions: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(suggestions) { contact in
-                    Button {
-                        recipient = contact.phones.first ?? recipient
-                    } label: {
-                        HStack(spacing: 7) {
-                            InitialAvatar(name: contact.name, photoData: contact.photoData, size: 28)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(contact.name)
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.primary)
-                                Text(contact.phones.first ?? "")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(
-                            Color(uiColor: .secondarySystemGroupedBackground),
-                            in: Capsule()
-                        )
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
-    }
-
-    private var messageInputBar: some View {
-        VStack(spacing: 5) {
-            HStack(alignment: .bottom, spacing: 9) {
-                TextField(L10n.t("Message"), text: $content, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .padding(.horizontal, 13)
-                    .padding(.vertical, 9)
-                    .background(
-                        Color(uiColor: .secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    )
-
-                Button(action: sendNow) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            canSend ? Color.blue : Color.secondary.opacity(0.4),
-                            in: Circle()
-                        )
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .accessibilityLabel(L10n.t("Send"))
-            }
-
-            Text(L10n.t("Messages are sent through the 4G module"))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(uiColor: .systemBackground))
-    }
-
-    private func sendNow() {
-        guard canSend else { return }
-        sending = true
-        Task {
-            if await model.sendSMS(to: recipient, content: content) { dismiss() }
-            sending = false
-        }
-    }
-}
-
-private struct MessageContactPicker: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(AppModel.self) private var model
-    @State private var search = ""
-    let onSelect: (String) -> Void
-
-    private var filteredContacts: [ContactStore.Contact] {
-        let query = search.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return model.contacts.contacts }
-        return model.contacts.contacts.filter { contact in
-            contact.name.localizedCaseInsensitiveContains(query)
-                || contact.phones.contains { $0.localizedCaseInsensitiveContains(query) }
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if !model.contacts.isAuthorized {
-                    EmptyStateView(
-                        title: L10n.t("Allow Contacts Access"),
-                        systemImage: "person.crop.circle.badge.questionmark",
-                        actionTitle: L10n.t("Allow Contacts Access")
-                    ) {
-                        Task { await model.contacts.requestAccessAndLoad() }
-                    }
-                } else if filteredContacts.isEmpty {
-                    EmptyStateView(title: L10n.t("No contacts"), systemImage: "person.2")
-                } else {
-                    List(filteredContacts) { contact in
-                        ForEach(ContactPhoneListPolicy.displayPhones(for: contact.phones), id: \.self) { phone in
-                            Button {
-                                onSelect(phone)
-                                dismiss()
-                            } label: {
-                                HStack(spacing: 12) {
-                                    InitialAvatar(name: contact.name, photoData: contact.photoData)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(contact.name)
-                                            .font(.body.weight(.semibold))
-                                            .foregroundStyle(.primary)
-                                        Text(phone)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption.weight(.semibold))
-                                        .foregroundStyle(.tertiary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .listStyle(.plain)
-                }
-            }
-            .navigationTitle(L10n.t("Choose Contact"))
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $search, prompt: L10n.t("Search name or number"))
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.t("Cancel")) { dismiss() }
-                }
-            }
-            .task { await model.contacts.loadIfAuthorized() }
-        }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
-    }
-}
-
-// MARK: - Contacts
-
-struct ContactsView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.openURL) private var openURL
-    let onCall: (String) -> Void
-    let onMessage: (String) -> Void
-    @State private var search = ""
-
-    private var filtered: [ContactStore.Contact] {
-        guard !search.isEmpty else { return model.contacts.contacts }
-        return model.contacts.contacts.filter {
-            $0.name.localizedCaseInsensitiveContains(search) || $0.phones.contains { $0.contains(search) }
-        }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if !model.contacts.isAuthorized {
-                    EmptyStateView(
-                        title: model.contacts.authorizationState == .denied
-                            ? "Contacts access is disabled"
-                            : L10n.t("Allow Contacts Access"),
-                        systemImage: "person.crop.circle.badge.questionmark",
-                        actionTitle: model.contacts.authorizationState == .denied
-                            ? "Open Settings"
-                            : L10n.t("Allow Contacts Access")
-                    ) {
-                        if model.contacts.authorizationState == .denied {
-                            openURL(URL(string: UIApplication.openSettingsURLString)!)
-                        } else {
-                            Task { await model.contacts.requestAccessAndLoad() }
-                        }
-                    }
-                } else if filtered.isEmpty {
-                    EmptyStateView(title: L10n.t("No contacts"), systemImage: "person.2")
-                } else {
-                    List(filtered) { contact in
-                        NavigationLink {
-                            ContactDetailView(contact: contact, onCall: onCall, onMessage: onMessage)
-                        } label: {
-                            HStack(spacing: PhoneListMetrics.avatarSpacing) {
-                                InitialAvatar(
-                                    name: contact.name,
-                                    photoData: contact.photoData,
-                                    fallbackContent: RecentAvatarPolicy.content(contactName: contact.name),
-                                    size: PhoneListMetrics.avatarSize
-                                )
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(contact.name)
-                                        .font(.body.weight(.semibold))
-                                        .lineLimit(1)
-                                    Text(contact.phones.first ?? "")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .frame(minHeight: PhoneListMetrics.rowHeight)
-                        }
-                        .listRowBackground(Color.clear)
-                        .listRowInsets(.init(
-                            top: 0,
-                            leading: PhoneListMetrics.horizontalInset,
-                            bottom: 0,
-                            trailing: PhoneListMetrics.horizontalInset
-                        ))
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in
-                            PhoneListMetrics.separatorLeading
-                        }
-                    }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .environment(\.defaultMinListRowHeight, PhoneListMetrics.rowHeight)
-                    .phoneReportsTabBarCompactState()
-                }
-            }
-            .background(PhoneBackdrop())
-            .navigationTitle("\(L10n.t("Contacts")) · \(model.contacts.contacts.count)")
-            .searchable(
-                text: $search,
-                placement: .navigationBarDrawer(displayMode: .always),
-                prompt: L10n.t("Search name or number")
-            )
-            .refreshable { await model.contacts.requestAccessAndLoad() }
-            .task { await model.contacts.loadIfAuthorized() }
-        }
-    }
-}
-
-private extension View {
-    @ViewBuilder
-    func dialKeySurface() -> some View {
-        if #available(iOS 26.0, *) {
-            glassEffect(.regular.interactive(), in: Circle())
-        } else {
-            background(Color(uiColor: .tertiarySystemFill), in: Circle())
-        }
-    }
-}
-
-private struct ContactDetailView: View {
-    let contact: ContactStore.Contact
-    let onCall: (String) -> Void
-    let onMessage: (String) -> Void
-
-    var body: some View {
-        List {
-            Section {
-                HStack {
-                    Spacer()
-                    VStack(spacing: 10) {
-                        InitialAvatar(name: contact.name, photoData: contact.photoData, size: 82)
-                        Text(contact.name).font(.title2.weight(.semibold))
-                    }
-                    Spacer()
-                }
-                .listRowBackground(Color.clear)
-            }
-            Section {
-                ForEach(ContactPhoneListPolicy.displayPhones(for: contact.phones), id: \.self) { phone in
-                    HStack {
-                        Text(phone)
-                            .font(.body.monospacedDigit())
-                        Spacer()
-                        HStack(spacing: 12) {
-                            Button { onMessage(phone) } label: {
-                                Image(systemName: "message.fill")
-                                    .foregroundStyle(.blue)
-                                    .frame(width: 42, height: 42)
-                                    .background(Color.blue.opacity(0.12), in: Circle())
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel(L10n.t("Send Message"))
-
-                            Button { onCall(phone) } label: {
-                                Image(systemName: "phone.fill")
-                                    .foregroundStyle(.green)
-                                    .frame(width: 42, height: 42)
-                                    .background(Color.green.opacity(0.12), in: Circle())
-                            }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel(L10n.t("Dial"))
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle(contact.name)
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
 enum AvatarFallbackContent: Equatable {
     case person
     case initial(String)
@@ -1476,119 +99,6 @@ enum RecentAvatarPolicy {
         return .initial(String(first))
     }
 }
-
-struct InitialAvatar: View {
-    let name: String
-    var photoData: Data? = nil
-    var fallbackContent: AvatarFallbackContent? = nil
-    var size: CGFloat = 44
-
-    private var resolvedFallback: AvatarFallbackContent {
-        fallbackContent
-            ?? .initial(String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1)))
-    }
-
-    var body: some View {
-        Group {
-            if let photoData, let image = UIImage(data: photoData) {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else {
-                avatarFallback
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-    }
-
-    private var avatarFallback: some View {
-        Circle()
-            .fill(
-                LinearGradient(
-                    colors: fallbackColors,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            )
-            .overlay {
-                switch resolvedFallback {
-                case .person:
-                    Image(systemName: "person.fill")
-                        .font(.system(size: size * 0.52, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .offset(y: size * 0.08)
-                case let .initial(initial):
-                    Text(initial)
-                        .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .shadow(color: Color.indigo.opacity(0.55), radius: 1.4, x: 0, y: 1.2)
-                        .overlay {
-                            Text(initial)
-                                .font(.system(size: size * 0.46, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.28))
-                                .offset(y: -0.8)
-                        }
-                }
-            }
-            .overlay {
-                Circle().stroke(
-                    LinearGradient(
-                        colors: [.white.opacity(0.5), .white.opacity(0.06)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-            }
-            .shadow(color: fallbackColors.last?.opacity(0.22) ?? .clear, radius: 3, y: 2)
-    }
-
-    private var fallbackColors: [Color] {
-        switch resolvedFallback {
-        case .person:
-            return [
-                Color(red: 0.64, green: 0.76, blue: 0.91),
-                Color(red: 0.43, green: 0.48, blue: 0.78),
-            ]
-        case .initial:
-            return [
-                Color(red: 0.66, green: 0.78, blue: 0.92),
-                Color(red: 0.43, green: 0.49, blue: 0.79),
-            ]
-        }
-    }
-}
-
-/// Uses native system ContentUnavailableView to present empty states.
-private struct EmptyStateView: View {
-    let title: String
-    let systemImage: String
-    var actionTitle: String? = nil
-    var action: (() -> Void)? = nil
-
-    var body: some View {
-        ContentUnavailableView {
-            Label(title, systemImage: systemImage)
-        } description: {
-            Text(emptyStateDescription)
-        } actions: {
-            if let actionTitle, let action {
-                Button(actionTitle, action: action)
-                    .buttonStyle(.borderedProminent)
-            }
-        }
-    }
-
-    private var emptyStateDescription: String {
-        switch systemImage {
-        case "message": return "Received messages appear here."
-        case "phone.arrow.up.right": return "Your call history appears here after a call."
-        case "person.2": return "Contacts sync from your device address book."
-        default: return "Connect or grant access to get started."
-        }
-    }
-}
-
-// MARK: - Call Overlay
 
 enum CallSurfacePhase: Equatable {
     case incoming
@@ -1632,638 +142,942 @@ enum CallProximityPolicy {
     }
 }
 
-struct ActiveCallView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let call: CallRecord
-    @State private var showingKeypad = false
 
-    private var content: CallSurfaceContent { CallSurfaceContent(state: call.state) }
-    private func avatarSize(isCompact: Bool) -> CGFloat {
-        content.phase == .incoming ? (isCompact ? 116 : 132) : (isCompact ? 92 : 112)
-    }
-    private var displayName: String { model.contacts.displayName(for: call.number) }
-    private var contactPhotoData: Data? {
-        guard let number = call.number else { return nil }
-        return model.contacts.contact(for: number)?.photoData
-    }
+private struct DialPadLayoutMetrics {
+    let keySize: CGFloat
+    let keySpacing: CGFloat
+    let rowSpacing: CGFloat
+    let sectionSpacing: CGFloat
+    let verticalPadding: CGFloat
+    let numberFontSize: CGFloat
+    let numberHeight: CGFloat
+    let contactHeight: CGFloat
 
-    var body: some View {
-        ZStack {
-            CallBackdrop()
-            GeometryReader { proxy in
-                let isCompact = horizontalSizeClass == .compact || proxy.size.height < 700
-                Group {
-                    if content.phase == .incoming {
-                        incomingSurface(isCompact: isCompact)
-                    } else {
-                        connectedSurface(isCompact: isCompact)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.horizontal, isCompact ? 20 : 32)
-                .padding(.vertical, isCompact ? 18 : 26)
-            }
-        }
-        // Incoming call alerts and active calls are focused full-screen tasks. Keep a fixed canvas to avoid
-        // ScrollView drag/bounce and prevent accidental gestures from interfering with answer or hangup.
-        .contentShape(Rectangle())
-        .sheet(isPresented: $showingKeypad) { DTMFKeypadView() }
-        .environment(\.colorScheme, .dark)
-        .preferredColorScheme(.dark)
-        .onAppear { updateProximityMonitoring() }
-        .onChange(of: call.state) { updateProximityMonitoring() }
-        .onChange(of: model.audio.speakerEnabled) { updateProximityMonitoring() }
-        .onDisappear { UIDevice.current.isProximityMonitoringEnabled = false }
-    }
+    var keypadWidth: CGFloat { keySize * 3 + keySpacing * 2 }
+    var digitFontSize: CGFloat { min(31, max(23, keySize * 0.34)) }
+    var letterFontSize: CGFloat { min(10, max(8, keySize * 0.115)) }
+    var callIconSize: CGFloat { min(30, max(23, keySize * 0.33)) }
+    var deleteIconSize: CGFloat { min(24, max(19, keySize * 0.27)) }
 
-    private func incomingSurface(isCompact: Bool) -> some View {
-        VStack(spacing: 0) {
-            callHeader(title: "AirSIM Incoming Call", showsRecording: false)
+    init(availableHeight: CGFloat, availableWidth: CGFloat, compactWidth: Bool) {
+        let compactHeight = availableHeight < 700
+        let desiredKeySize: CGFloat = compactWidth ? 84 : 90
+        let desiredKeySpacing: CGFloat = compactWidth ? 28 : 34
+        let reservedHeight: CGFloat = compactHeight ? 205 : 220
+        let verticalKeySize = (availableHeight - reservedHeight) / 5
+        let contentWidth = min(520, max(0, availableWidth - 32))
+        let horizontalKeySize = (contentWidth - desiredKeySpacing * 2) / 3
 
-            Spacer(minLength: 0)
-
-            InitialAvatar(
-                name: displayName,
-                photoData: contactPhotoData,
-                size: avatarSize(isCompact: isCompact)
-            )
-            .overlay { Circle().strokeBorder(.white.opacity(0.20), lineWidth: 1) }
-            .shadow(color: .black.opacity(0.34), radius: 28, y: 16)
-            .accessibilityHidden(true)
-
-            VStack(spacing: 8) {
-                Text(displayName)
-                    .font(isCompact ? .system(size: 38, weight: .semibold) : .system(size: 44, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.68)
-                    .multilineTextAlignment(.center)
-
-                if let number = call.number, number != displayName {
-                    Text(number)
-                        .font(.title3.weight(.regular).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.68))
-                        .textSelection(.enabled)
-                }
-
-                Text(L10n.t("Waiting"))
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.62))
-            }
-            .padding(.top, 24)
-
-            connectivityBadge
-                .padding(.top, 22)
-
-            Spacer(minLength: 0)
-
-            HStack {
-                CallDecisionButton(
-                    title: L10n.t("Decline"),
-                    icon: "phone.down.fill",
-                    color: .red
-                ) {
-                    Task { await model.reject() }
-                }
-
-                Spacer(minLength: 56)
-
-                CallDecisionButton(
-                    title: L10n.t("Accept"),
-                    icon: "phone.fill",
-                    color: .green
-                ) {
-                    Task { await model.answer() }
-                }
-            }
-            .frame(maxWidth: 430)
-            .padding(.horizontal, isCompact ? 12 : 28)
-            .padding(.bottom, isCompact ? 16 : 28)
-        }
-        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
-    }
-
-    private func connectedSurface(isCompact: Bool) -> some View {
-        let controlSize: CGFloat = isCompact ? 62 : 68
-        return VStack(spacing: 0) {
-            callHeader(title: "AirSIM Call", showsRecording: true)
-
-            Spacer(minLength: 0)
-
-            InitialAvatar(name: displayName, photoData: contactPhotoData, size: avatarSize(isCompact: isCompact))
-                .overlay { Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1) }
-                .shadow(color: .black.opacity(0.28), radius: 22, y: 12)
-                .accessibilityHidden(true)
-
-            VStack(spacing: 8) {
-                Text(displayName)
-                    .font(.largeTitle.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
-                    .multilineTextAlignment(.center)
-                if let number = call.number, number != displayName {
-                    Text(number)
-                        .font(.title3.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.66))
-                        .textSelection(.enabled)
-                }
-                if content.showsDuration {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(durationText(at: context.date))
-                            .font(.title2.weight(.medium).monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.82))
-                            .contentTransition(.numericText())
-                    }
-                }
-            }
-            .padding(.top, 22)
-
-            audioStatusBadge
-                .padding(.top, 20)
-
-            if let audioError = model.audio.errorMessage, !audioError.isEmpty {
-                Text(audioError)
-                    .font(.caption)
-                    .foregroundStyle(Color.red.opacity(0.92))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .padding(.top, 10)
-            }
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: isCompact ? 20 : 34) {
-                CallCircleButton(
-                    title: model.isMuted ? L10n.t("Unmute") : L10n.t("Mute"),
-                    icon: model.isMuted ? "mic.slash.fill" : "mic.fill",
-                    color: model.isMuted ? .orange : nil,
-                    foregroundColor: .white,
-                    size: controlSize
-                ) {
-                    Task { await model.toggleMute() }
-                }
-                CallCircleButton(
-                    title: "Keypad",
-                    icon: "circle.grid.3x3.fill",
-                    color: nil,
-                    foregroundColor: .white,
-                    size: controlSize
-                ) {
-                    showingKeypad = true
-                }
-                SpeakerRouteButton(
-                    audio: model.audio,
-                    size: controlSize,
-                    action: model.toggleSpeaker
-                )
-            }
-            .frame(maxWidth: 430)
-
-            CallDecisionButton(
-                title: L10n.t("End"),
-                icon: "phone.down.fill",
-                color: .red
-            ) {
-                Task { await model.hangup() }
-            }
-            .padding(.top, isCompact ? 30 : 42)
-            .padding(.bottom, isCompact ? 8 : 18)
-        }
-        .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.985)))
-    }
-
-    private func callHeader(title: String, showsRecording: Bool) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .symbolRenderingMode(.hierarchical)
-            Text(title)
-            Spacer()
-            if showsRecording {
-                Button {
-                    Task { await model.toggleRecording() }
-                } label: {
-                    Group {
-                        if model.isRecordingBusy {
-                            ProgressView().tint(.white)
-                        } else {
-                            Image(systemName: model.isRecording ? "record.circle.fill" : "record.circle")
-                                .font(.system(size: 18, weight: .semibold))
-                                .foregroundStyle(model.isRecording ? .red : .white)
-                        }
-                    }
-                    .frame(width: 44, height: 44)
-                    .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .callControlGlass(tint: model.isRecording ? .red.opacity(0.16) : nil)
-                .disabled(!model.canToggleRecording)
-                .opacity(model.canToggleRecording ? 1 : 0.45)
-                .accessibilityLabel(model.isRecording ? L10n.t("Stop Recording") : L10n.t("Record"))
-            }
-        }
-        .font(.subheadline.weight(.semibold))
-        .foregroundStyle(.white.opacity(0.72))
-        .frame(maxWidth: 520)
-    }
-
-    private var connectivityBadge: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(moduleIsReachable ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
-            Text(connectivityText)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.88))
-        }
-        .padding(.horizontal, 14)
-        .frame(minHeight: 38)
-        .callControlGlass(tint: (moduleIsReachable ? Color.green : Color.orange).opacity(0.10))
-        .accessibilityElement(children: .combine)
-    }
-
-    private var audioStatusBadge: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(model.callAudioIsActive ? Color.green : audioStatusColor)
-                .frame(width: 8, height: 8)
-            Text(model.callAudioStatusText)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.88))
-            if model.audio.active, !model.audio.routeDescription.isEmpty {
-                Text("· \(model.audio.routeDescription)")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.58))
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 13)
-        .frame(minHeight: 38)
-        .callControlGlass(tint: audioStatusColor.opacity(0.10))
-    }
-
-    private var moduleIsReachable: Bool {
-        model.isOnline || model.cloudAgentStatus?.cloudOnline == true
-    }
-
-    private var connectivityText: String {
-        let status = moduleIsReachable ? "Module Online" : "Connecting to Module"
-        let signal = model.modemStatus?.signalDBM ?? model.cloudAgentStatus?.signalDBM
-        guard let signal else { return status }
-        return "\(status) · Signal \(signal) dBm"
-    }
-
-    private var audioStatusColor: Color {
-        switch model.cloudCallAudioState {
-        case .failed: return .red
-        case .connected: return .green
-        case .starting, .connecting: return .orange
-        case .idle: return model.audio.active ? .green : .orange
-        }
-    }
-
-    private func durationText(at date: Date) -> String {
-        let total = max(0, Int(date.timeIntervalSince(call.startedAt)))
-        // localization.md: use FormatStyle instead of String(format:); zero-padding matches existing English output
-        // and preserves the mm:ss format even when minutes exceed 59 rather than switching to hours.
-        return Duration.seconds(total)
-            .formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2)))
-    }
-
-    private func updateProximityMonitoring() {
-        UIDevice.current.isProximityMonitoringEnabled = CallProximityPolicy.shouldMonitor(
-            state: call.state,
-            speakerEnabled: model.audio.speakerEnabled
+        keySize = min(desiredKeySize, max(56, min(verticalKeySize, horizontalKeySize)))
+        keySpacing = min(
+            desiredKeySpacing,
+            max(14, (contentWidth - keySize * 3) / 2)
         )
+        rowSpacing = compactHeight ? 8 : (compactWidth ? 12 : 16)
+        sectionSpacing = compactHeight ? 8 : (compactWidth ? 12 : 16)
+        verticalPadding = compactHeight ? 6 : 10
+        numberFontSize = compactHeight ? 32 : (compactWidth ? 36 : 42)
+        numberHeight = compactHeight ? 40 : 46
+        contactHeight = compactHeight ? 18 : 20
     }
 }
 
-private struct SpeakerRouteButton: View {
-    var audio: AudioSessionController
-    let size: CGFloat
-    let action: () -> Void
-
-    var body: some View {
-        CallCircleButton(
-            title: L10n.t("Speaker"),
-            icon: audio.speakerEnabled ? "speaker.wave.2.fill" : "speaker.fill",
-            color: audio.speakerEnabled ? .blue : nil,
-            foregroundColor: .white,
-            size: size,
-            action: action
-        )
-    }
-}
-
-private struct CallDecisionButton: View {
-    let title: String
-    let icon: String
-    let color: Color
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 10) {
-                Circle()
-                    .fill(color.gradient)
-                    .frame(width: 76, height: 76)
-                    .overlay {
-                        Image(systemName: icon)
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                    }
-                    .shadow(color: color.opacity(0.28), radius: 16, y: 8)
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.92))
-            }
-            .frame(minWidth: 96, minHeight: 108)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-    }
-}
-
-private struct CallCircleButton: View {
-    let title: String
-    let icon: String
-    let color: Color?
-    var foregroundColor: Color = .white
-    var size: CGFloat = 68
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                Circle().fill(.clear).frame(width: size, height: size).overlay {
-                    Image(systemName: icon).font(.title2.weight(.semibold)).foregroundStyle(foregroundColor)
+@MainActor
+final class DialPadViewController: ObservingViewController {
+    let model: AirSIMPresentation
+    private let number = phoneLabel(size: 36)
+    private let contact = phoneLabel(size: 16, color: .systemGreen)
+    private let agentButton = phoneButton("Paired Android Agents") {}
+    private var agentContents: UIView?
+    private var agentHeight: NSLayoutConstraint!
+    private var callButton: UIButton!
+    private var deleteButton: UIButton!
+    private var deleteTask: Task<Void, Never>?
+    private var keys: [UIButton] = []
+    private let stack = UIStackView()
+    private var keyRows: [UIStackView] = []
+    private var rowWidths: [NSLayoutConstraint] = []
+    private var keyHeight: NSLayoutConstraint!
+    private var numberHeight: NSLayoutConstraint!
+    private var contactHeight: NSLayoutConstraint!
+    private var contentWidth: NSLayoutConstraint!
+    private var lastLayoutSize = CGSize.zero
+    init(model: AirSIMPresentation) { self.model = model; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let backdrop = PhoneBackdropView()
+        backdrop.isUserInteractionEnabled = false
+        backdrop.accessibilityElementsHidden = true
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(backdrop, at: 0)
+        NSLayoutConstraint.activate([
+            backdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            backdrop.topAnchor.constraint(equalTo: view.topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        navigationItem.title = "Dial"; navigationItem.largeTitleDisplayMode = .never
+        stack.axis = .vertical; stack.spacing = 12; stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(stack)
+        contentWidth = stack.widthAnchor.constraint(equalToConstant: 360)
+        contentWidth.isActive = true
+        NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: view.centerXAnchor), stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor), stack.widthAnchor.constraint(lessThanOrEqualToConstant: 520), stack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16), stack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16), stack.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 4), stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4)])
+        number.font = UIFont.systemFont(ofSize: 36, weight: .light).rounded()
+        number.adjustsFontSizeToFitWidth = true; number.minimumScaleFactor = 0.45; number.numberOfLines = 1; number.textAlignment = .center
+        stack.addArrangedSubview(number); stack.setCustomSpacing(2, after: number); stack.addArrangedSubview(contact)
+        numberHeight = number.heightAnchor.constraint(equalToConstant: 46); numberHeight.isActive = true
+        contactHeight = contact.heightAnchor.constraint(equalToConstant: 20); contactHeight.isActive = true
+        agentButton.titleLabel?.numberOfLines = 3
+        agentButton.addAction(UIAction { [weak self] _ in guard let self else { return }; self.model.store.send(.agents(true)); self.showPhoneSheet(PairedAndroidAgentsViewController(model: self.model)) }, for: .touchUpInside)
+        stack.addArrangedSubview(agentButton)
+        agentButton.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        agentHeight = agentButton.heightAnchor.constraint(equalToConstant: 94); agentHeight.isActive = true
+        let letters: [String] = ["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ", "", "+", ""]
+        let digitRows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["*", "0", "#"]]
+        for (rowIndex, digits) in digitRows.enumerated() {
+            let row = UIStackView(); row.axis = .horizontal; row.spacing = 28; row.distribution = .fillEqually
+            for (column, digit) in digits.enumerated() {
+                let subtitle = letters[rowIndex * 3 + column]
+                let button = phoneButton(digit, color: .label) { [weak self] in self?.enter(digit) }
+                var configuration: UIButton.Configuration
+                if #available(iOS 26.0, *) { configuration = .glass() } else { configuration = .gray() }
+                configuration.baseForegroundColor = .label; configuration.cornerStyle = .capsule
+                var digitAttributes = AttributeContainer()
+                digitAttributes.font = UIFontMetrics(forTextStyle: .title1).scaledFont(for: .systemFont(ofSize: 31, weight: .regular))
+                var letterAttributes = AttributeContainer()
+                letterAttributes.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .systemFont(ofSize: 10, weight: .semibold))
+                configuration.attributedTitle = AttributedString(digit, attributes: digitAttributes)
+                configuration.attributedSubtitle = AttributedString(subtitle, attributes: letterAttributes)
+                configuration.titleAlignment = .center
+                configuration.titlePadding = 0
+                if #unavailable(iOS 26.0) {
+                    configuration.background.backgroundColor = .tertiarySystemFill
+                    configuration.background.strokeColor = UIColor.label.withAlphaComponent(0.12)
+                    configuration.background.strokeWidth = 0.5
                 }
-                .callControlGlass(tint: color?.opacity(0.24), shape: .circle)
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.88))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                configuration.contentInsets = .zero
+                button.configuration = configuration
+                button.accessibilityLabel = subtitle.isEmpty ? digit : "\(digit) \(subtitle)"
+                button.widthAnchor.constraint(equalTo: button.heightAnchor).isActive = true
+                if digit == "0" { button.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longZero(_:)))) }
+                row.addArrangedSubview(button); keys.append(button)
             }
-            .frame(minWidth: size)
+            stack.addArrangedSubview(row)
+            let width = row.widthAnchor.constraint(equalToConstant: 308); width.isActive = true; rowWidths.append(width); keyRows.append(row)
         }
-        .buttonStyle(.plain)
-    }
-}
-
-private struct CallBackdrop: View {
-    var body: some View {
-        ZStack {
-            Color(red: 0.008, green: 0.012, blue: 0.025)
-            RadialGradient(
-                colors: [Color.blue.opacity(0.24), .clear],
-                center: .topTrailing,
-                startRadius: 10,
-                endRadius: 420
-            )
-            RadialGradient(
-                colors: [Color.cyan.opacity(0.12), .clear],
-                center: .bottomLeading,
-                startRadius: 20,
-                endRadius: 360
-            )
+        let actions = UIStackView(); actions.axis = .horizontal; actions.spacing = 28; actions.distribution = .fillEqually
+        let blank = UIView(); actions.addArrangedSubview(blank)
+        callButton = phoneButton("Dial", image: "phone.fill", color: .white) { [weak self] in guard let self else { return }; Task { await self.model.dial() } }
+        callButton.configuration?.title = nil
+        callButton.configuration?.background.backgroundColor = .systemGreen
+        callButton.configuration?.image = UIImage(systemName: "phone.fill")?.withTintColor(.white, renderingMode: .alwaysOriginal)
+        callButton.configurationUpdateHandler = { button in
+            button.configuration?.background.backgroundColor = .systemGreen
+            button.configuration?.image = UIImage(systemName: "phone.fill")?.withTintColor(.white, renderingMode: .alwaysOriginal)
         }
-        .ignoresSafeArea()
+        callButton.accessibilityIdentifier = "dialCall"
+        deleteButton = phoneButton("Delete", image: "delete.left", color: .secondaryLabel) {}
+        deleteButton.configuration?.title = nil
+        deleteButton.configuration?.background.backgroundColor = .clear
+        deleteButton.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 18)
+        deleteButton.accessibilityHint = "Tap to delete one digit; hold to keep deleting"
+        (deleteButton as? PhoneActionButton)?.accessibilityAction = { [weak self] in
+            guard let self else { return }
+            self.model.numberInput = DialPadDeletePolicy.removingLast(from: self.model.numberInput)
+        }
+        deleteButton.addTarget(self, action: #selector(beginDelete), for: .touchDown)
+        deleteButton.addTarget(self, action: #selector(stopDelete), for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+        actions.addArrangedSubview(callButton); actions.addArrangedSubview(deleteButton)
+        stack.addArrangedSubview(actions); let width = actions.widthAnchor.constraint(equalToConstant: 308); width.isActive = true; rowWidths.append(width); keyRows.append(actions)
+        actions.heightAnchor.constraint(equalTo: keys[0].heightAnchor).isActive = true
+        keyHeight = keys[0].heightAnchor.constraint(equalToConstant: 84); keyHeight.isActive = true
     }
-}
+    override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); navigationController?.setNavigationBarHidden(true, animated: false) }
+    override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); stopDelete(); navigationController?.setNavigationBarHidden(false, animated: false) }
+    override func render() {
+        number.text = model.numberInput.isEmpty ? "Enter number" : model.numberInput
+        number.textColor = model.numberInput.isEmpty ? .secondaryLabel : .label
+        contact.text = model.contacts.contact(for: model.numberInput)?.name ?? " "
+        callButton.isEnabled = !model.numberInput.isEmpty && !model.isBusy && model.canStartOutgoingCommand
+        let callOpacity: CGFloat = model.numberInput.isEmpty || !model.canStartOutgoingCommand ? 0.4 : 1
+        callButton.alpha = callButton.isEnabled ? callOpacity : callOpacity * 0.5
+        deleteButton.isEnabled = !model.numberInput.isEmpty
+        agentButton.isHidden = model.currentAndroidAgent == nil && model.pairedAndroidAgents.isEmpty
+        agentButton.configuration = nil
+        agentContents?.removeFromSuperview()
+        let card = AndroidAgentCardView(agent: model.currentAndroidAgent, count: model.pairedAndroidAgents.count, cloudEnabled: CloudModePreference.isEnabled())
+        card.isUserInteractionEnabled = false; card.translatesAutoresizingMaskIntoConstraints = false; agentButton.addSubview(card); agentContents = card
+        agentHeight.constant = model.currentAndroidAgent == nil ? 74 : 94
+        NSLayoutConstraint.activate([card.leadingAnchor.constraint(equalTo: agentButton.leadingAnchor), card.trailingAnchor.constraint(equalTo: agentButton.trailingAnchor), card.topAnchor.constraint(equalTo: agentButton.topAnchor), card.bottomAnchor.constraint(equalTo: agentButton.bottomAnchor)])
 
-private enum CallControlShape { case capsule, circle }
-
-private struct CallControlGlass: ViewModifier {
-    let tint: Color?
-    let shape: CallControlShape
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            switch shape {
-            case .capsule:
-                content.glassEffect(.regular.tint(tint).interactive(), in: Capsule())
-            case .circle:
-                content.glassEffect(.regular.tint(tint).interactive(), in: Circle())
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let area = view.safeAreaLayoutGuide.layoutFrame
+        guard area.size != lastLayoutSize else { return }; lastLayoutSize = area.size
+        let metrics = DialPadLayoutMetrics(availableHeight: area.height, availableWidth: area.width, compactWidth: traitCollection.horizontalSizeClass == .compact)
+        keyHeight.constant = metrics.keySize; contentWidth.constant = min(520, max(0, area.width - 32))
+        numberHeight.constant = metrics.numberHeight; contactHeight.constant = metrics.contactHeight
+        number.font = UIFont.systemFont(ofSize: metrics.numberFontSize, weight: .light).rounded()
+        stack.spacing = metrics.sectionSpacing; stack.setCustomSpacing(2, after: number)
+        for row in keyRows { row.spacing = metrics.keySpacing }
+        for width in rowWidths { width.constant = metrics.keypadWidth }
+        let labels: [String] = ["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ", "", "+", ""]
+        let digits: [String] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"]
+        for (index, key) in keys.enumerated() {
+            var digit = AttributeContainer(); digit.font = UIFont.systemFont(ofSize: metrics.digitFontSize).rounded()
+            var letters = AttributeContainer(); letters.font = UIFont.systemFont(ofSize: metrics.letterFontSize, weight: .semibold); letters.kern = 1.4
+            key.configuration?.attributedTitle = AttributedString(digits[index], attributes: digit)
+            key.configuration?.attributedSubtitle = AttributedString(labels[index], attributes: letters)
+            key.configuration?.subtitleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+                var attributes = incoming; attributes.font = .systemFont(ofSize: metrics.letterFontSize, weight: .semibold); attributes.kern = 1.4; return attributes
             }
-        } else {
-            switch shape {
-            case .capsule:
-                content.background(.ultraThinMaterial, in: Capsule())
-            case .circle:
-                content.background(.ultraThinMaterial, in: Circle())
-            }
         }
+        callButton.configuration?.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: metrics.callIconSize, weight: .semibold)
     }
-}
-
-private extension View {
-    func callControlGlass(
-        tint: Color? = nil,
-        shape: CallControlShape = .capsule
-    ) -> some View {
-        modifier(CallControlGlass(tint: tint, shape: shape))
-    }
-}
-
-private struct DTMFKeypadView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(AppModel.self) private var model
-    @State private var enteredDigits = ""
-    private let rows = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["*", "0", "#"]]
-
-    private var keySize: CGFloat { horizontalSizeClass == .compact ? 62 : 70 }
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 20) {
-                Text(enteredDigits.isEmpty ? "Tap keys to send DTMF tones" : enteredDigits)
-                    .font(.system(.title3, design: .rounded).monospacedDigit())
-                    .foregroundStyle(enteredDigits.isEmpty ? .secondary : .primary)
-                    .lineLimit(1)
-                    .contentTransition(.numericText())
-                    .accessibilityLabel(enteredDigits.isEmpty ? "No digits entered" : enteredDigits)
-                if #available(iOS 26.0, *) {
-                    GlassEffectContainer(spacing: 16) { keypad }
-                } else {
-                    keypad
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(24)
-            .navigationTitle("Call Keypad")
-            .toolbar { Button(L10n.t("Cancel")) { dismiss() } }
-        }
-        .presentationDetents([.medium])
-        .presentationDragIndicator(.hidden)
-    }
-
-    private var keypad: some View {
-        VStack(spacing: 16) {
-            // rows is a constant layout table with distinct row contents; [String] is Hashable so \.self is used directly.
-            ForEach(rows, id: \.self) { row in
-                HStack(spacing: 24) {
-                    // Each digit in a row is unique and constant, providing stable content identity (foreach.md).
-                    ForEach(row, id: \.self) { digit in
-                        Button {
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            enteredDigits = String((enteredDigits + digit).suffix(18))
-                            Task { await model.sendDTMF(digit) }
-                        } label: {
-                            Text(digit)
-                                .font(.system(size: 29, weight: .medium, design: .rounded))
-                                .frame(width: keySize, height: keySize)
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(DTMFGlassButtonStyle())
-                        .accessibilityLabel("Send DTMF \(digit)")
-                    }
-                }
+    private func enter(_ digit: String) { model.numberInput.append(digit); if !model.isMuted { UIDevice.current.playInputClick() } }
+    @objc private func longZero(_ gesture: UILongPressGestureRecognizer) { if gesture.state == .began { enter("+") } }
+    @objc private func beginDelete() {
+        stopDelete(); model.numberInput = DialPadDeletePolicy.removingLast(from: model.numberInput)
+        deleteTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            while !Task.isCancelled, let self, !self.model.numberInput.isEmpty {
+                self.model.numberInput = DialPadDeletePolicy.removingLast(from: self.model.numberInput)
+                try? await Task.sleep(for: .milliseconds(90))
             }
         }
     }
+    @objc private func stopDelete() { deleteTask?.cancel(); deleteTask = nil }
 }
 
-private struct DTMFGlassButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Group {
-            if #available(iOS 26.0, *) {
-                configuration.label
-                    .glassEffect(.regular.tint(configuration.isPressed ? .cyan : .clear).interactive(), in: Circle())
+@MainActor
+final class PairedAndroidAgentsViewController: PhoneTableController {
+    let model: AirSIMPresentation
+    init(model: AirSIMPresentation) { self.model = model; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() { super.viewDidLoad(); title = "Paired Android Agents" }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); model.store.send(.agents(false)) }
+    override func render() {
+        let rows = model.pairedAndroidAgents.map { agent in
+            PhoneRow(id: agent.id, title: agent.deviceName, detail: "\(agent.phoneNumber ?? "Number unavailable")\nVoWLAN \(agent.vowlanOnline ? "Online" : "Offline") · Cloud \(!CloudModePreference.isEnabled() ? "Off" : (agent.cloudOnline ? "Online" : "Offline")) · \(String(localized: agent.agentKindTitle))", image: agent.isCurrent ? "checkmark.circle.fill" : "circle", color: agent.isCurrent ? .systemGreen : .label, action: { [weak self] in self?.model.bindAndroidAgent(agent.id) })
+        }
+        setSections([PhoneSection(rows: rows.isEmpty ? [PhoneRow(id: "empty", title: "No paired Android Agents", image: "smartphone.slash")] : rows)])
+    }
+}
+
+@MainActor
+final class RecentsViewController: PhoneTableController {
+    private let historyStatus = phoneLabel(size: 13, color: .secondaryLabel)
+    private let historyStatusBackground = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+    override var tableStyle: UITableView.Style { .plain }
+    let model: AirSIMPresentation
+    let onCall: (String) -> Void
+    let onMessage: (String) -> Void
+    init(model: AirSIMPresentation, onCall: @escaping (String) -> Void, onMessage: @escaping (String) -> Void) { self.model = model; self.onCall = onCall; self.onMessage = onMessage; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); title = "Recents"
+        historyStatus.translatesAutoresizingMaskIntoConstraints = false; historyStatusBackground.translatesAutoresizingMaskIntoConstraints = false
+        historyStatusBackground.contentView.addSubview(historyStatus); view.addSubview(historyStatusBackground)
+        NSLayoutConstraint.activate([historyStatusBackground.leadingAnchor.constraint(equalTo: view.leadingAnchor), historyStatusBackground.trailingAnchor.constraint(equalTo: view.trailingAnchor), historyStatusBackground.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor), historyStatus.leadingAnchor.constraint(equalTo: historyStatusBackground.contentView.leadingAnchor, constant: 20), historyStatus.trailingAnchor.constraint(equalTo: historyStatusBackground.contentView.trailingAnchor, constant: -20), historyStatus.topAnchor.constraint(equalTo: historyStatusBackground.contentView.topAnchor, constant: 16), historyStatus.bottomAnchor.constraint(equalTo: historyStatusBackground.contentView.bottomAnchor, constant: -16)])
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Recordings", image: UIImage(systemName: "waveform"), primaryAction: UIAction { [weak self] _ in guard let self else { return }; self.navigationController?.pushViewController(CallRecordingsViewController(model: self.model), animated: true) })
+        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "arrow.clockwise"), primaryAction: UIAction { [weak self] _ in Task { await self?.model.refreshCallHistory() } })
+        navigationItem.rightBarButtonItem?.accessibilityLabel = "Refresh call history"
+        navigationItem.leftBarButtonItem?.tintColor = .systemBlue; navigationItem.rightBarButtonItem?.tintColor = .systemBlue
+        table.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressCall(_:))))
+        enableRefresh { [weak self] in await self?.model.refreshCallHistory() }
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        Task { await model.refreshCallHistory() }
+    }
+    override func render() {
+        historyStatus.text = model.callHistoryMessage
+        historyStatusBackground.isHidden = model.callHistoryMessage == nil
+        table.contentInset.bottom = model.callHistoryMessage == nil ? 0 : 80
+        navigationItem.rightBarButtonItem?.isEnabled = !model.isRefreshingCallHistory
+        table.separatorStyle = model.callHistory.isEmpty ? .none : .singleLine
+        let rows = model.callHistory.map { call -> PhoneRow in
+            let contact = call.number.flatMap { model.contacts.contact(for: $0) }
+            let name = contact?.name ?? model.contacts.displayName(for: call.number)
+            return PhoneRow(id: call.id, title: name, detail: "\(call.missed ? "Missed" : "AirSIM Audio") · \(call.direction == "incoming" ? "↙" : "↗") · \(RecentCallTimeFormatter.string(for: call.startedAt))", color: call.missed ? .systemRed : .label, enabled: RecentCallDialPolicy.numberToDial(call.number) != nil, action: { [weak self] in if let number = RecentCallDialPolicy.numberToDial(call.number) { self?.onCall(number) } }, accessibilityHint: "Tap to call back; touch and hold for details", photo: contact?.photoData, avatarName: contact == nil ? "" : name, bodyViewProvider: { [weak self] in PhoneListContentView(name: name, subtitle: "\(call.direction == "incoming" ? "↙" : "↗") \(call.missed ? "Missed" : "AirSIM Audio")", photo: contact?.photoData, avatarName: contact == nil ? "" : name, time: RecentCallTimeFormatter.string(for: call.startedAt), missed: call.missed, callAction: { [weak self] in if let number = RecentCallDialPolicy.numberToDial(call.number) { self?.onCall(number) } }) }, bodyVersion: call.number, insets: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16))
+        }
+        setSections([PhoneSection(rows: rows.isEmpty ? [PhoneRow(id: "empty", title: "", bodyView: nativePhoneEmptyState("No Recents", image: "phone.arrow.up.right", detail: "Your call history appears here after a call.", minimumHeight: 300))] : rows)])
+    }
+    @objc private func longPressCall(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, let path = table.indexPathForRow(at: gesture.location(in: table)), let id = row(at: path)?.id, let call = model.callHistory.first(where: { $0.id == id }) else { return }
+        showDetails(call)
+    }
+    private func showDetails(_ call: CallRecord) {
+        guard let number = RecentCallDialPolicy.numberToDial(call.number) else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        model.store.send(.recentDetails(call.id))
+        let detail = RecentCallDetailsViewController(call: call, model: model, onCall: { [weak self] in self?.onCall(number) }, onMessage: { [weak self] in self?.onMessage(number) }, onDelete: { [weak self] in self?.model.deleteCallHistory(ids: [call.id]) })
+        detail.modalPresentationStyle = .overFullScreen; detail.modalTransitionStyle = .crossDissolve
+        present(detail, animated: true)
+    }
+    override func tableView(_ tableView: UITableView, contextMenuConfigurationForRowAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? { super.tableView(tableView, contextMenuConfigurationForRowAt: indexPath, point: point) }
+    func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let id = row(at: indexPath)?.id, let call = model.callHistory.first(where: { $0.id == id }) else { return nil }
+        var actions = [UIContextualAction(style: .destructive, title: "Delete") { [weak self] _, _, done in self?.model.deleteCallHistory(ids: [call.id]); done(true) }]
+        if let number = RecentCallDialPolicy.numberToDial(call.number) {
+            let message = UIContextualAction(style: .normal, title: "Messages") { [weak self] _, _, done in self?.onMessage(number); done(true) }; message.backgroundColor = .systemBlue
+            let dial = UIContextualAction(style: .normal, title: "Dial") { [weak self] _, _, done in self?.onCall(number); done(true) }; dial.backgroundColor = .systemGreen
+            actions += [message, dial]
+        }
+        let config = UISwipeActionsConfiguration(actions: actions); config.performsFirstActionWithFullSwipe = false; return config
+    }
+}
+
+@MainActor
+final class MessagesViewController: PhoneTableController, UINavigationControllerDelegate {
+    private var applyingNavigation = false
+    private var renderedThreadID: String?
+    private weak var composerNavigationController: UINavigationController?
+    override var tableStyle: UITableView.Style { .plain }
+    let model: AirSIMPresentation
+    init(model: AirSIMPresentation) { self.model = model; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); title = "Messages"
+        navigationController?.delegate = self
+        let refresh = UIAction(title: "Refresh", image: UIImage(systemName: "arrow.clockwise")) { [weak self] _ in Task { await self?.model.refreshMessages() } }
+        let clear = UIAction(title: "Clear all SMS", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in
+            self?.confirmPhoneAction("Clear all SMS", message: "This permanently deletes local messages and undelivered module messages.") { [weak self] in
+                self?.model.store.send(.command(.clearMessages))
+            }
+        }
+        navigationItem.leftBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: UIMenu(children: [refresh, clear]))
+        navigationItem.leftBarButtonItem?.accessibilityLabel = "Message Actions"
+        navigationItem.leftBarButtonItem?.tintColor = .systemBlue
+        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "square.and.pencil"), primaryAction: UIAction { [weak self] _ in self?.compose(recipient: "") })
+        navigationItem.rightBarButtonItem?.accessibilityLabel = "New Message"
+    }
+    override func render() {
+        let rows = model.conversations.map { conversation -> PhoneRow in
+            let contact = model.contacts.contact(for: conversation.sender)
+            let name = contact?.name ?? model.contacts.displayName(for: conversation.sender)
+            return PhoneRow(id: conversation.sender, title: name, detail: "\(conversation.messages.last?.content ?? "")\n\((conversation.messages.last?.timestamp ?? .now).formatted(date: .omitted, time: .shortened))", disclosure: true, action: { [weak self] in self?.openConversation(conversation.sender) }, photo: contact?.photoData, avatarName: contact == nil ? "" : name, bodyViewProvider: { PhoneListContentView(name: name, subtitle: conversation.messages.last?.content ?? "", photo: contact?.photoData, avatarName: contact == nil ? "" : name, time: (conversation.messages.last?.timestamp ?? .now).formatted(date: .omitted, time: .shortened)) }, insets: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16))
+        }
+        setSections([PhoneSection(rows: rows.isEmpty ? [PhoneRow(id: "empty", title: "", bodyView: nativePhoneEmptyState("No Messages", image: "message", detail: "Received messages appear here.", minimumHeight: 180))] : rows)])
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated); navigationController?.delegate = self
+        Task { await model.loadMessagesFromAgent(silently: true) }
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        presentComposerIfNeeded()
+    }
+    func compose(recipient: String) {
+        model.store.send(.messages(.compose(recipient)))
+        presentComposerIfNeeded()
+    }
+    func presentComposerIfNeeded() {
+        guard model.store.messages.composerPresented else { return }
+        loadViewIfNeeded()
+        guard let nav = navigationController, nav.view.window != nil, nav.presentedViewController == nil else { return }
+        composerNavigationController = nav.showPhoneSheet(MessageComposerViewController(model: model, recipient: model.store.messages.recipient))
+    }
+    func openConversation(_ sender: String) {
+        if model.store.messages.conversation != sender { model.store.send(.messages(.openConversation(sender))) }
+        showConversationIfNeeded(sender)
+    }
+    func showConversationIfNeeded(_ sender: String) {
+        guard model.store.messages.conversation == sender else { return }
+        loadViewIfNeeded()
+        guard let nav = navigationController else { return }
+        guard !applyingNavigation else { return }
+        // A pop exposes the destination stack before its transition completes.
+        // Reapplying the same route here would replace the departing controller.
+        guard renderedThreadID != sender else { return }
+        if let current = nav.topViewController as? MessageThreadViewController, current.sender == sender { return }
+        if let transition = nav.transitionCoordinator {
+            transition.animate(alongsideTransition: nil) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.showConversationIfNeeded(sender) }
+            }
+            return
+        }
+        if let composer = composerNavigationController, composer.presentingViewController != nil {
+            applyingNavigation = true
+            composer.dismiss(animated: true) { [weak self] in self?.applyingNavigation = false; self?.showConversationIfNeeded(sender) }
+            return
+        }
+        applyingNavigation = true
+        renderedThreadID = sender
+        nav.setViewControllers([self, MessageThreadViewController(model: model, sender: sender)], animated: false)
+        applyingNavigation = false
+    }
+    func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
+        if viewController === self, !applyingNavigation, let previous = renderedThreadID {
+            renderedThreadID = nil
+            if model.store.messages.conversation == previous { model.store.send(.messages(.closeConversation)) }
+        }
+    }
+}
+
+@MainActor
+final class MessageThreadViewController: PhoneTableController, UITextViewDelegate {
+    override var tableStyle: UITableView.Style { .plain }
+    let model: AirSIMPresentation
+    let sender: String
+    let reply = UITextView()
+    private let replyPlaceholder = phoneLabel("Message", color: .placeholderText)
+    private var sendButton: UIButton!
+    private var replyHeight: NSLayoutConstraint!
+    private var lastIDs: [String] = []
+    private var firstLoad = true
+    init(model: AirSIMPresentation, sender: String) { self.model = model; self.sender = sender; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); navigationItem.largeTitleDisplayMode = .never
+        table.separatorStyle = .none
+        table.contentInsetAdjustmentBehavior = .never
+        table.contentInset.bottom = 12
+        table.removeFromSuperview()
+        let bar = UIStackView(); bar.axis = .horizontal; bar.spacing = 10; bar.alignment = .center
+        reply.font = .preferredFont(forTextStyle: .body); reply.delegate = self; reply.layer.cornerRadius = 4; reply.backgroundColor = .systemBackground; reply.accessibilityLabel = "Message"
+        reply.layer.borderWidth = 0.5; reply.layer.borderColor = UIColor.separator.cgColor
+        reply.textContainerInset = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+        replyPlaceholder.translatesAutoresizingMaskIntoConstraints = false; reply.addSubview(replyPlaceholder)
+        NSLayoutConstraint.activate([replyPlaceholder.leadingAnchor.constraint(equalTo: reply.leadingAnchor, constant: 8), replyPlaceholder.topAnchor.constraint(equalTo: reply.topAnchor, constant: 4)])
+        replyHeight = reply.heightAnchor.constraint(equalToConstant: 32); replyHeight.isActive = true
+        sendButton = phoneButton("Send", image: "arrow.up.circle.fill") { [weak self] in
+            guard let self else { return }
+            self.model.store.send(.messages(.sendReply(to: self.sender)))
+        }
+        if model.store.messages.conversation != sender { model.store.send(.messages(.openConversation(sender))) }
+        sendButton.configuration?.title = nil; sendButton.configuration?.background.backgroundColor = .clear
+        sendButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
+        sendButton.isEnabled = false; bar.addArrangedSubview(reply); bar.addArrangedSubview(sendButton)
+        view.addSubview(table); view.addSubview(bar); bar.translatesAutoresizingMaskIntoConstraints = false
+        let divider = UIView(); divider.backgroundColor = .separator; divider.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(divider)
+        NSLayoutConstraint.activate([divider.leadingAnchor.constraint(equalTo: view.leadingAnchor), divider.trailingAnchor.constraint(equalTo: view.trailingAnchor), divider.heightAnchor.constraint(equalToConstant: 0.5), divider.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -16)])
+        NSLayoutConstraint.activate([table.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), table.leadingAnchor.constraint(equalTo: view.leadingAnchor), table.trailingAnchor.constraint(equalTo: view.trailingAnchor), table.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -16), bar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16), bar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16), bar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -16)])
+    }
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        if parent == nil, model.store.messages.conversation == sender { model.store.send(.messages(.closeConversation)) }
+    }
+    func textViewDidChange(_ textView: UITextView) { model.store.send(.messages(.replyChanged(reply.text ?? ""))) }
+    override func render() {
+        title = model.contacts.displayName(for: sender)
+        let feature = model.store.messages
+        if reply.text != feature.reply { reply.text = feature.reply }
+        updateReplyHeight()
+        replyPlaceholder.isHidden = !feature.reply.isEmpty
+        sendButton.isEnabled = !feature.sending && !feature.reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if let error = feature.error, presentedViewController == nil {
+            let alert = UIAlertController(title: "Error", message: error, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel) { [weak self] _ in self?.model.store.send(.messages(.clearError)) })
+            present(alert, animated: true)
+        }
+        let messages = model.messages.filter { $0.sender == sender }.sorted { $0.timestamp < $1.timestamp }
+        let wasAtBottom = firstLoad || table.contentOffset.y + table.bounds.height >= table.contentSize.height - 80
+        let rows = messages.map { message in PhoneRow(id: String(describing: message.id), title: "", context: { UIMenu(children: [UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in UIPasteboard.general.string = message.content }]) }, bodyViewProvider: { PhoneMessageBubble(message: message) }, bodyVersion: "\(message.isOutgoing)|\(message.content)", insets: UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 16)) }
+        let ids = rows.map(\.id); setSections([PhoneSection(rows: rows)])
+        if ids != lastIDs, wasAtBottom, !rows.isEmpty { table.layoutIfNeeded(); table.scrollToRow(at: IndexPath(row: rows.count - 1, section: 0), at: .bottom, animated: !firstLoad) }
+        lastIDs = ids; firstLoad = false
+        alignShortConversation()
+    }
+    override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); updateReplyHeight(); alignShortConversation() }
+    private func updateReplyHeight() {
+        guard reply.bounds.width > 0 else { return }
+        let keyboard = view.keyboardLayoutGuide.layoutFrame
+        let safeArea = view.safeAreaLayoutGuide.layoutFrame
+        let available = (keyboard.width > 0 ? keyboard.minY : safeArea.maxY) - safeArea.minY
+        let maximum = max(32, available / 2)
+        let desired = max(32, reply.sizeThatFits(CGSize(width: reply.bounds.width, height: .greatestFiniteMagnitude)).height)
+        let height = min(desired, maximum)
+        if abs(replyHeight.constant - height) > 0.5 { replyHeight.constant = height }
+        reply.isScrollEnabled = desired > maximum
+    }
+    private func alignShortConversation() {
+        let inset = max(0, table.bounds.height - table.contentSize.height - table.contentInset.bottom)
+        if abs(table.contentInset.top - inset) > 1 { table.contentInset.top = inset }
+        if inset > 0, abs(table.contentOffset.y + inset) > 1 { table.setContentOffset(CGPoint(x: 0, y: -inset), animated: false) }
+    }
+}
+
+@MainActor
+final class MessageComposerViewController: ObservingViewController, UITextViewDelegate, UIAdaptivePresentationControllerDelegate {
+    let model: AirSIMPresentation
+    let recipient = UITextField()
+    let content = UITextView()
+    private let suggestions = UIStackView()
+    private let messagePlaceholder = phoneLabel("Message", color: .placeholderText)
+    private let recognized = phoneLabel(size: 14)
+    private let sendButton = phoneButton("Send", image: "arrow.up") {}
+    private var contentHeight: NSLayoutConstraint!
+    init(model: AirSIMPresentation, recipient: String) {
+        self.model = model; super.init(nibName: nil, bundle: nil)
+        if !model.store.messages.composerPresented { model.store.send(.messages(.compose(recipient))) }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); title = "New Message"; view.backgroundColor = .systemBackground; navigationItem.largeTitleDisplayMode = .never
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Cancel", primaryAction: UIAction { [weak self] _ in self?.model.store.send(.messages(.dismissComposer)); self?.dismiss(animated: true) })
+        navigationItem.leftBarButtonItem?.tintColor = .systemBlue
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Send", primaryAction: UIAction { [weak self] _ in self?.model.store.send(.messages(.sendComposer)) })
+        recipient.placeholder = "Enter number or name"; recipient.keyboardType = .phonePad; recipient.textContentType = .telephoneNumber; recipient.font = .preferredFont(forTextStyle: .body)
+        recipient.addAction(UIAction { [weak self] _ in guard let self else { return }; self.model.store.send(.messages(.recipientChanged(self.recipient.text ?? ""))) }, for: .editingChanged)
+        let choose = phoneButton("Choose from Contacts", image: "plus.circle.fill", color: .label) { [weak self] in self?.chooseContact() }; choose.configuration?.title = nil; choose.configuration?.background.backgroundColor = .clear
+        let to = phoneLabel("To:", color: .secondaryLabel)
+        let recipientBar = UIStackView(arrangedSubviews: [choose, to, recipient, recognized]); recipientBar.axis = .horizontal; recipientBar.spacing = 9; recipientBar.alignment = .center
+        choose.widthAnchor.constraint(equalToConstant: 26).isActive = true; to.setContentHuggingPriority(.required, for: .horizontal); recognized.setContentHuggingPriority(.required, for: .horizontal)
+        recognized.font = .preferredFont(forTextStyle: .subheadline); recognized.numberOfLines = 1
+        let suggestionScroll = UIScrollView(); suggestionScroll.showsHorizontalScrollIndicator = false; suggestions.axis = .horizontal; suggestions.spacing = 8; suggestions.translatesAutoresizingMaskIntoConstraints = false; suggestionScroll.addSubview(suggestions)
+        NSLayoutConstraint.activate([suggestions.leadingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.leadingAnchor, constant: 16), suggestions.trailingAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.trailingAnchor, constant: -16), suggestions.topAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.topAnchor, constant: 8), suggestions.bottomAnchor.constraint(equalTo: suggestionScroll.contentLayoutGuide.bottomAnchor, constant: -8), suggestions.heightAnchor.constraint(equalTo: suggestionScroll.frameLayoutGuide.heightAnchor, constant: -16)])
+        content.font = .preferredFont(forTextStyle: .body); content.delegate = self; content.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? .secondarySystemGroupedBackground : .white }; content.layer.cornerRadius = 18; content.textContainerInset = UIEdgeInsets(top: 9, left: 13, bottom: 9, right: 13); content.accessibilityLabel = "Message"
+        messagePlaceholder.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(messagePlaceholder)
+        NSLayoutConstraint.activate([messagePlaceholder.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 13), messagePlaceholder.topAnchor.constraint(equalTo: content.topAnchor, constant: 9)])
+        contentHeight = content.heightAnchor.constraint(equalToConstant: 40); contentHeight.isActive = true
+        sendButton.configuration?.title = nil; sendButton.configuration?.baseForegroundColor = .white; sendButton.configuration?.background.backgroundColor = .systemBlue; sendButton.widthAnchor.constraint(equalToConstant: 36).isActive = true; sendButton.heightAnchor.constraint(equalToConstant: 36).isActive = true
+        sendButton.addAction(UIAction { [weak self] _ in self?.model.store.send(.messages(.sendComposer)) }, for: .touchUpInside)
+        let entry = UIStackView(arrangedSubviews: [content, sendButton]); entry.axis = .horizontal; entry.spacing = 9; entry.alignment = .bottom
+        let caption = phoneLabel("Messages are sent through the 4G module", size: 11, color: .tertiaryLabel); caption.textAlignment = .center
+        let bottom = UIStackView(arrangedSubviews: [entry, caption]); bottom.axis = .vertical; bottom.spacing = 5
+        [recipientBar, suggestionScroll, bottom].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; view.addSubview($0) }
+        for (anchor, offset) in [(recipientBar.bottomAnchor, CGFloat(0)), (bottom.topAnchor, CGFloat(-10))] {
+            let separator = UIView(); separator.backgroundColor = UIColor.separator.withAlphaComponent(0.10); separator.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(separator)
+            NSLayoutConstraint.activate([separator.leadingAnchor.constraint(equalTo: view.leadingAnchor), separator.trailingAnchor.constraint(equalTo: view.trailingAnchor), separator.heightAnchor.constraint(equalToConstant: 0.5), separator.topAnchor.constraint(equalTo: anchor, constant: offset)])
+        }
+        navigationItem.rightBarButtonItem?.setTitleTextAttributes([.foregroundColor: UIColor { $0.userInterfaceStyle == .dark ? .secondaryLabel : UIColor(white: 176.0 / 255.0, alpha: 1) }], for: .disabled)
+        NSLayoutConstraint.activate([recipientBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), recipientBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16), recipientBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), recipientBar.heightAnchor.constraint(equalToConstant: 52), suggestionScroll.topAnchor.constraint(equalTo: recipientBar.bottomAnchor), suggestionScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), suggestionScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor), suggestionScroll.heightAnchor.constraint(equalToConstant: 60), bottom.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), bottom.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16), bottom.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -10)])
+        Task { await model.contacts.loadIfAuthorized() }
+    }
+    override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); navigationController?.presentationController?.delegate = self }
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) { model.store.send(.messages(.dismissComposer)) }
+    func textViewDidChange(_ textView: UITextView) { model.store.send(.messages(.bodyChanged(content.text ?? ""))) }
+    override func render() {
+        let state = model.store.messages
+        if !state.composerPresented { dismiss(animated: true); return }
+        if recipient.text != state.recipient { recipient.text = state.recipient }
+        if content.text != state.body { content.text = state.body }
+        contentHeight.constant = min(130, max(40, content.sizeThatFits(CGSize(width: max(180, content.bounds.width), height: .greatestFiniteMagnitude)).height))
+        let canSend = !state.recipient.trimmingCharacters(in: .whitespaces).isEmpty && !state.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !state.sending
+        sendButton.isEnabled = canSend; sendButton.alpha = 1
+        sendButton.configuration?.background.backgroundColor = canSend ? .systemBlue : UIColor { $0.userInterfaceStyle == .dark ? .systemGray5 : UIColor(white: 232.0 / 255.0, alpha: 1) }
+        sendButton.configuration?.image = UIImage(systemName: "arrow.up")?.withTintColor(.white, renderingMode: .alwaysOriginal)
+        messagePlaceholder.isHidden = !state.body.isEmpty
+        navigationItem.rightBarButtonItem?.isEnabled = canSend
+        let matched = model.contacts.contact(for: state.recipient); recognized.text = matched?.name; recognized.isHidden = matched == nil
+        recognized.accessibilityLabel = matched.map { "Recognized contact: \($0.name)" }
+        suggestions.arrangedSubviews.forEach { suggestions.removeArrangedSubview($0); $0.removeFromSuperview() }
+        let query = state.recipient.trimmingCharacters(in: .whitespaces)
+        if !query.isEmpty, matched == nil {
+            for contact in model.contacts.contacts.filter({ $0.name.localizedCaseInsensitiveContains(query) || $0.phones.contains { $0.localizedCaseInsensitiveContains(query) || $0.hasSuffix(query) } }).prefix(5) {
+                let button = phoneButton(contact.name) { [weak self] in self?.model.store.send(.messages(.recipientChanged(contact.phones.first ?? query))) }
+                button.configuration?.subtitle = contact.phones.first; suggestions.addArrangedSubview(button)
+            }
+        }
+        if let error = state.error, presentedViewController == nil {
+            let alert = UIAlertController(title: "Error", message: error, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .cancel) { [weak self] _ in self?.model.store.send(.messages(.clearError)) }); present(alert, animated: true)
+        }
+    }
+    private func chooseContact() {
+        let picker = ContactsViewController(model: model, onCall: { _ in }, onMessage: { _ in })
+        picker.onSelect = { [weak self, weak picker] phone in self?.model.store.send(.messages(.recipientChanged(phone))); picker?.dismiss(animated: true) }
+        showPhoneSheet(picker)
+    }
+}
+
+@MainActor
+final class ContactsViewController: PhoneTableController, UISearchResultsUpdating {
+    override var tableStyle: UITableView.Style { .plain }
+    let model: AirSIMPresentation
+    let onCall: (String) -> Void
+    let onMessage: (String) -> Void
+    var onSelect: ((String) -> Void)?
+    private let search = UISearchController(searchResultsController: nil)
+    init(model: AirSIMPresentation, onCall: @escaping (String) -> Void, onMessage: @escaping (String) -> Void) { self.model = model; self.onCall = onCall; self.onMessage = onMessage; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        if onSelect != nil { model.store.send(.contactPickerSearchChanged("")) }
+        search.searchBar.text = onSelect == nil ? model.store.contactSearch : model.store.contactPickerSearch
+        search.searchResultsUpdater = self; search.obscuresBackgroundDuringPresentation = false; search.searchBar.placeholder = "Search name or number"; navigationItem.searchController = search; navigationItem.hidesSearchBarWhenScrolling = false
+        enableRefresh { [weak self] in await self?.model.contacts.requestAccessAndLoad() }
+    }
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        Task { await model.contacts.loadIfAuthorized() }
+    }
+    func updateSearchResults(for searchController: UISearchController) {
+        let text = searchController.searchBar.text ?? ""
+        model.store.send(onSelect == nil ? .contactSearchChanged(text) : .contactPickerSearchChanged(text))
+    }
+    override func render() {
+        title = onSelect == nil ? "Contacts" : "Choose Contact"
+        navigationItem.title = onSelect == nil ? "Contacts · \(model.contacts.contacts.count)" : "Choose Contact"
+        tabBarItem.title = "Contacts"
+        guard model.contacts.isAuthorized else {
+            let denied = model.contacts.authorizationState == .denied
+            var configuration = UIContentUnavailableConfiguration.empty()
+            configuration.image = UIImage(systemName: "person.crop.circle.badge.questionmark")
+            configuration.text = denied ? "Contacts access is disabled" : "Allow Contacts Access"
+            configuration.secondaryText = "Connect or grant access to get started."
+            configuration.button = .filled(); configuration.button.title = denied ? "Open Settings" : "Allow Contacts Access"
+            configuration.button.cornerStyle = .capsule
+            configureContactEmptyStyle(&configuration)
+            var buttonTitle = AttributeContainer(); buttonTitle.font = UIFont.systemFont(ofSize: 15, weight: .medium)
+            configuration.button.attributedTitle = AttributedString(denied ? "Open Settings" : "Allow Contacts Access", attributes: buttonTitle)
+            configuration.button.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12)
+            configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
+                guard let self else { return }; if denied { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } } else { Task { await self.model.contacts.requestAccessAndLoad() } }
+            }
+            setSections([]); table.isHidden = true; contentUnavailableConfiguration = configuration
+            return
+        }
+        table.isHidden = false; contentUnavailableConfiguration = nil
+        let searchText = onSelect == nil ? model.store.contactSearch : model.store.contactPickerSearch
+        if search.searchBar.text != searchText { search.searchBar.text = searchText }
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        let contacts = model.contacts.contacts.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.phones.contains { $0.localizedCaseInsensitiveContains(query) } }
+        var rows: [PhoneRow] = []
+        for contact in contacts {
+            if let onSelect {
+                for phone in ContactPhoneListPolicy.displayPhones(for: contact.phones) { rows.append(PhoneRow(id: contact.id + phone, title: contact.name, detail: phone, action: { onSelect(phone) }, photo: contact.photoData, avatarName: contact.name, bodyViewProvider: { PhoneListContentView(name: contact.name, subtitle: phone, photo: contact.photoData, avatarName: contact.name) }, insets: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16))) }
             } else {
-                configuration.label
-                    .background(.ultraThinMaterial, in: Circle())
-                    .overlay(Circle().fill(Color.cyan.opacity(configuration.isPressed ? 0.28 : 0)))
+                rows.append(PhoneRow(id: contact.id, title: contact.name, detail: contact.phones.first ?? "", disclosure: true, action: { [weak self] in guard let self else { return }; self.navigationController?.pushViewController(ContactDetailViewController(contact: contact, onCall: self.onCall, onMessage: self.onMessage), animated: true) }, photo: contact.photoData, avatarName: contact.name, bodyViewProvider: { PhoneListContentView(name: contact.name, subtitle: contact.phones.first ?? "", photo: contact.photoData, avatarName: contact.name) }, insets: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)))
             }
         }
-        .foregroundStyle(configuration.isPressed ? Color.cyan : Color.primary)
-        .scaleEffect(configuration.isPressed ? 0.91 : 1)
-        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+        table.separatorStyle = rows.isEmpty ? .none : .singleLine
+        table.backgroundView = PhoneBackdropView()
+        if rows.isEmpty {
+            var configuration = UIContentUnavailableConfiguration.empty(); configuration.image = UIImage(systemName: "person.2"); configuration.text = "No contacts"; configuration.secondaryText = "Contacts sync from your device address book."
+            configureContactEmptyStyle(&configuration)
+            contentUnavailableConfiguration = configuration
+        }
+        setSections(rows.isEmpty ? [] : [PhoneSection(rows: rows)])
+    }
+    private func configureContactEmptyStyle(_ configuration: inout UIContentUnavailableConfiguration) {
+        configuration.textProperties.font = UIFontMetrics(forTextStyle: .title3).scaledFont(for: .systemFont(ofSize: 20, weight: .bold))
+        configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 20))
+        configuration.secondaryTextProperties.numberOfLines = 0
+        configuration.secondaryTextProperties.lineBreakMode = .byWordWrapping
+        configuration.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44)
+        configuration.imageProperties.maximumSize = CGSize(width: 44, height: 44)
+        configuration.imageToTextPadding = 24; configuration.textToSecondaryTextPadding = 2; configuration.textToButtonPadding = 28
+        let width = traitCollection.horizontalSizeClass == .compact ? CGFloat(240) : CGFloat(360)
+        let margin = max(16, (view.bounds.width - width) / 2)
+        configuration.axesPreservingSuperviewLayoutMargins = []
+        configuration.directionalLayoutMargins.leading = margin; configuration.directionalLayoutMargins.trailing = margin
     }
 }
 
-#Preview("Dial Pad") {
-    let model = AppModel()
-    model.numberInput = "+1 202 555 0100"
-    return DialPadView()
-        .environment(model)
-        .environment(model.contacts)
-        .environment(model.audio)
+@MainActor
+final class ContactDetailViewController: PhoneTableController {
+    let contact: ContactStore.Contact
+    let onCall: (String) -> Void; let onMessage: (String) -> Void
+    init(contact: ContactStore.Contact, onCall: @escaping (String) -> Void, onMessage: @escaping (String) -> Void) { self.contact = contact; self.onCall = onCall; self.onMessage = onMessage; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() { super.viewDidLoad(); title = contact.name; navigationItem.largeTitleDisplayMode = .never }
+    override func render() {
+        let avatar = UIImageView(image: phoneAvatar(name: contact.name, photo: contact.photoData, size: 82)); avatar.widthAnchor.constraint(equalToConstant: 82).isActive = true; avatar.heightAnchor.constraint(equalToConstant: 82).isActive = true
+        let heading = phoneLabel(contact.name, size: 22); heading.font = UIFontMetrics(forTextStyle: .title2).scaledFont(for: .systemFont(ofSize: 22, weight: .semibold))
+        let header = UIStackView(arrangedSubviews: [avatar, heading]); header.axis = .vertical; header.spacing = 10; header.alignment = .center
+        var rows: [PhoneRow] = []
+        for phone in ContactPhoneListPolicy.displayPhones(for: contact.phones) {
+            let number = phoneLabel(phone); let message = phoneButton("Send Message", image: "message.fill") { [weak self] in self?.onMessage(phone) }; let call = phoneButton("Dial", image: "phone.fill", color: .systemGreen) { [weak self] in self?.onCall(phone) }
+            for button in [message, call] { button.configuration?.title = nil; button.widthAnchor.constraint(equalToConstant: 42).isActive = true; button.heightAnchor.constraint(equalToConstant: 42).isActive = true }
+            let row = UIStackView(arrangedSubviews: [number, UIView(), message, call]); row.axis = .horizontal; row.alignment = .center; row.spacing = 12
+            rows.append(PhoneRow(id: phone, title: "", bodyView: row))
+        }
+        setSections([PhoneSection(rows: [PhoneRow(id: "name", title: "", bodyView: header)]), PhoneSection(rows: rows)])
+    }
 }
 
-#Preview("Recents") {
-    let model = AppModel()
-    model.callHistory = [
-        CallRecord(
-            id: "preview-call-1",
-            index: 1,
-            direction: "incoming",
-            state: "ended",
-            number: "+1 202 555 0100",
-            startedAt: Date().addingTimeInterval(-900),
-            updatedAt: Date().addingTimeInterval(-840),
-            endedAt: Date().addingTimeInterval(-840),
-            missed: false
-        ),
-        CallRecord(
-            id: "preview-call-2",
-            index: 2,
-            direction: "incoming",
-            state: "ended",
-            number: "+1 202 555 0199",
-            startedAt: Date().addingTimeInterval(-7200),
-            updatedAt: Date().addingTimeInterval(-7200),
-            endedAt: Date().addingTimeInterval(-7200),
-            missed: true
-        ),
-    ]
-    return RecentsView(onCall: { _ in }, onMessage: { _ in })
-        .environment(model)
-        .environment(model.contacts)
+@MainActor
+final class ActiveCallViewController: ObservingViewController {
+    private weak var keypadNavigationController: UINavigationController?
+    let model: AirSIMPresentation
+    private(set) var call: CallRecord
+    var isPresentationPreview = false
+    private let header = phoneLabel(size: 16, color: .lightGray)
+    private let name = phoneLabel(size: 38, color: .white)
+    private let number = phoneLabel(size: 20, color: .lightGray)
+    private let status = phoneLabel(size: 12, color: .white)
+    private let duration = phoneLabel(size: 24, color: .lightGray)
+    private let avatar = UIImageView()
+    private let center = UIStackView()
+    private let controls = UIStackView()
+    private let decisions = UIStackView()
+    private let dot = UIView()
+    private var record: UIButton!
+    private var mute: CallCircleControl!
+    private var speaker: CallCircleControl!
+    private var lastPhase: CallSurfacePhase?
+    private var avatarWidth: NSLayoutConstraint!
+    private var headerWidth: NSLayoutConstraint!
+    private var headerTop: NSLayoutConstraint!
+    private var decisionsWidth: NSLayoutConstraint!
+    private var bottomInset: NSLayoutConstraint!
+    private var bottomStack: UIStackView!
+    private let statusBadge = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private var timer: Timer?
+    override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+    init(model: AirSIMPresentation, call: CallRecord) { self.model = model; self.call = call; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); view.isUserInteractionEnabled = !isPresentationPreview; overrideUserInterfaceStyle = .dark; view.accessibilityViewIsModal = true
+        let background = CallBackdropView(); background.frame = view.bounds; background.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.addSubview(background)
+        record = phoneButton("Record", image: "record.circle", color: .white) { [weak self] in Task { await self?.model.toggleRecording() } }; record.configuration?.title = nil; record.widthAnchor.constraint(equalToConstant: 44).isActive = true; record.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let antenna = UIImageView(image: UIImage(systemName: "antenna.radiowaves.left.and.right")); antenna.tintColor = .lightGray
+        let top = UIStackView(arrangedSubviews: [antenna, header, UIView(), record]); top.axis = .horizontal; top.alignment = .center; top.spacing = 10
+        center.axis = .vertical; center.spacing = 8; center.alignment = .center
+        avatarWidth = avatar.widthAnchor.constraint(equalToConstant: 116); avatarWidth.isActive = true; avatar.heightAnchor.constraint(equalTo: avatar.widthAnchor).isActive = true; avatar.isAccessibilityElement = false
+        avatar.layer.shadowColor = UIColor.black.cgColor; avatar.layer.shadowRadius = 28; avatar.layer.shadowOpacity = 0.34; avatar.layer.shadowOffset = CGSize(width: 0, height: 16)
+        center.addArrangedSubview(avatar); center.setCustomSpacing(24, after: avatar)
+        for label in [name, number, duration] { label.textAlignment = .center; label.numberOfLines = 2; center.addArrangedSubview(label) }
+        name.adjustsFontSizeToFitWidth = true; name.minimumScaleFactor = 0.68
+        let badge = statusBadge; badge.layer.cornerRadius = 19; badge.clipsToBounds = true
+        dot.backgroundColor = .systemOrange; dot.layer.cornerRadius = 4; dot.widthAnchor.constraint(equalToConstant: 8).isActive = true; dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        let badgeText = UIStackView(arrangedSubviews: [dot, status]); badgeText.axis = .horizontal; badgeText.spacing = 8; badgeText.alignment = .center; badgeText.translatesAutoresizingMaskIntoConstraints = false; badge.contentView.addSubview(badgeText)
+        NSLayoutConstraint.activate([badgeText.leadingAnchor.constraint(equalTo: badge.contentView.leadingAnchor, constant: 14), badgeText.trailingAnchor.constraint(equalTo: badge.contentView.trailingAnchor, constant: -14), badgeText.topAnchor.constraint(equalTo: badge.contentView.topAnchor, constant: 11), badgeText.bottomAnchor.constraint(equalTo: badge.contentView.bottomAnchor, constant: -11)])
+        center.addArrangedSubview(badge); center.setCustomSpacing(20, after: duration)
+        controls.axis = .horizontal; controls.spacing = 20; controls.alignment = .top
+        mute = CallCircleControl(title: "Mute", icon: "mic.fill", size: 62) { [weak self] in Task { await self?.model.toggleMute() } }
+        let keypad = CallCircleControl(title: "Keypad", icon: "circle.grid.3x3.fill", size: 62) { [weak self] in self?.presentKeypad() }
+        speaker = CallCircleControl(title: "Speaker", icon: "speaker.fill", size: 62) { [weak self] in self?.model.toggleSpeaker() }
+        [mute!, keypad, speaker!].forEach { controls.addArrangedSubview($0) }
+        decisions.axis = .horizontal; decisions.spacing = 100; decisions.alignment = .top
+        let bottom = UIStackView(arrangedSubviews: [controls, decisions]); bottomStack = bottom; bottom.axis = .vertical; bottom.spacing = 30; bottom.alignment = .center
+        for part in [top, center, bottom] { part.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(part) }
+        let above = UILayoutGuide(); let below = UILayoutGuide(); view.addLayoutGuide(above); view.addLayoutGuide(below)
+        headerTop = top.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 18)
+        headerWidth = top.widthAnchor.constraint(equalToConstant: 362)
+        decisionsWidth = decisions.widthAnchor.constraint(equalToConstant: 338)
+        bottomInset = bottom.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -34)
+        NSLayoutConstraint.activate([headerTop, headerWidth, top.centerXAnchor.constraint(equalTo: view.centerXAnchor), center.centerXAnchor.constraint(equalTo: view.centerXAnchor), center.widthAnchor.constraint(lessThanOrEqualToConstant: 520), center.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20), center.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20), above.topAnchor.constraint(equalTo: top.bottomAnchor), above.bottomAnchor.constraint(equalTo: center.topAnchor), below.topAnchor.constraint(equalTo: center.bottomAnchor), below.bottomAnchor.constraint(equalTo: bottom.topAnchor), above.heightAnchor.constraint(equalTo: below.heightAnchor), above.heightAnchor.constraint(greaterThanOrEqualToConstant: 0), bottom.centerXAnchor.constraint(equalTo: view.centerXAnchor), bottomInset, decisionsWidth])
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in Task { @MainActor in self?.updateDuration() } }
+    }
+    func presentKeypad(animated: Bool = true) {
+        guard presentedViewController == nil else { return }
+        model.store.send(.keypad(true))
+        let keypad = DTMFKeypadViewController(model: model)
+        keypadNavigationController = showPhoneSheet(keypad, animated: animated) { [weak self, weak keypad] in
+            // UIKit can defer dismissal while presentation is still in flight.
+            // The completion owns only this sheet, even if the call child is gone.
+            if self?.model.store.keypadPresented != true { keypad?.navigationController?.dismiss(animated: false) }
+        }
+    }
+    func dismissKeypad() {
+        if let keypad = keypadNavigationController, keypad.presentingViewController != nil { keypad.dismiss(animated: false) }
+        keypadNavigationController = nil
+        model.store.send(.keypad(false))
+    }
+    func update(call: CallRecord) { self.call = call; if isViewLoaded { render() } }
+    override func render() {
+        let content = CallSurfaceContent(state: call.state); let incoming = content.phase == .incoming
+        let compact = traitCollection.horizontalSizeClass == .compact || view.bounds.height < 700
+        let size: CGFloat = incoming ? (compact ? 116 : 132) : (compact ? 92 : 112)
+        avatarWidth.constant = size
+        avatar.layer.cornerRadius = size / 2; avatar.layer.borderWidth = 1; avatar.layer.borderColor = UIColor.white.withAlphaComponent(0.2).cgColor
+        let outer: CGFloat = compact ? 20 : 32
+        headerWidth.constant = min(520, max(0, view.bounds.width - outer * 2))
+        headerTop.constant = compact ? 18 : 26
+        decisionsWidth.constant = min(430, max(0, view.bounds.width - outer * 2 - (compact ? 24 : 56)))
+        decisions.distribution = .equalSpacing
+        bottomInset.constant = -((compact ? 18 : 26) + (incoming ? (compact ? 16 : 28) : (compact ? 8 : 18)))
+        bottomStack.spacing = compact ? 30 : 42
+        controls.spacing = compact ? 20 : 34
+        for control in controls.arrangedSubviews { (control as? CallCircleControl)?.setSize(compact ? 62 : 68) }
+        center.setCustomSpacing(incoming ? 24 : 22, after: avatar)
+        center.setCustomSpacing(incoming ? 22 : 20, after: duration)
+        header.font = .systemFont(ofSize: 15, weight: .semibold)
+        header.text = incoming ? "AirSIM Incoming Call" : "AirSIM Call"
+        let displayName = model.contacts.displayName(for: call.number)
+        name.text = displayName; name.font = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(for: .systemFont(ofSize: incoming ? (compact ? 38 : 44) : 34, weight: .semibold))
+        number.text = call.number; number.isHidden = call.number == nil || call.number == displayName
+        avatar.image = phoneAvatar(name: displayName, photo: call.number.flatMap { model.contacts.contact(for: $0)?.photoData }, size: size)
+        record.isHidden = incoming; record.isEnabled = model.canToggleRecording && !model.isRecordingBusy
+        record.configuration?.image = UIImage(systemName: model.isRecording ? "record.circle.fill" : "record.circle"); record.accessibilityLabel = model.isRecording ? "Stop Recording" : "Record"; record.configuration?.baseForegroundColor = model.isRecording ? .systemRed : .white
+        mute.update(title: model.isMuted ? "Unmute" : "Mute", icon: model.isMuted ? "mic.slash.fill" : "mic.fill", tint: model.isMuted ? .systemOrange : nil)
+        speaker.update(title: "Speaker", icon: model.audio.speakerEnabled ? "speaker.wave.2.fill" : "speaker.fill", tint: model.audio.speakerEnabled ? .systemBlue : nil)
+        controls.isHidden = incoming
+        if lastPhase != content.phase {
+            decisions.arrangedSubviews.forEach { decisions.removeArrangedSubview($0); $0.removeFromSuperview() }
+            if incoming {
+                decisions.addArrangedSubview(CallCircleControl(title: "Decline", icon: "phone.down.fill", size: 76, color: .systemRed) { [weak self] in Task { await self?.model.reject() } })
+                decisions.addArrangedSubview(CallCircleControl(title: "Accept", icon: "phone.fill", size: 76, color: .systemGreen) { [weak self] in Task { await self?.model.answer() } })
+            } else { decisions.addArrangedSubview(CallCircleControl(title: "End", icon: "phone.down.fill", size: 76, color: .systemRed) { [weak self] in Task { await self?.model.hangup() } }) }
+            lastPhase = content.phase
+        }
+        if incoming {
+            let online = model.isOnline || model.cloudAgentStatus?.cloudOnline == true; dot.backgroundColor = online ? .systemGreen : .systemOrange
+            statusBadge.contentView.backgroundColor = (online ? UIColor.systemGreen : .systemOrange).withAlphaComponent(0.1)
+            status.text = online ? "Module Online" : "Connecting to Module"
+            if let signal = model.modemStatus?.signalDBM ?? model.cloudAgentStatus?.signalDBM { status.text = "\(status.text ?? "") · Signal \(signal) dBm" }
+        } else {
+            dot.backgroundColor = model.callAudioIsActive ? .systemGreen : .systemOrange
+            statusBadge.contentView.backgroundColor = (model.callAudioIsActive ? UIColor.systemGreen : .systemOrange).withAlphaComponent(0.1)
+            status.text = model.callAudioStatusText + (model.audio.active && !model.audio.routeDescription.isEmpty ? " · \(model.audio.routeDescription)" : "") + (model.audio.errorMessage.map { "\n\($0)" } ?? "")
+        }
+        updateDuration(); if !isPresentationPreview { UIDevice.current.isProximityMonitoringEnabled = CallProximityPolicy.shouldMonitor(state: call.state, speakerEnabled: model.audio.speakerEnabled) }
+    }
+    private func updateDuration() { duration.text = CallSurfaceContent(state: call.state).showsDuration ? Duration.seconds(max(0, Int(Date().timeIntervalSince(call.startedAt)))).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2))) : "Waiting"; duration.font = .monospacedDigitSystemFont(ofSize: CallSurfaceContent(state: call.state).showsDuration ? 24 : 15, weight: .medium) }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); if !isPresentationPreview { UIDevice.current.isProximityMonitoringEnabled = false } }
+    deinit { timer?.invalidate() }
 }
 
-#Preview("Messages") {
-    @Previewable @State var pendingRecipient: String? = nil
-    @Previewable @State var pendingConversation: String? = nil
-    let model = AppModel()
-    model.messages = [
-        SMSMessage(
-            sender: "+1 202 555 0100",
-            content: "Your verification code is 482910.",
-            code: "482910",
-            timestamp: Date().addingTimeInterval(-300),
-            deliveryID: "preview-sms-1",
-            direction: .incoming
-        ),
-        SMSMessage(
-            sender: "+1 202 555 0100",
-            content: "Got it, thanks!",
-            code: nil,
-            timestamp: Date().addingTimeInterval(-120),
-            deliveryID: "preview-sms-2",
-            direction: .outgoing
-        ),
-    ]
-    return MessagesView(
-        pendingRecipient: $pendingRecipient,
-        pendingConversation: $pendingConversation
-    )
-    .environment(model)
-    .environment(model.contacts)
+@MainActor
+final class DTMFKeypadViewController: ObservingViewController {
+    let model: AirSIMPresentation
+    private let digits = phoneLabel("Tap keys to send DTMF tones", size: 20)
+    init(model: AirSIMPresentation) { self.model = model; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); title = "Call Keypad"; view.backgroundColor = .systemBackground
+        let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 12; stack.alignment = .center; stack.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(stack)
+        NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: view.centerXAnchor), stack.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor), stack.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 8), stack.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8)])
+        digits.accessibilityLabel = "No digits entered"; stack.addArrangedSubview(digits)
+        let digitRows: [[String]] = [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], ["*", "0", "#"]]
+        for rowDigits in digitRows {
+            let row = UIStackView(); row.axis = .horizontal; row.spacing = 24
+            for digit in rowDigits {
+                let key = phoneButton(digit, color: .label) { [weak self] in
+                    guard let self else { return }; UIImpactFeedbackGenerator(style: .light).impactOccurred(); self.model.store.send(.dtmf(digit))
+                }; key.accessibilityLabel = "Send DTMF \(digit)"; key.widthAnchor.constraint(equalToConstant: 62).isActive = true; key.heightAnchor.constraint(equalToConstant: 54).isActive = true; row.addArrangedSubview(key)
+            }; stack.addArrangedSubview(row)
+        }
+    }
+    override func render() { digits.text = enteredDigits.isEmpty ? "Tap keys to send DTMF tones" : enteredDigits; digits.accessibilityLabel = enteredDigits.isEmpty ? "No digits entered" : enteredDigits }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); model.store.send(.keypad(false)) }
 }
 
-#Preview("Contacts") {
-    let model = AppModel()
-    return ContactsView(onCall: { _ in }, onMessage: { _ in })
-        .environment(model)
-        .environment(model.contacts)
+private extension DTMFKeypadViewController {
+    var enteredDigits: String { model.store.keypadDigits }
 }
 
-#Preview("Active Call · Incoming") {
-    let model = AppModel()
-    let call = CallRecord(
-        id: "preview-incoming",
-        index: 1,
-        direction: "incoming",
-        state: "incoming",
-        number: "+1 202 555 0100",
-        startedAt: Date(),
-        updatedAt: Date(),
-        endedAt: nil,
-        missed: false
-    )
-    return ActiveCallView(call: call)
-        .environment(model)
-        .environment(model.contacts)
-        .environment(model.audio)
+@MainActor
+private final class RecentCallDetailsViewController: UIViewController {
+    let call: CallRecord; let model: AirSIMPresentation
+    let onCall: () -> Void; let onMessage: () -> Void; let onDelete: () -> Void
+    init(call: CallRecord, model: AirSIMPresentation, onCall: @escaping () -> Void, onMessage: @escaping () -> Void, onDelete: @escaping () -> Void) { self.call = call; self.model = model; self.onCall = onCall; self.onMessage = onMessage; self.onDelete = onDelete; super.init(nibName: nil, bundle: nil) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func viewDidLoad() {
+        super.viewDidLoad(); view.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+        let backdrop = UIButton(frame: view.bounds); backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]; backdrop.addTarget(self, action: #selector(close), for: .touchUpInside); view.addSubview(backdrop)
+        let card = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial)); card.layer.cornerRadius = 28; card.clipsToBounds = true; card.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(card)
+        let name = model.contacts.displayName(for: call.number)
+        let image = UIImageView(image: phoneAvatar(name: name, photo: call.number.flatMap { model.contacts.contact(for: $0)?.photoData }, size: 58)); image.widthAnchor.constraint(equalToConstant: 58).isActive = true; image.heightAnchor.constraint(equalToConstant: 58).isActive = true
+        let title = phoneLabel(name, size: 20); title.font = .systemFont(ofSize: 20, weight: .semibold); title.textAlignment = .center
+        let number = phoneLabel(call.number ?? "", size: 17, color: .secondaryLabel); number.textAlignment = .center
+        let date = phoneLabel(RecentCallTimeFormatter.string(for: call.startedAt), size: 12, color: .secondaryLabel); date.textAlignment = .center
+        let stack = UIStackView(arrangedSubviews: [image, title, number, date]); stack.axis = .vertical; stack.spacing = 8; stack.alignment = .center
+        for (label, icon, color, action) in [("Call Back", "phone.fill", UIColor.systemGreen, onCall), ("Send Message", "message.fill", UIColor.systemBlue, onMessage), ("Delete Call Record", "trash", UIColor.systemRed, onDelete)] {
+            let button = phoneButton(label, image: icon, color: color) { [weak self] in self?.dismiss(animated: true, completion: action) }
+            if label == "Call Back" { button.configuration?.baseBackgroundColor = .systemGreen; button.configuration?.baseForegroundColor = .white; button.configuration?.background.backgroundColor = .systemGreen }
+            button.configuration?.cornerStyle = .medium; button.heightAnchor.constraint(greaterThanOrEqualToConstant: 48).isActive = true
+            stack.addArrangedSubview(button); button.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        }
+        let cancel = phoneButton("Cancel", color: .secondaryLabel) { [weak self] in self?.close() }; cancel.configuration = .plain(); cancel.setTitle("Cancel", for: .normal); stack.addArrangedSubview(cancel)
+        stack.translatesAutoresizingMaskIntoConstraints = false; card.contentView.addSubview(stack)
+        let preferred = card.widthAnchor.constraint(equalToConstant: 340); preferred.priority = .defaultHigh
+        NSLayoutConstraint.activate([card.centerXAnchor.constraint(equalTo: view.centerXAnchor), card.centerYAnchor.constraint(equalTo: view.centerYAnchor), preferred, card.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 28), card.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -28), stack.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: 22), stack.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -22), stack.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: 22), stack.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -22)])
+    }
+    override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); model.store.send(.recentDetails(nil)) }
+    @objc private func close() { dismiss(animated: true) }
 }
 
-#Preview("Active Call · Connected") {
-    let model = AppModel()
-    let call = CallRecord(
-        id: "preview-active",
-        index: 1,
-        direction: "outgoing",
-        state: "active",
-        number: "+1 202 555 0100",
-        startedAt: Date().addingTimeInterval(-85),
-        updatedAt: Date(),
-        endedAt: nil,
-        missed: false
-    )
-    return ActiveCallView(call: call)
-        .environment(model)
-        .environment(model.contacts)
-        .environment(model.audio)
+@MainActor
+private final class AndroidAgentCardView: UIView {
+    init(agent: AndroidAgentPresentation?, count: Int, cloudEnabled: Bool) {
+        super.init(frame: .zero)
+        let material = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial)); material.layer.cornerRadius = 16; material.clipsToBounds = true; material.translatesAutoresizingMaskIntoConstraints = false; addSubview(material)
+        let stack = UIStackView(); stack.axis = .vertical; stack.spacing = 10; stack.translatesAutoresizingMaskIntoConstraints = false; material.contentView.addSubview(stack)
+        let icon = UIImageView(image: UIImage(systemName: agent == nil ? "smartphone.slash" : "smartphone")); icon.tintColor = agent == nil ? .secondaryLabel : .systemGreen; icon.contentMode = .center; icon.widthAnchor.constraint(equalToConstant: 34).isActive = true; icon.heightAnchor.constraint(equalToConstant: 34).isActive = true; icon.backgroundColor = UIColor.systemGreen.withAlphaComponent(agent == nil ? 0 : 0.12); icon.layer.cornerRadius = 17
+        let title = phoneLabel(agent?.deviceName ?? "Paired Android Agents · \(count)", size: 15); title.font = .systemFont(ofSize: 15, weight: .semibold); title.numberOfLines = 1
+        let titleRow = UIStackView(arrangedSubviews: [title]); titleRow.axis = .horizontal; titleRow.spacing = 6
+        if agent != nil { let current = pill("Current", color: .systemGreen); titleRow.addArrangedSubview(current) }
+        titleRow.addArrangedSubview(UIView())
+        let detail = phoneLabel(agent?.phoneNumber ?? (agent == nil ? "No call route is currently available" : "Number unavailable"), size: 12, color: .secondaryLabel); detail.numberOfLines = 1
+        let text = UIStackView(arrangedSubviews: [titleRow, detail]); text.axis = .vertical; text.spacing = 2
+        let row = UIStackView(arrangedSubviews: [icon, text]); row.axis = .horizontal; row.spacing = 10; row.alignment = .center
+        if count > 1 { let all = phoneLabel("All \(count)", size: 12, color: .systemBlue); all.setContentHuggingPriority(.required, for: .horizontal); row.addArrangedSubview(all) }
+        stack.addArrangedSubview(row)
+        if let agent {
+            let routes = UIStackView(arrangedSubviews: [pill("VoWLAN \(agent.vowlanOnline ? "Online" : "Offline")", color: agent.vowlanOnline ? .systemGreen : .secondaryLabel), pill("Cloud \(!cloudEnabled ? "Off" : (agent.cloudOnline ? "Online" : "Offline"))", color: cloudEnabled && agent.cloudOnline ? .systemGreen : .secondaryLabel), UIView(), phoneLabel(String(localized: agent.agentKindTitle), size: 10, color: .secondaryLabel)]); routes.axis = .horizontal; routes.spacing = 8; routes.alignment = .center; stack.addArrangedSubview(routes)
+        }
+        NSLayoutConstraint.activate([material.leadingAnchor.constraint(equalTo: leadingAnchor), material.trailingAnchor.constraint(equalTo: trailingAnchor), material.topAnchor.constraint(equalTo: topAnchor), material.bottomAnchor.constraint(equalTo: bottomAnchor), stack.leadingAnchor.constraint(equalTo: material.contentView.leadingAnchor, constant: 12), stack.trailingAnchor.constraint(equalTo: material.contentView.trailingAnchor, constant: -12), stack.topAnchor.constraint(equalTo: material.contentView.topAnchor, constant: 12), stack.bottomAnchor.constraint(equalTo: material.contentView.bottomAnchor, constant: -12)])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    private func pill(_ title: String, color: UIColor) -> UIView {
+        let text = phoneLabel(title, size: 10, color: color); text.font = .systemFont(ofSize: 10, weight: .medium); text.numberOfLines = 1
+        let box = UIStackView(arrangedSubviews: [text]); box.isLayoutMarginsRelativeArrangement = true; box.layoutMargins = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8); box.backgroundColor = color.withAlphaComponent(0.1); box.layer.cornerRadius = 10; return box
+    }
 }
 
-#Preview("DTMF Keypad") {
-    DTMFKeypadView()
-        .environment(AppModel())
+#if DEBUG
+#Preview("Dial · Connected Agent") {
+    AirSIMPreviewFixtures.navigation(DialPadViewController(model: AirSIMPreviewFixtures.presentation()))
 }
 
+#Preview("Paired Android Agents") {
+    AirSIMPreviewFixtures.navigation(PairedAndroidAgentsViewController(model: AirSIMPreviewFixtures.presentation()))
+}
+
+#Preview("Recents · Calls") {
+    AirSIMPreviewFixtures.navigation(RecentsViewController(model: AirSIMPreviewFixtures.presentation(tab: .recents), onCall: { _ in }, onMessage: { _ in }))
+}
+
+#Preview("Messages · Conversations") {
+    AirSIMPreviewFixtures.navigation(MessagesViewController(model: AirSIMPreviewFixtures.presentation(tab: .messages)))
+}
+
+#Preview("Messages · Thread") {
+    let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+    model.store.send(.messages(.openConversation(AirSIMPreviewFixtures.phone)))
+    return AirSIMPreviewFixtures.navigation(MessageThreadViewController(model: model, sender: AirSIMPreviewFixtures.phone))
+}
+
+#Preview("Messages · Composer") {
+    let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+    model.store.send(.messages(.compose(AirSIMPreviewFixtures.phone)))
+    model.store.send(.messages(.bodyChanged("I will be there in five minutes.")))
+    return AirSIMPreviewFixtures.navigation(MessageComposerViewController(model: model, recipient: AirSIMPreviewFixtures.phone))
+}
+
+#Preview("Contacts · People") {
+    AirSIMPreviewFixtures.navigation(ContactsViewController(model: AirSIMPreviewFixtures.presentation(tab: .contacts), onCall: { _ in }, onMessage: { _ in }))
+}
+
+#Preview("Contacts · Empty") {
+    AirSIMPreviewFixtures.navigation(ContactsViewController(model: AirSIMPreviewFixtures.presentation(tab: .contacts, empty: true), onCall: { _ in }, onMessage: { _ in }))
+}
+
+#Preview("Contact · Details") {
+    AirSIMPreviewFixtures.navigation(ContactDetailViewController(contact: AirSIMPreviewFixtures.contact, onCall: { _ in }, onMessage: { _ in }))
+}
+
+#Preview("Call · Incoming") {
+    let model = AirSIMPreviewFixtures.presentation(callState: "incoming")
+    let controller = ActiveCallViewController(model: model, call: AirSIMPreviewFixtures.call("incoming"))
+    controller.isPresentationPreview = true
+    return controller
+}
+
+#Preview("Call · Connected") {
+    let model = AirSIMPreviewFixtures.presentation(callState: "active")
+    let controller = ActiveCallViewController(model: model, call: AirSIMPreviewFixtures.call("active"))
+    controller.isPresentationPreview = true
+    return controller
+}
+
+#Preview("Call · DTMF Keypad") {
+    let model = AirSIMPreviewFixtures.presentation(callState: "active")
+    model.store.send(.keypad(true))
+    return AirSIMPreviewFixtures.navigation(DTMFKeypadViewController(model: model))
+}
+
+#Preview("Recent Call · Details Card") {
+    RecentCallDetailsViewController(call: AirSIMPreviewFixtures.history[0], model: AirSIMPreviewFixtures.presentation(tab: .recents), onCall: {}, onMessage: {}, onDelete: {})
+}
+
+#Preview("Component · Android Agent Card") {
+    AirSIMPreviewFixtures.canvas(AndroidAgentCardView(agent: AirSIMPreviewFixtures.agents[0], count: 2, cloudEnabled: true), height: 94)
+}
+#endif

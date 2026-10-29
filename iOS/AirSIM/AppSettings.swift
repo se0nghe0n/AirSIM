@@ -1,4 +1,4 @@
-import SwiftUI
+import Observation
 import UIKit
 
 /// Centrally provides the mobile device name to avoid hardcoded iPad copy on iPhone.
@@ -13,7 +13,7 @@ enum DeviceContext {
 }
 
 /// Retains the Mac version's appearance options on iPhone/iPad.
-enum AppAppearance: String, CaseIterable, Identifiable {
+enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
     case system, light, dark
     var id: String { rawValue }
 
@@ -25,16 +25,16 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         }
     }
 
-    var colorScheme: ColorScheme? {
+    var interfaceStyle: UIUserInterfaceStyle {
         switch self {
-        case .system: return nil
+        case .system: return .unspecified
         case .light: return .light
         case .dark: return .dark
         }
     }
 }
 
-enum AppLanguage: String, CaseIterable, Identifiable {
+enum AppLanguage: String, CaseIterable, Identifiable, Sendable {
     case system, zh, en
     var id: String { rawValue }
 

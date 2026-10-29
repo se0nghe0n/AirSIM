@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        AABC00000000000000000004 /* AirSIMPreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000004; };
+        AABC00000000000000000003 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000003; };
+        AABC00000000000000000001 /* AirSIMFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000001; };
+        AABC00000000000000000002 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = EABC00000000000000000001; };
 		A10000000000000000000001 /* AirSIMIPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* AirSIMIPadApp.swift */; };
 		A10000000000000000000002 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* APIModels.swift */; };
 		A10000000000000000000003 /* AirSIMAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* AirSIMAPI.swift */; };
@@ -111,6 +115,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        BABC00000000000000000004 /* AirSIMPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMPreviewSupport.swift; sourceTree = "<group>"; };
+        BABC00000000000000000003 /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
+        BABC00000000000000000001 /* AirSIMFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMFeature.swift; sourceTree = "<group>"; };
 		B10000000000000000000001 /* AirSIMIPadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMIPadApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* AirSIMAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMAPI.swift; sourceTree = "<group>"; };
@@ -172,6 +179,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA0000000000000000000002 /* WebRTC in Frameworks */,
+                AABC00000000000000000002 /* ComposableArchitecture in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -204,6 +212,7 @@
 			children = (
 				D10000000000000000000002 /* AirSIM */,
 				BB0000000000000000000004 /* WebRTC-LICENSE */,
+                BABC00000000000000000003 /* ThirdPartyNotices.txt */,
 				BB0000000000000000000006 /* WebRTC-PATENTS */,
 				BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */,
 				D10000000000000000000004 /* Shared */,
@@ -246,6 +255,8 @@
 				B10000000000000000000031 /* ConnectionModePreference.swift */,
 				B1000000000000000000001D /* WatchCallCoordinator.swift */,
 				B10000000000000000000008 /* RootView.swift */,
+                BABC00000000000000000001 /* AirSIMFeature.swift */,
+                BABC00000000000000000004 /* AirSIMPreviewSupport.swift */,
 				B10000000000000000000009 /* PhoneViews.swift */,
 				B1000000000000000000000A /* AirSIMSetupView.swift */,
 				B10000000000000000000018 /* LocalHistoryStore.swift */,
@@ -328,6 +339,7 @@
 			name = AirSIM;
 			packageProductDependencies = (
 				EE0000000000000000000001 /* WebRTC */,
+                EABC00000000000000000001 /* ComposableArchitecture */,
 			);
 			productName = AirSIM;
 			productReference = B1000000000000000000000C /* AirSIM.app */;
@@ -418,6 +430,7 @@
 			mainGroup = D10000000000000000000001;
 			packageReferences = (
 				DD0000000000000000000001 /* XCLocalSwiftPackageReference "WebRTCDependency" */,
+                DABC00000000000000000001 /* swift-composable-architecture */,
 			);
 			productRefGroup = D10000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -438,6 +451,7 @@
 			files = (
 				A10000000000000000000018 /* AppIcon.icon in Resources */,
 				AA0000000000000000000004 /* WebRTC-LICENSE in Resources */,
+                AABC00000000000000000003 /* ThirdPartyNotices.txt in Resources */,
 				AA0000000000000000000006 /* WebRTC-PATENTS in Resources */,
 				AA0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES in Resources */,
 			);
@@ -484,6 +498,8 @@
 				A10000000000000000000006 /* AudioSessionController.swift in Sources */,
 				A10000000000000000000007 /* AppModel.swift in Sources */,
 				A10000000000000000000008 /* RootView.swift in Sources */,
+                AABC00000000000000000001 /* AirSIMFeature.swift in Sources */,
+                AABC00000000000000000004 /* AirSIMPreviewSupport.swift in Sources */,
 				A10000000000000000000009 /* PhoneViews.swift in Sources */,
 				A1000000000000000000000A /* AirSIMSetupView.swift in Sources */,
 				A1000000000000000000000E /* CallKitController.swift in Sources */,
@@ -870,7 +886,19 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+        DABC00000000000000000001 /* swift-composable-architecture */ = {
+            isa = XCRemoteSwiftPackageReference;
+            repositoryURL = "https://github.com/pointfreeco/swift-composable-architecture";
+            requirement = {kind = exactVersion; version = 1.26.2; };
+        };
+/* End XCRemoteSwiftPackageReference section */
 /* Begin XCSwiftPackageProductDependency section */
+        EABC00000000000000000001 /* ComposableArchitecture */ = {
+            isa = XCSwiftPackageProductDependency;
+            package = DABC00000000000000000001;
+            productName = ComposableArchitecture;
+        };
 		EE0000000000000000000001 /* WebRTC */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = DD0000000000000000000001 /* XCLocalSwiftPackageReference "WebRTCDependency" */;

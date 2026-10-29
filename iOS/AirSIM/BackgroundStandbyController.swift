@@ -70,7 +70,7 @@ enum IncomingCallPresentationRequest {
     }
 }
 
-/// When a notification is tapped, the initial SwiftUI screen may not have subscribed to events yet; store only the sender without persisting SMS body text.
+/// When a notification is tapped, the initial UIKit screen may not have subscribed to events yet; store only the sender without persisting SMS body text.
 enum IncomingSMSPresentationRequest {
     static let key = "airsim.pending-sms-sender"
 
@@ -87,9 +87,24 @@ enum IncomingSMSPresentationRequest {
 
 /// Handles lock-screen notification actions and controls module calls directly within the system-granted background execution window.
 @MainActor
-final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+#if DEBUG
+    private lazy var coldLaunchCallHandler = ColdLaunchCallKitHandler()
+    private lazy var historyStore = LocalHistoryStore()
+
+    override init() {
+        super.init()
+        // Preserve normal eager bootstrap order before didFinishLaunching, while
+        // the preview host avoids discovery and creation of the history directory.
+        if !AirSIMPreviewEnvironment.isActive {
+            _ = coldLaunchCallHandler
+            _ = historyStore
+        }
+    }
+#else
     private let coldLaunchCallHandler = ColdLaunchCallKitHandler()
     private let historyStore = LocalHistoryStore()
+#endif
 
     func application(
         _ application: UIApplication,
@@ -104,7 +119,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
             CallKitController.shared.handler = coldLaunchCallHandler
         }
 		// Watch tokens and cross-device answer ownership must be receivable during cold launch rather than waiting for
-		// SwiftUI onAppear (which may never fire on a lock-screen PushKit wakeup).
+		// foreground UI construction (which may never fire on a lock-screen PushKit wakeup).
 		WatchCallCoordinator.shared.start()
         if policy.startsCloud {
             VoIPPushController.shared.start()
@@ -119,6 +134,9 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
     }
 
     func applicationDidBecomeActive(_ application: UIApplication) {
+#if DEBUG
+        guard !AirSIMPreviewEnvironment.isActive else { return }
+#endif
         // The initial authorization prompt may return after didFinishLaunching; re-registering on foreground entry is idempotent.
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.start()
@@ -294,7 +312,7 @@ final class AirSIMNotificationDelegate: NSObject, UIApplicationDelegate, @precon
     }
 }
 
-/// Responds to system answer/reject actions before the SwiftUI state model is initialized; AppModel takes over the handler once started.
+/// Responds to system answer/reject actions before the foreground state model is initialized; AppModel takes over the handler once started.
 @MainActor
 private final class ColdLaunchCallKitHandler: CallKitActionHandling {
     private let vowlan = VoWLANController()

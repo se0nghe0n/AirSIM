@@ -4,6 +4,8 @@ import AVFoundation
 import Testing
 import AppIntents
 import Foundation
+import UIKit
+import ComposableArchitecture
 @testable import AirSIM
 
 struct CloudMediaCredentialTests {
@@ -1358,5 +1360,529 @@ struct StandaloneCleanupTests {
         }
         #expect(!LiveActivityActionGate.accepts(callID: "", currentCallID: "", callIsLive: true))
         #expect(!LiveActivityActionGate.accepts(callID: "call-A", currentCallID: "call-A", callIsLive: false))
+    }
+}
+
+@MainActor
+struct UIKitPresentationTests {
+    @Test func `Large lists construct bodies only for displayed cells`() {
+        let controller = PhoneTableController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        var constructed = 0
+        let rows = (0..<1_000).map { index in
+            PhoneRow(id: String(index), title: "", bodyViewProvider: { constructed += 1; return phoneLabel("Row \(index)") })
+        }
+        controller.setSections([PhoneSection(rows: rows)])
+        controller.table.layoutIfNeeded()
+        #expect(constructed > 0)
+        #expect(constructed < 100)
+        let beforeUpdate = constructed
+        let visibleBody = controller.table.visibleCells.first?.contentView.subviews.last
+        controller.setSections([PhoneSection(rows: rows)])
+        controller.table.layoutIfNeeded()
+        #expect(constructed == beforeUpdate)
+        #expect(controller.table.visibleCells.first?.contentView.subviews.last === visibleBody)
+        controller.table.scrollToRow(at: IndexPath(row: 999, section: 0), at: .bottom, animated: false)
+        controller.table.layoutIfNeeded()
+        #expect(controller.table.cellForRow(at: IndexPath(row: 999, section: 0)) != nil)
+        #expect(constructed < 200)
+    }
+
+    @Test func `Duplicate row identities can shrink without an invalid batch update`() {
+        let controller = PhoneTableController(); controller.loadViewIfNeeded()
+        controller.setSections([PhoneSection(rows: [PhoneRow(id: "same", title: "First"), PhoneRow(id: "same", title: "Second")])])
+        controller.table.layoutIfNeeded()
+        controller.setSections([PhoneSection(rows: [PhoneRow(id: "same", title: "Remaining")])])
+        #expect(controller.table.numberOfRows(inSection: 0) == 1)
+    }
+
+    @Test func `Section copy updates without replacing the focused field`() throws {
+        let controller = PhoneTableController()
+        let field = UITextField()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        controller.setSections([PhoneSection(title: "Old title", footer: "Old footer", rows: [PhoneRow(id: "url", title: "", accessory: field)])])
+        controller.table.layoutIfNeeded()
+        field.becomeFirstResponder()
+        controller.setSections([PhoneSection(title: "New title", footer: "New footer", rows: [PhoneRow(id: "url", title: "", accessory: field)])])
+        controller.table.layoutIfNeeded()
+        let header = try #require(controller.table.headerView(forSection: 0)?.contentConfiguration as? UIListContentConfiguration)
+        let footer = try #require(controller.table.footerView(forSection: 0)?.contentConfiguration as? UIListContentConfiguration)
+        #expect(header.text == "New title")
+        #expect(footer.text == "New footer")
+        #expect(field.isFirstResponder)
+    }
+
+    @Test func `Native form keeps focused text and selection when another section changes`() {
+        let controller = PhoneTableController()
+        controller.loadViewIfNeeded()
+        let field = UITextField()
+        field.text = "https://relay.example.com"
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.setSections([
+            PhoneSection(rows: [PhoneRow(id: "url", title: "", accessory: field)]),
+            PhoneSection(rows: [PhoneRow(id: "status", title: "Connecting")])
+        ])
+        controller.table.layoutIfNeeded()
+        field.becomeFirstResponder()
+        let start = field.position(from: field.beginningOfDocument, offset: 8)!
+        field.selectedTextRange = field.textRange(from: start, to: start)
+        controller.setSections([
+            PhoneSection(rows: [PhoneRow(id: "url", title: "", accessory: field)]),
+            PhoneSection(rows: [PhoneRow(id: "status", title: "Online"), PhoneRow(id: "new", title: "Agent ready")])
+        ])
+        controller.table.layoutIfNeeded()
+        #expect(field.isFirstResponder)
+        #expect(field.text == "https://relay.example.com")
+        #expect(field.offset(from: field.beginningOfDocument, to: field.selectedTextRange!.start) == 8)
+        window.isHidden = true
+    }
+
+    @Test func `Native message editor row fits its control height`() {
+        let controller = PhoneTableController()
+        controller.loadViewIfNeeded()
+        let editor = UITextView()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 568))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        controller.setSections([PhoneSection(rows: [PhoneRow(id: "editor", title: "", accessory: editor)])])
+        controller.table.layoutIfNeeded()
+        let rect = controller.table.rectForRow(at: IndexPath(row: 0, section: 0))
+        #expect(rect.height >= 144)
+        #expect(editor.bounds.width > 0)
+        #expect(editor.bounds.width <= 320)
+        window.isHidden = true
+    }
+
+    @Test func `Sheet preserves existing Send action`() {
+        let presenter = UIViewController()
+        let composer = UIViewController()
+        let send = UIBarButtonItem(title: "Send", primaryAction: UIAction { _ in })
+        composer.navigationItem.rightBarButtonItem = send
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = presenter
+        window.makeKeyAndVisible()
+        presenter.showPhoneSheet(composer)
+        #expect(composer.navigationItem.rightBarButtonItem === send)
+        presenter.dismiss(animated: false)
+        window.isHidden = true
+    }
+}
+
+@MainActor
+struct TCAUIKitFeatureTests {
+    private func client(sendResult: Bool = false) -> AirSIMClient {
+        AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } },
+            command: { _ in },
+            sendSMS: { _, _ in .init(success: sendResult) },
+            selfTest: { AsyncStream { _ in } },
+            pairing: { AsyncStream { $0.finish() } },
+            pair: { _, _, _ in "Paired" }
+        )
+    }
+
+    @Test func `Failed SMS send preserves draft and releases sending state`() async {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        var state = MessagesFeature.State()
+        state.recipient = "+12025550100"; state.body = "Keep this draft"; state.composerPresented = true
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: {
+            $0.airSIM = client(); $0.uuid = .constant(id)
+        }
+        await store.send(.sendComposer) { $0.sending = true; $0.sendID = id }
+        await store.receive(\.sendResponse) {
+            $0.sending = false; $0.sendID = nil
+            $0.error = "Unable to send message. Your draft has been kept."
+        }
+        #expect(store.state.body == "Keep this draft")
+        #expect(store.state.composerPresented)
+    }
+
+    @Test func `SMS failure retains the backend reason and draft`() async {
+        let id = UUID()
+        var state = MessagesFeature.State(); state.recipient = "123"; state.body = "Keep me"; state.composerPresented = true
+        var dependency = client()
+        dependency.sendSMS = { _, _ in .init(success: false, error: "Cloud mode is disabled") }
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .constant(id) }
+        await store.send(.sendComposer) { $0.sending = true; $0.sendID = id }
+        await store.receive(\.sendResponse) { $0.sending = false; $0.sendID = nil; $0.error = "Cloud mode is disabled" }
+        #expect(store.state.body == "Keep me")
+    }
+
+    @Test func `Updating the recipient of an open composer preserves its body`() async {
+        var state = MessagesFeature.State(); state.recipient = "old"; state.body = "Keep this text"; state.composerPresented = true
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.compose("new")) { $0.recipient = "new" }
+        #expect(store.state.body == "Keep this text")
+    }
+
+    @Test func `Visible thread reply retains its recipient if route state was cleared`() async {
+        let id = UUID(); let recipients = LockIsolated<[String]>([])
+        var state = MessagesFeature.State(); state.reply = "Still addressed"
+        var dependency = client()
+        dependency.sendSMS = { to, _ in recipients.withValue { $0.append(to) }; return .init(success: true) }
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .constant(id) }
+        await store.send(.sendReply(to: "123")) { $0.sending = true; $0.sendID = id }
+        await store.receive(\.sendResponse) { $0.reply = ""; $0.sending = false; $0.sendID = nil }
+        #expect(recipients.value == ["123"])
+    }
+
+    @Test func `Old SMS completion cannot close a newly opened composer`() async {
+        let oldID = UUID()
+        var state = MessagesFeature.State()
+        state.recipient = "old"; state.body = "old body"; state.composerPresented = true; state.sending = true; state.sendID = oldID
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.dismissComposer) { $0.composerPresented = false; $0.sendID = nil; $0.sending = false }
+        await store.send(.compose("new")) { $0.recipient = "new"; $0.body = ""; $0.composerPresented = true }
+        await store.send(.bodyChanged("new draft")) { $0.body = "new draft" }
+        await store.send(.sendResponse(id: oldID, success: true, body: "old body", composer: true))
+        #expect(store.state.body == "new draft")
+        #expect(store.state.composerPresented)
+    }
+
+    @Test func `Old reply completion cannot clear another conversation draft`() async {
+        let oldID = UUID()
+        var state = MessagesFeature.State()
+        state.conversation = "old"; state.reply = "same text"; state.sending = true; state.sendID = oldID
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.openConversation("new")) { $0.conversation = "new"; $0.reply = ""; $0.sending = false; $0.sendID = nil }
+        await store.send(.replyChanged("same text")) { $0.reply = "same text" }
+        await store.send(.sendResponse(id: oldID, success: true, body: "same text", composer: false))
+        #expect(store.state.reply == "same text")
+    }
+
+    @Test func `Changing mode cancels streaming self test without completing it`() async {
+        let store = TestStore(initialState: SettingsFeature.State()) { SettingsFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.runSelfTest) { $0.selfTestRunning = true; $0.report = .initial }
+        await store.send(.modeChanged(.vowlan)) { $0.mode = .vowlan; $0.selfTestRunning = false; $0.report = nil }
+        await store.finish()
+        #expect(!store.state.selfTestCompleted)
+    }
+
+    @Test func `Open conversation selects destination without sharing composer state`() async {
+        let store = TestStore(initialState: MessagesFeature.State()) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.openConversation("+12025550100")) { $0.conversation = "+12025550100" }
+        #expect(!store.state.composerPresented)
+    }
+}
+
+@MainActor
+struct TCATraceCommandTests {
+    private func client(clears: LockIsolated<[Bool]>, toggles: LockIsolated<[Bool]>) -> AirSIMClient {
+        AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } }, command: { _ in },
+            sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } },
+            pairing: { AsyncStream { $0.finish() } },
+            traceRefresh: { data, clear in clears.withValue { $0.append(clear) }; return data },
+            traceEnabled: { enabled in toggles.withValue { $0.append(enabled) } },
+            pair: { _, _, _ in "" }
+        )
+    }
+
+    @Test func `Clear requested during a poll runs after the poll`() async {
+        let clears = LockIsolated<[Bool]>([])
+        var state = TraceFeature.State(); state.refreshing = true; state.refreshID = 1
+        let store = TestStore(initialState: state) { TraceFeature() } withDependencies: {
+            $0.airSIM = client(clears: clears, toggles: LockIsolated([]))
+        }
+        await store.send(.clear) { $0.pendingClear = true }
+        await store.send(.refreshed(id: 1, AgentVerboseTraceData())) { $0.refreshing = false }
+        await store.receive(\.refresh) { $0.refreshing = true; $0.refreshID = 2; $0.pendingClear = false }
+        await store.receive(\.refreshed) { $0.refreshing = false }
+        #expect(clears.value == [true])
+    }
+
+    @Test func `An old poll cannot overwrite a pending verbose preference`() async {
+        let toggles = LockIsolated<[Bool]>([])
+        var state = TraceFeature.State(); state.refreshing = true; state.refreshID = 1
+        let store = TestStore(initialState: state) { TraceFeature() } withDependencies: {
+            $0.airSIM = client(clears: LockIsolated([]), toggles: toggles)
+        }
+        await store.send(.enabledChanged(true)) { $0.data.enabled = true; $0.pendingEnabled = true }
+        await store.send(.refreshed(id: 1, AgentVerboseTraceData())) { $0.refreshing = false }
+        await store.receive(\.refresh) { $0.refreshing = true; $0.refreshID = 2; $0.pendingEnabled = nil }
+        await store.receive(\.refreshed) { $0.refreshing = false }
+        #expect(store.state.data.enabled)
+        #expect(toggles.value == [true])
+    }
+
+    @Test func `Trace completion from a disappeared screen is ignored`() async {
+        var state = TraceFeature.State(); state.refreshing = true; state.refreshID = 1
+        let store = TestStore(initialState: state) { TraceFeature() } withDependencies: {
+            $0.airSIM = client(clears: LockIsolated([]), toggles: LockIsolated([]))
+        }
+        await store.send(.disappeared) { $0.refreshing = false; $0.refreshID = 2 }
+        var stale = AgentVerboseTraceData(); stale.enabled = true
+        await store.send(.refreshed(id: 1, stale))
+        #expect(!store.state.data.enabled)
+    }
+}
+
+@MainActor
+struct TCARootNavigationTests {
+    private var client: AirSIMClient {
+        AirSIMClient(snapshots: { AsyncStream { _ in } }, command: { _ in }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+    }
+    @Test func `Cold im link selects Messages and presents composer from state`() async {
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.openURL(URL(string: "im:+12025550100")!)) { $0.selectedTab = .messages }
+        await store.receive(\.messages.compose) { $0.messages.recipient = "+12025550100"; $0.messages.composerPresented = true }
+    }
+    @Test func `Cold Live Activity URL carries call identity past a stale UI snapshot`() async throws {
+        let performed = LockIsolated<[String]>([])
+        var dependency = client
+        dependency.command = { command in
+            if case let .liveActivityAction(action, callID) = command { performed.withValue { $0.append("\(action.rawValue):\(callID)") } }
+        }
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
+        let url = try #require(AirSIMLiveActivityActionURL.make(action: .answer, callID: "call-A"))
+        await store.send(.openURL(url))
+        await store.receive(\.command)
+        await store.finish()
+        #expect(performed.value == ["answer:call-A"])
+    }
+    @Test func `Service snapshot cannot overwrite newer dial input`() async {
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.numberChanged("123")) { $0.dialNumber = "123"; $0.hasDialDraft = true }
+        var old = AirSIMSnapshot(); old.numberInput = "12"
+        await store.send(.snapshot(old)) { $0.snapshot = old; $0.lastBackendNumber = "12" }
+        #expect(store.state.dialNumber == "123")
+    }
+    @Test func `Scene teardown cancels service observation`() async {
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.start)
+        await store.send(.stop)
+        await store.finish()
+    }
+}
+
+@MainActor
+struct TCANavigationDismissalTests {
+    @Test func `Back clears thread destination so later snapshots cannot reopen it`() async {
+        var state = MessagesFeature.State(); state.conversation = "+12025550100"
+        let store = TestStore(initialState: state) { MessagesFeature() }
+        await store.send(.closeConversation) { $0.conversation = nil }
+        #expect(store.state.conversation == nil)
+    }
+    @Test func `Opening notification conversation dismisses current composer state`() async {
+        var state = MessagesFeature.State(); state.composerPresented = true; state.recipient = "other"; state.body = "draft"
+        let store = TestStore(initialState: state) { MessagesFeature() }
+        await store.send(.openConversation("+12025550100")) { $0.conversation = "+12025550100"; $0.composerPresented = false }
+        #expect(!store.state.composerPresented)
+    }
+}
+
+@MainActor
+struct UIKitNavigationBridgeTests {
+    private func presentation() -> AirSIMPresentation {
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
+        let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+        let store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        return AirSIMPresentation(store: store)
+    }
+    @Test func `Native Back reconciles Store before another render can reopen thread`() {
+        let model = presentation()
+        let controller = MessagesViewController(model: model)
+        let nav = UINavigationController(rootViewController: controller)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = nav; window.makeKeyAndVisible()
+        controller.openConversation("+12025550100")
+        #expect(nav.topViewController is MessageThreadViewController)
+        nav.popViewController(animated: false)
+        #expect(model.store.messages.conversation == nil)
+        controller.render()
+        #expect(nav.topViewController === controller)
+        window.isHidden = true
+    }
+    @Test func `Composer can present while conversation controller is visible`() async throws {
+        let model = presentation()
+        let controller = MessagesViewController(model: model)
+        let nav = UINavigationController(rootViewController: controller)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = nav; window.makeKeyAndVisible()
+        controller.openConversation("+12025550100")
+        controller.compose(recipient: "+12025550101")
+        #expect((nav.presentedViewController as? UINavigationController)?.topViewController is MessageComposerViewController)
+        #expect(model.store.messages.recipient == "+12025550101")
+        nav.dismiss(animated: false); window.isHidden = true
+    }
+}
+
+@MainActor
+struct TCASharedPreferenceTests {
+    @Test func `Other scene preferences update without replacing the active relay draft`() async {
+        var state = AirSIMFeature.State()
+        state.settings.relayURL = "https://draft.example"
+        state.settings.lastObservedRelayURL = "https://saved.example"
+        state.settings.relayHasDraft = true
+        var snapshot = AirSIMSnapshot()
+        snapshot.preferenceMode = .cloud
+        snapshot.preferenceAppearance = .dark
+        snapshot.preferenceRelayURL = "https://other.example"
+        let store = TestStore(initialState: state) { AirSIMFeature() }
+        await store.send(.snapshot(snapshot)) {
+            $0.snapshot = snapshot
+            $0.settings.mode = .cloud; $0.settings.lastObservedMode = .cloud
+            $0.settings.appearance = .dark; $0.settings.lastObservedAppearance = .dark
+            $0.settings.lastObservedRelayURL = "https://other.example"
+        }
+        #expect(store.state.settings.relayURL == "https://draft.example")
+    }
+}
+
+@MainActor
+struct UIKitConversationReplacementTests {
+    @Test func `Finishing Back for A cannot clear a newly requested B`() {
+        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+        let list = MessagesViewController(model: model)
+        let nav = UINavigationController(rootViewController: list)
+        list.loadViewIfNeeded(); list.openConversation("A")
+        model.store.send(.messages(.openConversation("B")))
+        list.navigationController(nav, didShow: list, animated: true)
+        #expect(model.store.messages.conversation == "B")
+        list.showConversationIfNeeded("B")
+        #expect((nav.topViewController as? MessageThreadViewController)?.sender == "B")
+    }
+
+    @Test func `Replacing conversation A with B does not clear B when A is removed`() {
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
+        let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+        let model = AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client })
+        let controller = MessagesViewController(model: model)
+        let nav = UINavigationController(rootViewController: controller)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = nav; window.makeKeyAndVisible()
+        controller.openConversation("A")
+        controller.openConversation("B")
+        #expect(model.store.messages.conversation == "B")
+        #expect((nav.topViewController as? MessageThreadViewController)?.sender == "B")
+        window.isHidden = true
+    }
+}
+
+@MainActor
+private final class SpeculativeNavigationController: UINavigationController {
+    var pendingStack: [UIViewController]?
+    override var topViewController: UIViewController? { pendingStack?.last ?? super.topViewController }
+    override var viewControllers: [UIViewController] {
+        get { pendingStack ?? super.viewControllers }
+        set { super.viewControllers = newValue }
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct UIKitAdversarialRegressionTests {
+    @Test func `Reapplying a conversation preserves unrelated presented sheets`() throws {
+        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        root.openSMSConversation(AirSIMPreviewFixtures.phone)
+        root.render()
+        let sheet = UIViewController()
+        root.present(sheet, animated: false)
+        #expect(root.presentedViewController === sheet)
+        root.render()
+        #expect(root.presentedViewController === sheet)
+        #expect(!sheet.isBeingDismissed)
+        root.openSMSConversation("different conversation")
+        #expect(root.presentedViewController === sheet)
+        #expect(!sheet.isBeingDismissed)
+    }
+
+    @Test func `Call teardown leaves an unrelated root sheet intact`() {
+        let model = AirSIMPreviewFixtures.presentation(callState: "active")
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        #expect(root.children.contains { $0 is ActiveCallViewController })
+        let sheet = UIViewController(); root.present(sheet, animated: false)
+        var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
+        model.store.send(.snapshot(ended)); root.render()
+        #expect(!root.children.contains { $0 is ActiveCallViewController })
+        #expect(root.presentedViewController === sheet)
+        #expect(!sheet.isBeingDismissed)
+    }
+
+    @Test func `Call keypad survives thread renders and closes with its call`() async throws {
+        let model = AirSIMPreviewFixtures.presentation(tab: .messages, callState: "active")
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        root.openSMSConversation(AirSIMPreviewFixtures.phone); root.render()
+        let call = try #require(root.children.compactMap { $0 as? ActiveCallViewController }.first)
+        call.presentKeypad(animated: false)
+        let keypad = try #require(root.presentedViewController as? UINavigationController)
+        #expect(keypad.topViewController is DTMFKeypadViewController)
+        root.render()
+        #expect(!keypad.isBeingDismissed)
+        var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
+        model.store.send(.snapshot(ended)); root.render()
+        #expect(!model.store.keypadPresented)
+        for _ in 0..<100 {
+            if keypad.presentingViewController == nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(keypad.presentingViewController == nil)
+    }
+
+    @Test func `Speculative Back appearance does not discard a live reply destination`() async {
+        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+        let list = MessagesViewController(model: model)
+        let nav = SpeculativeNavigationController(rootViewController: list)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = nav; window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        list.openConversation("123")
+        model.store.send(.messages(.replyChanged("Reply after cancelled Back")))
+        // During an interactive pop UIKit exposes the proposed stack before didShow.
+        let departingThread = nav.topViewController
+        nav.pendingStack = [list]; list.viewWillAppear(true)
+        // A backend update during a held Back gesture re-applies the same route.
+        list.showConversationIfNeeded("123")
+        nav.pendingStack = nil
+        #expect(nav.topViewController === departingThread)
+        #expect(model.store.messages.conversation == "123")
+        #expect(nav.topViewController is MessageThreadViewController)
+        await model.store.send(.messages(.sendReply(to: "123"))).finish()
+        #expect(model.store.messages.reply.isEmpty)
+    }
+
+    @Test func `Contact picker search cannot filter the Contacts tab`() {
+        let model = AirSIMPreviewFixtures.presentation(tab: .contacts)
+        model.store.send(.contactSearchChanged("Mina"))
+        let tab = ContactsViewController(model: model, onCall: { _ in }, onMessage: { _ in })
+        tab.loadViewIfNeeded(); tab.render()
+        let picker = ContactsViewController(model: model, onCall: { _ in }, onMessage: { _ in })
+        picker.onSelect = { _ in }; picker.loadViewIfNeeded(); picker.render()
+        #expect(picker.sections.first?.rows.count == 3)
+        picker.navigationItem.searchController?.searchBar.text = "Alex"
+        picker.updateSearchResults(for: picker.navigationItem.searchController!)
+        picker.render(); tab.render()
+        #expect(model.store.contactSearch == "Mina")
+        #expect(tab.navigationItem.searchController?.searchBar.text == "Mina")
+        #expect(tab.sections.first?.rows.map(\.title) == ["Mina Kim"])
+        #expect(picker.sections.first?.rows.map(\.title) == ["Alex Rivera"])
+    }
+
+    @Test func `Multiline reply grows and contracts without replacing its text view`() {
+        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+        let thread = MessageThreadViewController(model: model, sender: "123")
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = UINavigationController(rootViewController: thread); window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        thread.loadViewIfNeeded(); thread.view.layoutIfNeeded()
+        model.store.send(.messages(.replyChanged("First line\nSecond line\nThird line")))
+        thread.render(); thread.view.layoutIfNeeded()
+        #expect(thread.reply.bounds.height > 60)
+        model.store.send(.messages(.replyChanged("")))
+        thread.render(); thread.view.layoutIfNeeded()
+        #expect(thread.reply.bounds.height == 32)
     }
 }

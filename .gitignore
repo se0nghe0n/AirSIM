@@ -32,3 +32,12 @@ push-relay-worker/.env*
 
 # Retired runtime build outputs may still exist locally.
 module/
+
+# Commit the application dependency lock; other generated workspace state stays ignored.
+!iOS/AirSIM.xcodeproj/project.xcworkspace/
+iOS/AirSIM.xcodeproj/project.xcworkspace/*
+!iOS/AirSIM.xcodeproj/project.xcworkspace/xcshareddata/
+iOS/AirSIM.xcodeproj/project.xcworkspace/xcshareddata/*
+!iOS/AirSIM.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+iOS/AirSIM.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!iOS/AirSIM.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
