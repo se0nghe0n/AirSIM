@@ -1,10 +1,14 @@
-# Shared Kotlin 2.4.21 pin and two-pass compilation for the shell build.
+# Shared Kotlin pin and two-pass compilation for the shell build.
+# Build Tools 35.0.0 d8 reads Kotlin metadata only up to 2.0, but kotlinc 2.0.x
+# cannot run on a JDK 26 host. So kotlinc 2.4.21 emits language/API 2.0 against
+# kotlin-stdlib 2.0.21. Raise all three together with Build Tools.
 # Source this file from build.sh and test.sh. Checksums are sha256 of the
 # downloaded artifacts (kotlin-compiler zip and kotlin-stdlib jar).
 
 airsim_kotlin_version=2.4.21
 airsim_kotlin_compiler_sha256=7cc140e76daf416a0424a5557f99afd7ca89ebd463ea1101261e3e01c33e75cd
-airsim_kotlin_stdlib_sha256=bd8250210584cb659847dce9cda660f8e9906e5def7fbebcea93dc6dcb6a88a3
+airsim_kotlin_stdlib_version=2.0.21
+airsim_kotlin_stdlib_sha256=f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09
 
 download_verified() {
   local url=$1
@@ -30,10 +34,10 @@ airsim_prepare_kotlin() {
     "$deps/kotlin-compiler-${version}.zip" \
     "$airsim_kotlin_compiler_sha256"
   download_verified \
-    "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/${version}/kotlin-stdlib-${version}.jar" \
-    "$deps/kotlin-stdlib-${version}.jar" \
+    "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib/${airsim_kotlin_stdlib_version}/kotlin-stdlib-${airsim_kotlin_stdlib_version}.jar" \
+    "$deps/kotlin-stdlib-${airsim_kotlin_stdlib_version}.jar" \
     "$airsim_kotlin_stdlib_sha256"
-  AIRSIM_KOTLIN_STDLIB="$deps/kotlin-stdlib-${version}.jar"
+  AIRSIM_KOTLIN_STDLIB="$deps/kotlin-stdlib-${airsim_kotlin_stdlib_version}.jar"
   AIRSIM_KOTLINC="$deps/kotlinc-${version}/bin/kotlinc"
   if [ ! -x "$AIRSIM_KOTLINC" ]; then
     rm -rf "$deps/kotlinc-${version}" "$deps/kotlinc-extract-${version}"
@@ -141,6 +145,8 @@ airsim_compile_classes() (
     -Xjdk-release=17 \
     -Xlambdas=class \
     -Xsam-conversions=class \
+    -language-version 2.0 \
+    -api-version 2.0 \
     -no-stdlib \
     -classpath "$kotlin_cp" \
     -d "$dest" \

@@ -16,7 +16,7 @@ compile_test() {
 }
 
 with_stdlib() {
-  printf '%s:%s' "$1"
+  printf '%s:%s' "$1" "$AIRSIM_KOTLIN_STDLIB"
 }
 ANDROID_JAR="${ANDROID_SDK_ROOT:-/opt/homebrew/share/android-commandlinetools}/platforms/android-35/android.jar"
 
