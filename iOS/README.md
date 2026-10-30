@@ -19,6 +19,20 @@ Main targets:
 - `AirSIMLiveActivityExtension`: Lock Screen and Dynamic Island Live Activities
 - `AirSIMTests`: transport selection and protocol-boundary tests
 
+The `AirSIM` target is organized into feature groups backed by matching folders under `iOS/AirSIM/`. Add new files to the group that owns the feature:
+
+- `App`: application/scene delegates, `AppModel`, root TCA feature, root view controller, app settings
+- `Agent`: Android Agent API client, wire models, connection mode and paired-device preferences
+- `Pairing`: Samsung one-time encrypted pairing
+- `VoWLAN`: local discovery, HMAC request signing, Wi-Fi-pinned HTTP transport
+- `Cloud`: PushKit/Relay registration and commands, cloud call session, WebRTC peer
+- `Call`: CallKit, call lifecycle, audio session, virtual-call TTS, background standby and call notifications
+- `Phone`: dial pad, recents, messages, contacts and active-call screens with local history and contact stores
+- `Recording`, `Settings`, `Diagnostics`, `LiveActivity`, `Watch`: call recording, setup/settings, Agent trace, Live Activity and Watch coordination on iPhone
+- `Previews`: DEBUG preview fixtures
+
+`Info.plist`, `AirSIM.entitlements` and `AppIcon.icon` stay at the `AirSIM/` root because build settings reference those paths.
+
 ## Client capabilities
 
 - One-time encrypted pairing with an Android device; see the [verified hardware and compatibility scope](../README.md#android-compatibility-and-verification)

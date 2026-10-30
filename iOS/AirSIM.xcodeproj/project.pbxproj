@@ -211,14 +211,11 @@
 			isa = PBXGroup;
 			children = (
 				D10000000000000000000002 /* AirSIM */,
-				BB0000000000000000000004 /* WebRTC-LICENSE */,
-                BABC00000000000000000003 /* ThirdPartyNotices.txt */,
-				BB0000000000000000000006 /* WebRTC-PATENTS */,
-				BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */,
 				D10000000000000000000004 /* Shared */,
 				D10000000000000000000005 /* AirSIMLiveActivityExtension */,
 				D10000000000000000000006 /* AirSIMWatchApp */,
 				D30000000000000000000001 /* AirSIMTests */,
+				D2000000000000000000000E /* Licenses */,
 				D10000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -226,45 +223,160 @@
 		D10000000000000000000002 /* AirSIM */ = {
 			isa = PBXGroup;
 			children = (
-				B10000000000000000000001 /* AirSIMIPadApp.swift */,
-				B10000000000000000000002 /* APIModels.swift */,
-				B10000000000000000000003 /* AirSIMAPI.swift */,
-				B10000000000000000000011 /* WiredHTTPTransport.swift */,
-				B10000000000000000000012 /* BackgroundStandbyController.swift */,
-				B10000000000000000000014 /* LiveActivityController.swift */,
-				B10000000000000000000004 /* AppSettings.swift */,
-				B10000000000000000000005 /* ContactStore.swift */,
-				B10000000000000000000006 /* AudioSessionController.swift */,
-				B10000000000000000000007 /* AppModel.swift */,
-				B10000000000000000000010 /* CallKitController.swift */,
-				B1000000000000000000001B /* VoIPPushController.swift */,
-				B10000000000000000000024 /* IPhoneCloudCallSession.swift */,
-				BB0000000000000000000001 /* CloudWebRTC.swift */,
-				BB0000000000000000000010 /* CallRecordingStore.swift */,
-				BB0000000000000000000011 /* CallRecordingWebRTCAudio.swift */,
-				BB0000000000000000000012 /* CallRecordingsView.swift */,
-				B1000000000000000000002B /* CallLifecycleStore.swift */,
-				B10000000000000000000025 /* VirtualCallTTSController.swift */,
-				B10000000000000000000029 /* AgentVerboseTrace.swift */,
-				B1000000000000000000002A /* AgentVerboseTraceView.swift */,
-				B1000000000000000000002C /* SamsungPairingCrypto.swift */,
-				B1000000000000000000002D /* SamsungPairingClient.swift */,
-				B1000000000000000000002E /* SamsungPairingView.swift */,
-				B1000000000000000000002F /* VoWLANAuth.swift */,
-				B10000000000000000000030 /* VoWLANController.swift */,
-				B10000000000000000000031 /* ConnectionModePreference.swift */,
-				B1000000000000000000001D /* WatchCallCoordinator.swift */,
-				B10000000000000000000008 /* RootView.swift */,
-                BABC00000000000000000001 /* AirSIMFeature.swift */,
-                BABC00000000000000000004 /* AirSIMPreviewSupport.swift */,
-				B10000000000000000000009 /* PhoneViews.swift */,
-				B1000000000000000000000A /* AirSIMSetupView.swift */,
-				B10000000000000000000018 /* LocalHistoryStore.swift */,
+				D20000000000000000000001 /* App */,
+				D20000000000000000000002 /* Agent */,
+				D20000000000000000000003 /* Pairing */,
+				D20000000000000000000004 /* VoWLAN */,
+				D20000000000000000000005 /* Cloud */,
+				D20000000000000000000006 /* Call */,
+				D20000000000000000000007 /* Phone */,
+				D20000000000000000000008 /* Recording */,
+				D20000000000000000000009 /* Settings */,
+				D2000000000000000000000A /* Diagnostics */,
+				D2000000000000000000000B /* LiveActivity */,
+				D2000000000000000000000C /* Watch */,
+				D2000000000000000000000D /* Previews */,
 				B10000000000000000000019 /* AppIcon.icon */,
 				B1000000000000000000000B /* Info.plist */,
 				B1000000000000000000001C /* AirSIM.entitlements */,
 			);
 			path = AirSIM;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000001 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000001 /* AirSIMIPadApp.swift */,
+				B10000000000000000000007 /* AppModel.swift */,
+				BABC00000000000000000001 /* AirSIMFeature.swift */,
+				B10000000000000000000008 /* RootView.swift */,
+				B10000000000000000000004 /* AppSettings.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000002 /* Agent */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000003 /* AirSIMAPI.swift */,
+				B10000000000000000000002 /* APIModels.swift */,
+				B10000000000000000000031 /* ConnectionModePreference.swift */,
+			);
+			path = Agent;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000003 /* Pairing */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000002D /* SamsungPairingClient.swift */,
+				B1000000000000000000002C /* SamsungPairingCrypto.swift */,
+				B1000000000000000000002E /* SamsungPairingView.swift */,
+			);
+			path = Pairing;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000004 /* VoWLAN */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000030 /* VoWLANController.swift */,
+				B1000000000000000000002F /* VoWLANAuth.swift */,
+				B10000000000000000000011 /* WiredHTTPTransport.swift */,
+			);
+			path = VoWLAN;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000005 /* Cloud */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000001B /* VoIPPushController.swift */,
+				B10000000000000000000024 /* IPhoneCloudCallSession.swift */,
+				BB0000000000000000000001 /* CloudWebRTC.swift */,
+			);
+			path = Cloud;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000006 /* Call */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000010 /* CallKitController.swift */,
+				B1000000000000000000002B /* CallLifecycleStore.swift */,
+				B10000000000000000000006 /* AudioSessionController.swift */,
+				B10000000000000000000025 /* VirtualCallTTSController.swift */,
+				B10000000000000000000012 /* BackgroundStandbyController.swift */,
+			);
+			path = Call;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000007 /* Phone */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000009 /* PhoneViews.swift */,
+				B10000000000000000000018 /* LocalHistoryStore.swift */,
+				B10000000000000000000005 /* ContactStore.swift */,
+			);
+			path = Phone;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000008 /* Recording */ = {
+			isa = PBXGroup;
+			children = (
+				BB0000000000000000000010 /* CallRecordingStore.swift */,
+				BB0000000000000000000011 /* CallRecordingWebRTCAudio.swift */,
+				BB0000000000000000000012 /* CallRecordingsView.swift */,
+			);
+			path = Recording;
+			sourceTree = "<group>";
+		};
+		D20000000000000000000009 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000000A /* AirSIMSetupView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		D2000000000000000000000A /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000029 /* AgentVerboseTrace.swift */,
+				B1000000000000000000002A /* AgentVerboseTraceView.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
+		D2000000000000000000000B /* LiveActivity */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000014 /* LiveActivityController.swift */,
+			);
+			path = LiveActivity;
+			sourceTree = "<group>";
+		};
+		D2000000000000000000000C /* Watch */ = {
+			isa = PBXGroup;
+			children = (
+				B1000000000000000000001D /* WatchCallCoordinator.swift */,
+			);
+			path = Watch;
+			sourceTree = "<group>";
+		};
+		D2000000000000000000000D /* Previews */ = {
+			isa = PBXGroup;
+			children = (
+				BABC00000000000000000004 /* AirSIMPreviewSupport.swift */,
+			);
+			path = Previews;
+			sourceTree = "<group>";
+		};
+		D2000000000000000000000E /* Licenses */ = {
+			isa = PBXGroup;
+			children = (
+				BABC00000000000000000003 /* ThirdPartyNotices.txt */,
+				BB0000000000000000000004 /* WebRTC-LICENSE */,
+				BB0000000000000000000006 /* WebRTC-PATENTS */,
+				BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */,
+			);
+			name = Licenses;
 			sourceTree = "<group>";
 		};
 		D10000000000000000000003 /* Products */ = {
