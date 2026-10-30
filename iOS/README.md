@@ -14,7 +14,7 @@ iOS/AirSIM.xcodeproj
 
 Main targets:
 
-- `AirSIM`: native UIKit iPhone / iPad app (`AirSIMIPadApp` application delegate, `AirSIMSceneDelegate`, and `RootViewController`)
+- `AirSIM`: native UIKit iPhone / iPad app (`AirSIMAppDelegate`, `AirSIMSceneDelegate`, and `RootViewController`)
 - `AirSIMWatchApp`: Apple Watch App
 - `AirSIMLiveActivityExtension`: Lock Screen and Dynamic Island Live Activities
 - `AirSIMTests`: transport selection and protocol-boundary tests

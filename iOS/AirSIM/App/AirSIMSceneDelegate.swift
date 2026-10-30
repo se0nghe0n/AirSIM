@@ -1,30 +1,10 @@
 import UIKit
 
-/// Notification infrastructure is installed before any foreground UI or AppModel is created.
-@main
-@MainActor
-final class AirSIMIPadApp: AirSIMNotificationDelegate {
-    override func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-#if DEBUG
-        guard !AirSIMPreviewEnvironment.isActive else { return true }
-#endif
-        LiveActivityCallActionDispatcher.shared.handler = { action, callID in
-            if CallKitController.shared.managesCurrentCall {
-                try await CallKitController.shared.performLiveActivityAction(action, callID: callID)
-            } else {
-                try await AirSIMUIModel.shared.performLiveActivityAction(action, callID: callID)
-            }
-        }
-        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-    }
-}
-
-@MainActor
-enum AirSIMUIModel {
-    static let shared = AppModel()
-    static let settings = AppSettings()
-}
-
+/// Owns the window for the app's single scene. A background-only PushKit launch connects the scene
+/// without building UI; RootViewController and AppModel start on the first foreground transition.
+///
+/// The class name is referenced by `UISceneDelegateClassName` in Info.plist and by persisted scene
+/// sessions, so keep it stable.
 @MainActor
 final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
@@ -62,7 +42,8 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
         guard !AirSIMPreviewEnvironment.isActive else { return }
 #endif
         connectUI()
-        (UIApplication.shared.delegate as? AirSIMNotificationDelegate)?.applicationDidBecomeActive(UIApplication.shared)
+        // Scene-based apps no longer receive applicationDidBecomeActive on the app delegate.
+        (UIApplication.shared.delegate as? AirSIMAppDelegate)?.applicationDidBecomeActive(UIApplication.shared)
         if root != nil { AirSIMUIModel.shared.didBecomeActive() }
         root?.consumePendingSMS()
     }

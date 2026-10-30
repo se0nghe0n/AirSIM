@@ -11,7 +11,8 @@
         AABC00000000000000000003 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000003; };
         AABC00000000000000000001 /* AirSIMFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000001; };
         AABC00000000000000000002 /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = EABC00000000000000000001; };
-		A10000000000000000000001 /* AirSIMIPadApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* AirSIMIPadApp.swift */; };
+		A10000000000000000000001 /* AirSIMAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* AirSIMAppDelegate.swift */; };
+		A10000000000000000000032 /* AirSIMSceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032 /* AirSIMSceneDelegate.swift */; };
 		A10000000000000000000002 /* APIModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* APIModels.swift */; };
 		A10000000000000000000003 /* AirSIMAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* AirSIMAPI.swift */; };
 		A10000000000000000000004 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* AppSettings.swift */; };
@@ -118,7 +119,8 @@
         BABC00000000000000000004 /* AirSIMPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMPreviewSupport.swift; sourceTree = "<group>"; };
         BABC00000000000000000003 /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
         BABC00000000000000000001 /* AirSIMFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMFeature.swift; sourceTree = "<group>"; };
-		B10000000000000000000001 /* AirSIMIPadApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMIPadApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000001 /* AirSIMAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMAppDelegate.swift; sourceTree = "<group>"; };
+		B10000000000000000000032 /* AirSIMSceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMSceneDelegate.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* APIModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIModels.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* AirSIMAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMAPI.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
@@ -246,7 +248,8 @@
 		D20000000000000000000001 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				B10000000000000000000001 /* AirSIMIPadApp.swift */,
+				B10000000000000000000001 /* AirSIMAppDelegate.swift */,
+				B10000000000000000000032 /* AirSIMSceneDelegate.swift */,
 				B10000000000000000000007 /* AppModel.swift */,
 				BABC00000000000000000001 /* AirSIMFeature.swift */,
 				B10000000000000000000008 /* RootView.swift */,
@@ -598,7 +601,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000001 /* AirSIMIPadApp.swift in Sources */,
+				A10000000000000000000001 /* AirSIMAppDelegate.swift in Sources */,
+				A10000000000000000000032 /* AirSIMSceneDelegate.swift in Sources */,
 				A10000000000000000000002 /* APIModels.swift in Sources */,
 				A10000000000000000000003 /* AirSIMAPI.swift in Sources */,
 				A1000000000000000000000F /* WiredHTTPTransport.swift in Sources */,
