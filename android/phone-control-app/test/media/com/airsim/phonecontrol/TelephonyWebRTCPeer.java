@@ -38,6 +38,7 @@ final class TelephonyWebRTCPeer implements AutoCloseable {
         }
         return disposal;
     }
+    String failureReason() { return "fake_carrier_failure"; }
     void completeDisposal() { disposal.complete(null); }
     void failDisposal() { disposal.completeExceptionally(new IllegalStateException("fake_disposal_failure")); }
     public void close() { closeAsync(); }

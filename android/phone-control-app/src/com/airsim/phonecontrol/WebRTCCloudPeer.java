@@ -107,11 +107,14 @@ final class WebRTCCloudPeer implements Closeable {
                     JSONObject response = request(identity("poll"));
                     JSONObject event = response.optJSONObject("event");
                     if (event != null) {
-                        if ("webrtc_failed".equals(event.optString("status"))) { fail(); return; }
+                        if ("webrtc_failed".equals(event.optString("status"))) {
+                            fail(event.optString("reason", "carrier_media_unavailable"));
+                            return;
+                        }
                         signals.send(event);
                     }
-                    if (!response.optBoolean("active")) fail();
-                } catch (Exception | LinkageError error) { fail(); }
+                    if (!response.optBoolean("active")) fail("privileged_peer_inactive");
+                } catch (Exception | LinkageError error) { fail("privileged_request_failed"); }
             }, 0, 40, TimeUnit.MILLISECONDS);
         });
     }
@@ -178,14 +181,26 @@ final class WebRTCCloudPeer implements Closeable {
         if (closed.get()) return;
         try { worker.execute(() -> {
             if (closed.get()) return;
-            try { work.run(); } catch (Exception | LinkageError error) { fail(); }
+            try { work.run(); } catch (Exception | LinkageError error) {
+                // Only fixed local phrases become codes; network exception text is never reported.
+                String message = error.getMessage();
+                fail("privileged_media_unavailable".equals(message) ? "privileged_media_unavailable"
+                        : "ICE configuration unavailable".equals(message) ? "ice_configuration_unavailable"
+                        : "privileged_request_failed");
+            }
         }); } catch (RejectedExecutionException ignored) {}
     }
 
-    private void fail() {
+    private void fail(String reason) {
         if (closed.get()) return;
         close();
-        BridgeLog.info("privileged_webrtc_unavailable");
+        BridgeLog.info("privileged_webrtc_unavailable reason=" + reason);
+        if (!hostOnly) {
+            // Diagnostic only: the owner sees why the agent is about to rebuild its media socket.
+            try { signals.send(new JSONObject().put("status", "agent_media_failed").put("message", reason)
+                    .put("call_uuid", callUUID).put("generation", generation)); }
+            catch (Exception ignored) {}
+        }
         failed.run();
     }
 

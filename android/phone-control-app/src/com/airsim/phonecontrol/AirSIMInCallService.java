@@ -69,6 +69,7 @@ public final class AirSIMInCallService extends InCallService {
         BridgeLog.debug("telecom_state_changed call_id=" + DebugRedactor.safeIdentifier(callId)
                 + " direction=" + callDirection + " state=" + wireState);
         if (!"unknown".equals(wireState) && deduplicator.shouldSend(callId, callDirection, wireState, callNumber)) {
+			if ("active".equals(wireState)) StandaloneCloudMediaManager.get(this).telecomCallActive(callId);
 			emit(callId, callDirection, wireState, callNumber);
 		}
     }

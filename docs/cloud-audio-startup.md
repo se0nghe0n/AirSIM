@@ -32,3 +32,15 @@ As soon as the call's Agent signaling socket connects, Android starts a call-sco
 Answer startup joins the same in-flight request or reuses its still-valid result. The lease starts at request time, with a safety margin; expired or missing-TTL preparation is fetched again. A failed speculative request is retried through normal startup and does not fail an unanswered call. Closing or replacing the call cancels preparation and cannot start native audio afterward. Credentials remain in the ordinary app and are never included in logs.
 
 The Android event `webrtc_ice_ready` reports `prefetched` and `wait_ms`. A ready prefetch removes credential-fetch waiting from the post-answer path. This does not remove ICE connectivity checks, native initialization, carrier routing, or the need for physical latency measurement.
+
+## Carrier attach and setup recovery
+
+Android attaches carrier audio as soon as `AirSIMInCallService` sees Telecom ACTIVE, instead of waiting for the 2-second agent loop and its Relay HTTP work. The loop still publishes the lifecycle; `active` is sent to the owner once per media socket.
+
+If the carrier device fails before its TELEPHONY route is first verified, the native peer releases that device and attaches a new one to the same peer: up to 4 attempts, 300 ms apart. ICE/DTLS and the call socket stay up, so the iPhone does not renegotiate. The route check is unchanged, and a loss after the route was verified still ends the peer. Each failure has a non-sensitive reason code (for example `carrier_route_unverified`, `ice_failed`, `sdp_set_failed`, `owner_lease_expired`). The app logs it as `privileged_webrtc_unavailable reason=…` and sends the owner a diagnostic `agent_media_failed` status before rebuilding its media socket.
+
+When an answer arrives while the previous native peer is still releasing resources, Android waits up to 3 seconds for the privileged service instead of replying `action_error`. A heartbeat that reported media unavailable is refreshed on the next 2-second agent cycle once the service is ready again, rather than up to 30 seconds later.
+
+The iPhone resends `answer` after 1 second on `answer_pending`, `action_error` or `action_rejected`. This happens only inside the existing confirmation window, so the overall budget and its final failure state are unchanged. Relay `webrtc_failed` rejections without a session id that read `peer unavailable…` or `stale signaling session` no longer rebuild the iPhone socket; the Relay's `peer_connected` for the agent already triggers renegotiation. A native ICE disconnect before audio was ever ready is traced as `native_disconnected` and is not presented as **Retrying Cloud Audio**. CallKit audio activation no longer waits for its trace write.
+
+These are source changes validated by JVM and simulator tests. Carrier-route timing on Pixel 8 Pro and Q25, and end-to-end setup latency, still require physical calls.

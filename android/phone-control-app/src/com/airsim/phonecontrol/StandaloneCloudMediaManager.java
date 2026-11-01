@@ -14,6 +14,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 final class StandaloneCloudMediaManager implements Closeable {
+    private static final long MEDIA_AVAILABLE_WAIT_NANOS = 3_000_000_000L;
     private static volatile StandaloneCloudMediaManager instance;
 
     static StandaloneCloudMediaManager get(android.content.Context context) {
@@ -64,6 +65,23 @@ final class StandaloneCloudMediaManager implements Closeable {
         if (call == null) return;
         try { start(Descriptor.from(call)); }
         catch (Exception error) { BridgeLog.error("standalone_outgoing_media_invalid", error); }
+    }
+
+    /**
+     * Attach carrier audio as soon as Telecom reports the call active. The agent loop still
+     * publishes the lifecycle; it no longer gates the audio route behind its 2 s cycle and HTTP work.
+     */
+    void telecomCallActive(String androidID) {
+        if (androidID == null || androidID.isBlank()) return;
+        try {
+            sessions.execute(() -> {
+                CloudSession session;
+                synchronized (lock) {
+                    session = active != null && androidID.equals(active.descriptor.androidID) ? active : null;
+                }
+                if (session != null) session.carrierBecameActive();
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {}
     }
 
     String androidCallIDFor(JSONObject call) {
@@ -223,6 +241,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile String mediaTransport;
         volatile boolean mediaStarted;
         private boolean carrierActive;
+        private StandaloneWebSocket activeAnnounced;
 
         CloudSession(Descriptor descriptor) {
             this.descriptor = descriptor;
@@ -284,7 +303,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
                 if ("answer".equals(action)) mediaTransport = control.optString("media_transport", descriptor.mediaTransport);
                 if ("answer".equals(action) && (!CloudCallMedia.WEBRTC.equals(mediaTransport)
-                        || !ShizukuBridgeManager.get(context).mediaAvailable())) {
+                        || !awaitMediaAvailable(owner))) {
                     owner.writeText(status("action_error", "privileged_media_unavailable"));
                     continue;
                 }
@@ -346,8 +365,25 @@ final class StandaloneCloudMediaManager implements Closeable {
             carrierActive = true;
             if (!running || !mediaStarted || webRTC == null || webSocket == null) return;
             webRTC.activateCarrierAudio();
+            // Telecom and the agent loop can both report ACTIVE. Announce it once per socket.
+            if (activeAnnounced == webSocket) return;
+            activeAnnounced = webSocket;
             try { webSocket.writeText(status("active", "")); }
             catch (Exception error) { closeSocket(webSocket); }
+        }
+
+        /**
+         * A previous peer can still be releasing native/carrier resources right after a media
+         * rebuild. Wait briefly instead of rejecting the owner's answer and costing it a 3 s retry.
+         */
+        private boolean awaitMediaAvailable(StandaloneWebSocket owner) throws InterruptedException {
+            ShizukuBridgeManager bridge = ShizukuBridgeManager.get(context);
+            long deadline = System.nanoTime() + MEDIA_AVAILABLE_WAIT_NANOS;
+            while (true) {
+                if (bridge.mediaAvailable()) return true;
+                if (!running || webSocket != owner || System.nanoTime() >= deadline) return false;
+                Thread.sleep(150);
+            }
         }
 
         private void prepareWebRTC(StandaloneWebSocket owner) {

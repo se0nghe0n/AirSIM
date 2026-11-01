@@ -26,6 +26,7 @@ final class TelephonyAudioDevice implements Closeable {
     private volatile AudioTrack track;
     private volatile Thread worker;
     private volatile Thread uplink;
+    private volatile String failureReason = "carrier_media_unavailable";
 
     TelephonyAudioDevice(WebRTCPcmBuffer capture, WebRTCPcmBuffer playback, Runnable ready, Runnable failed) {
         this.capture = capture; this.playback = playback; this.ready = ready; this.failed = failed;
@@ -95,7 +96,7 @@ final class TelephonyAudioDevice implements Closeable {
                 if (count > 0) capture.offer(frame, 0, count & ~1);
             }
         } catch (Exception | LinkageError error) {
-            if (!closed.get()) failed.run(); // Never log SDK/native or private audio data.
+            if (!closed.get()) fail(error); // Never log SDK/native or private audio data.
         } finally {
             Arrays.fill(frame, (byte) 0);
             // The peer's signaling executor owns disposal, including joining this worker.
@@ -113,7 +114,24 @@ final class TelephonyAudioDevice implements Closeable {
                     throw new IOException("carrier route lost");
                 try { write(output, frame); } finally { Arrays.fill(frame, (byte) 0); }
             }
-        } catch (Exception | LinkageError error) { if (!closed.get()) failed.run(); }
+        } catch (Exception | LinkageError error) { if (!closed.get()) fail(error); }
+    }
+
+    /** Stable, non-sensitive code for the most recent carrier failure. */
+    String failureReason() { return failureReason; }
+
+    private void fail(Throwable error) {
+        failureReason = reason(error);
+        failed.run();
+    }
+
+    // Our own IOException messages are fixed phrases. Other errors expose only their type.
+    static String reason(Throwable error) {
+        String value = error instanceof IOException && error.getMessage() != null
+                ? error.getMessage() : error instanceof SecurityException
+                ? "carrier permission denied" : "carrier " + error.getClass().getSimpleName();
+        value = value.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "_");
+        return value.length() > 48 ? value.substring(0, 48) : value;
     }
 
     private void write(AudioTrack output, byte[] frame) throws IOException {

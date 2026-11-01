@@ -28,6 +28,12 @@ final class TelephonyWebRTCPeer implements Closeable {
     private final WebRTCStatistics statistics = new WebRTCStatistics();
     private boolean statisticsPending;
     private boolean disposalFailed;
+    // Carrier attachment can race the Telecom/audio-policy transition into the call. Retry only
+    // before the verified route first reports ready; the TELEPHONY route check is never relaxed.
+    static final int CARRIER_ATTACH_ATTEMPTS = 4;
+    static final long CARRIER_ATTACH_RETRY_MILLIS = 300;
+    private int carrierAttempts;
+    private volatile String failureReason = "webrtc_failed";
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CompletableFuture<Void> disposal = new CompletableFuture<>();
     private final WebRTCPcmBuffer capture = new WebRTCPcmBuffer();
@@ -68,14 +74,14 @@ final class TelephonyWebRTCPeer implements Closeable {
                     .setUseStereoInput(false).setUseStereoOutput(false)
                     .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
                     .setAudioRecordErrorCallback(new JavaAudioDeviceModule.AudioRecordErrorCallback() {
-                        public void onWebRtcAudioRecordInitError(String error) { fail(); }
-                        public void onWebRtcAudioRecordStartError(JavaAudioDeviceModule.AudioRecordStartErrorCode code, String error) { fail(); }
-                        public void onWebRtcAudioRecordError(String error) { fail(); }
+                        public void onWebRtcAudioRecordInitError(String error) { fail("audio_record_init_error"); }
+                        public void onWebRtcAudioRecordStartError(JavaAudioDeviceModule.AudioRecordStartErrorCode code, String error) { fail("audio_record_start_error"); }
+                        public void onWebRtcAudioRecordError(String error) { fail("audio_record_error"); }
                     })
                     .setAudioTrackErrorCallback(new JavaAudioDeviceModule.AudioTrackErrorCallback() {
-                        public void onWebRtcAudioTrackInitError(String error) { fail(); }
-                        public void onWebRtcAudioTrackStartError(JavaAudioDeviceModule.AudioTrackStartErrorCode code, String error) { fail(); }
-                        public void onWebRtcAudioTrackError(String error) { fail(); }
+                        public void onWebRtcAudioTrackInitError(String error) { fail("audio_playout_init_error"); }
+                        public void onWebRtcAudioTrackStartError(JavaAudioDeviceModule.AudioTrackStartErrorCode code, String error) { fail("audio_playout_start_error"); }
+                        public void onWebRtcAudioTrackError(String error) { fail("audio_playout_error"); }
                     })
                     .setAudioBufferCallback((buffer, format, channels, rate, count, time) -> {
                         // With AudioRecord disabled this callback, not the SDK, owns the clock.
@@ -124,11 +130,40 @@ final class TelephonyWebRTCPeer implements Closeable {
 
     private void startCarrierAudio() {
         if (closed.get() || device != null) return;
-        device = new TelephonyAudioDevice(capture, playback, () -> {
+        carrierAttempts++;
+        TelephonyAudioDevice[] attempt = new TelephonyAudioDevice[1];
+        attempt[0] = new TelephonyAudioDevice(capture, playback, () -> {
             deviceReady = true;
             submit(() -> { readiness.deviceReady(); maybeEmitReady(); });
-        }, this::fail);
+        }, () -> carrierFailed(attempt[0]));
+        device = attempt[0];
         if (!closed.get()) device.start();
+    }
+
+    /** Retry a carrier device that failed before its route was verified, keeping ICE/DTLS alive. */
+    private void carrierFailed(TelephonyAudioDevice failed) {
+        submit(() -> {
+            if (device != failed) return;
+            String reason = failed.failureReason();
+            if (deviceReady || carrierAttempts >= CARRIER_ATTACH_ATTEMPTS) {
+                failureReason = reason;
+                throw new IOException(reason);
+            }
+            device = null;
+            try { failed.close(); }
+            catch (RuntimeException | LinkageError error) {
+                // A worker may still hold native handles. Never reuse its buffers or claim disposal.
+                disposalFailed = true;
+                throw new IOException("carrier_cleanup_failed");
+            }
+            capture.reopen(); playback.reopen();
+            if (closed.get()) { capture.close(); playback.close(); return; }
+            BridgeLog.info("standalone_carrier_attach_retry attempt=" + carrierAttempts + " reason=" + reason);
+            try {
+                signaling.schedule(() -> submit(this::startCarrierAudio),
+                        CARRIER_ATTACH_RETRY_MILLIS, TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException closing) { /* Peer is closing. */ }
+        });
     }
 
     static synchronized void initialize(Context context) {
@@ -323,8 +358,8 @@ final class TelephonyWebRTCPeer implements Closeable {
         DescriptionObserver(String id) { this.id = id; }
         public void onCreateSuccess(SessionDescription description) {}
         public void onSetSuccess() {}
-        public void onCreateFailure(String error) { submit(() -> { if (id.equals(sessionID)) fail(); }); }
-        public void onSetFailure(String error) { submit(() -> { if (id.equals(sessionID)) fail(); }); }
+        public void onCreateFailure(String error) { submit(() -> { if (id.equals(sessionID)) fail("sdp_create_failed"); }); }
+        public void onSetFailure(String error) { submit(() -> { if (id.equals(sessionID)) fail("sdp_set_failed"); }); }
     }
 
     private static List<PeerConnection.IceServer> parseICE(JSONArray servers, boolean hostOnly) throws Exception {
@@ -359,15 +394,27 @@ final class TelephonyWebRTCPeer implements Closeable {
         if (closed.get()) return;
         try { signaling.execute(() -> {
             if (closed.get()) return;
-            try { work.run(); } catch (Exception | LinkageError error) { fail(); }
+            try { work.run(); } catch (Exception | LinkageError error) { fail(reason(error)); }
         }); } catch (RejectedExecutionException ignored) {}
     }
 
-    private void fail() {
+    /** Stable, non-sensitive failure code. SDK messages may contain SDP/ICE and are never used. */
+    String failureReason() { return failureReason; }
+
+    private static String reason(Throwable error) {
+        String value = error instanceof IOException && error.getMessage() != null ? error.getMessage()
+                : "media_cleanup_failed".equals(error.getMessage()) ? "media_cleanup_failed"
+                : "webrtc " + error.getClass().getSimpleName();
+        value = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "_");
+        return value.length() > 48 ? value.substring(0, 48) : value;
+    }
+
+    private void fail(String reason) {
         if (closed.get()) return;
+        failureReason = reason;
         close();
         // Generic diagnostics only: SDK errors may contain SDP/ICE credentials.
-        BridgeLog.info("standalone_webrtc_failed");
+        BridgeLog.info("standalone_webrtc_failed reason=" + reason);
         failed.run();
     }
 

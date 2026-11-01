@@ -117,16 +117,20 @@ final class PrivilegedMediaService implements Closeable {
     private synchronized void enqueue(String key, JSONObject signal) throws Exception {
         if (closed || closing || !key.equals(owner) || peer == null) return;
         PrivilegedMediaProtocol.bounded(signal.toString());
-        if (events.size() >= PrivilegedMediaProtocol.MAX_EVENTS) { fail(key); return; }
+        if (events.size() >= PrivilegedMediaProtocol.MAX_EVENTS) { fail(key, "event_queue_overflow"); return; }
         events.addLast(signal);
     }
 
     private synchronized void fail(String key) {
+        fail(key, peer == null ? "carrier_media_unavailable" : peer.failureReason());
+    }
+
+    private synchronized void fail(String key, String reason) {
         if (closing || !key.equals(owner) || peer == null) return;
         stopOwned();
         events.clear();
         try { events.add(new JSONObject().put("status", "webrtc_failed")
-                .put("call_uuid", callUUID).put("generation", generation).put("reason", "carrier_media_unavailable")); }
+                .put("call_uuid", callUUID).put("generation", generation).put("reason", reason)); }
         catch (Exception ignored) {}
     }
 
@@ -159,7 +163,7 @@ final class PrivilegedMediaService implements Closeable {
     }
 
     private synchronized void expireOwner() {
-        if (peer != null && !closing && now() - lastPoll > PrivilegedMediaProtocol.OWNER_LEASE_MILLIS) fail(owner);
+        if (peer != null && !closing && now() - lastPoll > PrivilegedMediaProtocol.OWNER_LEASE_MILLIS) fail(owner, "owner_lease_expired");
     }
 
     private static long now() { return android.os.SystemClock.elapsedRealtime(); }

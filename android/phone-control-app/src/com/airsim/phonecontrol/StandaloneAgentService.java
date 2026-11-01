@@ -32,6 +32,7 @@ public final class StandaloneAgentService extends Service {
     private StandaloneRelayClient relay;
     private int syncedRegistrationHash;
     private long lastHeartbeat;
+    private boolean lastHeartbeatMediaReady;
     private long lastCommandPoll;
     private volatile StandaloneWebSocket commandSocket;
     private volatile boolean commandChannelConnected;
@@ -112,7 +113,7 @@ public final class StandaloneAgentService extends Service {
                 }
                 syncRegistration(registration);
                 long now = System.currentTimeMillis();
-                if (now - lastHeartbeat >= 30_000) sendHeartbeat(registration);
+                if (now - lastHeartbeat >= 30_000 || heartbeatMediaRecovered()) sendHeartbeat(registration);
                 flushEvents(registration);
                 if (CommandPollingPolicy.shouldPoll(commandChannelConnected, lastCommandPoll, now)) {
                     lastCommandPoll = now;
@@ -159,7 +160,17 @@ public final class StandaloneAgentService extends Service {
                 .put("cellular_recovery", "not_required").put("ecm_carrier", "android-default");
         relay.postJSON(registration, "/v1/events/heartbeat", heartbeat, 12_000);
         lastHeartbeat = System.currentTimeMillis();
+        lastHeartbeatMediaReady = mediaReady;
         store.recordSuccess();
+    }
+
+    /**
+     * The Relay admits dial/answer from the latest heartbeat. If that heartbeat caught the
+     * privileged service between calls, report its recovery on the next 2 s cycle, not 30 s later.
+     */
+    private boolean heartbeatMediaRecovered() {
+        return lastHeartbeat != 0 && !lastHeartbeatMediaReady
+                && ShizukuBridgeManager.get(this).mediaAvailable();
     }
 
     private void pollCommands(JSONObject registration, long generation) throws Exception {

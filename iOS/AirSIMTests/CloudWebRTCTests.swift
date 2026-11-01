@@ -836,4 +836,46 @@ struct CloudAudioStatusTests {
         #expect(CallAudioStatusPresentation.text(localAudioActive: false, cloudState: .connected)
                 == "Cloud Audio Connected")
     }
+
+    @Test func `Native disconnect before audio is ready is not presented as a retry`() {
+        #expect(CloudCallAudioState.starting.afterNativeDisconnect(maximumAttempts: 4) == .starting)
+        #expect(CloudCallAudioState.idle.afterNativeDisconnect(maximumAttempts: 4) == .idle)
+        #expect(CloudCallAudioState.connected.afterNativeDisconnect(maximumAttempts: 4)
+                == .connecting(attempt: 1, maximumAttempts: 4))
+        let retrying = CloudCallAudioState.connecting(attempt: 2, maximumAttempts: 4)
+        #expect(retrying.afterNativeDisconnect(maximumAttempts: 4) == retrying)
+    }
+
+    @Test func `Not-yet answer replies resend soon and other controls do not`() {
+        for status in ["answer_pending", "action_error", "action_rejected"] {
+            #expect(CloudCallAnswerPolicy.shouldReplaySoon(status: status, action: nil))
+            #expect(CloudCallAnswerPolicy.shouldReplaySoon(status: status, action: "answer"))
+            #expect(!CloudCallAnswerPolicy.shouldReplaySoon(status: status, action: "end"))
+        }
+        for status in ["answer_ok", "media_prepared", "action_forwarded", "webrtc_failed"] {
+            #expect(!CloudCallAnswerPolicy.shouldReplaySoon(status: status, action: nil))
+        }
+        #expect(CloudCallAnswerPolicy.quickReplayDelay < CloudCallAnswerPolicy.confirmationDelays[1])
+    }
+
+    @Test func `Relay rejections recovered by peer_connected do not rebuild the socket`() throws {
+        let current = UUID()
+        #expect(!CloudWebRTCFailurePolicy.requiresRebuild(
+            sessionID: nil, currentSessionID: current,
+            error: "peer unavailable; renegotiate after peer_connected"))
+        #expect(!CloudWebRTCFailurePolicy.requiresRebuild(
+            sessionID: nil, currentSessionID: current, error: "stale signaling session"))
+        #expect(CloudWebRTCFailurePolicy.requiresRebuild(
+            sessionID: nil, currentSessionID: current, error: "invalid WebRTC owner or transport"))
+        #expect(CloudWebRTCFailurePolicy.requiresRebuild(sessionID: nil, currentSessionID: current, error: nil))
+        #expect(CloudWebRTCFailurePolicy.requiresRebuild(
+            sessionID: current, currentSessionID: current, error: "stale signaling session"))
+        #expect(!CloudWebRTCFailurePolicy.requiresRebuild(
+            sessionID: UUID(), currentSessionID: current, error: nil))
+        let decoded = try CloudCallControlMessage.decode(
+            "{\"status\":\"webrtc_failed\",\"error\":\"stale signaling session\"}")
+        let control = try #require(decoded)
+        #expect(control.error == "stale signaling session")
+        #expect(control.sessionID == nil)
+    }
 }

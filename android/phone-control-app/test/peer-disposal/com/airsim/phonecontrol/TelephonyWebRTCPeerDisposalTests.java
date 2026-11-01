@@ -36,6 +36,9 @@ public final class TelephonyWebRTCPeerDisposalTests {
         run("earlier peer disposal failure stays sticky without retry", TelephonyWebRTCPeerDisposalTests::earlierDisposalFailureStaysSticky);
         run("rejected signaling submission fails closed", TelephonyWebRTCPeerDisposalTests::rejectedSubmissionFailsClosed);
         run("cancelled ringback cannot activate carrier audio", TelephonyWebRTCPeerDisposalTests::cancelledRingbackCannotActivateCarrier);
+        run("carrier attach retries in place before the route is ready", TelephonyWebRTCPeerDisposalTests::carrierAttachRetriesInPlace);
+        run("carrier attach gives up after bounded attempts with a reason", TelephonyWebRTCPeerDisposalTests::carrierAttachIsBounded);
+        run("carrier failure after ready is not retried", TelephonyWebRTCPeerDisposalTests::carrierFailureAfterReadyFails);
         check(!(Boolean) field("initialized").get(null), "Native WebRTC must never be initialized");
         System.out.println("TelephonyWebRTCPeerDisposalTests: " + passed + " passed (production peer, no JNI)");
     }
@@ -58,6 +61,78 @@ public final class TelephonyWebRTCPeerDisposalTests {
         } finally {
             release.countDown();
             get(owner.closeAsync());
+        }
+    }
+
+    private static void carrierAttachRetriesInPlace() throws Exception {
+        List<TelephonyAudioDevice> devices = java.util.Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch second = new CountDownLatch(2);
+        AtomicInteger failures = new AtomicInteger();
+        TelephonyAudioDevice.onStart = device -> { devices.add(device); second.countDown(); };
+        TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null, java.util.UUID.randomUUID().toString(), 1,
+                new JSONArray(), signal -> {}, failures::incrementAndGet, true);
+        try {
+            owner.activateCarrierAudio();
+            awaitCount(devices, 1, "first carrier attach");
+            devices.get(0).failed.run();
+            await(second, "carrier attach retry");
+            check(devices.get(0).closeCalls.get() == 1, "Failed carrier attempt must be released before retry");
+            check(field("device").get(owner) == devices.get(1), "Retry must attach a new device to the same peer");
+            devices.get(1).ready.run();
+            check(failures.get() == 0, "A recovered carrier attach must not fail the peer");
+            get(owner.closeAsync());
+            check(devices.get(1).closeCalls.get() == 1, "Close must release the recovered device");
+            check(devices.size() == 2, "Ready carrier must not be attached again");
+        } finally {
+            TelephonyAudioDevice.onStart = device -> { throw new AssertionError("native route start"); };
+            owner.closeAsync();
+        }
+    }
+
+    private static void carrierAttachIsBounded() throws Exception {
+        List<TelephonyAudioDevice> devices = java.util.Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch failed = new CountDownLatch(1);
+        TelephonyAudioDevice.onStart = device -> { devices.add(device); device.failed.run(); };
+        TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null, java.util.UUID.randomUUID().toString(), 1,
+                new JSONArray(), signal -> {}, failed::countDown, true);
+        try {
+            owner.activateCarrierAudio();
+            await(failed, "bounded carrier failure");
+            check(devices.size() == TelephonyWebRTCPeer.CARRIER_ATTACH_ATTEMPTS,
+                    "Carrier attach must stop after the configured attempts");
+            check("carrier_route_unverified".equals(owner.failureReason()),
+                    "Final failure must keep the non-sensitive carrier reason");
+            get(owner.closeAsync());
+        } finally {
+            TelephonyAudioDevice.onStart = device -> { throw new AssertionError("native route start"); };
+            owner.closeAsync();
+        }
+        for (TelephonyAudioDevice device : devices) {
+            check(device.closeCalls.get() == 1, "Every carrier attempt must be released exactly once");
+        }
+    }
+
+    private static void carrierFailureAfterReadyFails() throws Exception {
+        List<TelephonyAudioDevice> devices = java.util.Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch failed = new CountDownLatch(1);
+        TelephonyAudioDevice.onStart = device -> { devices.add(device); device.ready.run(); device.failed.run(); };
+        TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null, java.util.UUID.randomUUID().toString(), 1,
+                new JSONArray(), signal -> {}, failed::countDown, true);
+        try {
+            owner.activateCarrierAudio();
+            await(failed, "verified carrier loss");
+            check(devices.size() == 1, "A verified route loss must not be retried silently");
+        } finally {
+            TelephonyAudioDevice.onStart = device -> { throw new AssertionError("native route start"); };
+            owner.closeAsync();
+        }
+    }
+
+    private static void awaitCount(List<?> values, int count, String description) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
+        while (values.size() < count) {
+            check(System.nanoTime() < deadline, "Timed out: " + description);
+            Thread.sleep(5);
         }
     }
 

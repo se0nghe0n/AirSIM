@@ -69,6 +69,11 @@ final class WebRTCPcmBuffer {
         closed = true; frames.clear(); partialSize = 0; notifyAll();
     }
 
+    /** Reuse after a failed carrier attach. The previous device threads must already be joined. */
+    synchronized void reopen() {
+        closed = false; frames.clear(); partialSize = 0;
+    }
+
     private void dropExpired(long nowNanos) {
         while (!frames.isEmpty() && nowNanos - frames.peekFirst().enqueuedAt > MAX_AGE_NANOS) {
             frames.removeFirst();

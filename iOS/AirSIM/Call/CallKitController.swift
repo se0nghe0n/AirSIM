@@ -726,13 +726,17 @@ extension CallKitController: CXProviderDelegate {
                 WebRTCCallAudioSession.didActivate(audioSession)
             }
             self.audioSessionIsActive = true
-            await AgentVerboseTraceRecorder.shared.recordEvent(
-                source: "APP",
-                category: "callkit-audio",
-                phase: "activated",
-                title: "CallKit Audio Session Activated",
-                fields: self.audioTraceFields(audioSession)
-            )
+            let fields = self.audioTraceFields(audioSession)
+            // File-backed diagnostics must not delay the cloud/local audio start below.
+            Task {
+                await AgentVerboseTraceRecorder.shared.recordEvent(
+                    source: "APP",
+                    category: "callkit-audio",
+                    phase: "activated",
+                    title: "CallKit Audio Session Activated",
+                    fields: fields
+                )
+            }
             await self.handler?.callKitAudioSessionDidActivate()
         }
     }
