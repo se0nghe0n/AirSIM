@@ -221,7 +221,9 @@ enum SMSHistoryPolicy {
             sender: recipient,
             content: content,
             code: nil,
-            timestamp: timestamp,
+            // Local history stores whole-second ISO 8601 dates and the fallback id includes the timestamp, so a
+            // fractional second would give the reloaded copy a different id.
+            timestamp: Date(timeIntervalSince1970: timestamp.timeIntervalSince1970.rounded(.down)),
             deliveryID: nil,
             direction: .outgoing
         )
@@ -230,6 +232,14 @@ enum SMSHistoryPolicy {
                 .sorted { $0.timestamp > $1.timestamp }
                 .prefix(max(0, limit))
         )
+    }
+
+    /// Unordered union by id in which the stored copy wins; a local reload never removes in-memory messages.
+    static func mergingStored(_ stored: [SMSMessage], into current: [SMSMessage]) -> [SMSMessage] {
+        var messagesByID: [String: SMSMessage] = [:]
+        for message in current { messagesByID[message.id] = message }
+        for message in stored { messagesByID[message.id] = message }
+        return Array(messagesByID.values)
     }
 }
 

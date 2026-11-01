@@ -85,6 +85,27 @@ enum CallPresentationPolicy {
     }
 }
 
+/// A dial that throws before CallKit or the Agent owns a call, or one the busy gate drops, gets no lifecycle event, so
+/// nothing else retires the provisional "dialing" record that `AppModel.dial()` presented.
+enum FailedDialPresentationPolicy {
+    enum Cleanup: Equatable {
+        /// Another dial or a call event already replaced this dial's provisional record.
+        case unchanged
+        /// The call lifecycle still owns the in-app call screen.
+        case clearPendingCall
+        case clearPendingCallAndSurface
+    }
+
+    static func cleanup(
+        failedPendingCallID: String,
+        pendingOutgoingCallID: String?,
+        lifecycleRepresentsCall: Bool
+    ) -> Cleanup {
+        guard pendingOutgoingCallID == failedPendingCallID else { return .unchanged }
+        return lifecycleRepresentsCall ? .clearPendingCall : .clearPendingCallAndSurface
+    }
+}
+
 enum CallAnswerConfirmationPolicy {
     static func shouldMarkActiveImmediately(transport: CallTransport?) -> Bool {
         transport == .vowlan
@@ -1412,9 +1433,11 @@ final class AppModel {
     func dial() async {
         let number = Self.validatedNumber(numberInput)
         guard !number.isEmpty else { return }
+        // perform() would drop this dial; do not present a provisional call screen for it.
+        guard !isBusy else { return }
         callPresentationSurface = .app
         let now = Date()
-        pendingOutgoingCall = CallRecord(
+        let pendingCall = CallRecord(
             id: "pending-\(UUID().uuidString.lowercased())",
             index: 0,
             direction: "outgoing",
@@ -1425,11 +1448,12 @@ final class AppModel {
             endedAt: nil,
             missed: false
         )
+        pendingOutgoingCall = pendingCall
         debugDialLog(
             LocalModePreference.isEnabled()
                 ? "Placing direct outgoing call in local mode" : "Submitting CallKit outgoing call transaction"
         )
-        await perform {
+        let submitted = await perform {
             if LocalModePreference.isEnabled() {
                 try await self.callKitStart(number: number)
                 return
@@ -1445,6 +1469,27 @@ final class AppModel {
                 try await self.callKitStart(number: number)
                 debugDialLog("CallKit unavailable; dialing directly over current transport route")
             }
+        }
+        // After a submitted dial, Agent status, lifecycle events or callKitDidFail retire the provisional record.
+        guard !submitted else { return }
+        retireProvisionalOutgoingCall(pendingCall.id)
+    }
+
+    /// Clears a provisional "dialing" record that no lifecycle event will retire, unless another dial or call event
+    /// already replaced it.
+    private func retireProvisionalOutgoingCall(_ pendingCallID: String) {
+        switch FailedDialPresentationPolicy.cleanup(
+            failedPendingCallID: pendingCallID,
+            pendingOutgoingCallID: pendingOutgoingCall?.id,
+            lifecycleRepresentsCall: callLifecycleSnapshot.state.representsCall
+        ) {
+        case .unchanged:
+            break
+        case .clearPendingCall:
+            pendingOutgoingCall = nil
+        case .clearPendingCallAndSurface:
+            pendingOutgoingCall = nil
+            callPresentationSurface = nil
         }
     }
 
@@ -1623,6 +1668,11 @@ final class AppModel {
         beginCallTransitionProtection()
         audio.stopCallTone()
         applyCurrentCallIntent(.ending, source: .app)
+        // A direct dial still choosing its route has no lifecycle call ID, so the intent above cannot end it, and the
+        // attempt superseded here returns without an error that dial() would clean up after.
+        if !callKit.managesCurrentCall, callLifecycleSnapshot.callID == nil, let pending = pendingOutgoingCall {
+            retireProvisionalOutgoingCall(pending.id)
+        }
         if callKit.managesCurrentCall {
             await perform(allowWhileBusy: true) {
                 do {
@@ -2008,10 +2058,7 @@ final class AppModel {
 
         let storedMessages = historyStore.loadMessages()
         if !storedMessages.isEmpty {
-            var messagesByID: [String: SMSMessage] = [:]
-            for message in messages { messagesByID[message.id] = message }
-            for message in storedMessages { messagesByID[message.id] = message }
-            messages = normalizedMessages(Array(messagesByID.values))
+            messages = normalizedMessages(SMSHistoryPolicy.mergingStored(storedMessages, into: messages))
         }
     }
 
@@ -2113,11 +2160,13 @@ final class AppModel {
         )
     }
 
+    /// Returns whether the operation ran and finished without throwing.
+    @discardableResult
     private func perform(
         allowWhileBusy: Bool = false,
         _ operation: () async throws -> Void
-    ) async {
-        guard allowWhileBusy || !isBusy else { return }
+    ) async -> Bool {
+        guard allowWhileBusy || !isBusy else { return false }
         activeOperationCount += 1
         isBusy = true
         defer {
@@ -2127,8 +2176,10 @@ final class AppModel {
         do {
             try await operation()
             errorMessage = nil
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 

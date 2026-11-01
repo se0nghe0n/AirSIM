@@ -48,9 +48,7 @@ struct IncomingVoIPCall: Equatable, Sendable {
         else {
             throw VoIPPushPayloadError.missingCallID
         }
-        guard let rawUUID = userInfo["call_uuid"] as? String,
-            let uuid = UUID(uuidString: rawUUID)
-        else {
+        guard let uuid = Self.payloadUUID(from: userInfo) else {
             throw VoIPPushPayloadError.invalidCallUUID
         }
 
@@ -141,6 +139,11 @@ struct IncomingVoIPCall: Equatable, Sendable {
 
     func matches(backendID: String?, uuid: UUID?) -> Bool {
         backendID == callID || uuid == self.uuid
+    }
+
+    /// Readable even when the rest of the payload is rejected, so the CallKit placeholder can reuse the call's UUID.
+    static func payloadUUID(from userInfo: [AnyHashable: Any]) -> UUID? {
+        (userInfo["call_uuid"] as? String).flatMap(UUID.init(uuidString:))
     }
 
     private static func date(from value: Any?) -> Date? {
@@ -1692,31 +1695,39 @@ extension VoIPPushController: @preconcurrency PKPushRegistryDelegate {
             completion()
             return
         }
+        // iOS terminates the app when a VoIP push completes without a CallKit report, so the report is made here, on
+        // the registry's main queue, and a push that cannot ring reports an ended placeholder.
+        let userInfo = payload.dictionaryPayload
         guard !LocalModePreference.isEnabled() else {
-            completion()
+            CallKitController.shared.reportEndedPlaceholder(
+                payloadUUID: IncomingVoIPCall.payloadUUID(from: userInfo),
+                completion: completion
+            )
             return
         }
-        let userInfo = payload.dictionaryPayload
-        Task { @MainActor in
-            do {
-                let call = try IncomingVoIPCall(userInfo: userInfo)
-                CallKitController.shared.reportIncomingPush(call) { _ in completion() }
-                WatchCallCoordinator.shared.publishIncoming(call)
-                if call.callerName == nil, let number = call.number {
-                    Task {
-                        let resolvedName = await Task.detached(priority: .userInitiated) {
-                            try? ContactFetcher().displayName(for: number)
-                        }.value
-                        if let resolvedName, resolvedName != number {
-                            WatchCallCoordinator.shared.publishIncoming(call, callerName: resolvedName)
-                        }
-                    }
+        let call: IncomingVoIPCall
+        do {
+            call = try IncomingVoIPCall(userInfo: userInfo)
+        } catch {
+            #if DEBUG
+            print("[AirSIM PushKit] Rejecting invalid incoming call push: \(error.localizedDescription)")
+            #endif
+            CallKitController.shared.reportEndedPlaceholder(
+                payloadUUID: IncomingVoIPCall.payloadUUID(from: userInfo),
+                completion: completion
+            )
+            return
+        }
+        guard CallKitController.shared.reportIncomingPush(call, completion: { _ in completion() }) else { return }
+        WatchCallCoordinator.shared.publishIncoming(call)
+        if call.callerName == nil, let number = call.number {
+            Task {
+                let resolvedName = await Task.detached(priority: .userInitiated) {
+                    try? ContactFetcher().displayName(for: number)
+                }.value
+                if let resolvedName, resolvedName != number {
+                    WatchCallCoordinator.shared.publishIncoming(call, callerName: resolvedName)
                 }
-            } catch {
-                #if DEBUG
-                print("[AirSIM PushKit] Dropping invalid incoming call push: \(error.localizedDescription)")
-                #endif
-                completion()
             }
         }
     }

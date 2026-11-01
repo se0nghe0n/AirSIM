@@ -203,8 +203,9 @@ final class WatchCallSession: NSObject {
     }
 
     private func request(answer: Bool) {
-        guard let uuid = voIPCall?.uuid ?? call.callUUID else {
-            errorMessage = "No system call is available"
+        // A mirrored call the iPhone owns was never reported to this Watch's CallKit.
+        guard let uuid = voIPCall?.uuid else {
+            requestOnIPhone(answer: answer)
             return
         }
         let action: CXCallAction =
@@ -218,6 +219,41 @@ final class WatchCallSession: NSObject {
                 if let error { self?.errorMessage = error.localizedDescription }
             }
         }
+    }
+
+    private func requestOnIPhone(answer: Bool) {
+        guard let uuid = call.callUUID else {
+            errorMessage = "No system call is available"
+            return
+        }
+        guard let connectivity, connectivity.isReachable else {
+            errorMessage = "Open AirSIM on your nearby paired iPhone first"
+            return
+        }
+        let control = WatchCloudAudioPlan.companionAction(answer: answer, phase: call.phase)
+        isSendingAction = true
+        connectivity.sendMessage(
+            WatchCloudAudioPlan.companionControl(
+                action: control,
+                callID: call.callID,
+                callUUID: uuid
+            ),
+            replyHandler: { @Sendable [weak self] reply in
+                let reply = WatchMessage(reply)
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.isSendingAction = false
+                    guard reply["ok"] as? Bool != true else { return }
+                    self.errorMessage = reply["error"] as? String ?? "iPhone could not \(control) the call"
+                }
+            },
+            errorHandler: { @Sendable [weak self] error in
+                DispatchQueue.main.async {
+                    self?.isSendingAction = false
+                    self?.errorMessage = "iPhone did not respond: \(error.localizedDescription)"
+                }
+            }
+        )
     }
 
     private func publishLocalPhase(_ phase: WatchCallPhase) {
@@ -433,28 +469,17 @@ extension WatchCallSession: @preconcurrency PKPushRegistryDelegate {
             completion()
             return
         }
-        do {
-            let incoming = try WatchVoIPCall(userInfo: payload.dictionaryPayload)
-            if voIPCall?.callID == incoming.callID || endedCallIDs.contains(incoming.callID) {
-                completion()
-                return
-            }
+        switch WatchVoIPPushPolicy.disposition(
+            userInfo: payload.dictionaryPayload,
+            tracked: voIPCall,
+            endedCallIDs: endedCallIDs
+        ) {
+        case .ring(let incoming):
             voIPCall = incoming
             answered = false
             errorMessage = nil
             publishLocalPhase(.incoming)
-
-            let update = CXCallUpdate()
-            update.remoteHandle = CXHandle(
-                type: incoming.number == nil ? .generic : .phoneNumber,
-                value: incoming.number ?? incoming.displayName
-            )
-            update.localizedCallerName = incoming.callerName
-            update.hasVideo = false
-            update.supportsHolding = false
-            update.supportsGrouping = false
-            update.supportsUngrouping = false
-            update.supportsDTMF = false
+            let update = incomingCallUpdate(incoming)
             provider.reportNewIncomingCall(with: incoming.uuid, update: update) { [weak self] error in
                 if let error {
                     // CallKit calls this completion on the provider's delegate queue, which is main.
@@ -465,8 +490,50 @@ extension WatchCallSession: @preconcurrency PKPushRegistryDelegate {
                 }
                 completion()
             }
-        } catch {
-            errorMessage = error.localizedDescription
+        case .reportTracked(let tracked):
+            // The mirror often reports this call before its own push arrives. The tracked call stays as it is.
+            provider.reportNewIncomingCall(with: tracked.uuid, update: incomingCallUpdate(tracked)) { _ in
+                completion()
+            }
+        case .endAlreadyEnded(let placeholder):
+            reportEndedPlaceholder(placeholder, reason: .remoteEnded, completion: completion)
+        case .endUnusable(let placeholder, let error):
+            errorMessage = error
+            reportEndedPlaceholder(placeholder, reason: .failed, completion: completion)
+        }
+    }
+
+    private func incomingCallUpdate(_ incoming: WatchVoIPCall) -> CXCallUpdate {
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(
+            type: incoming.number == nil ? .generic : .phoneNumber,
+            value: incoming.number ?? incoming.displayName
+        )
+        update.localizedCallerName = incoming.callerName
+        update.hasVideo = false
+        update.supportsHolding = false
+        update.supportsGrouping = false
+        update.supportsUngrouping = false
+        update.supportsDTMF = false
+        return update
+    }
+
+    /// Satisfies PushKit for a push that must not ring, without touching the tracked call.
+    private func reportEndedPlaceholder(
+        _ uuid: UUID,
+        reason: CXCallEndedReason,
+        completion: @escaping @Sendable () -> Void
+    ) {
+        let update = CXCallUpdate()
+        update.remoteHandle = CXHandle(type: .generic, value: "AirSIM")
+        update.hasVideo = false
+        provider.reportNewIncomingCall(with: uuid, update: update) { [weak self] error in
+            if error == nil {
+                // CallKit calls this completion on the provider's delegate queue, which is main.
+                MainActor.assumeIsolated {
+                    self?.provider.reportCall(with: uuid, endedAt: Date(), reason: reason)
+                }
+            }
             completion()
         }
     }
@@ -566,6 +633,11 @@ extension WatchCallSession: @preconcurrency CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+        // A placeholder reported for a push that must not ring is never the tracked call.
+        if let voIPCall, voIPCall.uuid != action.callUUID {
+            action.fulfill()
+            return
+        }
         if let voIPCall {
             recordEnded(voIPCall.callID)
             if voIPCall.endsOnVoWLAN {

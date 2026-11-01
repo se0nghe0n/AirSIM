@@ -5,6 +5,10 @@ import AppIntents
 import Foundation
 import UIKit
 import UserNotifications
+import CallKit
+import Observation
+import Network
+import ActivityKit
 import ComposableArchitecture
 @testable import AirSIM
 
@@ -81,6 +85,139 @@ private struct AgentSMSInboxProbe: AgentSMSInboxServicing {
     let inbox: [SMSMessage]
 
     func messages() async throws -> [SMSMessage] { inbox }
+}
+
+struct CallKitPushKitReportingTests {
+    private func pushDisposition(
+        callKitAvailable: Bool = true,
+        recentlyEnded: Bool = false,
+        hasCurrentCall: Bool = true,
+        matchesCurrentCall: Bool = true,
+        currentCallReported: Bool = false,
+        currentReportFailed: Bool = false
+    ) -> IncomingPushDisposition {
+        IncomingPushPolicy.disposition(
+            callKitAvailable: callKitAvailable,
+            recentlyEnded: recentlyEnded,
+            hasCurrentCall: hasCurrentCall,
+            matchesCurrentCall: matchesCurrentCall,
+            currentCallReported: currentCallReported,
+            currentReportFailed: currentReportFailed
+        )
+    }
+
+    private func startAction(callUUID: UUID = UUID()) -> CXStartCallAction {
+        CXStartCallAction(call: callUUID, handle: CXHandle(type: .phoneNumber, value: "10086"))
+    }
+
+    @Test func `Pushes that cannot become the current call are rejected for an ended placeholder`() {
+        #expect(pushDisposition(callKitAvailable: false, hasCurrentCall: false) == .rejected(.unavailable))
+        #expect(pushDisposition(recentlyEnded: true, hasCurrentCall: false) == .rejected(.recentlyEnded))
+        #expect(
+            pushDisposition(matchesCurrentCall: false, currentCallReported: true) == .rejected(.callInProgress)
+        )
+    }
+
+    @Test func `New and redelivered pushes for the current call keep their report`() {
+        #expect(pushDisposition(hasCurrentCall: false, matchesCurrentCall: false) == .reportNewCall)
+        #expect(pushDisposition(currentCallReported: true) == .currentCallReported)
+        #expect(pushDisposition() == .awaitCurrentCallReport)
+    }
+
+    @Test func `Redelivered push after a failed report reports its own placeholder`() {
+        #expect(pushDisposition(currentReportFailed: true) == .currentCallPlaceholder)
+    }
+
+    @Test func `Placeholder reuses the payload UUID but never the current call UUID`() {
+        let payloadUUID = UUID()
+        let currentUUID = UUID()
+        #expect(
+            IncomingPushPolicy.placeholderUUID(payloadUUID: payloadUUID, currentCallUUID: currentUUID) == payloadUUID
+        )
+        #expect(IncomingPushPolicy.placeholderUUID(payloadUUID: payloadUUID, currentCallUUID: nil) == payloadUUID)
+        #expect(
+            IncomingPushPolicy.placeholderUUID(payloadUUID: currentUUID, currentCallUUID: currentUUID) != currentUUID
+        )
+        #expect(IncomingPushPolicy.placeholderUUID(payloadUUID: nil, currentCallUUID: currentUUID) != currentUUID)
+    }
+
+    @Test func `Rejected push payload still yields its call UUID for the placeholder`() {
+        let callUUID = UUID()
+        let expired: [AnyHashable: Any] = [
+            "event": "incoming_call",
+            "call_id": "expired-call",
+            "call_uuid": callUUID.uuidString,
+            "expires_at": Date().addingTimeInterval(-60).timeIntervalSince1970,
+        ]
+        #expect(throws: VoIPPushPayloadError.expired) { try IncomingVoIPCall(userInfo: expired) }
+        #expect(IncomingVoIPCall.payloadUUID(from: expired) == callUUID)
+        #expect(IncomingVoIPCall.payloadUUID(from: ["call_uuid": "not-a-uuid"]) == nil)
+        #expect(IncomingVoIPCall.payloadUUID(from: [:]) == nil)
+    }
+
+    @Test func `Each new start action is admitted even after earlier actions are freed`() {
+        var ledger = OutgoingStartActionLedger()
+        for _ in 0..<64 {
+            // Each action is freed before the next is allocated, so its address may be reused.
+            let action = startAction()
+            #expect(ledger.disposition(for: action, startInFlight: false, currentOutgoingCallReported: false) == .start)
+            ledger.recordDialed(action)
+        }
+    }
+
+    @Test func `Repeated start fulfills once dialed and a concurrent start fails`() {
+        var ledger = OutgoingStartActionLedger()
+        let callUUID = UUID()
+        let first = startAction(callUUID: callUUID)
+        #expect(ledger.disposition(for: first, startInFlight: false, currentOutgoingCallReported: false) == .start)
+        ledger.recordDialed(first)
+        #expect(
+            ledger.disposition(for: first, startInFlight: true, currentOutgoingCallReported: false) == .repeatedDelivery
+        )
+        let redialed = ledger.disposition(
+            for: startAction(callUUID: callUUID),
+            startInFlight: true,
+            currentOutgoingCallReported: false
+        )
+        #expect(redialed == .fulfill)
+        #expect(
+            ledger.disposition(for: startAction(), startInFlight: true, currentOutgoingCallReported: false) == .fail
+        )
+        #expect(
+            ledger.disposition(for: startAction(), startInFlight: false, currentOutgoingCallReported: true) == .fulfill
+        )
+    }
+
+    @Test func `Trimmed start ledger still recognises the latest dialed call`() {
+        var ledger = OutgoingStartActionLedger()
+        let firstCallUUID = UUID()
+        var latestCallUUID = firstCallUUID
+        for index in 0..<41 {
+            latestCallUUID = index == 0 ? firstCallUUID : UUID()
+            let action = startAction(callUUID: latestCallUUID)
+            _ = ledger.disposition(for: action, startInFlight: false, currentOutgoingCallReported: false)
+            ledger.recordDialed(action)
+        }
+        let latest = ledger.disposition(
+            for: startAction(callUUID: latestCallUUID),
+            startInFlight: false,
+            currentOutgoingCallReported: false
+        )
+        let trimmed = ledger.disposition(
+            for: startAction(callUUID: firstCallUUID),
+            startInFlight: false,
+            currentOutgoingCallReported: false
+        )
+        #expect(latest == .fulfill)
+        #expect(trimmed == .start)
+    }
+
+    @Test func `End action only acts on the call it names`() {
+        let endedUUID = UUID()
+        #expect(CallKitEndActionPolicy.targetsCurrentCall(actionCallUUID: endedUUID, currentCallUUID: endedUUID))
+        #expect(!CallKitEndActionPolicy.targetsCurrentCall(actionCallUUID: endedUUID, currentCallUUID: UUID()))
+        #expect(!CallKitEndActionPolicy.targetsCurrentCall(actionCallUUID: endedUUID, currentCallUUID: nil))
+    }
 }
 
 struct CloudCallHistoryTests {
@@ -1493,6 +1630,126 @@ struct AirSIMTests {
     }
 }
 
+struct FailedDialAndLocalHistoryTests {
+    private func temporaryDirectory() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    }
+
+    @Test func `Failed dial clears its own provisional call screen`() {
+        #expect(
+            FailedDialPresentationPolicy.cleanup(
+                failedPendingCallID: "pending-a",
+                pendingOutgoingCallID: "pending-a",
+                lifecycleRepresentsCall: false
+            ) == .clearPendingCallAndSurface
+        )
+    }
+
+    @Test func `Failed dial keeps the call screen while the lifecycle owns a call`() {
+        #expect(
+            FailedDialPresentationPolicy.cleanup(
+                failedPendingCallID: "pending-a",
+                pendingOutgoingCallID: "pending-a",
+                lifecycleRepresentsCall: true
+            ) == .clearPendingCall
+        )
+    }
+
+    @Test func `Failed dial leaves a newer or already retired provisional call alone`() {
+        #expect(
+            FailedDialPresentationPolicy.cleanup(
+                failedPendingCallID: "pending-a",
+                pendingOutgoingCallID: "pending-b",
+                lifecycleRepresentsCall: false
+            ) == .unchanged
+        )
+        #expect(
+            FailedDialPresentationPolicy.cleanup(
+                failedPendingCallID: "pending-a",
+                pendingOutgoingCallID: nil,
+                lifecycleRepresentsCall: false
+            ) == .unchanged
+        )
+    }
+
+    @Test @MainActor
+    func `Busy gate drops a dial without presenting a provisional call`() async {
+        let model = AppModel()
+        model.numberInput = "123"
+        model.isBusy = true
+        let presentationChanged = LockIsolated(false)
+        withObservationTracking {
+            _ = model.pendingOutgoingCall
+            _ = model.callPresentationSurface
+        } onChange: {
+            presentationChanged.setValue(true)
+        }
+
+        await model.dial()
+
+        #expect(!presentationChanged.value)
+        #expect(model.inAppPresentedCall == nil)
+    }
+
+    @Test func `Sent SMS keeps its id across a local save and reload`() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inMemory = SMSHistoryPolicy.appendingSentMessage(
+            recipient: "123",
+            content: "Hi",
+            at: Date(timeIntervalSince1970: 1_778_000_000.987),
+            to: [],
+            limit: 10
+        )
+        #expect(inMemory.first?.timestamp == Date(timeIntervalSince1970: 1_778_000_000))
+        #expect(LocalHistoryStore(directoryURL: directory).saveMessages(inMemory))
+
+        let reloaded = LocalHistoryStore(directoryURL: directory).loadMessages()
+
+        #expect(reloaded.map(\.id) == inMemory.map(\.id))
+        #expect(SMSHistoryPolicy.mergingStored(reloaded, into: inMemory).count == 1)
+    }
+
+    @Test func `Undecodable history file is moved aside before the next save`() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalHistoryStore(directoryURL: directory)
+        let corrupt = Data("[{\"sender\":".utf8)
+        try corrupt.write(to: directory.appendingPathComponent("messages.json"))
+
+        #expect(store.loadMessages().isEmpty)
+        let sent = SMSHistoryPolicy.appendingSentMessage(recipient: "123", content: "Hi", at: .now, to: [], limit: 10)
+        #expect(store.saveMessages(sent))
+
+        let unreadable = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("messages.unreadable-") && $0.hasSuffix(".json") }
+        #expect(unreadable.count == 1)
+        let preserved = try Data(contentsOf: directory.appendingPathComponent(try #require(unreadable.first)))
+        #expect(preserved == corrupt)
+        #expect(store.loadMessages() == sent)
+    }
+
+    @Test func `Unreadable history file stays in place on a read error`() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = LocalHistoryStore(directoryURL: directory)
+        let callHistoryURL = directory.appendingPathComponent("call-history.json")
+        // Undecodable on purpose: if the read succeeded, the decode path would move the file aside.
+        let original = Data("[{\"id\":".utf8)
+        try original.write(to: callHistoryURL)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: callHistoryURL.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: callHistoryURL.path)
+        }
+
+        #expect(store.loadCallHistory().isEmpty)
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["call-history.json"])
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: callHistoryURL.path)
+        #expect(try Data(contentsOf: callHistoryURL) == original)
+    }
+}
+
 struct RecentCallTimeFormatterTests {
     private let calendar = Calendar(identifier: .gregorian)
 
@@ -2319,6 +2576,181 @@ struct LiveActivityCallActionTests {
                 direction: "outgoing"
             )
         )
+    }
+}
+
+/// Loopback TCP peer standing in for the Android pairing endpoint. With a nil `response` it reads the
+/// claim and then stays silent without closing, like an Android whose pairing window stalled.
+private final class LoopbackPairingPeer: @unchecked Sendable {
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "com.airsim.tests.pairing-peer")
+    private let lock = NSLock()
+    private var connections: [NWConnection] = []
+    private var receivedRequest = Data()
+
+    init(response: Data?) throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        listener = try NWListener(using: parameters)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection, response: response)
+        }
+    }
+
+    var request: Data { lock.withLock { receivedRequest } }
+    var acceptedCount: Int { lock.withLock { connections.count } }
+    var isClosed: Bool { listener.state == .cancelled }
+
+    func start() async throws -> NWEndpoint {
+        listener.start(queue: queue)
+        for _ in 0..<500 {
+            if listener.state == .ready, let port = listener.port {
+                return .hostPort(host: .ipv4(.loopback), port: port)
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw POSIXError(.ETIMEDOUT)
+    }
+
+    func stop() {
+        listener.cancel()
+        for connection in lock.withLock({ connections }) { connection.cancel() }
+    }
+
+    private func accept(_ connection: NWConnection, response: Data?) {
+        lock.withLock { connections.append(connection) }
+        connection.start(queue: queue)
+        read(from: connection, response: response)
+    }
+
+    private func read(from connection: NWConnection, response: Data?) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
+            [weak self] content, _, isComplete, error in
+            guard let self, error == nil else { return }
+            let requestComplete = lock.withLock {
+                if let content { receivedRequest.append(content) }
+                return Self.isComplete(receivedRequest)
+            }
+            if requestComplete, let response {
+                connection.send(
+                    content: response,
+                    isComplete: true,
+                    completion: .contentProcessed { _ in connection.cancel() }
+                )
+            } else if !isComplete {
+                read(from: connection, response: response)
+            }
+        }
+    }
+
+    /// True once the headers and the `Content-Length` body bytes have arrived.
+    private static func isComplete(_ request: Data) -> Bool {
+        let lengthField = "content-length:"
+        guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)),
+            let headers = String(data: request[..<headerEnd.lowerBound], encoding: .utf8),
+            let field = headers.split(separator: "\r\n").first(where: { $0.lowercased().hasPrefix(lengthField) }),
+            let length = Int(field.dropFirst(lengthField.count).trimmingCharacters(in: .whitespaces))
+        else { return false }
+        return request.count - headerEnd.upperBound >= length
+    }
+}
+
+struct SamsungPairingExchangeTests {
+    private static let claim = Data(#"{"version":1}"#.utf8)
+
+    @Test func `Exchange deadline is at most fifteen seconds and ends with the pairing window`() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        #expect(SamsungPairingClient.exchangeTimeout(expiresAt: now.addingTimeInterval(120), now: now) == 15)
+        #expect(SamsungPairingClient.exchangeTimeout(expiresAt: now.addingTimeInterval(4), now: now) == 4)
+    }
+
+    @Test func `Claim exchange keeps the wire request and returns the response body`() async throws {
+        let peer = try LoopbackPairingPeer(
+            response: Data("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"configured\":true}".utf8)
+        )
+        defer { peer.stop() }
+        let endpoint = try await peer.start()
+
+        let response = try await SamsungPairingClient.exchange(endpoint: endpoint, body: Self.claim, timeout: 10)
+
+        #expect(response == Data(#"{"configured":true}"#.utf8))
+        #expect(
+            String(data: peer.request, encoding: .utf8)
+                == "POST /pair/v1/claim HTTP/1.1\r\nHost: airsim-pair.local\r\nContent-Type: application/json\r\n"
+                + "Content-Length: 13\r\nConnection: close\r\n\r\n{\"version\":1}"
+        )
+    }
+
+    @Test @MainActor
+    func `Silent Android times out and releases the agent write gate`() async throws {
+        let peer = try LoopbackPairingPeer(response: nil)
+        defer { peer.stop() }
+        let endpoint = try await peer.start()
+        let gate = SamsungPairingRegistrationGate()
+        let started = ContinuousClock.now
+
+        let error = await #expect(throws: SamsungPairingClientError.self) {
+            try await gate.withPairing {
+                try await SamsungPairingClient.exchange(endpoint: endpoint, body: Self.claim, timeout: 1)
+            }
+        }
+
+        #expect(error == .timedOut)
+        #expect(ContinuousClock.now - started < .seconds(10))
+        #expect(!peer.request.isEmpty, "the peer received the claim and stayed silent")
+        #expect(gate.beginAgentWrite(), "agent push-registration writes resume after the failed pairing")
+        gate.endAgentWrite()
+    }
+
+    @Test @MainActor
+    func `Cancelling the pairing task ends a silent exchange promptly`() async throws {
+        let peer = try LoopbackPairingPeer(response: nil)
+        defer { peer.stop() }
+        let endpoint = try await peer.start()
+        let exchange = Task {
+            try await SamsungPairingClient.exchange(endpoint: endpoint, body: Self.claim, timeout: 60)
+        }
+        let delivered = try await eventually { peer.request.isEmpty ? nil : true }
+        try #require(delivered == true, "the claim must reach the silent peer before cancelling")
+        let cancelled = ContinuousClock.now
+
+        exchange.cancel()
+
+        await #expect(throws: CancellationError.self) { try await exchange.value }
+        #expect(ContinuousClock.now - cancelled < .seconds(5))
+    }
+
+    @Test @MainActor
+    func `An already cancelled pairing task never opens a connection`() async throws {
+        let peer = try LoopbackPairingPeer(response: nil)
+        defer { peer.stop() }
+        let endpoint = try await peer.start()
+        let exchange = Task {
+            while !Task.isCancelled { await Task.yield() }
+            return try await SamsungPairingClient.exchange(endpoint: endpoint, body: Self.claim, timeout: 60)
+        }
+
+        exchange.cancel()
+
+        await #expect(throws: CancellationError.self) { try await exchange.value }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(peer.acceptedCount == 0)
+    }
+
+    @Test @MainActor
+    func `Refused connection fails without waiting for the deadline`() async throws {
+        let peer = try LoopbackPairingPeer(response: nil)
+        let endpoint = try await peer.start()
+        peer.stop()
+        let closed = try await eventually { peer.isClosed ? true : nil }
+        try #require(closed == true, "the port must refuse connections")
+        let started = ContinuousClock.now
+
+        await #expect(throws: NWError.self) {
+            try await SamsungPairingClient.exchange(endpoint: endpoint, body: Self.claim, timeout: 30)
+        }
+
+        #expect(ContinuousClock.now - started < .seconds(10))
     }
 }
 
@@ -3581,6 +4013,132 @@ struct ActiveCallFeatureTests {
             root.activeCallController?.call?.id == "layout-preview"
                 && root.activeCallController?.view.window === callWindow
         )
+    }
+}
+
+struct WatchPushAndLiveActivityRecoveryTests {
+    private static let trackedUUID = UUID()
+
+    private func incomingPush(
+        callID: String,
+        uuid: UUID,
+        expiresAt: Date? = nil
+    ) -> [AnyHashable: Any] {
+        var push: [AnyHashable: Any] = [
+            "event": "incoming_call", "call_id": callID, "call_uuid": uuid.uuidString,
+            "number": "+15551212", "media_route": "iphone", "media_transport": "webrtc",
+        ]
+        if let expiresAt { push["expires_at"] = expiresAt.timeIntervalSince1970 }
+        return push
+    }
+
+    private func trackedCall() throws -> WatchVoIPCall {
+        try WatchVoIPCall(userInfo: incomingPush(callID: "tracked", uuid: Self.trackedUUID))
+    }
+
+    @Test func `Watch push for a new call rings`() throws {
+        let uuid = UUID()
+        let push = incomingPush(callID: "new", uuid: uuid)
+        let disposition = WatchVoIPPushPolicy.disposition(userInfo: push, tracked: nil, endedCallIDs: [])
+        let expected = try WatchVoIPCall(userInfo: push)
+        #expect(disposition == .ring(expected))
+    }
+
+    @Test func `Watch push repeating the tracked call reports the tracked UUID again`() throws {
+        let tracked = try trackedCall()
+        let sameCallID = incomingPush(callID: "tracked", uuid: UUID())
+        let sameUUID = incomingPush(callID: "other", uuid: Self.trackedUUID)
+        for push in [sameCallID, sameUUID] {
+            #expect(
+                WatchVoIPPushPolicy.disposition(userInfo: push, tracked: tracked, endedCallIDs: ["other"])
+                    == .reportTracked(tracked)
+            )
+        }
+    }
+
+    @Test func `Watch push for an ended call reports and ends a placeholder with its UUID`() throws {
+        let uuid = UUID()
+        let disposition = WatchVoIPPushPolicy.disposition(
+            userInfo: incomingPush(callID: "ended", uuid: uuid),
+            tracked: try trackedCall(),
+            endedCallIDs: ["ended"]
+        )
+        #expect(disposition == .endAlreadyEnded(placeholder: uuid))
+    }
+
+    @Test func `Watch push that cannot ring still reports a placeholder`() throws {
+        let now = Date()
+        let fallback = UUID()
+        let uuid = UUID()
+        let expired = WatchVoIPPushPolicy.disposition(
+            userInfo: incomingPush(callID: "late", uuid: uuid, expiresAt: now.addingTimeInterval(-1)),
+            tracked: nil,
+            endedCallIDs: [],
+            now: now,
+            fallbackUUID: fallback
+        )
+        #expect(
+            expired == .endUnusable(placeholder: uuid, error: WatchVoIPPayloadError.expired.localizedDescription)
+        )
+        let malformed = WatchVoIPPushPolicy.disposition(
+            userInfo: ["event": "incoming_call", "call_id": "broken", "call_uuid": "not-a-uuid"],
+            tracked: nil,
+            endedCallIDs: [],
+            fallbackUUID: fallback
+        )
+        #expect(
+            malformed
+                == .endUnusable(
+                    placeholder: fallback,
+                    error: WatchVoIPPayloadError.invalidCallUUID.localizedDescription
+                )
+        )
+        let tracked = try trackedCall()
+        let lateTracked = WatchVoIPPushPolicy.disposition(
+            userInfo: incomingPush(callID: "tracked", uuid: Self.trackedUUID, expiresAt: now.addingTimeInterval(-1)),
+            tracked: tracked,
+            endedCallIDs: [],
+            now: now,
+            fallbackUUID: fallback
+        )
+        #expect(lateTracked == .reportTracked(tracked))
+    }
+
+    @Test func `Watch controls for an iPhone owned call carry the keys the iPhone matches`() {
+        #expect(WatchCloudAudioPlan.companionAction(answer: true, phase: .incoming) == "answer")
+        #expect(WatchCloudAudioPlan.companionAction(answer: false, phase: .incoming) == "reject")
+        #expect(WatchCloudAudioPlan.companionAction(answer: false, phase: .connecting) == "end")
+        #expect(WatchCloudAudioPlan.companionAction(answer: false, phase: .active) == "end")
+        let uuid = UUID()
+        let message = WatchMessage(
+            WatchCloudAudioPlan.companionControl(
+                action: WatchCloudAudioPlan.companionAction(answer: false, phase: .active),
+                callID: "iphone-call",
+                callUUID: uuid
+            )
+        )
+        #expect(message["action"] as? String == "end")
+        #expect(message["call_id"] as? String == "iphone-call")
+        #expect((message["call_uuid"] as? String).flatMap(UUID.init(uuidString:)) == uuid)
+    }
+
+    @Test func `Live Activity drops an ended or dismissed activity`() {
+        #expect(LiveActivitySelectionPolicy.isFinished(.ended))
+        #expect(LiveActivitySelectionPolicy.isFinished(.dismissed))
+        #expect(!LiveActivitySelectionPolicy.isFinished(.active))
+        #expect(!LiveActivitySelectionPolicy.isFinished(.stale))
+    }
+
+    @Test func `Live Activity adopts only an active or stale activity`() {
+        let states: [(id: String, state: ActivityState)] = [
+            ("ended", .ended), ("dismissed", .dismissed), ("stale", .stale), ("active", .active),
+        ]
+        let fromAll = LiveActivitySelectionPolicy.reusable(states) { $0.state }
+        let fromFinished = LiveActivitySelectionPolicy.reusable(Array(states.prefix(2))) { $0.state }
+        let fromActive = LiveActivitySelectionPolicy.reusable(Array(states.suffix(1))) { $0.state }
+        #expect(fromAll?.id == "stale")
+        #expect(fromFinished?.id == nil)
+        #expect(fromActive?.id == "active")
     }
 }
 

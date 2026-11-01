@@ -11,6 +11,23 @@ enum LiveActivityCreationPolicy {
     }
 }
 
+enum LiveActivitySelectionPolicy {
+    /// ActivityKit no longer applies content to an ended activity, and a dismissed one is gone, so the controller drops
+    /// it and lets the creation path replace it.
+    static func isFinished(_ state: ActivityState) -> Bool {
+        state == .ended || state == .dismissed
+    }
+
+    /// Adopts the first activity that is showing and accepts updates. AirSIM never schedules an activity, so a pending
+    /// one is not adopted.
+    static func reusable<Candidate>(
+        _ candidates: [Candidate],
+        state: (Candidate) -> ActivityState
+    ) -> Candidate? {
+        candidates.first { [.active, .stale].contains(state($0)) }
+    }
+}
+
 struct LiveActivityAgentSnapshot: Equatable {
     let deviceName: String?
     let phoneNumber: String?
@@ -144,6 +161,10 @@ final class LiveActivityController {
         appIsActive: Bool
     ) async {
         guard enabled, UIDevice.current.userInterfaceIdiom == .phone else { return }
+        if let activity, LiveActivitySelectionPolicy.isFinished(activity.activityState) {
+            self.activity = nil
+            lastState = nil
+        }
         resolveExistingActivity()
         #if DEBUG
         let requestedPhase =
@@ -244,7 +265,7 @@ final class LiveActivityController {
     private func resolveExistingActivity() {
         guard activity == nil else { return }
         let existing = Activity<AirSIMCallActivityAttributes>.activities
-        activity = existing.first
+        activity = LiveActivitySelectionPolicy.reusable(existing) { $0.activityState }
         if let activity {
             VoIPPushController.shared.observeLiveActivity(activity)
         }

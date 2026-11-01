@@ -150,6 +150,13 @@ enum WatchCloudAudioPlan {
         ]
     }
 
+    /// The control a Watch button sends for a call the iPhone owns: an unanswered incoming call is rejected and any
+    /// other call is ended.
+    static func companionAction(answer: Bool, phase: WatchCallPhase) -> String {
+        if answer { return "answer" }
+        return phase == .incoming ? "reject" : "end"
+    }
+
     static func companionControl(action: String, callID: String, callUUID: UUID) -> [String: Any] {
         [
             "action": action,
@@ -302,6 +309,45 @@ struct WatchVoIPCall: Equatable, Sendable {
         if let value = value as? NSNumber { return Date(timeIntervalSince1970: value.doubleValue) }
         guard let value = value as? String else { return nil }
         return ISO8601DateFormatter().date(from: value)
+    }
+}
+
+/// What the Watch reports to CallKit for a VoIP push. PushKit requires every push to report a call before its
+/// completion runs, so a push that must not ring still reports one.
+enum WatchVoIPPushDisposition: Equatable, Sendable {
+    /// A new incoming call: track it and ring.
+    case ring(WatchVoIPCall)
+    /// The push repeats the tracked call. Report its UUID again; CallKit's "already exists" error is expected.
+    case reportTracked(WatchVoIPCall)
+    /// The call already ended on this Watch. Report a placeholder and end it at once.
+    case endAlreadyEnded(placeholder: UUID)
+    /// The payload cannot ring, for example malformed or expired. Report a placeholder and end it at once.
+    case endUnusable(placeholder: UUID, error: String)
+}
+
+enum WatchVoIPPushPolicy {
+    /// A placeholder keeps the payload's `call_uuid` when it parses and uses `fallbackUUID` otherwise. A push naming
+    /// the tracked call by `call_id` or `call_uuid` always reports the tracked UUID, so a placeholder never ends it.
+    static func disposition(
+        userInfo: [AnyHashable: Any],
+        tracked: WatchVoIPCall?,
+        endedCallIDs: Set<String>,
+        now: Date = Date(),
+        fallbackUUID: UUID = UUID()
+    ) -> WatchVoIPPushDisposition {
+        let incoming: WatchVoIPCall
+        do {
+            incoming = try WatchVoIPCall(userInfo: userInfo, now: now)
+        } catch {
+            let payloadUUID = (userInfo["call_uuid"] as? String).flatMap(UUID.init(uuidString:))
+            if let tracked, payloadUUID == tracked.uuid { return .reportTracked(tracked) }
+            return .endUnusable(placeholder: payloadUUID ?? fallbackUUID, error: error.localizedDescription)
+        }
+        if let tracked, tracked.callID == incoming.callID || tracked.uuid == incoming.uuid {
+            return .reportTracked(tracked)
+        }
+        if endedCallIDs.contains(incoming.callID) { return .endAlreadyEnded(placeholder: incoming.uuid) }
+        return .ring(incoming)
     }
 }
 

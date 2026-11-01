@@ -55,6 +55,99 @@ enum CallKitEndActionPolicy {
     static func shouldForwardToBackend(systemCallWasCurrent: Bool) -> Bool {
         systemCallWasCurrent
     }
+
+    /// An end action acts only on the call it names. Any other UUID is cleanup for a call that already ended or was
+    /// replaced, including when the current call changes while the backend request is pending.
+    static func targetsCurrentCall(actionCallUUID: UUID, currentCallUUID: UUID?) -> Bool {
+        currentCallUUID == actionCallUUID
+    }
+}
+
+/// How a delivered CXStartCallAction completes. Every disposition except `repeatedDelivery` fulfills or fails the
+/// action; a repeated delivery belongs to a transaction whose first delivery does.
+enum OutgoingStartActionDisposition: Equatable {
+    case repeatedDelivery
+    /// The call was already dialed or reported; fulfill without dialing again.
+    case fulfill
+    /// Another outgoing start is still dialing and the provider allows one call.
+    case fail
+    case start
+}
+
+/// Remembers CXStartCallAction deliveries by transaction UUID. Object addresses are reused once an action is freed, so
+/// they cannot tell a new action from a repeated one.
+struct OutgoingStartActionLedger {
+    private static let retainedLimit = 32
+    private var handledActionUUIDs: Set<UUID> = []
+    private var dialedCallUUIDs: Set<UUID> = []
+
+    mutating func disposition(
+        for action: CXStartCallAction,
+        startInFlight: Bool,
+        currentOutgoingCallReported: Bool
+    ) -> OutgoingStartActionDisposition {
+        guard handledActionUUIDs.insert(action.uuid).inserted else { return .repeatedDelivery }
+        if dialedCallUUIDs.contains(action.callUUID) { return .fulfill }
+        if startInFlight { return .fail }
+        if currentOutgoingCallReported { return .fulfill }
+        return .start
+    }
+
+    mutating func recordDialed(_ action: CXStartCallAction) {
+        dialedCallUUIDs.insert(action.callUUID)
+        guard handledActionUUIDs.count > Self.retainedLimit || dialedCallUUIDs.count > Self.retainedLimit else {
+            return
+        }
+        handledActionUUIDs = [action.uuid]
+        dialedCallUUIDs = [action.callUUID]
+    }
+}
+
+/// Why an incoming PushKit call cannot become or repeat the current system call.
+enum IncomingPushRejection: String, Equatable {
+    case unavailable
+    case recentlyEnded
+    case callInProgress
+}
+
+/// How an incoming PushKit call reaches CallKit. iOS 13+ terminates an app that completes a VoIP push without
+/// reporting a call, and repeated misses stop VoIP delivery, so a push that cannot share the current call's report is
+/// reported as a placeholder that ends at once.
+enum IncomingPushDisposition: Equatable {
+    /// No call is current; the push becomes the current call and is reported.
+    case reportNewCall
+    /// The push repeats the current call, which CallKit already shows.
+    case currentCallReported
+    /// The push repeats the current call before CallKit shows it and completes with that call's report.
+    case awaitCurrentCallReport
+    /// The push repeats the current call after its report failed, which left no report to wait for.
+    case currentCallPlaceholder
+    /// The push cannot become the current call, so it must not ring the Watch or update the in-app call.
+    case rejected(IncomingPushRejection)
+}
+
+enum IncomingPushPolicy {
+    static func disposition(
+        callKitAvailable: Bool,
+        recentlyEnded: Bool,
+        hasCurrentCall: Bool,
+        matchesCurrentCall: Bool,
+        currentCallReported: Bool,
+        currentReportFailed: Bool
+    ) -> IncomingPushDisposition {
+        guard callKitAvailable else { return .rejected(.unavailable) }
+        guard !recentlyEnded else { return .rejected(.recentlyEnded) }
+        guard hasCurrentCall else { return .reportNewCall }
+        guard matchesCurrentCall else { return .rejected(.callInProgress) }
+        if currentCallReported { return .currentCallReported }
+        return currentReportFailed ? .currentCallPlaceholder : .awaitCurrentCallReport
+    }
+
+    /// A placeholder reuses the payload UUID unless it names the current system call, which must not be ended.
+    static func placeholderUUID(payloadUUID: UUID?, currentCallUUID: UUID?) -> UUID {
+        if let payloadUUID, payloadUUID != currentCallUUID { return payloadUUID }
+        return UUID()
+    }
 }
 
 extension CallKitActionHandling {
@@ -118,10 +211,10 @@ final class CallKitController: NSObject {
     private var missingCallPolls = 0
     private var outgoingStartInFlight = false
     private var outgoingStartID = UUID()
-    private var handledOutgoingActions: Set<ObjectIdentifier> = []
-    private var dialedOutgoingUUIDs: Set<UUID> = []
+    private var outgoingStartActions = OutgoingStartActionLedger()
     private var appAnswerRequestUUID: UUID?
     private var incomingReportCompletions: [(Error?) -> Void] = []
+    private var placeholderReportCompletions: [UUID: () -> Void] = [:]
     private var incomingDeduplicator = IncomingCallDeduplicator()
     private(set) var currentIncomingPush: IncomingVoIPCall?
 
@@ -197,37 +290,50 @@ final class CallKitController: NSObject {
     }
 
     /// PushKit cold launch must immediately hand the incoming call to the system. Subsequent USB status sync reuses
-    /// the same call_id/UUID without creating a duplicate system call.
+    /// the same call_id/UUID without creating a duplicate system call. Every push is reported to CallKit before
+    /// `completion` runs; returns whether the push is for the current call.
     func reportIncomingPush(
         _ call: IncomingVoIPCall,
         completion: @escaping (Error?) -> Void
-    ) {
-        guard isAvailable else {
-            completion(CallKitBridgeError.unavailable)
-            return
-        }
-        guard incomingDeduplicator.shouldAccept(callID: call.callID, uuid: call.uuid) else {
-            debugLog("Ignoring late PushKit event for ended call")
-            completion(nil)
-            return
-        }
-        if currentUUID != nil {
-            guard call.matches(backendID: currentBackendID, uuid: currentUUID) else {
-                completion(CallKitBridgeError.callInProgress)
-                return
-            }
+    ) -> Bool {
+        let disposition = IncomingPushPolicy.disposition(
+            callKitAvailable: isAvailable,
+            recentlyEnded: !incomingDeduplicator.shouldAccept(callID: call.callID, uuid: call.uuid),
+            hasCurrentCall: currentUUID != nil,
+            matchesCurrentCall: call.matches(backendID: currentBackendID, uuid: currentUUID),
+            currentCallReported: systemCallReported,
+            currentReportFailed: incomingReportFailed
+        )
+        switch disposition {
+        case .rejected(let rejection):
+            debugLog("Reporting ended placeholder for rejected PushKit event; reason=\(rejection.rawValue)")
+            let error: Error? =
+                switch rejection {
+                case .unavailable: CallKitBridgeError.unavailable
+                case .callInProgress: CallKitBridgeError.callInProgress
+                case .recentlyEnded: nil
+                }
+            reportEndedPlaceholder(payloadUUID: call.uuid) { completion(error) }
+            return false
+        case .currentCallReported, .awaitCurrentCallReport, .currentCallPlaceholder:
             currentIncomingPush = call
             currentBackendID = call.callID
             currentNumber = call.number ?? currentNumber
-            if systemCallReported {
+            if disposition == .currentCallReported {
                 handler?.callKitDidReceiveIncoming(call)
                 completion(nil)
-                return
+                return true
             }
-            incomingReportCompletions.append(completion)
-            reportIncomingIfNeeded(number: currentNumber, callerName: call.callerName, source: "PushKit Redelivery")
+            if disposition == .currentCallPlaceholder {
+                reportEndedPlaceholder(payloadUUID: call.uuid) { completion(nil) }
+            } else {
+                incomingReportCompletions.append(completion)
+                reportIncomingIfNeeded(number: currentNumber, callerName: call.callerName, source: "PushKit Redelivery")
+            }
             handler?.callKitDidReceiveIncoming(call)
-            return
+            return true
+        case .reportNewCall:
+            break
         }
 
         currentUUID = call.uuid
@@ -241,6 +347,31 @@ final class CallKitController: NSObject {
         incomingReportCompletions.append(completion)
         reportIncomingIfNeeded(number: call.number, callerName: call.callerName, source: "PushKit")
         handler?.callKitDidReceiveIncoming(call)
+        return true
+    }
+
+    /// Satisfies the PushKit rule for a push that cannot use the current call's report: reports a placeholder call, ends
+    /// it at once and completes the push when CallKit answers. The provider stays usable while CallKit calls are
+    /// disabled for local mode; if the system refuses the report, the push still completes.
+    func reportEndedPlaceholder(payloadUUID: UUID?, completion: @escaping () -> Void) {
+        let uuid = IncomingPushPolicy.placeholderUUID(payloadUUID: payloadUUID, currentCallUUID: currentUUID)
+        let requestID = UUID()
+        placeholderReportCompletions[requestID] = completion
+        provider.reportNewIncomingCall(with: uuid, update: update(number: nil, callerName: nil)) { @Sendable error in
+            Task { @MainActor in
+                self.finishEndedPlaceholder(requestID: requestID, uuid: uuid, reported: error == nil)
+            }
+        }
+    }
+
+    private func finishEndedPlaceholder(requestID: UUID, uuid: UUID, reported: Bool) {
+        // A failed report (for example a UUID CallKit still shows) must not end that existing call.
+        if reported {
+            provider.reportCall(with: uuid, endedAt: Date(), reason: .failed)
+        } else {
+            debugLog("System refused ended placeholder for PushKit event")
+        }
+        placeholderReportCompletions.removeValue(forKey: requestID)?()
     }
 
     /// Lets the system take over the outgoing call transaction first; the actual module ATD is executed only inside the
@@ -595,16 +726,24 @@ final class CallKitController: NSObject {
 
     private func performStart(_ action: CXStartCallAction) async {
         if action.isComplete { return }
-        let actionIdentity = ObjectIdentifier(action)
-        guard handledOutgoingActions.insert(actionIdentity).inserted else { return }
-        if dialedOutgoingUUIDs.contains(action.callUUID) {
+        switch outgoingStartActions.disposition(
+            for: action,
+            startInFlight: outgoingStartInFlight,
+            currentOutgoingCallReported: systemCallReported && currentUUID == action.callUUID
+                && currentDirection == "outgoing"
+        ) {
+        case .repeatedDelivery:
+            return
+        case .fulfill:
             action.fulfill()
             return
-        }
-        if outgoingStartInFlight { return }
-        if systemCallReported, currentUUID == action.callUUID, currentDirection == "outgoing" {
-            action.fulfill()
+        case .fail:
+            // Not reported to the handler: that would cancel the outgoing attempt that is still dialing.
+            debugLog("Failing outgoing start while another start is in flight")
+            action.fail()
             return
+        case .start:
+            break
         }
         outgoingStartInFlight = true
         let operationID = UUID()
@@ -625,8 +764,7 @@ final class CallKitController: NSObject {
             guard currentUUID == action.callUUID, currentDirection == "outgoing" else {
                 throw CallKitBridgeError.staleSystemCall
             }
-            dialedOutgoingUUIDs.insert(action.callUUID)
-            trimOutgoingDeduplicationState(keeping: action)
+            outgoingStartActions.recordDialed(action)
             let backendError = try await CallKitActionCoordinator.perform(
                 prepare: { try handler.callKitPrepareAudioSession() },
                 fulfill: {
@@ -656,37 +794,46 @@ final class CallKitController: NSObject {
         }
     }
 
-    private func trimOutgoingDeduplicationState(keeping action: CXStartCallAction) {
-        guard handledOutgoingActions.count > 32 || dialedOutgoingUUIDs.count > 32 else { return }
-        handledOutgoingActions = [ObjectIdentifier(action)]
-        dialedOutgoingUUIDs = [action.callUUID]
-    }
-
     private func performEnd(_ action: CXEndCallAction) async {
         let currentHandler = handler
         // reportCall(ended:) may be followed by a delayed CXEndCallAction after
-        // the authoritative Agent state already cleared this UUID. That action
-        // is cleanup, not a new user hangup whose missing transport needs an alert.
-        let systemCallWasCurrent = currentUUID != nil
+        // the authoritative Agent state already cleared or replaced this UUID,
+        // and an ended placeholder may be declined. That action is cleanup, not
+        // a hangup of whichever call is current now.
+        let endedUUID = action.callUUID
+        let systemCallWasCurrent = CallKitEndActionPolicy.targetsCurrentCall(
+            actionCallUUID: endedUUID,
+            currentCallUUID: currentUUID
+        )
+        guard CallKitEndActionPolicy.shouldForwardToBackend(systemCallWasCurrent: systemCallWasCurrent) else {
+            action.fulfill()
+            return
+        }
+        let endedBackendID = currentBackendID
+        // Unlike start/answer, the action stays pending until the hangup or reject
+        // is sent: callKitEnd picks its route from this call's push and answer
+        // state, and callKitCallDidEnd tears down the session it uses.
         var backendError: Error?
-        if CallKitEndActionPolicy.shouldForwardToBackend(
-            systemCallWasCurrent: systemCallWasCurrent
-        ) {
-            do {
-                guard let currentHandler else { throw CallKitBridgeError.handlerUnavailable }
-                try await currentHandler.callKitEnd()
-            } catch {
-                backendError = error
-            }
+        do {
+            guard let currentHandler else { throw CallKitBridgeError.handlerUnavailable }
+            try await currentHandler.callKitEnd()
+        } catch {
+            backendError = error
         }
 
+        // A call that ended or was replaced during the request was finished by
+        // that path; recording or resetting now would end the current call.
+        guard CallKitEndActionPolicy.targetsCurrentCall(actionCallUUID: endedUUID, currentCallUUID: currentUUID) else {
+            action.fulfill()
+            return
+        }
         // CallKit owns the local system-call lifecycle. A temporarily missing
         // module must not leave the UUID registered after the user hangs up.
         endActionFulfilled = true
         action.fulfill()
         incomingDeduplicator.recordEnded(
-            callID: currentBackendID,
-            uuid: currentUUID,
+            callID: currentBackendID ?? endedBackendID,
+            uuid: endedUUID,
             at: Date()
         )
         currentHandler?.callKitCallDidEnd()

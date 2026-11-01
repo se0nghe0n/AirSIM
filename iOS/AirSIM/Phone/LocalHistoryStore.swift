@@ -23,11 +23,13 @@ enum CallHistoryPolicy {
 
 /// Persists local call history and SMS on the phone independent of whether the module is online.
 final class LocalHistoryStore {
+    private let fileManager: FileManager
     private let callHistoryURL: URL
     private let messagesURL: URL
     private let deletedCallIDsURL: URL
 
     init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
+        self.fileManager = fileManager
         let durableRoot =
             fileManager.urls(
                 for: .applicationSupportDirectory,
@@ -83,16 +85,53 @@ final class LocalHistoryStore {
     }
 
     private func load<Element: Decodable>(_ type: Element.Type, from url: URL) -> [Element]? {
+        let data: Data
         do {
-            let data = try Data(contentsOf: url)
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            return nil
+        } catch {
+            // Protected data unavailable or permission errors leave the file in place for a later read.
+            Self.log("Failed to read local history (\(url.lastPathComponent)): \(error.localizedDescription)")
+            return nil
+        }
+        do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             return try decoder.decode([Element].self, from: data)
-        } catch CocoaError.fileReadNoSuchFile {
+        } catch let error as DecodingError {
+            Self.log("Failed to decode local history (\(url.lastPathComponent)): \(error.localizedDescription)")
+            // Callers treat nil as empty history and save over it, so keep the unreadable copy out of the way.
+            moveAsideUnreadableFile(at: url)
             return nil
         } catch {
             Self.log("Failed to read local history (\(url.lastPathComponent)): \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    /// Renames the file to `<name>.unreadable-<UTC timestamp>.json` in the same directory, which keeps its file
+    /// protection class and backup exclusion.
+    private func moveAsideUnreadableFile(at url: URL) {
+        let timestampFormatter = ISO8601DateFormatter()
+        timestampFormatter.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let directoryURL = url.deletingLastPathComponent()
+        let unreadableName =
+            "\(url.deletingPathExtension().lastPathComponent).unreadable-"
+            + timestampFormatter.string(from: Date())
+        var destinationURL = directoryURL.appendingPathComponent("\(unreadableName).json")
+        if fileManager.fileExists(atPath: destinationURL.path) {
+            destinationURL = directoryURL.appendingPathComponent(
+                "\(unreadableName)-\(UUID().uuidString.lowercased()).json"
+            )
+        }
+        do {
+            try fileManager.moveItem(at: url, to: destinationURL)
+            Self.log("Moved unreadable local history aside: \(destinationURL.lastPathComponent)")
+        } catch {
+            Self.log(
+                "Failed to move unreadable local history aside (\(url.lastPathComponent)): \(error.localizedDescription)"
+            )
         }
     }
 

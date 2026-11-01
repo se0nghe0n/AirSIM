@@ -171,26 +171,33 @@ enum SamsungPairingClient {
                 sealedRegistration: sealed.combined.base64URL
             )
         )
-        let responseData = try await exchange(endpoint: service.endpoint, body: body)
+        let responseData = try await exchange(
+            endpoint: service.endpoint,
+            body: body,
+            timeout: exchangeTimeout(expiresAt: service.expiresAt)
+        )
         let response = try JSONDecoder().decode(Response.self, from: responseData)
         guard response.configured else { throw SamsungPairingClientError.rejected }
         if let agentID = response.agentID { PairedAndroidDeviceStore.allowPairing(agentID) }
         return response.deviceIDHint.map { "Paired successfully (device …\($0))" } ?? "Paired successfully"
     }
 
-    private static func exchange(endpoint: NWEndpoint, body: Data) async throws -> Data {
-        try await withCheckedThrowingContinuation { continuation in
-            let connection = NWConnection(to: endpoint, using: .tcp)
-            let state = PairingExchangeState(connection: connection, continuation: continuation)
-            connection.stateUpdateHandler = { newState in
-                switch newState {
-                case .ready: state.send(body: body)
-                case .failed(let error): state.finish(.failure(error))
-                case .cancelled: state.finish(.failure(SamsungPairingClientError.connectionClosed))
-                default: break
-                }
+    /// Longest one claim exchange may take, so an unresponsive Android cannot hold the pairing gate.
+    static let maximumExchangeTimeout: TimeInterval = 15
+
+    /// The exchange also ends when the advertised pairing window closes, if that comes first.
+    static func exchangeTimeout(expiresAt: Date, now: Date = Date()) -> TimeInterval {
+        min(maximumExchangeTimeout, expiresAt.timeIntervalSince(now))
+    }
+
+    static func exchange(endpoint: NWEndpoint, body: Data, timeout: TimeInterval) async throws -> Data {
+        let exchange = PairingExchangeState()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                exchange.start(endpoint: endpoint, body: body, timeout: timeout, continuation: continuation)
             }
-            connection.start(queue: DispatchQueue(label: "com.airsim.samsung-pair.claim"))
+        } onCancel: {
+            exchange.finish(.failure(CancellationError()))
         }
     }
 }
@@ -207,19 +214,58 @@ enum SamsungPairingCompletionCoordinator {
     }
 }
 
+/// One claim exchange. The first terminal event (response, connection error or `.waiting`, deadline, or
+/// task cancellation) resumes the continuation exactly once and cancels the connection. Connection
+/// callbacks hold the state weakly, so the connection never keeps it alive.
 private final class PairingExchangeState: @unchecked Sendable {
-    private let connection: NWConnection
-    private let continuation: CheckedContinuation<Data, Error>
-    private var received = Data()
-    private var finished = false
+    private let queue = DispatchQueue(label: "com.airsim.samsung-pair.claim")
     private let lock = NSLock()
+    private var connection: NWConnection?
+    private var continuation: CheckedContinuation<Data, Error>?
+    private var deadline: DispatchWorkItem?
+    private var outcome: Result<Data, Error>?
+    private var received = Data()
 
-    init(connection: NWConnection, continuation: CheckedContinuation<Data, Error>) {
+    func start(
+        endpoint: NWEndpoint,
+        body: Data,
+        timeout: TimeInterval,
+        continuation: CheckedContinuation<Data, Error>
+    ) {
+        lock.lock()
+        if let outcome {
+            // The calling task was cancelled before the connection was created.
+            lock.unlock()
+            continuation.resume(with: outcome)
+            return
+        }
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        let deadline = DispatchWorkItem { [weak self] in
+            self?.finish(.failure(SamsungPairingClientError.timedOut))
+        }
         self.connection = connection
         self.continuation = continuation
+        self.deadline = deadline
+        connection.stateUpdateHandler = { [weak self] newState in
+            switch newState {
+            case .ready: self?.send(body: body)
+            case .waiting(let error), .failed(let error): self?.finish(.failure(error))
+            case .cancelled: self?.finish(.failure(SamsungPairingClientError.connectionClosed))
+            default: break
+            }
+        }
+        // Started under the lock so a concurrent finish cannot cancel the connection before it starts.
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + timeout, execute: deadline)
+        lock.unlock()
     }
 
-    func send(body: Data) {
+    private var activeConnection: NWConnection? {
+        lock.withLock { connection }
+    }
+
+    private func send(body: Data) {
+        guard let connection = activeConnection else { return }
         var request = Data(
             "POST /pair/v1/claim HTTP/1.1\r\nHost: airsim-pair.local\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
                 .utf8
@@ -238,6 +284,7 @@ private final class PairingExchangeState: @unchecked Sendable {
     }
 
     private func receive() {
+        guard let connection = activeConnection else { return }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
             [weak self] content, _, isComplete, error in
             guard let self else { return }
@@ -269,14 +316,21 @@ private final class PairingExchangeState: @unchecked Sendable {
 
     func finish(_ result: Result<Data, Error>) {
         lock.lock()
-        guard !finished else {
+        guard outcome == nil else {
             lock.unlock()
             return
         }
-        finished = true
+        outcome = result
+        let connection = self.connection
+        let continuation = self.continuation
+        let deadline = self.deadline
+        self.connection = nil
+        self.continuation = nil
+        self.deadline = nil
         lock.unlock()
-        connection.cancel()
-        continuation.resume(with: result)
+        deadline?.cancel()
+        connection?.cancel()
+        continuation?.resume(with: result)
     }
 }
 
@@ -286,6 +340,7 @@ enum SamsungPairingClientError: LocalizedError {
     case rejected
     case responseTooLarge
     case connectionClosed
+    case timedOut
     case registrationUnavailable
     case pairingBusy
 
@@ -296,6 +351,7 @@ enum SamsungPairingClientError: LocalizedError {
         case .rejected: return "Android rejected pairing. Check the code and try again."
         case .responseTooLarge: return "Android returned an invalid response"
         case .connectionClosed: return "The local network connection to Android was lost"
+        case .timedOut: return "Android did not respond. Keep its pairing window open and try again."
         case .registrationUnavailable:
             return
                 "Relay/push configuration is not ready. Configure cloud settings first, or enable Local-Only Pairing for a local connection."
