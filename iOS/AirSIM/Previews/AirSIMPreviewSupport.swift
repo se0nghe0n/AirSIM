@@ -16,7 +16,7 @@ enum AirSIMPreviewEnvironment {
 @MainActor
 enum AirSIMPreviewFixtures {
     static let date = Date(timeIntervalSince1970: 1_793_268_000)
-    static let phone = "+1 202 555 0100"
+    nonisolated static let phone = "+1 202 555 0100"
     static let contact = ContactStore.Contact(
         id: "preview-mina",
         name: "Mina Kim",

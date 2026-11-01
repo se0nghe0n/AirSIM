@@ -29,16 +29,6 @@ struct AgentVerboseTraceEntry: Codable, Identifiable, Sendable, Equatable {
     let fields: [String: String]?
 }
 
-struct AgentVerboseRemoteEvent: Sendable {
-    let sequence: UInt64
-    let timestamp: String
-    let category: String
-    let direction: String
-    let summary: String
-    let payload: String
-    let fields: [String: String]
-}
-
 actor AgentVerboseTraceRecorder {
     static let preferenceKey = "agent_verbose_trace_enabled"
     static let shared = AgentVerboseTraceRecorder(
@@ -60,15 +50,6 @@ actor AgentVerboseTraceRecorder {
         entries = loaded.count > self.maxEntries
             ? Array(loaded.suffix(self.maxEntries))
             : loaded
-    }
-
-    func isEnabled() -> Bool { enabled }
-
-    func setEnabled(_ enabled: Bool) {
-        self.enabled = enabled
-        if persistenceURL != nil {
-            UserDefaults.standard.set(enabled, forKey: Self.preferenceKey)
-        }
     }
 
     func begin(method: String, path: String, bodyBytes: Int) -> AgentVerboseTraceContext? {
@@ -146,49 +127,6 @@ actor AgentVerboseTraceRecorder {
         persist()
     }
 
-    func snapshot() -> [AgentVerboseTraceEntry] { entries }
-
-    func clear() {
-        entries.removeAll(keepingCapacity: true)
-        persist()
-    }
-
-    func exportText(agentEvents: [AgentVerboseRemoteEvent]) -> String {
-        var lines = [
-            "AirSIM Agent Verbose Trace",
-            "exported_at=\(Self.iso8601.string(from: Date()))",
-            "local_entries=\(entries.count) agent_events=\(agentEvents.count)",
-            ""
-        ]
-        for entry in entries {
-            let elapsed = entry.elapsedMilliseconds.map { " duration_ms=\($0)" } ?? ""
-            let fields = (entry.fields ?? [:])
-                .filter { $0.key != "trace_id" }
-                .sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: " ")
-            lines.append(
-                "\(Self.iso8601.string(from: entry.timestamp)) [\(entry.source ?? "APP")] " +
-                "trace=\(entry.traceID) stage=\(entry.stage.rawValue) " +
-                "\(entry.method) \(entry.path)\(elapsed) \(fields) \(entry.detail)"
-            )
-        }
-        for event in agentEvents {
-            let trace = event.fields["trace_id"].map { " trace=\($0)" } ?? ""
-            let fields = event.fields
-                .filter { $0.key != "trace_id" }
-                .sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value)" }
-                .joined(separator: " ")
-            lines.append(
-                "\(event.timestamp) [AGENT] seq=\(event.sequence)\(trace) " +
-                "\(event.category)/\(event.direction) \(event.summary) \(fields)"
-            )
-            if !event.payload.isEmpty { lines.append(event.payload) }
-        }
-        return lines.joined(separator: "\n")
-    }
-
     private func append(
         _ context: AgentVerboseTraceContext,
         stage: AgentVerboseTraceStage,
@@ -251,10 +189,4 @@ actor AgentVerboseTraceRecorder {
             .appendingPathComponent("AirSIM", isDirectory: true)
             .appendingPathComponent("agent-verbose-trace.json")
     }
-
-    private static let iso8601: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
 }
