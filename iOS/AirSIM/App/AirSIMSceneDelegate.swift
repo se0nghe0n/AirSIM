@@ -37,7 +37,10 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
         pendingURLs.removeAll()
     }
 
-    func sceneWillEnterForeground(_ scene: UIScene) { connectUI() }
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        connectUI()
+    }
+
     func sceneDidBecomeActive(_ scene: UIScene) {
 #if DEBUG
         guard !AirSIMPreviewEnvironment.isActive else { return }
@@ -45,22 +48,38 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
         connectUI()
         // Scene-based apps no longer receive applicationDidBecomeActive on the app delegate.
         (UIApplication.shared.delegate as? AirSIMAppDelegate)?.applicationDidBecomeActive(UIApplication.shared)
-        if root != nil { AirSIMUIModel.shared.didBecomeActive() }
+        if root != nil {
+            AirSIMUIModel.shared.didBecomeActive()
+        }
         root?.consumePendingSMS()
     }
+
     func sceneWillResignActive(_ scene: UIScene) {
-        if !UIApplication.shared.connectedScenes.contains(where: { $0 !== scene && $0.activationState == .foregroundActive }) { if root != nil { AirSIMUIModel.shared.willResignActive() } }
+        guard root != nil, !anotherScene(than: scene, isIn: [.foregroundActive]) else { return }
+        AirSIMUIModel.shared.willResignActive()
     }
+
     func sceneDidEnterBackground(_ scene: UIScene) {
-        if !UIApplication.shared.connectedScenes.contains(where: { $0 !== scene && ($0.activationState == .foregroundActive || $0.activationState == .foregroundInactive) }) { if root != nil { AirSIMUIModel.shared.didEnterBackground() } }
+        guard root != nil, !anotherScene(than: scene, isIn: [.foregroundActive, .foregroundInactive]) else { return }
+        AirSIMUIModel.shared.didEnterBackground()
     }
+
     func sceneDidDisconnect(_ scene: UIScene) {
         root?.store.send(.stop)
         root = nil
         window = nil
     }
+
     func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
-        if let root { contexts.forEach { root.handleSystemCommunicationURL($0.url) } }
-        else { pendingURLs.append(contentsOf: contexts.map(\.url)) }
+        guard let root else {
+            pendingURLs.append(contentsOf: contexts.map(\.url))
+            return
+        }
+        contexts.forEach { root.handleSystemCommunicationURL($0.url) }
+    }
+
+    /// The app-wide lifecycle follows the last foreground scene, not each scene.
+    private func anotherScene(than scene: UIScene, isIn states: Set<UIScene.ActivationState>) -> Bool {
+        UIApplication.shared.connectedScenes.contains { $0 !== scene && states.contains($0.activationState) }
     }
 }
