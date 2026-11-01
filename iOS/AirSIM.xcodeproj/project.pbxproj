@@ -100,6 +100,7 @@
 		AA0000000000000000000011 /* CallRecordingWebRTCAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000011 /* CallRecordingWebRTCAudio.swift */; };
 		AA0000000000000000000012 /* CallRecordingsViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000012 /* CallRecordingsViewController.swift */; };
 		AA0000000000000000000013 /* CallRecordingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000013 /* CallRecordingTests.swift */; };
+		A1F000000000000000000001 /* ContactDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000001 /* ContactDirectory.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -245,6 +246,7 @@
 		BB0000000000000000000011 /* CallRecordingWebRTCAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingWebRTCAudio.swift; sourceTree = "<group>"; };
 		BB0000000000000000000012 /* CallRecordingsViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingsViewController.swift; sourceTree = "<group>"; };
 		BB0000000000000000000013 /* CallRecordingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallRecordingTests.swift; sourceTree = "<group>"; };
+		B1F000000000000000000001 /* ContactDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactDirectory.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -398,6 +400,7 @@
 				D20000000000000000000014 /* ActiveCall */,
 				B10000000000000000000018 /* LocalHistoryStore.swift */,
 				B10000000000000000000005 /* ContactStore.swift */,
+				B1F000000000000000000001 /* ContactDirectory.swift */,
 			);
 			path = Phone;
 			sourceTree = "<group>";
@@ -830,6 +833,7 @@
 				A1D000000000000000000032 /* AgentVerboseTraceData.swift in Sources */,
 				A1D000000000000000000033 /* TraceFeature.swift in Sources */,
 				A1D000000000000000000034 /* AgentVerboseTraceDetailViewController.swift in Sources */,
+				A1F000000000000000000001 /* ContactDirectory.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

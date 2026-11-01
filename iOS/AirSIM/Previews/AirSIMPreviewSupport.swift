@@ -74,59 +74,69 @@ enum AirSIMPreviewFixtures {
         empty: Bool = false,
         appearance: AppAppearance = .light
     ) -> AirSIMPresentation {
-        var state = AirSIMFeature.State()
+        let relayURL = "https://relay.example.com"
+        var snapshot = AirSIMSnapshot()
+        snapshot.numberInput = phone
+        snapshot.contacts = ContactDirectory(all: empty ? [] : contacts, isAuthorized: true, authorization: .authorized)
+        snapshot.callHistory = empty ? [] : history
+        snapshot.messages = empty ? [] : messages
+        snapshot.conversations = empty ? [] : [.init(sender: phone, messages: messages)]
+        snapshot.pairedAndroidAgents = empty ? [] : agents
+        snapshot.currentAndroidAgent = empty ? nil : agents.first
+        snapshot.pairedDeviceHistory = empty ? [] : agents
+        snapshot.recordings = empty ? [] : recordings
+        snapshot.canStartOutgoingCommand = !empty
+        snapshot.isOnline = !empty
+        if !empty, let endpoint = try? VoWLANEndpoint(host: "192.168.1.20", controlPort: 8080) {
+            snapshot.vowlan = .verified(endpoint, at: date)
+        }
+        snapshot.connectionModePresentation = .make(vowlanOnline: !empty, cloudModeEnabled: true, cloudOnline: !empty)
+        snapshot.preferenceMode = .automatic
+        snapshot.preferenceAppearance = appearance
+        snapshot.preferenceRelayURL = relayURL
+        snapshot.preferenceOnboardingComplete = true
+        if let callState {
+            let record = call(callState)
+            snapshot.inAppPresentedCall = record
+            snapshot.callLifecycleSnapshot = CallLifecycleSnapshot(
+                callID: record.id,
+                callUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000301")!,
+                generation: 1,
+                state: callState == "incoming" ? .ringing : .active,
+                source: .app,
+                timestamp: date,
+                traceID: "PREVIEW1",
+                failure: nil
+            )
+            snapshot.callAudioIsActive = callState == "active"
+            snapshot.audioActive = callState == "active"
+            snapshot.callAudioStatusText = callState == "active" ? "Audio Connected" : "Connecting Audio"
+            snapshot.audioRoute = "iPhone"
+            snapshot.canToggleRecording = callState == "active"
+        }
+
+        var state = AirSIMFeature.State(snapshot: snapshot)
         state.selectedTab = tab
         state.firstConnectionComplete = true
         state.dialNumber = phone
         state.lastBackendNumber = phone
-        state.snapshot.numberInput = phone
-        state.snapshot.contacts = empty ? [] : contacts
-        state.snapshot.contactsAuthorized = true
-        state.snapshot.contactsAuthorization = .authorized
-        state.snapshot.callHistory = empty ? [] : history
-        state.snapshot.messages = empty ? [] : messages
-        state.snapshot.conversations = empty ? [] : [.init(sender: phone, messages: messages)]
-        state.snapshot.pairedAndroidAgents = empty ? [] : agents
-        state.snapshot.currentAndroidAgent = empty ? nil : agents.first
-        state.snapshot.pairedDeviceHistory = empty ? [] : agents
-        state.snapshot.recordings = empty ? [] : recordings
-        state.snapshot.canStartOutgoingCommand = !empty
-        state.snapshot.isOnline = !empty
-        if !empty, let endpoint = try? VoWLANEndpoint(host: "192.168.1.20", controlPort: 8080) {
-            state.snapshot.vowlan = .verified(endpoint, at: date)
-        }
-        state.snapshot.connectionModePresentation = .make(vowlanOnline: !empty, cloudModeEnabled: true, cloudOnline: !empty)
         state.settings.mode = .automatic
         state.settings.lastObservedMode = .automatic
         state.settings.appearance = appearance
         state.settings.lastObservedAppearance = appearance
-        state.settings.relayURL = "https://relay.example.com"
-        state.settings.lastObservedRelayURL = state.settings.relayURL
+        state.settings.relayURL = relayURL
+        state.settings.lastObservedRelayURL = relayURL
         state.settings.report = selfTestReport
         state.settings.selfTestCompleted = true
-        state.snapshot.preferenceMode = state.settings.mode
-        state.snapshot.preferenceAppearance = appearance
-        state.snapshot.preferenceRelayURL = state.settings.relayURL
-        state.snapshot.preferenceOnboardingComplete = true
         state.pairing.services = empty ? [] : pairingServices
         state.pairing.status = empty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair"
         state.trace.data = .previewData()
-        if let callState {
-            let record = call(callState)
-            state.snapshot.inAppPresentedCall = record
-            state.snapshot.callLifecycleSnapshot = CallLifecycleSnapshot(callID: record.id, callUUID: UUID(uuidString: "00000000-0000-0000-0000-000000000301")!, generation: 1, state: callState == "incoming" ? .ringing : .active, source: .app, timestamp: date, traceID: "PREVIEW1", failure: nil)
-            state.snapshot.callAudioIsActive = callState == "active"
-            state.snapshot.audioActive = callState == "active"
-            state.snapshot.callAudioStatusText = callState == "active" ? "Audio Connected" : "Connecting Audio"
-            state.snapshot.audioRoute = "iPhone"
-            state.snapshot.canToggleRecording = callState == "active"
-        }
-        let snapshot = state.snapshot
+
         let services = state.pairing.services
         let trace = state.trace.data
         let report = selfTestReport
         let client = AirSIMClient(
-            snapshots: { AsyncStream { $0.yield(snapshot); $0.finish() } },
+            snapshots: { [snapshot] in AsyncStream { $0.yield(snapshot); $0.finish() } },
             command: { _ in },
             sendSMS: { _, _ in .init(success: true) },
             selfTest: { AsyncStream { $0.yield(report); $0.finish() } },

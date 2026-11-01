@@ -8,8 +8,7 @@ final class AirSIMPresentation {
     let store: StoreOf<AirSIMFeature>
     init(model: AppModel, settings: AppSettings) {
         let playback = CallRecordingPlayback()
-        var state = AirSIMFeature.State()
-        state.snapshot = AirSIMSnapshot(model: model, settings: settings, playback: playback)
+        var state = AirSIMFeature.State(snapshot: AirSIMSnapshot(model: model, settings: settings, playback: playback))
         state.dialNumber = model.numberInput
         state.lastBackendNumber = model.numberInput
         state.settings.mode = ConnectionModePreference.selected()
@@ -79,20 +78,11 @@ final class AirSIMPresentation {
 @MainActor
 struct ContactsPresentation {
     let owner: AirSIMPresentation
-    var contacts: [ContactStore.Contact] { owner.snapshot.contacts }
-    var isAuthorized: Bool { owner.snapshot.contactsAuthorized }
-    var authorizationState: ContactAuthorizationState { owner.snapshot.contactsAuthorization }
-    func contact(for number: String) -> ContactStore.Contact? {
-        let target = ContactStore.normalized(number)
-        guard !target.isEmpty else { return nil }
-        if let exact = contacts.first(where: { $0.phones.contains(target) }) { return exact }
-        guard target.count >= 7 else { return nil }
-        return contacts.first { $0.phones.contains { $0.count >= 7 && $0.hasSuffix(target.suffix(7)) } }
-    }
-    func displayName(for number: String?) -> String {
-        guard let number, !number.isEmpty else { return "Unknown Number" }
-        return contact(for: number)?.name ?? number
-    }
+    var contacts: [ContactStore.Contact] { owner.snapshot.contacts.all }
+    var isAuthorized: Bool { owner.snapshot.contacts.isAuthorized }
+    var authorizationState: ContactAuthorizationState { owner.snapshot.contacts.authorization }
+    func contact(for number: String) -> ContactStore.Contact? { owner.snapshot.contacts.contact(for: number) }
+    func displayName(for number: String?) -> String { owner.snapshot.contacts.displayName(for: number) }
     func loadIfAuthorized() async { await owner.perform(.contacts(false)) }
     func requestAccessAndLoad() async { await owner.perform(.contacts(true)) }
 }

@@ -1761,22 +1761,22 @@ struct TCARootNavigationTests {
         }
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
         var old = AirSIMSnapshot(); old.errorMessage = "Old failure"
-        await store.send(.snapshot(old)) { $0.snapshot = old; $0.lastBackendError = "Old failure"; $0.alert = .error("Old failure", ok: .clearBackendError("Old failure")) }
+        await store.send(.snapshot(old)) { $0.$snapshot.withLock { $0 = old }; $0.lastBackendError = "Old failure"; $0.alert = .error("Old failure", ok: .clearBackendError("Old failure")) }
         // Later snapshots carrying the same error do not alert again.
         var muted = old; muted.isMuted = true
-        await store.send(.snapshot(muted)) { $0.snapshot = muted }
+        await store.send(.snapshot(muted)) { $0.$snapshot.withLock { $0 = muted } }
         // A newer error is recorded before OK on the older alert reaches the backend.
         backend.setValue("New failure")
         await store.send(.alert(.presented(.clearBackendError("Old failure")))) { $0.alert = nil }
         await store.finish()
         #expect(cleared.value == ["Old failure"] && backend.value == "New failure")
         var new = muted; new.errorMessage = "New failure"
-        await store.send(.snapshot(new)) { $0.snapshot = new; $0.lastBackendError = "New failure"; $0.alert = .error("New failure", ok: .clearBackendError("New failure")) }
+        await store.send(.snapshot(new)) { $0.$snapshot.withLock { $0 = new }; $0.lastBackendError = "New failure"; $0.alert = .error("New failure", ok: .clearBackendError("New failure")) }
         await store.send(.alert(.presented(.clearBackendError("New failure")))) { $0.alert = nil }
         await store.finish()
         #expect(backend.value == nil)
         var cleaned = new; cleaned.errorMessage = nil
-        await store.send(.snapshot(cleaned)) { $0.snapshot = cleaned; $0.lastBackendError = nil }
+        await store.send(.snapshot(cleaned)) { $0.$snapshot.withLock { $0 = cleaned }; $0.lastBackendError = nil }
     }
     @Test func `Command failure alerts without clearing the backend error`() async {
         let cleared = LockIsolated(0)
@@ -1785,7 +1785,7 @@ struct TCARootNavigationTests {
             if case .clearError = command { cleared.withValue { $0 += 1 } }
             if case .forgetDevice = command { throw CocoaError(.featureUnsupported) }
         }
-        var state = AirSIMFeature.State(); state.snapshot.errorMessage = "Backend failure"; state.lastBackendError = "Backend failure"
+        var snapshot = AirSIMSnapshot(); snapshot.errorMessage = "Backend failure"; var state = AirSIMFeature.State(snapshot: snapshot); state.lastBackendError = "Backend failure"
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
         await store.send(.command(.forgetDevice("agent")))
         await store.receive(\.commandFailed) { $0.alert = .error(CocoaError(.featureUnsupported).localizedDescription) }
@@ -1823,7 +1823,7 @@ struct TCARootNavigationTests {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
         await store.send(.numberChanged("123")) { $0.dialNumber = "123"; $0.hasDialDraft = true }
         var old = AirSIMSnapshot(); old.numberInput = "12"
-        await store.send(.snapshot(old)) { $0.snapshot = old; $0.lastBackendNumber = "12" }
+        await store.send(.snapshot(old)) { $0.$snapshot.withLock { $0 = old }; $0.lastBackendNumber = "12" }
         #expect(store.state.dialNumber == "123")
     }
     @Test func `Each pairing screen starts from the current mode without the last code`() async {
@@ -1857,7 +1857,7 @@ struct TCACallKeypadTests {
     private func client(dtmf: LockIsolated<[String]> = .init([])) -> AirSIMClient {
         AirSIMClient(snapshots: { AsyncStream { _ in } }, command: { command in if case .dtmf(let digit) = command { dtmf.withValue { $0.append(digit) } } }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
     }
-    private var inCall: AirSIMFeature.State { var state = AirSIMFeature.State(); state.snapshot.inAppPresentedCall = AirSIMPreviewFixtures.call("active"); return state }
+    private var inCall: AirSIMFeature.State { var snapshot = AirSIMSnapshot(); snapshot.inAppPresentedCall = AirSIMPreviewFixtures.call("active"); return AirSIMFeature.State(snapshot: snapshot) }
     @Test func `Keypad button opens an empty keypad only during an in-app call`() async {
         let idle = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
         await idle.send(.keypadButtonTapped)
@@ -1883,9 +1883,9 @@ struct TCACallKeypadTests {
         var state = inCall; state.keypad = KeypadFeature.State(digits: "12")
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
         var muted = state.snapshot; muted.isMuted = true
-        await store.send(.snapshot(muted)) { $0.snapshot = muted }
+        await store.send(.snapshot(muted)) { $0.$snapshot.withLock { $0 = muted } }
         var ended = muted; ended.inAppPresentedCall = nil
-        await store.send(.snapshot(ended)) { $0.snapshot = ended; $0.keypad = nil }
+        await store.send(.snapshot(ended)) { $0.$snapshot.withLock { $0 = ended }; $0.keypad = nil }
     }
 }
 
@@ -1994,7 +1994,7 @@ struct TCASharedPreferenceTests {
         snapshot.preferenceRelayURL = "https://other.example"
         let store = TestStore(initialState: state) { AirSIMFeature() }
         await store.send(.snapshot(snapshot)) {
-            $0.snapshot = snapshot
+            $0.$snapshot.withLock { $0 = snapshot }
             $0.settings.mode = .cloud; $0.settings.lastObservedMode = .cloud
             $0.settings.appearance = .dark; $0.settings.lastObservedAppearance = .dark
             $0.settings.lastObservedRelayURL = "https://other.example"
