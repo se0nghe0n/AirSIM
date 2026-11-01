@@ -116,23 +116,16 @@ final class AudioSessionController {
     @ObservationIgnored private var speakerRouteRetryTask: Task<Void, Never>?
     @ObservationIgnored private var sessionActivationManagedByCallKit = false
     @ObservationIgnored private var ownsWebRTCAudioActivation = false
-    @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
+    @ObservationIgnored private var routeChangeObservation: NotificationObservation?
 
     init() {
         // CallKit, Bluetooth, or Control Center may change the output route; button state must follow the actual audio
         // session.
-        routeChangeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification,
-            object: AVAudioSession.sharedInstance(),
-            queue: .main
+        routeChangeObservation = NotificationObservation(
+            AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.handleRouteChange() }
-        }
-    }
-
-    deinit {
-        if let routeChangeObserver {
-            NotificationCenter.default.removeObserver(routeChangeObserver)
         }
     }
 

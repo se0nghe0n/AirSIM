@@ -28,7 +28,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         (callWindow?.rootViewController as? ActiveCallContainerViewController)?.call
     }
 
-    private var notificationTokens: [NSObjectProtocol] = []
+    private var notificationObservations: [NotificationObservation] = []
 
     // MARK: Lifecycle
 
@@ -45,10 +45,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     #endif
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    deinit {
-        notificationTokens.forEach(NotificationCenter.default.removeObserver)
-    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -317,25 +313,25 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     // MARK: Notifications
 
     private func observeNotifications() {
-        let center = NotificationCenter.default
         for name in [Notification.Name.airsimRemoteSMSReceived, .airsimOpenSMSConversation, .airsimOpenIncomingCall] {
-            let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+            let observation = NotificationObservation(name) { [weak self] notification in
+                let sender = notification.userInfo?["sender"] as? String
                 Task { @MainActor in
-                    self?.handle(notification)
+                    self?.handle(name, sender: sender)
                 }
             }
-            notificationTokens.append(token)
+            notificationObservations.append(observation)
         }
     }
 
-    private func handle(_ notification: Notification) {
-        switch notification.name {
+    private func handle(_ name: Notification.Name, sender: String?) {
+        switch name {
         case .airsimRemoteSMSReceived:
             store.send(.remoteSMSReceived)
         case .airsimOpenIncomingCall:
             store.send(.openIncomingCall)
         default:
-            if let sender = IncomingSMSPresentationRequest.consume() ?? notification.userInfo?["sender"] as? String {
+            if let sender = IncomingSMSPresentationRequest.consume() ?? sender {
                 openSMSConversation(sender)
             } else {
                 select(.messages)

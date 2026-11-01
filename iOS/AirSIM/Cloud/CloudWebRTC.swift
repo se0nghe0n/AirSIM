@@ -1,6 +1,6 @@
 import AVFoundation
 import Foundation
-import WebRTC
+@preconcurrency import WebRTC
 
 /// CallKit owns the system session for both local and cloud native peers.
 /// Forward each activation exactly once, even before a peer has been created.

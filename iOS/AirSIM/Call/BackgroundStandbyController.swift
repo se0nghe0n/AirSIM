@@ -214,8 +214,8 @@ final class BackgroundStandbyController {
     private var appIsBackground = false
     private var suspendedForCall = false
     private var retryTask: Task<Void, Never>?
-    private var interruptionObserver: NSObjectProtocol?
-    private var mediaServicesResetObserver: NSObjectProtocol?
+    private var interruptionObservation: NotificationObservation?
+    private var mediaServicesResetObservation: NotificationObservation?
 
     init() {
         let format = AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 1)!
@@ -228,19 +228,16 @@ final class BackgroundStandbyController {
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
 
-        interruptionObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.interruptionNotification,
-            object: nil,
-            queue: .main
+        interruptionObservation = NotificationObservation(
+            AVAudioSession.interruptionNotification
         ) { [weak self] notification in
+            let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
             Task { @MainActor [weak self] in
-                self?.handleInterruption(notification)
+                self?.handleInterruption(rawType: rawType)
             }
         }
-        mediaServicesResetObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.mediaServicesWereResetNotification,
-            object: nil,
-            queue: .main
+        mediaServicesResetObservation = NotificationObservation(
+            AVAudioSession.mediaServicesWereResetNotification
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.ensureRunning()
@@ -250,12 +247,6 @@ final class BackgroundStandbyController {
 
     deinit {
         retryTask?.cancel()
-        if let interruptionObserver {
-            NotificationCenter.default.removeObserver(interruptionObserver)
-        }
-        if let mediaServicesResetObserver {
-            NotificationCenter.default.removeObserver(mediaServicesResetObserver)
-        }
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -356,8 +347,8 @@ final class BackgroundStandbyController {
         ensureRunning()
     }
 
-    private func handleInterruption(_ notification: Notification) {
-        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+    private func handleInterruption(rawType: UInt?) {
+        guard let rawType,
             let type = AVAudioSession.InterruptionType(rawValue: rawType),
             type == .ended
         else { return }

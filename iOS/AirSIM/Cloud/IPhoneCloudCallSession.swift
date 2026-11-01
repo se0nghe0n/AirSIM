@@ -185,8 +185,8 @@ enum CloudWebRTCFailurePolicy {
 
 enum CloudCallTerminationCoordinator {
     static func finish(
-        closeMedia: () async -> Void,
-        enqueuePersistentControl: () async -> Void
+        closeMedia: @Sendable @MainActor () async -> Void,
+        enqueuePersistentControl: @Sendable @MainActor () async -> Void
     ) async {
         await closeMedia()
         await enqueuePersistentControl()

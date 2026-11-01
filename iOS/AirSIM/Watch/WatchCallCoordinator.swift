@@ -1,9 +1,10 @@
 import Foundation
-import WatchConnectivity
+@preconcurrency import WatchConnectivity
 
 /// Mirrors iPhone call state and proxies dialing for cloud calls initiated from Apple Watch.
 /// Dialing and answer controls stay on WCSession. Both cloud and local VoWLAN audio are carried by the iPhone WebRTC
 /// peer.
+@MainActor
 final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     static let shared = WatchCallCoordinator()
 
@@ -159,7 +160,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         guard activationState == .activated,
             !session.receivedApplicationContext.isEmpty
         else { return }
-        let context = session.receivedApplicationContext
+        let context = WatchMessage(session.receivedApplicationContext)
         Task { @MainActor in
             _ = self.consumeWatchRegistration(context) || self.consumeWatchOwnership(context)
         }
@@ -174,8 +175,9 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     nonisolated func session(
         _ session: WCSession,
         didReceiveMessage message: [String: Any],
-        replyHandler: @escaping ([String: Any]) -> Void
+        replyHandler: @escaping @Sendable ([String: Any]) -> Void
     ) {
+        let message = WatchMessage(message)
         Task { @MainActor in
             if self.consumeWatchRegistration(message) {
                 replyHandler(["ok": true])
@@ -259,7 +261,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
 
     @MainActor
     private func setMutedFromWatch(
-        _ message: [String: Any],
+        _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
         guard let callID = message["call_id"] as? String,
@@ -286,7 +288,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
 
     @MainActor
     private func dialFromWatch(
-        _ message: [String: Any],
+        _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
         guard let requestID = (message["request_id"] as? String).flatMap(UUID.init(uuidString:)),
@@ -408,7 +410,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     @MainActor
-    private func cancelWatchDial(_ message: [String: Any]) {
+    private func cancelWatchDial(_ message: WatchMessage) {
         guard let requestID = (message["request_id"] as? String).flatMap(UUID.init(uuidString:)) else { return }
         if cancelledWatchDialIDs.count >= 20 { cancelledWatchDialIDs.removeAll() }
         cancelledWatchDialIDs.insert(requestID)
@@ -445,7 +447,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
 
     @MainActor
     private func answerLocallyFromWatch(
-        _ message: [String: Any],
+        _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
         guard let callID = message["call_id"] as? String, !callID.isEmpty,
@@ -499,7 +501,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
 
     @MainActor
     private func endLocalWatchCall(
-        _ message: [String: Any],
+        _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
         guard let call = localWatchCall,
@@ -526,7 +528,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
 
     @MainActor
     private func rejectLocalWatchCall(
-        _ message: [String: Any],
+        _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
         guard let callID = message["call_id"] as? String, !callID.isEmpty,
@@ -569,7 +571,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     @MainActor
-    private func finishOwnedCloudCall(_ message: [String: Any]) async -> Bool {
+    private func finishOwnedCloudCall(_ message: WatchMessage) async -> Bool {
         guard message["action"] as? String == "end" || message["action"] as? String == "reject",
             let callID = message["call_id"] as? String,
             let identity = cloudWatchIdentity,
@@ -636,6 +638,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        let message = WatchMessage(message)
         Task { @MainActor in
             if message["action"] as? String == "cancel_dial" {
                 self.cancelWatchDial(message)
@@ -655,6 +658,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        let userInfo = WatchMessage(userInfo)
         Task { @MainActor in
             if await self.finishOwnedCloudCall(userInfo) { return }
             if userInfo["action"] as? String == "watch_local_end" {
@@ -673,6 +677,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         _ session: WCSession,
         didReceiveApplicationContext applicationContext: [String: Any]
     ) {
+        let applicationContext = WatchMessage(applicationContext)
         Task { @MainActor in
             if await self.finishOwnedCloudCall(applicationContext) { return }
             if applicationContext["action"] as? String == "watch_local_end" {
@@ -688,7 +693,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     @MainActor
-    private func consumeWatchRegistration(_ message: [String: Any]) -> Bool {
+    private func consumeWatchRegistration(_ message: WatchMessage) -> Bool {
         guard message["event"] as? String == "watch_voip_registration",
             let token = message["watch_voip_token"] as? String,
             let bundleID = message["watch_bundle_id"] as? String,
@@ -702,7 +707,7 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     }
 
     @MainActor
-    private func consumeWatchOwnership(_ message: [String: Any]) -> Bool {
+    private func consumeWatchOwnership(_ message: WatchMessage) -> Bool {
         guard message["event"] as? String == "watch_call_owner",
             let phase = message["phase"] as? String
         else { return false }

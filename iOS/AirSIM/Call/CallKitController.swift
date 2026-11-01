@@ -34,6 +34,7 @@ enum CallAnswerOrigin: Equatable, Sendable {
 /// CallKit system transactions must complete before slow Agent/Relay I/O so the system activates
 /// AVAudioSession promptly. Backend errors are returned separately for the caller to end the established system call.
 enum CallKitActionCoordinator {
+    @MainActor
     static func perform(
         prepare: () throws -> Void,
         fulfill: () -> Void,
@@ -124,7 +125,7 @@ final class CallKitController: NSObject {
     private var incomingDeduplicator = IncomingCallDeduplicator()
     private(set) var currentIncomingPush: IncomingVoIPCall?
 
-    override init() {
+    private override init() {
         let configuration = CXProviderConfiguration()
         configuration.maximumCallGroups = 1
         configuration.maximumCallsPerCallGroup = 1
@@ -134,10 +135,6 @@ final class CallKitController: NSObject {
         provider = CXProvider(configuration: configuration)
         super.init()
         provider.setDelegate(self, queue: .main)
-    }
-
-    deinit {
-        provider.invalidate()
     }
 
     var isAvailable: Bool { entitlementAvailable && featureEnabled }
@@ -695,8 +692,8 @@ final class CallKitController: NSObject {
     }
 }
 
-extension CallKitController: CXProviderDelegate {
-    nonisolated func providerDidReset(_ provider: CXProvider) {
+extension CallKitController: @preconcurrency CXProviderDelegate {
+    func providerDidReset(_ provider: CXProvider) {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if self.audioSessionIsActive {
@@ -708,19 +705,19 @@ extension CallKitController: CXProviderDelegate {
         }
     }
 
-    nonisolated func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         Task { @MainActor [weak self] in await self?.performStart(action) }
     }
 
-    nonisolated func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
         Task { @MainActor [weak self] in await self?.performAnswer(action) }
     }
 
-    nonisolated func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
         Task { @MainActor [weak self] in await self?.performEnd(action) }
     }
 
-    nonisolated func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         Task { @MainActor [weak self] in
             guard let self, let handler = self.handler else {
                 action.fail()
@@ -731,7 +728,7 @@ extension CallKitController: CXProviderDelegate {
         }
     }
 
-    nonisolated func provider(_ provider: CXProvider, perform action: CXPlayDTMFCallAction) {
+    func provider(_ provider: CXProvider, perform action: CXPlayDTMFCallAction) {
         Task { @MainActor [weak self] in
             do {
                 guard let handler = self?.handler else { throw CallKitBridgeError.handlerUnavailable }
@@ -743,7 +740,7 @@ extension CallKitController: CXProviderDelegate {
         }
     }
 
-    nonisolated func provider(
+    func provider(
         _ provider: CXProvider,
         didActivate audioSession: AVAudioSession
     ) {
@@ -768,7 +765,7 @@ extension CallKitController: CXProviderDelegate {
         }
     }
 
-    nonisolated func provider(
+    func provider(
         _ provider: CXProvider,
         didDeactivate audioSession: AVAudioSession
     ) {

@@ -263,7 +263,7 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         }
     }
 
-    private func send(_ data: Data, completion: (() -> Void)? = nil) {
+    private func send(_ data: Data, completion: (@Sendable () -> Void)? = nil) {
         connection.send(
             content: data,
             contentContext: .defaultStream,

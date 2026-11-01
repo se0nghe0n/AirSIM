@@ -1054,6 +1054,59 @@ struct AirSIMTests {
         #expect(!message.keys.contains("pcm_secret"))
     }
 
+    @Test func `Watch message keeps the fields a WatchConnectivity reply carries`() throws {
+        let requestID = UUID()
+        let reply = WatchCloudAudioPlan.dialReply(
+            requestID: requestID,
+            callID: "watch-cloud",
+            callUUID: UUID(),
+            number: "+15551212",
+            expiresAt: Date().addingTimeInterval(60)
+        )
+        let delivered = try #require(NSDictionary(dictionary: reply) as? [String: Any])
+        let message = WatchMessage(delivered)
+        #expect(message["ok"] as? Bool == true)
+        #expect(message["request_id"] as? String == requestID.uuidString)
+        #expect(message["expires_at"] as? TimeInterval == reply["expires_at"] as? TimeInterval)
+        #expect(message["call_secret"] == nil)
+        #expect(try WatchVoIPCall(outgoingReply: message.dictionary) == WatchVoIPCall(outgoingReply: delivered))
+
+        let mute = try #require(NSDictionary(dictionary: ["muted": false, "routes": ["a"]]) as? [String: Any])
+        #expect(WatchMessage(mute)["muted"] as? Bool == false)
+        #expect(WatchMessage(mute)["routes"] == nil)
+    }
+
+    @Test @MainActor
+    func `Notification observation stops delivering once released`() async throws {
+        let name = Notification.Name("AirSIMTests.NotificationObservation")
+        let received = LockIsolated(0)
+        do {
+            let observation = NotificationObservation(name) { _ in received.withValue { $0 += 1 } }
+            NotificationCenter.default.post(name: name, object: nil)
+            try await waitUntil({ received.value == 1 }, "the live observation did not receive the notification")
+            withExtendedLifetime(observation) {}
+        }
+        NotificationCenter.default.post(name: name, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(received.value == 1)
+    }
+
+    @Test @MainActor
+    func `CallKit action fulfills before the backend request and returns its error`() async throws {
+        struct BackendUnavailable: Error {}
+        var events: [String] = []
+        let backendError = try await CallKitActionCoordinator.perform(
+            prepare: { events.append("prepare") },
+            fulfill: { events.append("fulfill") },
+            backend: {
+                events.append("backend")
+                throw BackendUnavailable()
+            }
+        )
+        #expect(events == ["prepare", "fulfill", "backend"])
+        #expect(backendError is BackendUnavailable)
+    }
+
     @Test @MainActor
     func `VoWLAN transport failure falls back once to cloud`() async throws {
         let local = OutgoingCallServiceProbe(dialError: URLError(.timedOut))

@@ -461,7 +461,7 @@ final class CallAudioRecorder: @unchecked Sendable {
         try FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
     }
 
-    private func perform<T>(_ operation: @escaping () throws -> T) async throws -> T {
+    private func perform<T>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { continuation.resume(with: Result { try operation() }) }
         }

@@ -69,6 +69,26 @@ struct WatchCallPayload: Equatable, Sendable {
     }
 }
 
+/// A WatchConnectivity dictionary copied into Sendable values, so a delegate or reply callback can hand it to the main
+/// actor. The iPhone and Watch apps exchange only strings, numbers, booleans, dates and data; other values are dropped.
+struct WatchMessage: Sendable {
+    private let values: [String: any Sendable]
+
+    init(_ dictionary: [String: Any]) {
+        values = dictionary.compactMapValues { value -> (any Sendable)? in
+            if let string = value as? String { return string }
+            if let number = value as? NSNumber { return number }
+            if let date = value as? Date { return date }
+            if let data = value as? Data { return data }
+            return nil
+        }
+    }
+
+    var dictionary: [String: Any] { values }
+
+    subscript(key: String) -> (any Sendable)? { values[key] }
+}
+
 enum WatchVoIPPayloadError: LocalizedError, Equatable {
     case unsupportedEvent
     case missingCallID

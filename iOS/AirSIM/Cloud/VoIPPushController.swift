@@ -1,4 +1,4 @@
-import ActivityKit
+@preconcurrency import ActivityKit
 import CryptoKit
 import Foundation
 import PushKit
@@ -1640,8 +1640,8 @@ final class VoIPPushController: NSObject {
     }
 }
 
-extension VoIPPushController: PKPushRegistryDelegate {
-    nonisolated func pushRegistry(
+extension VoIPPushController: @preconcurrency PKPushRegistryDelegate {
+    func pushRegistry(
         _ registry: PKPushRegistry,
         didUpdate pushCredentials: PKPushCredentials,
         for type: PKPushType
@@ -1656,7 +1656,7 @@ extension VoIPPushController: PKPushRegistryDelegate {
         }
     }
 
-    nonisolated func pushRegistry(
+    func pushRegistry(
         _ registry: PKPushRegistry,
         didInvalidatePushTokenFor type: PKPushType
     ) {
@@ -1670,7 +1670,7 @@ extension VoIPPushController: PKPushRegistryDelegate {
         }
     }
 
-    nonisolated func pushRegistry(
+    func pushRegistry(
         _ registry: PKPushRegistry,
         didReceiveIncomingPushWith payload: PKPushPayload,
         for type: PKPushType,
