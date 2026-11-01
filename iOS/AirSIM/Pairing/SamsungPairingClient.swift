@@ -281,7 +281,13 @@ private final class PairingExchangeState: @unchecked Sendable {
 }
 
 enum SamsungPairingClientError: LocalizedError {
-    case invalidCode, expired, rejected, responseTooLarge, connectionClosed, registrationUnavailable, pairingBusy
+    case invalidCode
+    case expired
+    case rejected
+    case responseTooLarge
+    case connectionClosed
+    case registrationUnavailable
+    case pairingBusy
 
     var errorDescription: String? {
         switch self {

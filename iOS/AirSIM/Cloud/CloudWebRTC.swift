@@ -22,7 +22,9 @@ enum WebRTCCallAudioSession {
 /// Shared v1 wire format. SDP and ICE are deliberately never included in diagnostics.
 struct CloudWebRTCSignal: Codable, Equatable, Sendable {
     enum Action: String, Codable, Sendable {
-        case offer = "webrtc_offer", answer = "webrtc_answer", ice = "webrtc_ice"
+        case offer = "webrtc_offer"
+        case answer = "webrtc_answer"
+        case ice = "webrtc_ice"
     }
 
     struct Candidate: Codable, Equatable, Sendable {
@@ -174,7 +176,8 @@ struct CloudICEConfiguration: Decodable, Sendable {
     let ttl: Int
 
     enum CodingKeys: String, CodingKey {
-        case iceServers = "ice_servers", ttl
+        case iceServers = "ice_servers"
+        case ttl
     }
 
     static func request(for call: IncomingVoIPCall) throws -> URLRequest {

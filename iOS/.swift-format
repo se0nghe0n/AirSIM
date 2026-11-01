@@ -57,7 +57,7 @@
     "NoPlaygroundLiterals": false,
     "NoVoidReturnOnFunctionSignature": false,
     "OmitExplicitReturns": false,
-    "OneCasePerLine": false,
+    "OneCasePerLine": true,
     "OneVariableDeclarationPerLine": false,
     "OnlyOneTrailingClosureArgument": false,
     "OrderedImports": false,
