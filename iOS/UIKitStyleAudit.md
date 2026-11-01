@@ -9,6 +9,14 @@ The table records the implementation mapping, not a claim of physical-device or
 pixel-identical acceptance. The final combined review is recorded below; network and carrier behavior
 require a paired physical endpoint.
 
+> Later change (2026-11-02): commit `1a01641` deleted the unreachable Agent Verbose
+> trace screens, `TraceFeature`, their previews and tests. The Trace row, the Trace
+> timeline renders, finding M2's retained diagnostic controllers and finding M5's
+> trace serialization describe the code at the time of this review. The screen and
+> preview counts below predate that removal. The trace recorder remains, with no
+> in-app switch or viewer; see
+> [Cloud audio startup diagnostics](../docs/cloud-audio-startup.md#diagnostics).
+
 | Original element | UIKit implementation and retained styling |
 | --- | --- |
 | Root canvas | `PhoneBackdropView`: white in light mode; original blue-black base and bottom gradient in dark mode. |

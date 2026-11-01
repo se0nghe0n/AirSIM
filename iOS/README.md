@@ -29,7 +29,7 @@ The `AirSIM` target is organized into feature groups backed by matching folders 
 - `Cloud`: PushKit/Relay registration and commands, cloud call session, WebRTC peer
 - `Call`: CallKit, call lifecycle, audio session, virtual-call TTS, background standby and call notifications
 - `Phone`: one subgroup per screen family (`Dial`, `Recents`, `Messages`, `Contacts`, `ActiveCall`) plus `ContactDirectory` and the local history and contact stores
-- `Recording`, `Settings`, `Diagnostics`, `LiveActivity`, `Watch`: call recording, setup/settings, Agent trace recording, Live Activity and Watch coordination on iPhone
+- `Recording`, `Settings`, `Diagnostics`, `LiveActivity`, `Watch`: call recording, setup/settings, the Agent trace recorder (no in-app switch or viewer; see [Cloud audio startup diagnostics](../docs/cloud-audio-startup.md#diagnostics)), Live Activity and Watch coordination on iPhone
 - `Previews`: DEBUG preview fixtures
 
 `Info.plist`, `AirSIM.entitlements` and `AppIcon.icon` stay at the `AirSIM/` root because build settings reference those paths.
@@ -57,8 +57,8 @@ Swift sources follow `iOS/.swift-format` (4-space indent, 120 columns, one argum
 - Both cloud and local VoWLAN call audio use native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. Dormant PCM network engines, resampling, framing, and time-pitch helpers have been removed. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
 - Settings show current VoWLAN/cloud mode and Agent heartbeat status.
 - Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
-- Four-stage cloud diagnostics: local push credentials, Relay identity, device registration, and Agent heartbeat
-- Local call history, swipe-to-delete, deletion from details, diagnostics, and media health
+- Four-stage Cloud Self-Test in Settings: local configuration (push credentials), Relay identity, device registration, and Agent heartbeat
+- Local call history, swipe-to-delete, and deletion from details
 
 When the current call is known, VoWLAN answer, reject, and hang-up requests include the `call_id` returned by `/api/calls/status` (JSON field `call_id`). Standalone validates it so an old notification cannot affect a subsequent call. Before a call ID is available, an empty request remains compatible with older Agents.
 
@@ -76,7 +76,7 @@ PushKit VoIP push is only for real incoming calls handled by CallKit; it must no
 4. On iPhone, select the pairing method in “Pair Android Phone,” then enter the Android six-digit code. With “Local Mode Pairing” on, pairing writes only VoWLAN keys and does not read or write Relay/push parameters. With it off, pairing writes cloud configuration and reports missing credentials rather than silently falling back. Its initial value follows global local mode, but changing it affects only this pairing and does not change global settings; it cannot be changed during pairing. Pairing waits for in-flight Agent registration writes, and automatic registration recognizes Android's local pairing state. Other devices' global Relay-token refresh is not disabled.
 5. Wait for VoWLAN to show Ready.
 6. For remote mode, enter a separate Relay URL matching the app's signing identity under “Cloud Relay,” select “Save Relay URL,” and enable “Remote Calls and SMS.” The maintainer's `com.eric3u.airsim` build uses `https://airsim-push.remotepilot.site`; other Bundle IDs require a self-deployed Relay.
-7. Open “Settings → Cloud Mode Diagnostics.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the Standalone Agent within 90 seconds. Diagnostics do not dial or send SMS.
+7. In “Settings → Cloud Self-Test,” tap “Run Cloud Self-Test.” All four checks must pass for cloud control readiness. “Relay Identity” rejects DJOneHub and other services; “Agent Heartbeat” requires a report from the Standalone Agent within 90 seconds. The self-test does not dial or send SMS.
 
 ### Manage paired Android devices
 
@@ -263,9 +263,9 @@ returned directly; reusable components use a small native UIKit canvas for an
 explicit display size. These previews cover the main UIKit app.
 
 `AirSIMPreviewSupport.swift` supplies deterministic contacts, calls, messages,
-recording metadata, discovered services and diagnostic traces to in-memory TCA
+recording metadata and discovered services to in-memory TCA
 stores. Its dependency client does not create AppModel or perform file, network,
-audio, permission or pairing operations. Diagnostic clock time is frozen. In an
+audio, permission or pairing operations. Fixture dates and the TCA clock are fixed. In an
 Xcode preview host, DEBUG lifecycle guards skip live notification/watch/service
 bootstrap and the notification delegate's eager discovery/history setup. Normal
 app launches still initialize the cold-call handler and history in their original

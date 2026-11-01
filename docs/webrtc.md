@@ -66,11 +66,17 @@ selected ICE path carries audio. NetEq on both peers holds at most 50 Opus
 packets (one second at 20 ms) and fast-accelerates when that buffer grows.
 The legacy PCM jitter buffer and time-pitch node are not applied on top.
 
-iOS records `webrtc_stats`; Android records `standalone_webrtc_stats`. Samples
+iOS writes `webrtc_stats` to its trace recorder; Android logs `standalone_webrtc_stats`
+from the privileged media process. Samples
 are taken approximately every five seconds and belong to one negotiation.
 The selected path is resolved through the audio RTP transport's
 `selectedCandidatePairId`, not an arbitrary gathered candidate. Addresses,
 candidate strings, SDP, and TURN credentials are excluded from these records.
+
+The iPhone trace currently cannot be turned on or read in the app, so only the
+Android samples are available. They appear in logcat under the tag
+`AirSIMBridge` (`adb logcat -s AirSIMBridge`), not in the Android in-app debug
+log. See [Cloud audio startup diagnostics](cloud-audio-startup.md#diagnostics).
 
 | Field | Interpretation |
 | --- | --- |
@@ -88,9 +94,11 @@ Interval measurements are omitted on the first sample, after a stream/counter
 reset, or when their denominator is zero. Missing metrics mean unavailable,
 not zero. Unselected candidate pairs must not influence the displayed RTT.
 
-Compare both endpoints: increasing RTT/jitter/loss points to transport trouble;
-stable path metrics with increasing receive-buffer residence points to local
-playout accumulation. These are diagnostic clues, not proof of the precise
+Comparing both endpoints separates the causes: increasing RTT/jitter/loss points
+to transport trouble; stable path metrics with increasing receive-buffer
+residence points to local playout accumulation. Until the iPhone trace is
+readable again, only the Android side of that comparison is available. These
+are diagnostic clues, not proof of the precise
 source of delay. The telephony loopback is outside that receive-buffer
 measurement. Its app queue holds at most 60 ms and drops audio older than
 80 ms. The device buffer keeps an 80 ms floor when that is above the platform
@@ -122,4 +130,4 @@ unchanged.
 
 Native loopback tests use generated tones and local test peers; they do not contact a carrier or record private conversations. They exercise the real SDK and audio device adapters, but bypass the full app WebSocket → ICE HTTP endpoint → rooted TCP call orchestration. Passing local tests does not establish KT/Q25 physical audio routing, real network handover, production Cloudflare TURN reachability, or subjective call quality. Production Relay deployment and physical app installation were not performed.
 
-For device acceptance, install matching signed builds without clearing pairing data, configure a sandbox Relay and TURN provider, then test incoming/outgoing calls over distinct networks, two-way speech, mute/speaker/headset, Wi-Fi/cellular handover, background CallKit answer, hangup/reconnect, and a Watch/legacy call. Inspect negotiated transport and RTP/ICE diagnostics; never include call secrets, SDP, TURN passwords, or voice recordings in a bug report.
+For device acceptance, install matching signed builds without clearing pairing data, configure a sandbox Relay and TURN provider, then test incoming/outgoing calls over distinct networks, two-way speech, mute/speaker/headset, Wi-Fi/cellular handover, background CallKit answer, hangup/reconnect, and a Watch/legacy call. Inspect negotiated transport and RTP/ICE diagnostics in Android logcat; the iPhone trace is not currently readable. Never include call secrets, SDP, TURN passwords, or voice recordings in a bug report.
