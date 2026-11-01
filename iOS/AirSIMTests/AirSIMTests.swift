@@ -1437,38 +1437,110 @@ struct TCAUIKitFeatureTests {
         )
     }
 
+    private func composing(_ recipient: String, body: String = "", sendID: UUID? = nil) -> MessagesFeature.State {
+        var state = MessagesFeature.State(); state.composer = ComposerFeature.State(recipient: recipient, body: body, sendID: sendID); return state
+    }
+
     @Test func `Failed SMS send preserves draft and releases sending state`() async {
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        var state = MessagesFeature.State()
-        state.recipient = "+12025550100"; state.body = "Keep this draft"; state.composerPresented = true
-        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: {
+        let store = TestStore(initialState: composing("+12025550100", body: "Keep this draft")) { MessagesFeature() } withDependencies: {
             $0.airSIM = client(); $0.uuid = .constant(id)
         }
-        await store.send(.sendComposer) { $0.sending = true; $0.sendID = id }
-        await store.receive(\.sendResponse) {
-            $0.sending = false; $0.sendID = nil
-            $0.error = "Unable to send message. Your draft has been kept."
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = id }
+        await store.receive(\.composer.presented.delegate)
+        await store.receive(\.composerSendFinished) {
+            $0.composer?.sendID = nil
+            $0.composer?.alert = .sendFailed("Unable to send message. Your draft has been kept.")
         }
-        #expect(store.state.body == "Keep this draft")
-        #expect(store.state.composerPresented)
+        #expect(store.state.composer?.body == "Keep this draft")
+        #expect(store.state.composer?.recipient == "+12025550100")
+        #expect(store.state.composer?.sending == false)
     }
 
     @Test func `SMS failure retains the backend reason and draft`() async {
         let id = UUID()
-        var state = MessagesFeature.State(); state.recipient = "123"; state.body = "Keep me"; state.composerPresented = true
         var dependency = client()
         dependency.sendSMS = { _, _ in .init(success: false, error: "Cloud mode is disabled") }
-        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .constant(id) }
-        await store.send(.sendComposer) { $0.sending = true; $0.sendID = id }
-        await store.receive(\.sendResponse) { $0.sending = false; $0.sendID = nil; $0.error = "Cloud mode is disabled" }
-        #expect(store.state.body == "Keep me")
+        let store = TestStore(initialState: composing("123", body: "Keep me")) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .constant(id) }
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = id }
+        await store.receive(\.composer.presented.delegate)
+        await store.receive(\.composerSendFinished) { $0.composer?.sendID = nil; $0.composer?.alert = .sendFailed("Cloud mode is disabled") }
+        #expect(store.state.composer?.body == "Keep me")
+    }
+
+    @Test func `Composer send closes it on success and its alert OK only closes the alert`() async {
+        let commands = LockIsolated<[String]>([])
+        var dependency = client(sendResult: true)
+        dependency.command = { command in commands.withValue { $0.append("\(command)") } }
+        let store = TestStore(initialState: composing("123", body: "Hi")) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .incrementing }
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = UUID(0) }
+        await store.receive(\.composer.presented.delegate)
+        await store.receive(\.composerSendFinished) { $0.composer = nil }
+        var failed = composing("123", body: "Hi"); failed.composer?.alert = .sendFailed("Offline")
+        let alerting = TestStore(initialState: failed) { MessagesFeature() } withDependencies: { $0.airSIM = dependency }
+        await alerting.send(.composer(.presented(.alert(.presented(.ok))))) { $0.composer?.alert = nil }
+        await alerting.finish()
+        // The send's failure never reached the shared backend error, so there is nothing to clear.
+        #expect(commands.value.isEmpty)
     }
 
     @Test func `Updating the recipient of an open composer preserves its body`() async {
-        var state = MessagesFeature.State(); state.recipient = "old"; state.body = "Keep this text"; state.composerPresented = true
-        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
-        await store.send(.compose("new")) { $0.recipient = "new" }
-        #expect(store.state.body == "Keep this text")
+        let store = TestStore(initialState: composing("old", body: "Keep this text")) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.compose("new")) { $0.composer?.recipient = "new" }
+        #expect(store.state.composer?.body == "Keep this text")
+    }
+
+    @Test func `Closing the composer mid-send neither cancels the SMS nor applies it to a later composer`() async {
+        let release = AsyncStream<Void>.makeStream()
+        let sent = LockIsolated<[String]>([])
+        var dependency = client(sendResult: false)
+        dependency.sendSMS = { to, body in
+            for await _ in release.stream { break }
+            sent.withValue { $0.append("\(to):\(body):\(Task.isCancelled ? "cancelled" : "delivered")") }
+            return .init(success: false, error: "Late failure")
+        }
+        let store = TestStore(initialState: composing("123", body: "On my way")) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .incrementing }
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = UUID(0) }
+        await store.receive(\.composer.presented.delegate)
+        await store.send(.composer(.presented(.cancelButtonTapped)))
+        await store.receive(\.composer.dismiss) { $0.composer = nil }
+        await store.send(.compose("456")) { $0.composer = ComposerFeature.State(recipient: "456") }
+        release.continuation.yield()
+        await store.receive(\.composerSendFinished)
+        // Its screen is gone, so the root alert reports it without promising a kept draft.
+        await store.receive(\.delegate.unreportedSendFailure, "Late failure")
+        #expect(sent.value == ["123:On my way:delivered"])
+        #expect(store.state.composer == ComposerFeature.State(recipient: "456"))
+    }
+
+    @Test func `Readdressing a composer mid-send detaches that send from it`() async {
+        let release = AsyncStream<Void>.makeStream()
+        let result = LockIsolated(AirSIMMessageResult(success: true))
+        var dependency = client()
+        dependency.sendSMS = { _, _ in for await _ in release.stream { break }; return result.value }
+        let store = TestStore(initialState: composing("A", body: "On my way")) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .incrementing }
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = UUID(0) }
+        await store.receive(\.composer.presented.delegate)
+        // A's success must not close the composer the user just addressed to B.
+        await store.send(.compose("B")) { $0.composer?.recipient = "B"; $0.composer?.sendID = nil }
+        release.continuation.yield()
+        await store.receive(\.composerSendFinished)
+        // Nor may a failure alert there with B's address; the root alert reports it.
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = UUID(1) }
+        await store.receive(\.composer.presented.delegate)
+        await store.send(.compose("C")) { $0.composer?.recipient = "C"; $0.composer?.sendID = nil }
+        result.setValue(.init(success: false, error: "Offline"))
+        release.continuation.yield()
+        await store.receive(\.composerSendFinished)
+        await store.receive(\.delegate.unreportedSendFailure, "Offline")
+        #expect(store.state.composer == ComposerFeature.State(recipient: "C", body: "On my way"))
+        // Composing to the same recipient keeps the send attached, so its success still closes the composer.
+        result.setValue(.init(success: true))
+        await store.send(.composer(.presented(.sendButtonTapped))) { $0.composer?.sendID = UUID(2) }
+        await store.receive(\.composer.presented.delegate)
+        await store.send(.compose("C"))
+        release.continuation.yield()
+        await store.receive(\.composerSendFinished) { $0.composer = nil }
     }
 
     @Test func `Visible thread reply retains its recipient if route state was cleared`() async {
@@ -1484,15 +1556,15 @@ struct TCAUIKitFeatureTests {
 
     @Test func `Old SMS completion cannot close a newly opened composer`() async {
         let oldID = UUID()
-        var state = MessagesFeature.State()
-        state.recipient = "old"; state.body = "old body"; state.composerPresented = true; state.sending = true; state.sendID = oldID
-        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
-        await store.send(.dismissComposer) { $0.composerPresented = false; $0.sendID = nil; $0.sending = false }
-        await store.send(.compose("new")) { $0.recipient = "new"; $0.body = ""; $0.composerPresented = true }
-        await store.send(.bodyChanged("new draft")) { $0.body = "new draft" }
-        await store.send(.sendResponse(id: oldID, success: true, body: "old body", composer: true))
-        #expect(store.state.body == "new draft")
-        #expect(store.state.composerPresented)
+        let store = TestStore(initialState: composing("old", body: "old body", sendID: oldID)) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.composer(.dismiss)) { $0.composer = nil }
+        await store.send(.compose("new")) { $0.composer = ComposerFeature.State(recipient: "new") }
+        await store.send(.composer(.presented(.bodyChanged("new draft")))) { $0.composer?.body = "new draft" }
+        await store.send(.composerSendFinished(id: oldID, result: .init(success: true)))
+        await store.send(.composerSendFinished(id: oldID, result: .init(success: false, error: "Old failure")))
+        await store.receive(\.delegate.unreportedSendFailure, "Old failure")
+        #expect(store.state.composer?.body == "new draft")
+        #expect(store.state.composer?.alert == nil)
     }
 
     @Test func `Old reply completion cannot clear another conversation draft`() async {
@@ -1502,8 +1574,82 @@ struct TCAUIKitFeatureTests {
         let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
         await store.send(.openConversation("new")) { $0.conversation = "new"; $0.reply = ""; $0.sending = false; $0.sendID = nil }
         await store.send(.replyChanged("same text")) { $0.reply = "same text" }
-        await store.send(.sendResponse(id: oldID, success: true, body: "same text", composer: false))
+        await store.send(.sendResponse(id: oldID, success: true, body: "same text"))
         #expect(store.state.reply == "same text")
+    }
+
+    @Test func `Composing elsewhere keeps a thread reply in flight`() async {
+        let replyID = UUID()
+        var state = MessagesFeature.State()
+        state.conversation = "X"; state.reply = "On my way"; state.sending = true; state.sendID = replyID
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.compose("Y")) { $0.composer = ComposerFeature.State(recipient: "Y") }
+        // The delivered reply must not stay in the field with Send enabled.
+        await store.send(.sendResponse(id: replyID, success: true, body: "On my way")) {
+            $0.reply = ""; $0.sending = false; $0.sendID = nil
+        }
+    }
+
+    @Test func `Reopening the visible conversation closes the composer and keeps the thread draft`() async {
+        var state = composing("Y", body: "Composer draft", sendID: UUID())
+        state.conversation = "X"; state.reply = "draft"; state.composer?.alert = .sendFailed("Composer failure")
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.openConversation("X")) { $0.composer = nil }
+        #expect(store.state.reply == "draft")
+        #expect(store.state.alert == nil)
+    }
+
+    @Test func `Reopening the visible conversation keeps its draft and send`() async {
+        let replyID = UUID()
+        var state = MessagesFeature.State()
+        state.conversation = "X"; state.reply = "draft"; state.sending = true; state.sendID = replyID
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.openConversation("X"))
+        await store.send(.sendResponse(id: replyID, success: false, body: "draft", error: "Offline")) {
+            $0.sending = false; $0.sendID = nil; $0.alert = .sendFailed("Offline")
+        }
+        #expect(store.state.reply == "draft")
+    }
+
+    @Test func `Thread failure alerts in its thread, and above an open composer or from root once the thread is gone`() async {
+        let result = LockIsolated(AirSIMMessageResult(success: false, error: "Cloud mode is disabled"))
+        let release = AsyncStream<Void>.makeStream()
+        var dependency = client()
+        dependency.sendSMS = { _, body in if body == "late" { for await _ in release.stream { break } }; return result.value }
+        var state = MessagesFeature.State(); state.conversation = "X"; state.reply = "draft"
+        let store = TestStore(initialState: state) { MessagesFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .incrementing }
+        await store.send(.sendReply(to: "X")) { $0.sending = true; $0.sendID = UUID(0) }
+        await store.receive(\.sendResponse) { $0.sending = false; $0.sendID = nil; $0.alert = .sendFailed("Cloud mode is disabled") }
+        await store.send(.alert(.presented(.ok))) { $0.alert = nil }
+        // The thread would present from beneath the composer sheet and replace it.
+        await store.send(.compose("Y")) { $0.composer = ComposerFeature.State(recipient: "Y") }
+        result.setValue(.init(success: false))
+        await store.send(.sendReply(to: "X")) { $0.sending = true; $0.sendID = UUID(1) }
+        await store.receive(\.sendResponse) { $0.sending = false; $0.sendID = nil }
+        await store.receive(\.delegate.unreportedSendFailure, "Unable to send message. Your draft has been kept.")
+        #expect(store.state.reply == "draft" && store.state.alert == nil)
+        await store.send(.composer(.dismiss)) { $0.composer = nil }
+        // A thread alert closes with its conversation.
+        await store.send(.sendReply(to: "X")) { $0.sending = true; $0.sendID = UUID(2) }
+        await store.receive(\.sendResponse) { $0.sending = false; $0.sendID = nil; $0.alert = .sendFailed("Unable to send message. Your draft has been kept.") }
+        await store.send(.openConversation("Z")) { $0.conversation = "Z"; $0.reply = ""; $0.alert = nil }
+        // A reply still sending when its thread closes reports to the root alert.
+        await store.send(.replyChanged("late")) { $0.reply = "late" }
+        result.setValue(.init(success: false, error: "Offline"))
+        await store.send(.sendReply(to: "Z")) { $0.sending = true; $0.sendID = UUID(3) }
+        await store.send(.closeConversation) { $0.conversation = nil; $0.sending = false; $0.sendID = nil }
+        release.continuation.yield()
+        await store.receive(\.sendResponse)
+        await store.receive(\.delegate.unreportedSendFailure, "Offline")
+    }
+
+    @Test func `Recording failure alerts once and OK closes it`() async {
+        var dependency = client()
+        dependency.command = { _ in throw CocoaError(.fileReadCorruptFile) }
+        let store = TestStore(initialState: RecordingsFeature.State()) { RecordingsFeature() } withDependencies: { $0.airSIM = dependency }
+        await store.send(.reload)
+        await store.receive(\.failed) { $0.alert = .error(CocoaError(.fileReadCorruptFile).localizedDescription, title: "Recording Error", ok: .ok) }
+        await store.send(.alert(.presented(.ok))) { $0.alert = nil }
     }
 
     @Test func `Changing mode cancels streaming self test without completing it`() async {
@@ -1517,7 +1663,7 @@ struct TCAUIKitFeatureTests {
     @Test func `Open conversation selects destination without sharing composer state`() async {
         let store = TestStore(initialState: MessagesFeature.State()) { MessagesFeature() } withDependencies: { $0.airSIM = client() }
         await store.send(.openConversation("+12025550100")) { $0.conversation = "+12025550100" }
-        #expect(!store.state.composerPresented)
+        #expect(store.state.composer == nil)
     }
 }
 
@@ -1579,9 +1725,87 @@ struct TCARootNavigationTests {
         AirSIMClient(snapshots: { AsyncStream { _ in } }, command: { _ in }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
     }
     @Test func `Cold im link selects Messages and presents composer from state`() async {
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.openURL(URL(string: "im:+12025550100")!)) {
+            $0.selectedTab = .messages; $0.messages.composer = ComposerFeature.State(recipient: "+12025550100")
+        }
+        await store.finish()
+    }
+    @Test func `Compose during onboarding waits until onboarding completes`() async {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
-        await store.send(.openURL(URL(string: "im:+12025550100")!)) { $0.selectedTab = .messages }
-        await store.receive(\.messages.compose) { $0.messages.recipient = "+12025550100"; $0.messages.composerPresented = true }
+        // The onboarding screen covers the tabs; presenting the composer now would dismiss it.
+        await store.send(.composeMessage("+12025550100")) { $0.selectedTab = .messages; $0.pendingComposeRecipient = "+12025550100" }
+        await store.send(.openURL(URL(string: "im:+12025550101")!)) { $0.pendingComposeRecipient = "+12025550101" }
+        await store.send(.completeOnboarding) {
+            $0.firstConnectionComplete = true; $0.pendingComposeRecipient = nil
+            $0.messages.composer = ComposerFeature.State(recipient: "+12025550101")
+        }
+        await store.finish()
+    }
+    @Test func `Compose readdresses an open composer and keeps its draft`() async {
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true
+        state.messages.composer = ComposerFeature.State(recipient: "old", body: "Keep this text")
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.composeMessage("new")) { $0.selectedTab = .messages; $0.messages.composer?.recipient = "new" }
+        await store.finish()
+    }
+    @Test func `OK on an older backend alert cannot clear a newer backend error`() async {
+        // Like AppModel, the fake backend clears an error only while it is still the current one.
+        let backend = LockIsolated<String?>("Old failure")
+        let cleared = LockIsolated<[String]>([])
+        var dependency = client
+        dependency.command = { command in
+            guard case .clearError(let error) = command else { return }
+            cleared.withValue { $0.append(error) }; backend.withValue { if $0 == error { $0 = nil } }
+        }
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
+        var old = AirSIMSnapshot(); old.errorMessage = "Old failure"
+        await store.send(.snapshot(old)) { $0.snapshot = old; $0.lastBackendError = "Old failure"; $0.alert = .error("Old failure", ok: .clearBackendError("Old failure")) }
+        // Later snapshots carrying the same error do not alert again.
+        var muted = old; muted.isMuted = true
+        await store.send(.snapshot(muted)) { $0.snapshot = muted }
+        // A newer error is recorded before OK on the older alert reaches the backend.
+        backend.setValue("New failure")
+        await store.send(.alert(.presented(.clearBackendError("Old failure")))) { $0.alert = nil }
+        await store.finish()
+        #expect(cleared.value == ["Old failure"] && backend.value == "New failure")
+        var new = muted; new.errorMessage = "New failure"
+        await store.send(.snapshot(new)) { $0.snapshot = new; $0.lastBackendError = "New failure"; $0.alert = .error("New failure", ok: .clearBackendError("New failure")) }
+        await store.send(.alert(.presented(.clearBackendError("New failure")))) { $0.alert = nil }
+        await store.finish()
+        #expect(backend.value == nil)
+        var cleaned = new; cleaned.errorMessage = nil
+        await store.send(.snapshot(cleaned)) { $0.snapshot = cleaned; $0.lastBackendError = nil }
+    }
+    @Test func `Command failure alerts without clearing the backend error`() async {
+        let cleared = LockIsolated(0)
+        var dependency = client
+        dependency.command = { command in
+            if case .clearError = command { cleared.withValue { $0 += 1 } }
+            if case .forgetDevice = command { throw CocoaError(.featureUnsupported) }
+        }
+        var state = AirSIMFeature.State(); state.snapshot.errorMessage = "Backend failure"; state.lastBackendError = "Backend failure"
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
+        await store.send(.command(.forgetDevice("agent")))
+        await store.receive(\.commandFailed) { $0.alert = .error(CocoaError(.featureUnsupported).localizedDescription) }
+        // Its OK carries no action; the root controller reports the close as a dismissal.
+        await store.send(.alert(.dismiss)) { $0.alert = nil }
+        await store.finish()
+        #expect(cleared.value == 0 && store.state.snapshot.errorMessage == "Backend failure")
+    }
+    @Test func `A send failure whose composer closed reaches the root alert`() async {
+        let release = AsyncStream<Void>.makeStream()
+        var dependency = client
+        dependency.sendSMS = { _, _ in for await _ in release.stream { break }; return .init(success: false, error: "Cloud mode is disabled") }
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.messages.composer = ComposerFeature.State(recipient: "123", body: "On my way")
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency; $0.uuid = .incrementing }
+        await store.send(.messages(.composer(.presented(.sendButtonTapped)))) { $0.messages.composer?.sendID = UUID(0) }
+        await store.receive(\.messages.composer.presented.delegate)
+        await store.send(.messages(.composer(.dismiss))) { $0.messages.composer = nil }
+        release.continuation.yield()
+        await store.receive(\.messages.composerSendFinished)
+        await store.receive(\.messages.delegate.unreportedSendFailure) { $0.alert = .error("Cloud mode is disabled") }
     }
     @Test func `Cold Live Activity URL carries call identity past a stale UI snapshot`() async throws {
         let performed = LockIsolated<[String]>([])
@@ -1592,7 +1816,6 @@ struct TCARootNavigationTests {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
         let url = try #require(AirSIMLiveActivityActionURL.make(action: .answer, callID: "call-A"))
         await store.send(.openURL(url))
-        await store.receive(\.command)
         await store.finish()
         #expect(performed.value == ["answer:call-A"])
     }
@@ -1603,11 +1826,107 @@ struct TCARootNavigationTests {
         await store.send(.snapshot(old)) { $0.snapshot = old; $0.lastBackendNumber = "12" }
         #expect(store.state.dialNumber == "123")
     }
+    @Test func `Each pairing screen starts from the current mode without the last code`() async {
+        var state = AirSIMFeature.State()
+        state.settings.mode = .vowlan
+        state.pairing.code = "123456"; state.pairing.message = "Pairing failed: code expired"
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        // A result that finished after the last screen closed is still shown once.
+        await store.send(.pairing(.opened)) { $0.pairing.code = ""; $0.pairing.localOnly = true }
+        await store.send(.pairing(.disappeared)) { $0.pairing.message = "" }
+        await store.send(.settings(.modeChanged(.automatic))) { $0.settings.mode = .automatic }
+        await store.send(.pairing(.opened)) { $0.pairing.localOnly = false }
+        await store.finish()
+    }
+    @Test func `Reopening pairing during a pairing keeps its code and mode`() async {
+        var state = AirSIMFeature.State()
+        state.pairing.code = "123456"; state.pairing.pairingID = "service"; state.pairing.localOnly = true
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.pairing(.opened))
+    }
     @Test func `Scene teardown cancels service observation`() async {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
         await store.send(.start)
         await store.send(.stop)
         await store.finish()
+    }
+}
+
+@MainActor
+struct TCACallKeypadTests {
+    private func client(dtmf: LockIsolated<[String]> = .init([])) -> AirSIMClient {
+        AirSIMClient(snapshots: { AsyncStream { _ in } }, command: { command in if case .dtmf(let digit) = command { dtmf.withValue { $0.append(digit) } } }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+    }
+    private var inCall: AirSIMFeature.State { var state = AirSIMFeature.State(); state.snapshot.inAppPresentedCall = AirSIMPreviewFixtures.call("active"); return state }
+    @Test func `Keypad button opens an empty keypad only during an in-app call`() async {
+        let idle = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
+        await idle.send(.keypadButtonTapped)
+        let store = TestStore(initialState: inCall) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.keypadButtonTapped) { $0.keypad = KeypadFeature.State() }
+        await store.send(.keypad(.presented(.digitTapped("5")))) { $0.keypad?.digits = "5" }
+        // A repeated tap while the sheet is still presenting keeps the digits already sent.
+        await store.send(.keypadButtonTapped)
+        await store.send(.keypad(.dismiss)) { $0.keypad = nil }
+        await store.send(.keypadButtonTapped) { $0.keypad = KeypadFeature.State() }
+        await store.finish()
+    }
+    @Test func `Keypad shows the last 18 digits and sends each tap as DTMF`() async {
+        let dtmf = LockIsolated<[String]>([])
+        var state = inCall; state.keypad = KeypadFeature.State(digits: String(repeating: "1", count: 18))
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client(dtmf: dtmf) }
+        await store.send(.keypad(.presented(.digitTapped("#")))) { $0.keypad?.digits = String(repeating: "1", count: 17) + "#" }
+        await store.send(.keypad(.presented(.digitTapped("0")))) { $0.keypad?.digits = String(repeating: "1", count: 16) + "#0" }
+        await store.finish()
+        #expect(dtmf.value == ["#", "0"])
+    }
+    @Test func `Keypad stays through call updates and closes when the call leaves the app`() async {
+        var state = inCall; state.keypad = KeypadFeature.State(digits: "12")
+        let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
+        var muted = state.snapshot; muted.isMuted = true
+        await store.send(.snapshot(muted)) { $0.snapshot = muted }
+        var ended = muted; ended.inAppPresentedCall = nil
+        await store.send(.snapshot(ended)) { $0.snapshot = ended; $0.keypad = nil }
+    }
+}
+
+struct TelephoneNumberValidationTests {
+    @Test func `Visual separators from tel and im links are accepted`() {
+        #expect(AppModel.validatedNumber(" +1 (202) 555-0100 ") == "+12025550100")
+        #expect(AppModel.validatedNumber("202.555.0100") == "2025550100")
+        #expect(AppModel.validatedNumber("*#06#") == "*#06#")
+    }
+    @Test func `Anything that could reach the modem as a command is rejected`() {
+        #expect(AppModel.validatedNumber("123;ATH") == "")
+        #expect(AppModel.validatedNumber("123\r\nAT") == "")
+        #expect(AppModel.validatedNumber(String(repeating: "1", count: 83)) == "")
+        #expect(AppModel.validatedNumber("1 2;ATH") == "")
+        // Lookalikes and non-ASCII digits are not separators or digits.
+        for input in ["\u{FF11}\u{FF12}", "1\u{00A0}2", "1\u{2011}2", "1-\u{0301}2", "\u{0661}\u{0662}"] {
+            #expect(AppModel.validatedNumber(input) == "", "\(input.unicodeScalars.map(\.value))")
+        }
+    }
+    @Test func `Length limit applies after separators are removed`() {
+        let digits82 = String(repeating: "1", count: 82)
+        #expect(AppModel.validatedNumber(digits82.map { "\($0)-" }.joined()) == digits82)
+        #expect(AppModel.validatedNumber(String(repeating: "1-", count: 83)) == "")
+        #expect(AppModel.validatedNumber(" ( ) - . ") == "")
+    }
+    @Test @MainActor func `SMS failure reports only its own error`() async {
+        let model = AppModel()
+        model.errorMessage = "Unable to delete local call history. Try again later."
+        let result = await model.sendSMS(to: "not a number", content: "Hi")
+        #expect(!result.sent)
+        #expect(result.error == nil)
+        #expect(model.errorMessage == "Unable to delete local call history. Try again later.")
+    }
+    @Test @MainActor func `Acknowledging an older error keeps a newer backend error`() async throws {
+        let model = AppModel()
+        let client = AirSIMClient.live(model: model, settings: AppSettings(), playback: CallRecordingPlayback())
+        model.errorMessage = "Newer failure"
+        try await client.command(.clearError("Older failure"))
+        #expect(model.errorMessage == "Newer failure")
+        try await client.command(.clearError("Newer failure"))
+        #expect(model.errorMessage == nil)
     }
 }
 
@@ -1620,10 +1939,9 @@ struct TCANavigationDismissalTests {
         #expect(store.state.conversation == nil)
     }
     @Test func `Opening notification conversation dismisses current composer state`() async {
-        var state = MessagesFeature.State(); state.composerPresented = true; state.recipient = "other"; state.body = "draft"
+        var state = MessagesFeature.State(); state.composer = ComposerFeature.State(recipient: "other", body: "draft")
         let store = TestStore(initialState: state) { MessagesFeature() }
-        await store.send(.openConversation("+12025550100")) { $0.conversation = "+12025550100"; $0.composerPresented = false }
-        #expect(!store.state.composerPresented)
+        await store.send(.openConversation("+12025550100")) { $0.conversation = "+12025550100"; $0.composer = nil }
     }
 }
 
@@ -1650,14 +1968,16 @@ struct UIKitNavigationBridgeTests {
     }
     @Test func `Composer can present while conversation controller is visible`() async throws {
         let model = presentation()
-        let controller = MessagesViewController(model: model)
-        let nav = UINavigationController(rootViewController: controller)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = nav; window.makeKeyAndVisible()
-        controller.openConversation("+12025550100")
-        controller.compose(recipient: "+12025550101")
-        #expect((nav.presentedViewController as? UINavigationController)?.topViewController is MessageComposerViewController)
-        #expect(model.store.messages.recipient == "+12025550101")
-        nav.dismiss(animated: false); window.isHidden = true
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = root; window.makeKeyAndVisible()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        root.openSMSConversation("+12025550100")
+        let tab = try #require(root.tabs.selectedViewController as? UINavigationController)
+        #expect(tab.topViewController is MessageThreadViewController)
+        withUITransaction(\.uiKit.disablesAnimations, true) { (tab.viewControllers.first as? MessagesViewController)?.compose(recipient: "+12025550101") }
+        let composer = try #require(await presentedSheet(root)?.topViewController as? MessageComposerViewController)
+        #expect(composer.store.recipient == "+12025550101" && composer.recipient.text == "+12025550101")
+        #expect(model.store.messages.conversation == "+12025550100" && tab.topViewController is MessageThreadViewController)
     }
 }
 
@@ -1712,6 +2032,21 @@ struct UIKitConversationReplacementTests {
     }
 }
 
+/// present(item:) applies state on a later main-queue turn, once its presenter has appeared.
+@MainActor
+private func eventually<T>(_ value: () -> T?) async throws -> T? {
+    for _ in 0..<300 { if let value = value() { return value }; try await Task.sleep(for: .milliseconds(10)) }
+    return value()
+}
+
+@MainActor
+private func presentedSheet(_ presenter: UIViewController, other: UIViewController? = nil) async throws -> UINavigationController? {
+    try await eventually {
+        guard let sheet = presenter.presentedViewController as? UINavigationController, sheet !== other, !sheet.isBeingPresented else { return nil }
+        return sheet
+    }
+}
+
 @MainActor
 private final class SpeculativeNavigationController: UINavigationController {
     var pendingStack: [UIViewController]?
@@ -1744,19 +2079,88 @@ struct UIKitAdversarialRegressionTests {
         #expect(!sheet.isBeingDismissed)
     }
 
-    @Test func `Call teardown leaves an unrelated root sheet intact`() {
+    @Test func `Call teardown leaves an unrelated root sheet intact`() throws {
         let model = AirSIMPreviewFixtures.presentation(callState: "active")
         let root = RootViewController(previewPresentation: model)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
-        #expect(root.children.contains { $0 is ActiveCallViewController })
+        let callWindow = try #require(root.callWindow)
+        #expect(root.activeCallController?.view.window === callWindow)
         let sheet = UIViewController(); root.present(sheet, animated: false)
         var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
         model.store.send(.snapshot(ended)); root.render()
-        #expect(!root.children.contains { $0 is ActiveCallViewController })
+        #expect(root.callWindow == nil && root.activeCallController == nil)
+        #expect(callWindow.isHidden)
         #expect(root.presentedViewController === sheet)
         #expect(!sheet.isBeingDismissed)
+    }
+
+    @Test func `Incoming call shows above a root sheet without dismissing it`() throws {
+        let model = AirSIMPreviewFixtures.presentation()
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let sheet = UINavigationController(rootViewController: UIViewController()); root.present(sheet, animated: false)
+        #expect(root.callWindow == nil)
+        var incoming = model.snapshot; incoming.inAppPresentedCall = AirSIMPreviewFixtures.call("incoming")
+        model.store.send(.snapshot(incoming)); root.render()
+        // VoWLAN calls have no CallKit screen, so Accept and Decline must sit above every root sheet.
+        let callWindow = try #require(root.callWindow)
+        let call = try #require(root.activeCallController)
+        #expect(!callWindow.isHidden && callWindow.windowLevel > window.windowLevel)
+        #expect(callWindow.windowScene === window.windowScene && callWindow.frame == window.frame)
+        #expect(call.view.window === callWindow && !root.children.contains { $0 is ActiveCallViewController })
+        #expect(callWindow.rootViewController?.childForStatusBarStyle === call && callWindow.rootViewController?.childForStatusBarHidden === call)
+        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed)
+        // The call view's modality only hides siblings in its own window; VoiceOver must not reach the covered sheet.
+        #expect(window.accessibilityElementsHidden && !callWindow.accessibilityElementsHidden)
+        var answered = incoming; answered.inAppPresentedCall = AirSIMPreviewFixtures.call("active")
+        model.store.send(.snapshot(answered)); root.render()
+        #expect(root.callWindow === callWindow && root.activeCallController === call && call.call.state == "active")
+        var ended = answered; ended.inAppPresentedCall = nil
+        model.store.send(.snapshot(ended)); root.render()
+        #expect(root.callWindow == nil && callWindow.isHidden && !window.accessibilityElementsHidden)
+        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed)
+    }
+
+    @Test func `Incoming call shows above full-screen onboarding`() async throws {
+        let model = AirSIMPreviewFixtures.presentation()
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let onboarding = UINavigationController(rootViewController: UIViewController()); onboarding.modalPresentationStyle = .fullScreen
+        root.present(onboarding, animated: false)
+        // A completed full-screen presentation takes root's view out of the window; only the onboarding is in it.
+        #expect(try await eventually { root.viewIfLoaded?.window == nil && onboarding.viewIfLoaded?.window === window ? true : nil } == true)
+        var incoming = model.snapshot; incoming.inAppPresentedCall = AirSIMPreviewFixtures.call("incoming")
+        model.store.send(.snapshot(incoming)); root.render()
+        let callWindow = try #require(root.callWindow)
+        #expect(!callWindow.isHidden && callWindow.windowLevel > window.windowLevel && callWindow.windowScene === window.windowScene)
+        #expect(root.activeCallController?.view.window === callWindow && window.accessibilityElementsHidden)
+        #expect(root.presentedViewController === onboarding && !onboarding.isBeingDismissed)
+        var ended = incoming; ended.inAppPresentedCall = nil
+        model.store.send(.snapshot(ended)); root.render()
+        #expect(root.callWindow == nil && callWindow.isHidden && !window.accessibilityElementsHidden)
+        #expect(root.presentedViewController === onboarding && !onboarding.isBeingDismissed)
+    }
+
+    @Test func `Error during a call is shown above the call and moves to root when it ends`() throws {
+        let model = AirSIMPreviewFixtures.presentation(callState: "active")
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let callWindow = try #require(root.callWindow)
+        model.store.send(.commandFailed("Unable to reach the module")); root.render()
+        #expect(callWindow.rootViewController?.presentedViewController is UIAlertController)
+        #expect(root.presentedViewController == nil)
+        var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
+        model.store.send(.snapshot(ended)); root.render()
+        #expect(root.callWindow == nil)
+        #expect((root.presentedViewController as? UIAlertController)?.message == "Unable to reach the module")
     }
 
     @Test func `Call keypad survives thread renders and closes with its call`() async throws {
@@ -1766,20 +2170,190 @@ struct UIKitAdversarialRegressionTests {
         window.rootViewController = root; window.makeKeyAndVisible()
         defer { root.dismiss(animated: false); window.isHidden = true }
         root.openSMSConversation(AirSIMPreviewFixtures.phone); root.render()
-        let call = try #require(root.children.compactMap { $0 as? ActiveCallViewController }.first)
-        call.presentKeypad(animated: false)
-        let keypad = try #require(root.presentedViewController as? UINavigationController)
+        let callWindow = try #require(root.callWindow)
+        let keypad = try #require(await presentKeypad(model, in: callWindow))
         #expect(keypad.topViewController is DTMFKeypadViewController)
+        #expect(keypad.sheetPresentationController?.prefersGrabberVisible == true && keypad.topViewController?.navigationItem.rightBarButtonItem != nil)
+        #expect(root.presentedViewController == nil)
         root.render()
-        #expect(!keypad.isBeingDismissed)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!keypad.isBeingDismissed && keypad.presentingViewController != nil && model.store.keypad != nil)
         var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
         model.store.send(.snapshot(ended)); root.render()
-        #expect(!model.store.keypadPresented)
-        for _ in 0..<100 {
-            if keypad.presentingViewController == nil { break }
-            try await Task.sleep(for: .milliseconds(10))
+        #expect(model.store.keypad == nil)
+        #expect(try await eventually { keypad.presentingViewController == nil ? true : nil } == true)
+    }
+
+    @Test func `Closing the call keypad clears its state so the next one starts empty`() async throws {
+        let model = AirSIMPreviewFixtures.presentation(callState: "active")
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let callWindow = try #require(root.callWindow)
+        let keypad = try #require(await presentKeypad(model, in: callWindow))
+        let pad = try #require(keypad.topViewController as? DTMFKeypadViewController)
+        pad.store.send(.digitTapped("7"))
+        #expect(model.store.keypad?.digits == "7")
+        // Done and swipe-down are UIKit dismissals; the presentation binding writes the closed state back.
+        keypad.dismiss(animated: false)
+        #expect(try await eventually { model.store.keypad == nil ? true : nil } == true)
+        // present(item:) applies the closed state on a later main-actor turn; a reopen before then reuses the
+        // cached child store and is skipped. A person cannot tap within that turn.
+        try await Task.sleep(for: .milliseconds(50))
+        let reopened = try #require(await presentKeypad(model, in: callWindow))
+        #expect(reopened !== keypad && model.store.keypad?.digits == "")
+    }
+
+    @Test func `Composing while root shows another sheet replaces it with the composer`() async throws {
+        let model = AirSIMPreviewFixtures.presentation(tab: .contacts)
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let other = UINavigationController(rootViewController: UIViewController()); root.present(other, animated: false)
+        withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage(AirSIMPreviewFixtures.phone) }
+        let sheet = try #require(await presentedSheet(root, other: other))
+        let composer = try #require(sheet.topViewController as? MessageComposerViewController)
+        #expect(other.presentingViewController == nil)
+        #expect(model.store.selectedTab == .messages && composer.store.recipient == AirSIMPreviewFixtures.phone)
+        #expect(sheet.sheetPresentationController?.prefersGrabberVisible == true && composer.navigationItem.leftBarButtonItem?.title == "Cancel")
+        // Swipe-down is a UIKit dismissal; the presentation binding writes the closed state back.
+        sheet.dismiss(animated: false)
+        #expect(try await eventually { model.store.messages.composer == nil ? true : nil } == true)
+    }
+
+    @Test func `Failed composer send alerts above the open composer and a later success closes it`() async throws {
+        let result = LockIsolated(AirSIMMessageResult(success: false, error: "Cloud mode is disabled"))
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
+        let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in result.value }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+        let model = AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client; $0.uuid = .incrementing })
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage("123") }
+        let sheet = try #require(await presentedSheet(root))
+        let composer = try #require(sheet.topViewController as? MessageComposerViewController)
+        composer.store.send(.bodyChanged("Keep me"))
+        composer.store.send(.sendButtonTapped)
+        let alert = try #require(await eventually { () -> UIAlertController? in
+            guard let alert = composer.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
+            return alert
+        })
+        #expect(alert.message == "Cloud mode is disabled" && alert.actions.map(\.title) == ["OK"])
+        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed && composer.store.body == "Keep me")
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = composer.store.send(.alert(.presented(.ok))) }
+        #expect(try await eventually { composer.presentedViewController == nil ? true : nil } == true)
+        #expect(composer.store.alert == nil && root.presentedViewController === sheet)
+        result.setValue(.init(success: true))
+        composer.store.send(.sendButtonTapped)
+        #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
+        #expect(model.store.messages.composer == nil)
+    }
+
+    @Test func `Backend error during an open composer alerts above it and outlives the composer`() async throws {
+        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage(AirSIMPreviewFixtures.phone) }
+        let sheet = try #require(await presentedSheet(root))
+        model.store.send(.messages(.composer(.presented(.bodyChanged("Keep me")))))
+        let error = "Message sent, but could not be saved locally. Refresh later to confirm."
+        var failed = model.snapshot; failed.errorMessage = error
+        model.store.send(.snapshot(failed)); root.render()
+        let alert = try #require(await eventually { () -> UIAlertController? in
+            guard let alert = sheet.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
+            return alert
+        })
+        #expect(alert.title == "Error" && alert.message == error && alert.actions.map(\.title) == ["OK"])
+        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed && model.store.messages.composer?.body == "Keep me")
+        // Closing the composer takes the alert above it along; the unacknowledged alert returns above the tabs.
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.composer(.dismiss))) }
+        let returned = try #require(await eventually { () -> UIAlertController? in
+            guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
+            return alert
+        })
+        #expect(returned.message == error && model.store.messages.composer == nil && model.store.alert != nil)
+        // OK clears the alert in state, and state closes it.
+        model.store.send(.alert(.presented(.clearBackendError(error)))); root.render()
+        #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
+        root.render()
+        #expect(root.presentedViewController == nil)
+    }
+
+    @Test func `Thread reply failure on another tab alerts above that tab's sheet without dismissing it`() async throws {
+        let release = AsyncStream<Void>.makeStream()
+        var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
+        let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in for await _ in release.stream { break }; return .init(success: false, error: "Offline") }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+        let model = AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client; $0.uuid = .incrementing })
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        root.openSMSConversation("123")
+        let thread = try #require(await eventually { () -> MessageThreadViewController? in
+            window.layoutIfNeeded()
+            guard let thread = (root.tabs.selectedViewController as? UINavigationController)?.topViewController as? MessageThreadViewController, thread.viewIfLoaded?.window != nil else { return nil }
+            return thread
+        })
+        model.store.send(.messages(.replyChanged("On my way")))
+        model.store.send(.messages(.sendReply(to: "123")))
+        // The reply is still sending when the user opens a sheet on another tab.
+        root.select(.dial)
+        let sheet = UINavigationController(rootViewController: UIViewController()); root.present(sheet, animated: false)
+        #expect(thread.viewIfLoaded?.window == nil && model.store.messages.conversation == "123")
+        release.continuation.yield()
+        let alert = try #require(await eventually { () -> UIAlertController? in
+            guard let alert = sheet.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
+            return alert
+        })
+        #expect(alert.message == "Offline" && root.presentedViewController === sheet && !sheet.isBeingDismissed)
+        #expect(model.store.messages.reply == "On my way" && model.store.selectedTab == .dial)
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.alert(.presented(.ok)))) }
+        #expect(try await eventually { sheet.presentedViewController == nil ? true : nil } == true)
+        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed)
+    }
+
+    @Test func `Screen alert closed from beneath clears its state so the next error shows`() async throws {
+        let model = AirSIMPreviewFixtures.presentation(tab: .recents)
+        let root = RootViewController(previewPresentation: model)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root; window.makeKeyAndVisible(); root.render()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let recents = try #require(root.tabs.selectedViewController as? UINavigationController)
+        let recordings = CallRecordingsViewController(model: model)
+        recents.pushViewController(recordings, animated: false); window.layoutIfNeeded()
+        #expect(recordings.viewIfLoaded?.window === window)
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recordings(.failed("First failure"))) }
+        let first = try #require(await eventually { () -> UIAlertController? in
+            guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
+            return alert
+        })
+        #expect(first.title == "Recording Error" && first.message == "First failure")
+        // Opening the composer, e.g. from an im: link, dismisses whatever root presents, this alert included.
+        withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage(AirSIMPreviewFixtures.phone) }
+        _ = try #require(await presentedSheet(root))
+        #expect(try await eventually { model.store.recordings.alert == nil ? true : nil } == true)
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.composer(.dismiss))) }
+        #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recordings(.failed("Second failure"))) }
+        let second = try #require(await eventually { () -> UIAlertController? in
+            guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
+            return alert
+        })
+        #expect(second !== first && second.message == "Second failure")
+    }
+
+    private func presentKeypad(_ model: AirSIMPresentation, in callWindow: UIWindow) async throws -> UINavigationController? {
+        let previous = callWindow.rootViewController?.presentedViewController
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.keypadButtonTapped) }
+        return try await eventually {
+            guard let nav = callWindow.rootViewController?.presentedViewController as? UINavigationController, nav !== previous, !nav.isBeingPresented else { return nil }
+            return nav
         }
-        #expect(keypad.presentingViewController == nil)
     }
 
     @Test func `Speculative Back appearance does not discard a live reply destination`() async {

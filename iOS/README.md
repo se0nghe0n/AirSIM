@@ -19,15 +19,16 @@ Main targets:
 - `AirSIMLiveActivityExtension`: Lock Screen and Dynamic Island Live Activities
 - `AirSIMTests`: transport selection and protocol-boundary tests
 
-The `AirSIM` target is organized into feature groups backed by matching folders under `iOS/AirSIM/`. Add new files to the group that owns the feature:
+The `AirSIM` target is organized into feature groups backed by matching folders under `iOS/AirSIM/`. Add new files to the group that owns the feature. Each feature keeps its TCA reducer (`*Feature.swift`) next to its view controllers, with one screen per file:
 
-- `App`: application/scene delegates, `AppModel`, root TCA feature, root view controller, app settings
+- `App`: application/scene delegates, `AppModel`, app settings, the root `AirSIMFeature` reducer, its `AirSIMClient` dependency and `AirSIMSnapshot` projection, the `AirSIMPresentation` store facade, URL and tab routing, and `RootViewController`
+- `UI`: shared UIKit building blocks (`ObservingViewController`, `PhoneTableController`, buttons, labels, backdrops, empty states and sheet helpers)
 - `Agent`: Android Agent API client, wire models, connection mode and paired-device preferences
 - `Pairing`: Samsung one-time encrypted pairing
 - `VoWLAN`: local discovery, HMAC request signing, Wi-Fi-pinned HTTP transport
 - `Cloud`: PushKit/Relay registration and commands, cloud call session, WebRTC peer
 - `Call`: CallKit, call lifecycle, audio session, virtual-call TTS, background standby and call notifications
-- `Phone`: dial pad, recents, messages, contacts and active-call screens with local history and contact stores
+- `Phone`: one subgroup per screen family (`Dial`, `Recents`, `Messages`, `Contacts`, `ActiveCall`) plus the local history and contact stores
 - `Recording`, `Settings`, `Diagnostics`, `LiveActivity`, `Watch`: call recording, setup/settings, Agent trace, Live Activity and Watch coordination on iPhone
 - `Previews`: DEBUG preview fixtures
 
@@ -204,25 +205,36 @@ embeds SwiftUI. The official `swift-composable-architecture` package is pinned t
 1.26.2; the included `Package.resolved` also locks transitive dependencies, and
 `ThirdPartyNotices.txt` is bundled with the app.
 
-`AirSIMFeature` owns tab/deep-link/onboarding navigation, dial input and call-keypad
-presentation. Its Messages, Settings, Pairing, Recordings and Trace reducers own
-their draft, progress, selection and operation states. UIKit controls read scoped
-Store state and send actions through `AirSIMPresentation`. Network, pairing,
-playback and persistence operations run through an injected `AirSIMClient`.
-`AppModel` remains the existing communications service. Its immutable value
-snapshots enter the Store through a cancellable Observation stream, without a
-polling bridge or a reference model inside reducer State. Dial commands carry the
-number atomically; SMS responses carry an operation ID so old completions cannot
-clear a newer draft or dismiss a newly opened composer.
+`AirSIMFeature` owns tab/deep-link/onboarding navigation and dial input, and
+presents the call keypad as a `KeypadFeature` through `@Presents`. `MessagesFeature`
+presents the SMS composer as a `ComposerFeature` the same way and runs its send
+itself, so closing the composer never cancels an SMS in flight. Alerts are
+`AlertState` in Store state. The composer presents its own with `present(item:)`.
+The thread and recordings screens present theirs above whatever is on top, so a
+late failure never replaces another sheet, and an alert closed from beneath clears
+its state. The root alert covers backend errors, failed commands and failed sends
+whose screen has closed. Root presents it above whatever is on top, including the
+call, so it never replaces an open sheet; its OK clears only the backend error it
+showed. The Messages, Settings, Pairing, Recordings and Trace reducers own their
+draft, progress, selection and operation states. UIKit controls read scoped Store
+state and send actions through `AirSIMPresentation`. Network, pairing, playback
+and persistence operations run through an injected `AirSIMClient`. `AppModel`
+remains the existing communications service. Its immutable value snapshots enter
+the Store through a cancellable Observation stream, without a polling bridge or a
+reference model inside reducer State. Dial commands carry the number atomically;
+SMS responses carry an operation ID so old completions cannot clear a newer draft
+or dismiss a newly opened composer.
 
 The notification delegate installs cold-launch CallKit and PushKit handlers before
 foreground scene creation. Background-only scene connections defer AppModel and
 UI construction until foreground entry. Inactive/background audio preparation
 remains a synchronous scene-to-service lifecycle call. Scene teardown cancels the
 Store snapshot stream. `tel:`, `im:`, Live Activity actions and pending SMS routing
-enter the native hierarchy; a cold composer waits until its tab and onboarding are
-ready. The app retains single-window behavior. Live Activity URL commands carry
-their call ID to a gate against current backend state immediately before execution.
+enter the native hierarchy; a composer requested during onboarding waits in Store
+state until onboarding completes. The app keeps a single scene; the in-app call
+surface uses its own window above the main window, so no sheet or onboarding screen
+can cover Accept or Decline. Live Activity URL commands carry their call ID to a
+gate against current backend state immediately before execution.
 
 `UIKitPresentationTests` exercises input focus/selection across changing rows,
 editor sizing on narrow screens and sheet toolbar preservation. TCA TestStore

@@ -1,66 +1,15 @@
-@preconcurrency import AVFoundation
 import UIKit
-import Observation
-
-@MainActor
-@Observable
-final class CallRecordingPlayback: NSObject, AVAudioPlayerDelegate {
-    private(set) var playingID: UUID?
-    @ObservationIgnored private var player: AVAudioPlayer?
-
-    func toggle(_ recording: CallRecordingFile, url: URL) throws {
-        if playingID == recording.id { stop(); return }
-        stop()
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .spokenAudio)
-            try session.setActive(true)
-            let player = try AVAudioPlayer(contentsOf: url)
-            self.player = player
-            player.delegate = self
-            guard player.play() else { throw CocoaError(.fileReadCorruptFile) }
-            playingID = recording.id
-        } catch {
-            stop()
-            throw error
-        }
-    }
-
-    func stop(deactivateSession: Bool = true) {
-        let hadPlayer = player != nil
-        player?.delegate = nil
-        player?.stop()
-        player = nil
-        playingID = nil
-        // An incoming CallKit call may already own the shared session.
-        let session = AVAudioSession.sharedInstance()
-        if hadPlayer, deactivateSession, session.category == .playback {
-            try? session.setActive(false, options: .notifyOthersOnDeactivation)
-        }
-    }
-
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            guard self?.player === player else { return }
-            self?.stop()
-        }
-    }
-
-    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: (any Error)?) {
-        Task { @MainActor [weak self] in
-            guard self?.player === player else { return }
-            self?.stop()
-        }
-    }
-}
-
 
 @MainActor
 final class CallRecordingsViewController: PhoneTableController {
     let model: AirSIMPresentation
     init(model: AirSIMPresentation) { self.model = model; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func viewDidLoad() { super.viewDidLoad(); title = "Recordings"; enableRefresh { [weak self] in await self?.model.recordings.reload() } }
+    override func viewDidLoad() {
+        super.viewDidLoad(); title = "Recordings"; enableRefresh { [weak self] in await self?.model.recordings.reload() }
+        let store = model.store
+        presentAlert({ store.recordings.alert }, send: { store.send(.recordings(.alert($0))) })
+    }
     override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); Task { await model.recordings.reload() } }
     override func viewDidDisappear(_ animated: Bool) { super.viewDidDisappear(animated); model.store.send(.recordings(.stop(!model.callLifecycleSnapshot.state.representsCall))) }
     override func render() {
@@ -70,10 +19,6 @@ final class CallRecordingsViewController: PhoneTableController {
             return PhoneRow(id: recording.id.uuidString, title: "", context: { [weak self] in UIMenu(children: [UIAction(title: "Share recording", image: UIImage(systemName: "square.and.arrow.up")) { [weak self] _ in self?.share(recording) }, UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { [weak self] _ in self?.delete(recording) }]) }, bodyViewProvider: { [weak self] in self?.recordingView(recording, active: active, playing: playing) ?? UIView() }, bodyVersion: "\(recording.fileName)|\(recording.startedAt.timeIntervalSinceReferenceDate)|\(recording.duration)|\(active)|\(playing)")
         }
         setSections([PhoneSection(footer: rows.isEmpty ? "" : (active ? "Playback is available after your call ends." : "Recordings stay on this iPhone. Use Share to export a recording."), rows: rows.isEmpty ? [PhoneRow(id: "empty", title: "", bodyView: phoneEmptyState("No recordings yet", image: "waveform", detail: "Tap Record during a connected call. Saved recordings appear here.", minimumHeight: 0, iconSize: 34, detailSize: 15, spacing: 12, verticalPadding: 40, headingSize: 17), transparent: true)] : rows)])
-        if let error = model.store.recordings.error, presentedViewController == nil {
-            let alert = UIAlertController(title: "Recording Error", message: error, preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .cancel) { [weak self] _ in self?.model.store.send(.recordings(.clearError)) }); present(alert, animated: true)
-        }
         if model.recordings.isBusy { let spinner = UIActivityIndicatorView(style: .medium); spinner.startAnimating(); spinner.accessibilityLabel = "Saving recording"; navigationItem.rightBarButtonItem = UIBarButtonItem(customView: spinner) } else { navigationItem.rightBarButtonItem = nil }
     }
     private func recordingView(_ recording: CallRecordingFile, active: Bool, playing: Bool) -> UIView {

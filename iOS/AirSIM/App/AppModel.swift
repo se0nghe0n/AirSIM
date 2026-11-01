@@ -290,6 +290,7 @@ final class AppModel {
     @ObservationIgnored private var pollingTask: Task<Void, Never>?
     @ObservationIgnored private var moduleMetadataTask: Task<Void, Never>?
     @ObservationIgnored private var callHistoryRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var dtmfQueue: Task<(any Error)?, Never>?
     @ObservationIgnored private var scheduledCallHistoryRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var activeOperationCount = 0
     @ObservationIgnored private var startingCallAudio = false
@@ -1532,18 +1533,37 @@ final class AppModel {
         )
     }
     func sendDTMF(_ digit: String) async {
-        await perform {
-            if self.callKit.managesCurrentCall {
+        do {
+            if callKit.managesCurrentCall {
                 do {
                     // In-app keypad and system call UI share CallKit transactions so DTMF ordering stays consistent.
-                    try await self.callKit.playDTMF(digit)
+                    try await callKit.playDTMF(digit)
                 } catch CallKitBridgeError.staleSystemCall {
-                    try await self.sendDTMFUsingAvailableTransport(digit)
+                    try await inDTMFOrder { try await self.sendDTMFUsingAvailableTransport(digit) }
                 }
             } else {
-                try await self.sendDTMFUsingAvailableTransport(digit)
+                try await inDTMFOrder { try await self.sendDTMFUsingAvailableTransport(digit) }
             }
+        } catch {
+            errorMessage = error.localizedDescription
         }
+    }
+
+    /// Taps can outpace a signed POST or cloud command. Deliver digits one at a time in
+    /// tap order, outside the busy gate that would drop them and block dial or answer.
+    /// Digits still queued when their call ends or changes are discarded.
+    private func inDTMFOrder(_ deliver: @escaping () async throws -> Void) async throws {
+        let call = callLifecycleSnapshot
+        let previous = dtmfQueue
+        let next = Task { () -> (any Error)? in
+            _ = await previous?.value
+            let current = callLifecycleSnapshot
+            guard current.callID == call.callID, current.callUUID == call.callUUID,
+                  current.state.representsCall, current.state != .ending else { return nil }
+            do { try await deliver(); return nil } catch { return error }
+        }
+        dtmfQueue = next
+        if let error = await next.value { throw error }
     }
 
     private func sendDTMFUsingAvailableTransport(_ digit: String) async throws {
@@ -1632,10 +1652,12 @@ final class AppModel {
 #endif
     }
 
-    func sendSMS(to phone: String, content: String) async -> Bool {
+    /// `error` explains only this send and stays out of the shared `errorMessage`: the screen that sent it
+    /// reports it, or the root alert does once that screen is gone, so one failure is never alerted twice.
+    func sendSMS(to phone: String, content: String) async -> (sent: Bool, error: String?) {
         let target = Self.validatedNumber(phone)
         let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty, !body.isEmpty, body.count <= 2_000 else { return false }
+        guard !target.isEmpty, !body.isEmpty, body.count <= 2_000 else { return (false, nil) }
         do {
             let localAPI = verifiedVoWLANAPI()
             // A signed VoWLAN health check is the reachability authority. The global
@@ -1662,10 +1684,9 @@ final class AppModel {
                 saveSentMessage(recipient: target, content: body)
             }
             if localReachable { await refreshMessages(silently: true) }
-            return result.sent
+            return (result.sent, nil)
         } catch {
-            errorMessage = error.localizedDescription
-            return false
+            return (false, error.localizedDescription)
         }
     }
 
@@ -1865,6 +1886,25 @@ final class AppModel {
     private func mergeMessages(
         _ remote: [SMSMessage], acknowledgingOn source: AirSIMAPI
     ) async -> [SMSMessage] {
+        let merged = messagesMerging(remote)
+        if !remote.isEmpty, historyStore.saveMessages(merged) {
+            let persistedIDs = Set(merged.map(\.id))
+            let acknowledgedIDs = remote
+                .filter { persistedIDs.contains($0.id) }
+                .compactMap(\.deliveryID)
+            // The Agent never re-serves acknowledged SMS. Publish the batch before the
+            // acknowledgement suspends so another inbox load or a sent message saved
+            // meanwhile keeps it, then merge whatever those writers added.
+            if messages != merged { messages = merged }
+            try? await source.acknowledgeMessages(ids: acknowledgedIDs)
+            let latest = messagesMerging(remote)
+            if latest != merged { _ = historyStore.saveMessages(latest) }
+            return latest
+        }
+        return merged
+    }
+
+    private func messagesMerging(_ remote: [SMSMessage]) -> [SMSMessage] {
         var byID: [String: SMSMessage] = [:]
         for message in messages { byID[message.id] = message }
         for var message in remote {
@@ -1872,15 +1912,7 @@ final class AppModel {
             if message.deliveryID == nil { message.deliveryID = byID[message.id]?.deliveryID }
             byID[message.id] = message
         }
-        let merged = normalizedMessages(Array(byID.values))
-        if !remote.isEmpty, historyStore.saveMessages(merged) {
-            let persistedIDs = Set(merged.map(\.id))
-            let acknowledgedIDs = remote
-                .filter { persistedIDs.contains($0.id) }
-                .compactMap(\.deliveryID)
-            try? await source.acknowledgeMessages(ids: acknowledgedIDs)
-        }
-        return merged
+        return normalizedMessages(Array(byID.values))
     }
 
     /// The module inbox endpoint does not echo sent SMS messages, so write them to local phone history immediately after sending.
@@ -2067,8 +2099,9 @@ final class AppModel {
     }
 
     /// Allows only standard telephony characters to prevent accidental AT control characters from reaching the module Agent.
-    private static func validatedNumber(_ input: String) -> String {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Visual separators from tel:/im: links and contacts, such as "+1 (202) 555-0100", are dropped first.
+    nonisolated static func validatedNumber(_ input: String) -> String {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines).filter { !" -.()".contains($0) }
         let allowed = CharacterSet(charactersIn: "+*#0123456789")
         guard trimmed.count <= 82,
               trimmed.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return "" }
@@ -2550,14 +2583,18 @@ extension AppModel: CallKitActionHandling {
 
     func callKitPlayDTMF(_ digits: String) async throws {
         if VirtualCallTTSController.shared.isPrepared { return }
-        for digit in digits where "0123456789*#".contains(digit) {
-            if currentCallTransport == .cloud {
-                try await VoIPPushController.shared.sendCloudDTMF(String(digit))
-            } else {
-                guard let localAPI = reachableLocalAPI else {
-                    throw CallKitBridgeError.noReachableTransport
+        // CallKit performs each action in its own task; without the queue two quick
+        // digits race on separate connections and can reach the Agent swapped.
+        try await inDTMFOrder {
+            for digit in digits where "0123456789*#".contains(digit) {
+                if self.currentCallTransport == .cloud {
+                    try await VoIPPushController.shared.sendCloudDTMF(String(digit))
+                } else {
+                    guard let localAPI = self.reachableLocalAPI else {
+                        throw CallKitBridgeError.noReachableTransport
+                    }
+                    try await localAPI.sendDTMF(String(digit))
                 }
-                try await localAPI.sendDTMF(String(digit))
             }
         }
     }

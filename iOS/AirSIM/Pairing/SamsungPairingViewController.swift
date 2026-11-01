@@ -12,6 +12,7 @@ final class SamsungPairingViewController: PhoneTableController {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
         super.viewDidLoad(); title = "Pair Android Phone"; navigationItem.largeTitleDisplayMode = .never
+        model.store.send(.pairing(.opened))
         localSwitch.isOn = model.store.pairing.localOnly; localSwitch.accessibilityIdentifier = "localPairingOnly"; localSwitch.accessibilityLabel = "Local-Only Pairing"
         localSwitch.addAction(UIAction { [weak self] _ in guard let self else { return }; self.model.store.send(.pairing(.localChanged(self.localSwitch.isOn))) }, for: .valueChanged)
 
@@ -52,7 +53,11 @@ final class SamsungPairingViewController: PhoneTableController {
 
 #if DEBUG
 #Preview("Pair Android Phone · Discovered") {
-    AirSIMPreviewFixtures.navigation(SamsungPairingViewController(model: AirSIMPreviewFixtures.presentation(tab: .settings)))
+    let model = AirSIMPreviewFixtures.presentation(tab: .settings)
+    let controller = SamsungPairingViewController(model: model)
+    controller.loadViewIfNeeded()
+    model.store.send(.pairing(.codeChanged("123456")))
+    return AirSIMPreviewFixtures.navigation(controller)
 }
 
 #Preview("Pair Android Phone · Searching") {

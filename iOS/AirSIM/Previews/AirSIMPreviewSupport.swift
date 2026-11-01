@@ -110,7 +110,6 @@ enum AirSIMPreviewFixtures {
         state.snapshot.preferenceOnboardingComplete = true
         state.pairing.services = empty ? [] : pairingServices
         state.pairing.status = empty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair"
-        state.pairing.code = "123456"
         state.trace.data = .previewData()
         if let callState {
             let record = call(callState)
