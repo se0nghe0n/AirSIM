@@ -51,7 +51,8 @@ struct AirSIMSnapshot: Equatable, Sendable {
     var preferenceLiveActivity = true
     var preferenceRelayURL = ""
     var preferenceOnboardingComplete = false
-    var cloudModeEnabled = false
+    /// `CloudModePreference.isEnabled()`, which is true while no preference is stored.
+    var cloudModeEnabled = true
     var playingRecordingID: UUID?
 
     init() {}

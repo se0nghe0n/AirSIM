@@ -67,7 +67,7 @@ final class RecentsViewController: PhoneTableController {
             detail: row.detail,
             color: row.isMissed ? .systemRed : .label,
             enabled: row.dialNumber != nil,
-            action: { [weak self] in self?.send(.callTapped(row.id)) },
+            action: { [weak self] in self?.send(.callTapped(row)) },
             accessibilityHint: "Tap to call back; touch and hold for details",
             photo: row.photo,
             avatarName: row.avatarName,
@@ -79,7 +79,7 @@ final class RecentsViewController: PhoneTableController {
                     avatarName: row.avatarName,
                     time: row.time,
                     missed: row.isMissed,
-                    callAction: { [weak self] in self?.send(.callTapped(row.id)) }
+                    callAction: { [weak self] in self?.send(.callTapped(row)) }
                 )
             },
             bodyVersion: row.number,
@@ -161,12 +161,12 @@ final class RecentsViewController: PhoneTableController {
         var actions = [delete]
         if row.dialNumber != nil {
             let message = UIContextualAction(style: .normal, title: "Messages") { [weak self] _, _, done in
-                self?.send(.messageTapped(id))
+                self?.send(.messageTapped(row))
                 done(true)
             }
             message.backgroundColor = .systemBlue
             let dial = UIContextualAction(style: .normal, title: "Dial") { [weak self] _, _, done in
-                self?.send(.callTapped(id))
+                self?.send(.callTapped(row))
                 done(true)
             }
             dial.backgroundColor = .systemGreen

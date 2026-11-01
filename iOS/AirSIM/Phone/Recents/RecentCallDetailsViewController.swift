@@ -80,13 +80,13 @@ final class RecentCallDetailsViewController: UIViewController {
     }
 
     private func actionButtons() -> [UIButton] {
-        let callBack = actionButton("Call Back", image: "phone.fill", color: .systemGreen, then: .callTapped(row.id))
+        let callBack = actionButton("Call Back", image: "phone.fill", color: .systemGreen, then: .callTapped(row))
         callBack.configuration?.baseBackgroundColor = .systemGreen
         callBack.configuration?.baseForegroundColor = .white
         callBack.configuration?.background.backgroundColor = .systemGreen
         return [
             callBack,
-            actionButton("Send Message", image: "message.fill", color: .systemBlue, then: .messageTapped(row.id)),
+            actionButton("Send Message", image: "message.fill", color: .systemBlue, then: .messageTapped(row)),
             actionButton("Delete Call Record", image: "trash", color: .systemRed, then: .deleteTapped(row.id)),
         ]
     }

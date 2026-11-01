@@ -1226,20 +1226,32 @@ struct RecentsFeatureTests {
         #expect(stranger?.name == "+1 202 555 0199" && stranger?.avatarName == "" && stranger?.subtitle == "↙ Missed")
     }
 
-    @Test func `Calling back or messaging a recent asks the app shell, with the call's number`() async {
+    @Test func `Calling back or messaging a recent asks the app shell, with the call's number`() async throws {
         let store = TestStore(initialState: RecentsFeature.State(snapshot: SharedReader(value: snapshot()))) { RecentsFeature() }
-        await store.send(.view(.callTapped("preview-recent-2")))
+        let row = try #require(store.state.row(id: "preview-recent-2"))
+        await store.send(.view(.callTapped(row)))
         await store.receive(\.delegate.call, "+1 202 555 0102")
-        await store.send(.view(.messageTapped("preview-recent-2")))
+        await store.send(.view(.messageTapped(row)))
         await store.receive(\.delegate.message, "+1 202 555 0102")
     }
 
-    @Test func `A call back from Recents switches to Dial, keeps the number as a draft and dials it`() async {
+    @Test func `A row drawn before a history refresh still calls and messages the number it showed`() async throws {
+        let shown = try #require(RecentsFeature.State(snapshot: SharedReader(value: snapshot())).row(id: "preview-recent-2"))
+        // The refresh dropped that call, e.g. past the history limit, while its card was still open.
+        let store = TestStore(initialState: RecentsFeature.State(snapshot: SharedReader(value: AirSIMSnapshot()))) { RecentsFeature() }
+        await store.send(.view(.callTapped(shown)))
+        await store.receive(\.delegate.call, "+1 202 555 0102")
+        await store.send(.view(.messageTapped(shown)))
+        await store.receive(\.delegate.message, "+1 202 555 0102")
+    }
+
+    @Test func `A call back from Recents switches to Dial, keeps the number as a draft and dials it`() async throws {
         let dialed = LockIsolated<[AirSIMCommand]>([])
         var client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in .init(success: true) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
         client.command = { command in dialed.withValue { $0.append(command) } }
         let store = TestStore(initialState: AirSIMFeature.State(snapshot: snapshot())) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
-        await store.send(.recents(.view(.callTapped("preview-recent-2"))))
+        let row = try #require(store.state.recents.row(id: "preview-recent-2"))
+        await store.send(.recents(.view(.callTapped(row))))
         await store.receive(\.recents.delegate.call) {
             $0.dial.number = "+1 202 555 0102"
             $0.dial.hasDraft = true
@@ -1428,6 +1440,7 @@ struct DialFeatureTests {
         let disabled = state {
             $0.pairedAndroidAgents = agents
             $0.currentAndroidAgent = agents[0]
+            $0.cloudModeEnabled = false
         }
         #expect(!disabled.cloudModeEnabled)
         #expect(disabled.agentRows.map(\.detail) == [

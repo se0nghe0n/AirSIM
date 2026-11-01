@@ -36,8 +36,9 @@ struct RecentsFeature {
         enum View {
             case appeared
             case refreshTapped
-            case callTapped(RecentCallRow.ID)
-            case messageTapped(RecentCallRow.ID)
+            /// Carries the row as it was drawn, so a history refresh cannot change or drop its number.
+            case callTapped(RecentCallRow)
+            case messageTapped(RecentCallRow)
             case deleteTapped(RecentCallRow.ID)
         }
 
@@ -57,12 +58,12 @@ struct RecentsFeature {
             case .view(.appeared), .view(.refreshTapped):
                 return .run { [client] _ in try await client.command(.refreshHistory) }
 
-            case .view(.callTapped(let id)):
-                guard let number = state.row(id: id)?.dialNumber else { return .none }
+            case .view(.callTapped(let row)):
+                guard let number = row.dialNumber else { return .none }
                 return .send(.delegate(.call(number)))
 
-            case .view(.messageTapped(let id)):
-                guard let number = state.row(id: id)?.dialNumber else { return .none }
+            case .view(.messageTapped(let row)):
+                guard let number = row.dialNumber else { return .none }
                 return .send(.delegate(.message(number)))
 
             case .view(.deleteTapped(let id)):
