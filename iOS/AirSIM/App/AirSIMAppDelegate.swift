@@ -7,7 +7,7 @@ import UserNotifications
 /// work during a cold launch. Scene/window lifecycle lives in `AirSIMSceneDelegate`.
 @main
 @MainActor
-final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     #if DEBUG
     private lazy var coldLaunchCallHandler = ColdLaunchCallKitHandler()
     private lazy var historyStore = LocalHistoryStore()
@@ -148,7 +148,9 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
 
     // MARK: - UNUserNotificationCenterDelegate
 
-    func userNotificationCenter(
+    // UserNotifications does not document which thread calls these, and a main-actor witness traps off the main
+    // thread, so they stay nonisolated.
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
@@ -162,18 +164,29 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
 
     /// Handles lock-screen notification actions and controls module calls directly within the system-granted background
     /// execution window.
-    func userNotificationCenter(
+    nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
-        withCompletionHandler completionHandler: @escaping () -> Void
+        withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
-        let actionIdentifier = response.actionIdentifier
-        if response.notification.request.content.userInfo["event"] as? String == "incoming_sms" {
-            let userInfo = response.notification.request.content.userInfo
-            if let pushed = try? IncomingRemoteSMS(userInfo: userInfo), persistRemoteSMS(pushed) {
+        let route = NotificationResponseRoute(
+            actionIdentifier: response.actionIdentifier,
+            requestIdentifier: response.notification.request.identifier,
+            userInfo: response.notification.request.content.userInfo
+        )
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { handle(route, completionHandler: completionHandler) }
+        } else {
+            Task { @MainActor in handle(route, completionHandler: completionHandler) }
+        }
+    }
+
+    private func handle(_ route: NotificationResponseRoute, completionHandler: @escaping @Sendable () -> Void) {
+        switch route {
+        case .openSMS(let pushed, let sender):
+            if let pushed, persistRemoteSMS(pushed) {
                 NotificationCenter.default.post(name: .airsimRemoteSMSReceived, object: nil)
             }
-            let sender = userInfo["sender"] as? String
             if let sender { IncomingSMSPresentationRequest.markPending(sender: sender) }
             NotificationCenter.default.post(
                 name: .airsimOpenSMSConversation,
@@ -181,54 +194,41 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
                 userInfo: sender.map { ["sender": $0] }
             )
             completionHandler()
-            return
-        }
-        if response.notification.request.content.userInfo["event"] as? String == "incoming_call",
-            actionIdentifier == UNNotificationDefaultActionIdentifier
-        {
+        case .openIncomingCall:
             IncomingCallPresentationRequest.markPending()
             NotificationCenter.default.post(name: .airsimOpenIncomingCall, object: nil)
             completionHandler()
-            return
-        }
-        guard
-            actionIdentifier == IncomingCallNotification.answerActionIdentifier
-                || actionIdentifier == IncomingCallNotification.rejectActionIdentifier,
-            let callID = response.notification.request.content.userInfo[
-                IncomingCallNotification.callIDKey
-            ] as? String
-        else {
+        case .ignore:
             completionHandler()
-            return
-        }
-
-        Task { @MainActor in
-            defer {
-                center.removeDeliveredNotifications(
-                    withIdentifiers: [response.notification.request.identifier]
-                )
-                completionHandler()
-            }
-            do {
-                guard let api = await coldLaunchCallHandler.availableSamsungAPI() else {
-                    throw CallKitBridgeError.noReachableTransport
+        case .callAction(let answer, let callID, let requestIdentifier):
+            Task { @MainActor in
+                defer {
+                    UNUserNotificationCenter.current().removeDeliveredNotifications(
+                        withIdentifiers: [requestIdentifier]
+                    )
+                    completionHandler()
                 }
-                let status = try await api.callStatus()
-                // Must match the same call that is still ringing so tapping a stale notification cannot affect a new
-                // call.
-                guard status.active?.id == callID,
-                    status.active?.direction == "incoming",
-                    let state = status.active?.state,
-                    ["incoming", "waiting"].contains(state)
-                else { return }
+                do {
+                    guard let api = await coldLaunchCallHandler.availableSamsungAPI() else {
+                        throw CallKitBridgeError.noReachableTransport
+                    }
+                    let status = try await api.callStatus()
+                    // Must match the same call that is still ringing so tapping a stale notification cannot affect a
+                    // new call.
+                    guard status.active?.id == callID,
+                        status.active?.direction == "incoming",
+                        let state = status.active?.state,
+                        ["incoming", "waiting"].contains(state)
+                    else { return }
 
-                if actionIdentifier == IncomingCallNotification.answerActionIdentifier {
-                    try await api.answerCall(callID: callID)
-                } else {
-                    _ = try await api.rejectCall(callID: callID)
+                    if answer {
+                        try await api.answerCall(callID: callID)
+                    } else {
+                        _ = try await api.rejectCall(callID: callID)
+                    }
+                } catch {
+                    Self.reportActionFailure(error)
                 }
-            } catch {
-                Self.reportActionFailure(error)
             }
         }
     }
@@ -261,6 +261,34 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
             messages = Array(messages.prefix(2_000))
         }
         return historyStore.saveMessages(messages)
+    }
+}
+
+/// What a notification tap or action asks for, read from the response on whatever thread UserNotifications used.
+enum NotificationResponseRoute: Equatable, Sendable {
+    case openSMS(pushed: IncomingRemoteSMS?, sender: String?)
+    case openIncomingCall
+    case callAction(answer: Bool, callID: String, requestIdentifier: String)
+    case ignore
+
+    init(actionIdentifier: String, requestIdentifier: String, userInfo: [AnyHashable: Any]) {
+        let event = userInfo["event"] as? String
+        if event == "incoming_sms" {
+            self = .openSMS(pushed: try? IncomingRemoteSMS(userInfo: userInfo), sender: userInfo["sender"] as? String)
+        } else if event == "incoming_call", actionIdentifier == UNNotificationDefaultActionIdentifier {
+            self = .openIncomingCall
+        } else if actionIdentifier == IncomingCallNotification.answerActionIdentifier
+            || actionIdentifier == IncomingCallNotification.rejectActionIdentifier,
+            let callID = userInfo[IncomingCallNotification.callIDKey] as? String
+        {
+            self = .callAction(
+                answer: actionIdentifier == IncomingCallNotification.answerActionIdentifier,
+                callID: callID,
+                requestIdentifier: requestIdentifier
+            )
+        } else {
+            self = .ignore
+        }
     }
 }
 

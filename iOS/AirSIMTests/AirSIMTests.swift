@@ -4,6 +4,7 @@ import Testing
 import AppIntents
 import Foundation
 import UIKit
+import UserNotifications
 import ComposableArchitecture
 @testable import AirSIM
 
@@ -790,6 +791,35 @@ struct AirSIMTests {
         IncomingSMSPresentationRequest.markPending(sender: "10086", defaults: defaults)
         #expect(IncomingSMSPresentationRequest.consume(defaults: defaults) == "10086")
         #expect(IncomingSMSPresentationRequest.consume(defaults: defaults) == nil)
+    }
+
+    @MainActor
+    @Test func `Notification responses route the same on the main thread and off it`() async throws {
+        let onMain = notificationResponseRoutes()
+        let (offMainThread, offMain) = await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(returning: (Thread.isMainThread, notificationResponseRoutes()))
+            }
+        }
+        #expect(!offMainThread)
+        #expect(offMain == onMain)
+
+        guard case .openSMS(let pushed, let sender) = try #require(onMain.first) else {
+            Issue.record("SMS tap did not route to the conversation: \(onMain)")
+            return
+        }
+        #expect(pushed?.deliveryID == "sms-tap-1" && pushed?.content == "SMS body")
+        #expect(sender == "10086")
+        #expect(
+            Array(onMain.dropFirst()) == [
+                .openSMS(pushed: nil, sender: "10086"),
+                .openIncomingCall,
+                .callAction(answer: true, callID: "call-7", requestIdentifier: "answer-request"),
+                .callAction(answer: false, callID: "call-7", requestIdentifier: "reject-request"),
+                .ignore,
+                .ignore,
+            ]
+        )
     }
 
     @Test func `SMS delivery ID deduplicates push and agent copies`() {
@@ -4047,6 +4077,50 @@ private func eventually<T>(_ value: () -> T?) async throws -> T? {
         try await Task.sleep(for: .milliseconds(10))
     }
     return value()
+}
+
+private func notificationResponseRoutes() -> [NotificationResponseRoute] {
+    let call: [AnyHashable: Any] = ["event": "incoming_call", IncomingCallNotification.callIDKey: "call-7"]
+    return [
+        NotificationResponseRoute(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            requestIdentifier: "sms-request",
+            userInfo: [
+                "event": "incoming_sms", "delivery_id": "sms-tap-1", "sender": "10086",
+                "content": "SMS body", "timestamp": "2026-10-08T08:30:12Z",
+            ]
+        ),
+        NotificationResponseRoute(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            requestIdentifier: "preview-request",
+            userInfo: ["event": "incoming_sms", "sender": "10086"]
+        ),
+        NotificationResponseRoute(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            requestIdentifier: "call-request",
+            userInfo: call
+        ),
+        NotificationResponseRoute(
+            actionIdentifier: IncomingCallNotification.answerActionIdentifier,
+            requestIdentifier: "answer-request",
+            userInfo: call
+        ),
+        NotificationResponseRoute(
+            actionIdentifier: IncomingCallNotification.rejectActionIdentifier,
+            requestIdentifier: "reject-request",
+            userInfo: call
+        ),
+        NotificationResponseRoute(
+            actionIdentifier: IncomingCallNotification.answerActionIdentifier,
+            requestIdentifier: "no-call-id-request",
+            userInfo: ["event": "incoming_call"]
+        ),
+        NotificationResponseRoute(
+            actionIdentifier: UNNotificationDismissActionIdentifier,
+            requestIdentifier: "dismiss-request",
+            userInfo: call
+        ),
+    ]
 }
 
 @MainActor
