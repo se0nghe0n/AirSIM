@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-/// The in-call keypad sheet: the digits sent so far, and one DTMF tone per tap.
 @Reducer
 struct KeypadFeature {
     @ObservableState

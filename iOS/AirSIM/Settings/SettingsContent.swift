@@ -1,6 +1,5 @@
 import Foundation
 
-/// The color of a Settings status line. The Settings screen maps it to a system color.
 enum SettingsTone: Equatable {
     case secondary
     case blue
@@ -9,13 +8,10 @@ enum SettingsTone: Equatable {
     case red
 }
 
-/// One paired Android phone in Settings: its number and the routes that reach it now.
 struct PairedDeviceRow: Equatable, Identifiable {
     let id: String
     let name: String
-    /// The phone number, or "Number unavailable" once the phone is offline.
     let number: String
-    /// "VoWLAN Online · Cloud Online", one of them, or "Offline · Refreshes on reconnection".
     let route: String
 
     init(device: AndroidAgentPresentation) {
@@ -33,7 +29,6 @@ struct PairedDeviceRow: Equatable, Identifiable {
     var detail: String { "\(number)\n\(route)" }
 }
 
-/// One cloud self-test step with the symbol and tone of its state.
 struct SelfTestStepRow: Equatable, Identifiable {
     let id: String
     let title: String
@@ -62,7 +57,6 @@ struct SelfTestStepRow: Equatable, Identifiable {
     }
 }
 
-/// The line under a finished cloud self-test.
 struct SelfTestResult: Equatable {
     let text: String
     let tone: SettingsTone

@@ -2,8 +2,6 @@ import ComposableArchitecture
 import Foundation
 
 extension AirSIMFeature {
-    /// The app's store, already receiving snapshots. The client and the snapshots share one playback, so snapshots
-    /// report the recording the client plays.
     @MainActor
     static func liveStore(model: AppModel, settings: AppSettings) -> StoreOf<AirSIMFeature> {
         let playback = CallRecordingPlayback()

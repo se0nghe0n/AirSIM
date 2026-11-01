@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-/// The Recents tab: call history with refresh and delete, the Recordings screen it pushes, and
-/// call-back and message requests for the app shell.
 @Reducer
 struct RecentsFeature {
     @ObservableState
@@ -36,7 +34,6 @@ struct RecentsFeature {
         enum View {
             case appeared
             case refreshTapped
-            /// Carries the row as it was drawn, so a history refresh cannot change or drop its number.
             case callTapped(RecentCallRow)
             case messageTapped(RecentCallRow)
             case deleteTapped(RecentCallRow.ID)

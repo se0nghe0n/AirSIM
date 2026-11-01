@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The full-screen first-run screen: what pairing needs, the connection mode, and pairing now or later in Settings.
 @MainActor
 @ViewAction(for: SettingsFeature.self)
 final class AirSIMFirstConnectionViewController: ObservingViewController {
@@ -115,7 +114,6 @@ final class AirSIMFirstConnectionViewController: ObservingViewController {
         return UIStackView([start, later], axis: .vertical, spacing: 10, alignment: .center)
     }
 
-    /// The content scrolls above a blurred bar that holds the pairing buttons.
     private func buildLayout(content: UIStackView, actions: UIStackView) {
         let scroll = UIScrollView()
         let bottomBar = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
@@ -170,7 +168,6 @@ final class AirSIMFirstConnectionViewController: ObservingViewController {
 
     // MARK: Navigation
 
-    /// Closing this pairing sheet with VoWLAN online finishes onboarding.
     private func showPairing() {
         send(.startPairingTapped)
         showPhoneSheet(SamsungPairingViewController(store: store.scope(state: \.pairing, action: \.pairing)))

@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-/// The Settings tab and the first-connection screen: connection mode, appearance, Live Activities, the cloud Relay
-/// and its self-test, paired Android phones, and pairing.
 @Reducer
 struct SettingsFeature {
     @ObservableState
@@ -23,11 +21,8 @@ struct SettingsFeature {
         var selfTestCompleted = false
         var message: String?
         var deletingDevice = false
-        /// The pairing screen showing now was opened from the first-connection screen, so closing it can finish
-        /// onboarding.
         var pairingFromOnboarding = false
 
-        /// Starts from the saved preferences in the snapshot; `reconcile(with:)` applies later changes.
         init(snapshot: SharedReader<AirSIMSnapshot>) {
             _snapshot = snapshot
             let saved = snapshot.wrappedValue
@@ -41,7 +36,6 @@ struct SettingsFeature {
             lastObservedLiveActivity = saved.preferenceLiveActivity
         }
 
-        /// Another scene's preference change reaches this one, except over a relay URL being edited here.
         mutating func reconcile(with value: AirSIMSnapshot) {
             if value.preferenceMode != lastObservedMode {
                 mode = value.preferenceMode
@@ -66,7 +60,6 @@ struct SettingsFeature {
             }
         }
 
-        /// The cloud Relay, its URL and the self-test are available only in modes that start cloud.
         var modeUsesCloud: Bool { ConnectionModeRuntimePolicy(mode: mode).startsCloud }
         var modeTitle: String { String(localized: mode.title) }
         var modeDetail: String { String(localized: mode.detail) }
@@ -82,7 +75,6 @@ struct SettingsFeature {
             }
         }
 
-        /// The route in use now, its status and a line about it.
         var connection: ConnectionModePresentation { snapshot.connectionModePresentation }
         var vowlanStatus: String { VoWLANStatusCopy.text(for: snapshot.vowlan) }
 
@@ -146,7 +138,6 @@ struct SettingsFeature {
 
         @CasePathable
         enum Delegate: Equatable {
-            /// The first-connection screen is done: Pair Later, or its pairing closed with VoWLAN online.
             case onboardingCompleted
         }
     }
@@ -255,7 +246,7 @@ struct SettingsFeature {
                 }
                 return .none
 
-            case .pairing(.delegate(.closed)):
+            case .pairing(.delegate(.disappeared)):
                 guard state.pairingFromOnboarding else { return .none }
                 state.pairingFromOnboarding = false
                 guard state.snapshot.vowlan.isOnlineForDisplay else { return .none }

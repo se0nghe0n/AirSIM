@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The Settings tab: connection mode and status, Android pairing, Live Activities, the cloud Relay and its
-/// self-test, and appearance.
 @MainActor
 @ViewAction(for: SettingsFeature.self)
 final class AirSIMSettingsViewController: PhoneTableController {
@@ -244,7 +242,6 @@ final class AirSIMSettingsViewController: PhoneTableController {
         ])
     }
 
-    /// A title with its value on the trailing side.
     private func valueRow(id: String, title: String, detail: String) -> PhoneRow {
         PhoneRow(
             id: id,

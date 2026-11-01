@@ -1,7 +1,5 @@
 import UIKit
 
-/// The Dial screen's Android Agent summary: the current agent with its call routes, or the paired count while none is
-/// current. It draws the values it is given.
 @MainActor
 final class AndroidAgentCardView: UIView {
     init(agent: AndroidAgentPresentation?, count: Int, cloudEnabled: Bool) {
@@ -20,7 +18,6 @@ final class AndroidAgentCardView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// The icon, the title over the number, and "All n" when more than one agent is paired.
     private func summaryRow(agent: AndroidAgentPresentation?, count: Int) -> UIStackView {
         let row = UIStackView(
             [icon(for: agent), titleAndDetail(agent: agent, count: count)],
@@ -68,7 +65,6 @@ final class AndroidAgentCardView: UIView {
         return UIStackView([titleRow, detail], axis: .vertical, spacing: Metrics.titleToDetailSpacing)
     }
 
-    /// The VoWLAN and Cloud route pills, and the agent kind.
     private func routesRow(agent: AndroidAgentPresentation, cloudEnabled: Bool) -> UIStackView {
         let vowlan = pill(agent.vowlanStatus, color: agent.vowlanOnline ? .systemGreen : .secondaryLabel)
         let cloud = pill(
@@ -100,7 +96,6 @@ final class AndroidAgentCardView: UIView {
 private enum Metrics {
     static let cornerRadius: CGFloat = 16
     static let padding = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
-    /// Between the summary row and the routes row.
     static let sectionSpacing: CGFloat = 10
     static let rowSpacing: CGFloat = 10
     static let iconSize: CGFloat = 34

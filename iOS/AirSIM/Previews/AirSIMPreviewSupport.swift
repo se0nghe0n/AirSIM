@@ -166,7 +166,6 @@ enum AirSIMPreviewFixtures {
         )
     }
 
-    /// A root store over fixture data whose client contacts nothing.
     static func store(
         tab: PhoneTab = .dial,
         callState: String? = nil,
@@ -218,7 +217,6 @@ enum AirSIMPreviewFixtures {
         }
     }
 
-    /// Settings seeds its mode, appearance, relay URL and Live Activity switch from these saved preferences.
     private static func backendSnapshot(callState: String?, empty: Bool, appearance: AppAppearance) -> AirSIMSnapshot {
         var snapshot = AirSIMSnapshot()
         snapshot.numberInput = phone

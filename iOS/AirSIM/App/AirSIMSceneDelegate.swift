@@ -78,7 +78,6 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
         contexts.forEach { root.handleSystemCommunicationURL($0.url) }
     }
 
-    /// The app-wide lifecycle follows the last foreground scene, not each scene.
     private func anotherScene(than scene: UIScene, isIn states: Set<UIScene.ActivationState>) -> Bool {
         UIApplication.shared.connectedScenes.contains { $0 !== scene && states.contains($0.activationState) }
     }

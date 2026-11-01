@@ -1,12 +1,9 @@
 import Foundation
 
-/// One conversation in the Messages list, ready to draw.
 struct ConversationRow: Equatable, Identifiable {
     let sender: String
-    /// The contact's name, else the number, else "Unknown Number".
     let name: String
     let photo: Data?
-    /// Empty when the sender is not a contact, so the avatar shows the generic person glyph.
     let avatarName: String
     let lastMessage: String
     let time: String
@@ -24,6 +21,5 @@ struct ConversationRow: Equatable, Identifiable {
     }
 
     var id: String { sender }
-    /// The plain-cell text: the last message over its time.
     var detail: String { "\(lastMessage)\n\(time)" }
 }

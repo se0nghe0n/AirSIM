@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// A contact's numbers, each with Send Message and Dial. It owns no state: it shows the row it was opened
-/// with and sends Contacts actions.
 @MainActor
 @ViewAction(for: ContactsFeature.self)
 final class ContactDetailViewController: PhoneTableController {

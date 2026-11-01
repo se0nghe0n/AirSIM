@@ -42,8 +42,6 @@ func phoneLabel(_ text: String = "", size: CGFloat = 17, color: UIColor = .label
     return label
 }
 
-/// A round avatar: the photo when it decodes, otherwise the name's initial, or a person symbol when the name is
-/// blank, on a blue gradient.
 @MainActor
 func phoneAvatar(name: String, photo: Data?, size: CGFloat = 44) -> UIImage {
     let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
@@ -104,7 +102,6 @@ private func drawAvatarInitial(_ initial: String, size: CGFloat) {
     text.draw(at: CGPoint(x: (size - measured.width) / 2, y: (size - measured.height) / 2), withAttributes: attributes)
 }
 
-/// A contact with no name gets a slightly different gradient.
 private enum AvatarGradient {
     static let named = [
         UIColor(red: 0.66, green: 0.78, blue: 0.92, alpha: 1),
@@ -122,7 +119,6 @@ extension UIFont {
     }
 }
 
-/// A menu picker's current value: an optional symbol, the value in blue and an up-down chevron.
 @MainActor
 final class MenuValueButton: UIButton {
     private let valueLabel = phoneLabel(color: .systemBlue)
@@ -171,7 +167,6 @@ private enum MenuValueMetrics {
     static let spacing: CGFloat = 5
     static let symbolWidth: CGFloat = 20
     static let chevronPointSize: CGFloat = 12
-    /// Room for the chevron and the spacing before it.
     static let chevronAllowance: CGFloat = 17
     static let insets = UIEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
     static let height: CGFloat = 32

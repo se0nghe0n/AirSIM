@@ -5,7 +5,6 @@ struct ConversationSnapshot: Equatable, Sendable {
     var messages: [SMSMessage]
 }
 
-/// Value-only projection of the backend: reducers never retain the observable backend or UIKit objects.
 struct AirSIMSnapshot: Equatable, Sendable {
     var callHistory: [CallRecord] = []
     var isRefreshingCallHistory = false
@@ -51,7 +50,6 @@ struct AirSIMSnapshot: Equatable, Sendable {
     var preferenceLiveActivity = true
     var preferenceRelayURL = ""
     var preferenceOnboardingComplete = false
-    /// `CloudModePreference.isEnabled()`, which is true while no preference is stored.
     var cloudModeEnabled = true
     var playingRecordingID: UUID?
 

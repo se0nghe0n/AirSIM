@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-/// Saved call recordings: playback, sharing and deletion, with one alert for failures.
 @Reducer
 struct RecordingsFeature {
     @ObservableState
@@ -16,7 +15,6 @@ struct RecordingsFeature {
         var recordings: [CallRecordingFile] { snapshot.recordings }
         var isSaving: Bool { snapshot.recordingsBusy }
         var playingID: UUID? { snapshot.playingRecordingID }
-        /// Playback waits for the call to end.
         var isCallActive: Bool { snapshot.callLifecycleSnapshot.state.representsCall }
 
         func recording(id: String) -> CallRecordingFile? {
@@ -30,7 +28,6 @@ struct RecordingsFeature {
 
     enum Action: ViewAction {
         case view(View)
-        /// Sent by the app shell when a call starts during playback.
         case stopPlayback(deactivateSession: Bool)
         case failed(String)
         case alert(PresentationAction<Alert>)

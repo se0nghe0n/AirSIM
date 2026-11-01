@@ -1,13 +1,10 @@
 import Foundation
 
-/// One Recents row, ready to draw.
 struct RecentCallRow: Equatable, Identifiable {
     let id: String
     let call: CallRecord
-    /// The contact's name, else the number, else "Unknown Number".
     let name: String
     let photo: Data?
-    /// Empty when the number is not a contact, so the avatar shows the generic person glyph.
     let avatarName: String
     let time: String
 
@@ -26,9 +23,7 @@ struct RecentCallRow: Equatable, Identifiable {
     var isMissed: Bool { call.missed }
     var dialNumber: String? { RecentCallDialPolicy.numberToDial(call.number) }
 
-    /// "↙ Missed" or "↗ AirSIM Audio".
     var subtitle: String { "\(directionArrow) \(kind)" }
-    /// The plain-cell text, also read by VoiceOver: "Missed · ↙ · 10:42".
     var detail: String { "\(kind) · \(directionArrow) · \(time)" }
 
     private var kind: String { call.missed ? "Missed" : "AirSIM Audio" }

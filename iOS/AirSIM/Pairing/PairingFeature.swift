@@ -1,7 +1,5 @@
 import ComposableArchitecture
 
-/// Pairing with an Android phone found on the local network: the local-only choice, the six-digit code and the
-/// result. Settings and the first-connection screen show it.
 @Reducer
 struct PairingFeature {
     struct Discovery: Sendable {
@@ -18,7 +16,6 @@ struct PairingFeature {
         var pairingID: String?
         var message = ""
 
-        /// The local-only choice is fixed while a pairing is in flight.
         var canChangeLocalOnly: Bool { pairingID == nil }
         var canPair: Bool { code.count == 6 && pairingID == nil }
 
@@ -48,10 +45,8 @@ struct PairingFeature {
 
         @CasePathable
         enum Delegate: Equatable {
-            /// A pairing screen opened; the parent applies the defaults that depend on its own state.
             case opened
-            /// A pairing screen disappeared: it closed, or another screen covered it.
-            case closed
+            case disappeared
         }
     }
 
@@ -87,7 +82,7 @@ struct PairingFeature {
                 }
                 return .merge(
                     .cancel(id: CancelID.discovery),
-                    .send(.delegate(.closed))
+                    .send(.delegate(.disappeared))
                 )
 
             case .discovery(let value):

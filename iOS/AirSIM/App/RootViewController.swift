@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The app's root: the five tabs, first-connection onboarding, the open conversation, the root alert, and the call
-/// window above the main window.
 @MainActor
 final class RootViewController: ObservingViewController, UITabBarControllerDelegate {
     // MARK: Store
@@ -38,7 +36,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     }
 
 #if DEBUG
-    /// A preview root leaves the pending SMS request to the app and shows its call screen as a presentation preview.
     convenience init(previewStore: StoreOf<AirSIMFeature>) {
         self.init(store: previewStore)
         isPreview = true
@@ -137,7 +134,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         }
     }
 
-    /// Shows each newly opened conversation once, while Messages is the selected tab.
     private func renderConversation() {
         guard let sender = store.messages.conversation else {
             appliedConversation = nil
@@ -155,7 +151,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         let setup = AirSIMFirstConnectionViewController(store: store.scope(state: \.settings, action: \.settings))
         let navigation = UINavigationController(rootViewController: setup)
         navigation.modalPresentationStyle = .fullScreen
-        // render() dismisses it once onboarding completes, here or in another scene.
         firstConnection = navigation
         present(navigation, animated: true)
     }
@@ -221,7 +216,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
 
     // MARK: Call window
 
-    /// Shows the call window while a call is presented in app and removes it once the call leaves.
     private func renderCall() {
         guard store.activeCall.call != nil else {
             closeCallWindow()

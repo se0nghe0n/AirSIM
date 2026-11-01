@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// Saved call recordings, pushed from Recents.
 @MainActor
 @ViewAction(for: RecordingsFeature.self)
 final class CallRecordingsViewController: PhoneTableController {

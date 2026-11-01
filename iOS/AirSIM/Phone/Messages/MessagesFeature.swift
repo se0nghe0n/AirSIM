@@ -1,8 +1,7 @@
 import ComposableArchitecture
 import Foundation
 
-/// The Messages tab: the conversation list, the open thread with its reply, and the composer sheet. SMS sends
-/// run here, so closing the screen that started one cannot cancel it.
+/// SMS sends run here, so closing the screen that started one cannot cancel it.
 @Reducer
 struct MessagesFeature {
     @ObservableState
@@ -32,7 +31,6 @@ struct MessagesFeature {
             snapshot.contacts.displayName(for: sender)
         }
 
-        /// The sender's messages, oldest first.
         func messages(from sender: String) -> [SMSMessage] {
             snapshot.messages
                 .filter { $0.sender == sender }
@@ -67,9 +65,7 @@ struct MessagesFeature {
 
     enum Action: ViewAction {
         case view(View)
-        /// Sent by the app shell for an SMS banner or notification.
         case openConversation(String)
-        /// Opens the composer, or readdresses an open one.
         case compose(String)
         case sendResponse(id: UUID, success: Bool, body: String, error: String? = nil)
         case composer(PresentationAction<ComposerFeature.Action>)
@@ -95,7 +91,6 @@ struct MessagesFeature {
 
         @CasePathable
         enum Delegate {
-            /// The compose button; the app shell selects this tab and waits for onboarding before composing.
             case compose(String)
             /// A failed send whose composer or thread can no longer show it; the root alert reports it instead.
             case unreportedSendFailure(String)
@@ -131,7 +126,6 @@ struct MessagesFeature {
                 return .none
 
             case .view(.threadClosed(let sender)):
-                // A replaced thread reports closing after its successor has opened.
                 guard state.conversation == sender else { return .none }
                 state.conversation = nil
                 state.alert = nil

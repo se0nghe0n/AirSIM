@@ -1,12 +1,10 @@
 import Foundation
 
-/// The address book as the UI sees it, with the app's one number-matching policy.
 struct ContactDirectory: Equatable, Sendable {
     var all: [ContactStore.Contact] = []
     var isAuthorized = false
     var authorization: ContactAuthorizationState = .notDetermined
 
-    /// An exact normalized match, else a match on the last seven digits.
     func contact(for number: String) -> ContactStore.Contact? {
         let target = ContactStore.normalized(number)
         guard !target.isEmpty else { return nil }
@@ -19,14 +17,11 @@ struct ContactDirectory: Equatable, Sendable {
         }
     }
 
-    /// The contact's name, else the number, else "Unknown Number".
     func displayName(for number: String?) -> String {
         guard let number, !number.isEmpty else { return "Unknown Number" }
         return contact(for: number)?.name ?? number
     }
 
-    /// Every contact for a blank query, else those whose name or any number contains the trimmed query,
-    /// ignoring case.
     func contacts(matching query: String) -> [ContactStore.Contact] {
         let query = query.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return all }
@@ -36,9 +31,6 @@ struct ContactDirectory: Equatable, Sendable {
         }
     }
 
-    /// The first five contacts that could complete a typed recipient: those whose name or any number contains the
-    /// trimmed text, ignoring case, or whose number ends with it. None while the recipient is blank or already
-    /// names a contact.
     func suggestions(for recipient: String) -> [ContactStore.Contact] {
         let query = recipient.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty, contact(for: recipient) == nil else { return [] }

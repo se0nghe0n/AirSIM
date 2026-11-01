@@ -1,17 +1,13 @@
 import ComposableArchitecture
 import Foundation
 
-/// The Dial tab and its Paired Android Agents sheet: the number being typed, press-and-hold delete, Call, and the
-/// agent that places calls.
 @Reducer
 struct DialFeature {
     @ObservableState
     struct State: Equatable {
         @SharedReader fileprivate var snapshot: AirSIMSnapshot
         var number: String
-        /// The backend's number as of the last snapshot.
         var lastBackendNumber: String
-        /// The field holds a local edit, so a new backend number leaves it alone.
         var hasDraft = false
 
         init(snapshot: SharedReader<AirSIMSnapshot>) {
@@ -37,14 +33,17 @@ struct DialFeature {
             snapshot.pairedAndroidAgents.map { PairedAgentRow(agent: $0, cloudModeEnabled: snapshot.cloudModeEnabled) }
         }
 
-        /// A local edit is a draft while it differs from the backend's number.
         mutating func edit(_ value: String) {
             number = value
             hasDraft = value != lastBackendNumber
         }
 
-        /// A new backend number replaces the field unless it holds a draft. Once the backend reports the field's
-        /// number, the field is no longer a draft.
+        /// Keeps `value` as a draft even when it equals the backend's number.
+        mutating func holdDraft(_ value: String) {
+            number = value
+            hasDraft = true
+        }
+
         mutating func reconcile(backendNumber: String) {
             if backendNumber != lastBackendNumber {
                 lastBackendNumber = backendNumber
@@ -64,14 +63,12 @@ struct DialFeature {
 
     enum Action: ViewAction {
         case view(View)
-        /// One step of a held delete.
         case deleteRepeated
 
         enum View {
             case digitTapped(String)
             case deletePressed
             case deleteReleased
-            /// VoiceOver activation of Delete.
             case deleteActivated
             case callTapped
             case agentChosen(String)

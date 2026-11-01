@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The Recents tab.
 @MainActor
 @ViewAction(for: RecentsFeature.self)
 final class RecentsViewController: PhoneTableController {

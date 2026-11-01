@@ -1,6 +1,5 @@
 import UIKit
 
-/// Draws its text inside the bubble padding and includes the padding in its size.
 @MainActor
 private final class BubbleLabel: UILabel {
     let padding = UIEdgeInsets(top: 9, left: 14, bottom: 9, right: 14)
@@ -21,7 +20,6 @@ private final class BubbleLabel: UILabel {
     }
 }
 
-/// One message in a thread: a blue outgoing bubble with "Sent" under it, or a gray incoming one.
 @MainActor
 final class PhoneMessageBubble: UIView {
     init(message: SMSMessage) {
@@ -58,7 +56,6 @@ final class PhoneMessageBubble: UIView {
 private enum Metrics {
     static let captionSpacing: CGFloat = 3
     static let cornerRadius: CGFloat = 18
-    /// The narrowest gap a bubble leaves on the side it does not hug.
     static let oppositeSideGap: CGFloat = 48
 }
 

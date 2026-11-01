@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The paired Android Agents with the current one checked; choosing one makes it current. It owns no state: it shows
-/// and sends Dial actions.
 @MainActor
 @ViewAction(for: DialFeature.self)
 final class PairedAndroidAgentsViewController: PhoneTableController {

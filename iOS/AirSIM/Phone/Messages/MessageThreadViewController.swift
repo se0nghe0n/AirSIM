@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// One conversation's messages, oldest first, with a reply field. It has no feature of its own: it shows the sender
-/// it was opened for and sends Messages actions.
 @MainActor
 @ViewAction(for: MessagesFeature.self)
 final class MessageThreadViewController: PhoneTableController, UITextViewDelegate {
@@ -76,7 +74,6 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
         sendButton.isEnabled = store.canSendReply
     }
 
-    /// Scrolls to a new message on first load, or while the newest one was already in view.
     private func renderMessages(_ messages: [SMSMessage]) {
         let threshold = table.contentSize.height - Metrics.followNewMessagesSlack
         let wasAtBottom = firstLoad || table.contentOffset.y + table.bounds.height >= threshold
@@ -91,7 +88,6 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
         firstLoad = false
     }
 
-    /// The reply grows with its text up to half the space above the keyboard, then scrolls.
     private func updateReplyHeight() {
         guard reply.bounds.width > 0 else { return }
         let keyboard = view.keyboardLayoutGuide.layoutFrame
@@ -107,7 +103,6 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
         reply.isScrollEnabled = desired > maximum
     }
 
-    /// Insets a conversation shorter than the table so it sits at the bottom, above the reply field.
     private func alignShortConversation() {
         let inset = max(0, table.bounds.height - table.contentSize.height - table.contentInset.bottom)
         if abs(table.contentInset.top - inset) > 1 {
@@ -143,7 +138,6 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
         table.separatorStyle = .none
         table.contentInsetAdjustmentBehavior = .never
         table.contentInset.bottom = Metrics.tableBottomInset
-        // Re-added in buildLayout, ending above the reply bar instead of at the bottom edge.
         table.removeFromSuperview()
     }
 
@@ -210,13 +204,11 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
 private enum Metrics {
     static let rowInsets = UIEdgeInsets(top: 4, left: 16, bottom: 4, right: 16)
     static let tableBottomInset: CGFloat = 12
-    /// How far above the bottom still counts as reading the newest message.
     static let followNewMessagesSlack: CGFloat = 80
     static let replyInsets = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
     static let minimumReplyHeight: CGFloat = 32
     static let sendButtonWidth: CGFloat = 26
     static let barSpacing: CGFloat = 10
-    /// Around the reply bar, and between it and the messages.
     static let barMargin: CGFloat = 16
     static let dividerHeight: CGFloat = 0.5
 }

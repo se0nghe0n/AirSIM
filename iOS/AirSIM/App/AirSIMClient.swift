@@ -72,7 +72,6 @@ private final class SnapshotSubscription {
     let playback: CallRecordingPlayback
     let continuation: AsyncStream<AirSIMSnapshot>.Continuation
     private var cancelled = false
-    /// Advances on every registration, so a change reported to an older one does not register twice.
     private var generation = 0
     private var defaultsToken: NSObjectProtocol?
 

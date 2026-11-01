@@ -1,15 +1,11 @@
 import Foundation
 
-/// Everything the in-app call screen shows for one call, ready to draw.
 struct ActiveCallContent: Equatable {
     enum Phase: Equatable {
-        /// Ringing or waiting: Accept and Decline, no duration.
         case incoming
-        /// Every other state: the in-call controls, End and the running duration.
         case connected
     }
 
-    /// The color of the status badge or its dot. The call screen maps it to a system color.
     enum Tone: Equatable {
         case green
         case orange
@@ -18,10 +14,8 @@ struct ActiveCallContent: Equatable {
 
     let phase: Phase
     let header: String
-    /// The contact's name, else the number, else "Unknown Number".
     let name: String
     let number: String?
-    /// False without a number or when the name already is the number.
     let showsNumber: Bool
     let photo: Data?
     let startedAt: Date
@@ -32,7 +26,6 @@ struct ActiveCallContent: Equatable {
     let status: String
     let badgeTone: Tone
     let dotTone: Tone
-    /// The proximity sensor turns the screen off at the ear while a call is placed or live and the speaker is off.
     let monitorsProximity: Bool
 
     init(call: CallRecord, snapshot: AirSIMSnapshot) {
@@ -68,14 +61,12 @@ struct ActiveCallContent: Equatable {
     var isIncoming: Bool { phase == .incoming }
     var showsDuration: Bool { phase == .connected }
 
-    /// "01:05" once connected, "Waiting" before.
     func duration(at now: Date) -> String {
         guard showsDuration else { return "Waiting" }
         let seconds = max(0, Int(now.timeIntervalSince(startedAt)))
         return Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2)))
     }
 
-    /// Red once the call audio failed, green once it connected, orange while it starts.
     private static func audioTone(_ snapshot: AirSIMSnapshot) -> Tone {
         switch snapshot.cloudCallAudioState {
         case .failed:

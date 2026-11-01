@@ -1,6 +1,5 @@
 import UIKit
 
-/// A list row body: the avatar, the name over a subtitle, and an optional time column and Dial button.
 @MainActor
 final class PhoneListContentView: UIView {
     init(

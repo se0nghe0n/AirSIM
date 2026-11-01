@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The in-app call screen: the caller, the call's status and duration, Accept and Decline while the call rings, and
-/// the in-call controls and End once it connects.
 @MainActor
 @ViewAction(for: ActiveCallFeature.self)
 final class ActiveCallViewController: ObservingViewController {
@@ -10,7 +8,6 @@ final class ActiveCallViewController: ObservingViewController {
 
     let store: StoreOf<ActiveCallFeature>
     var call: CallRecord? { store.call }
-    /// Previews and layout screenshots ignore touches and leave the proximity sensor alone.
     var isPresentationPreview = false
 
     // MARK: Views
@@ -100,7 +97,6 @@ final class ActiveCallViewController: ObservingViewController {
     // MARK: Rendering
 
     override func render() {
-        // Once the call leaves, the root removes this screen's window; until then it keeps the last call drawn.
         guard let content = store.content else { return }
         let compact = traitCollection.horizontalSizeClass == .compact || view.bounds.height < Metrics.compactHeight
         let layout = CallLayout(width: view.bounds.width, compact: compact, incoming: content.isIncoming)
@@ -165,7 +161,6 @@ final class ActiveCallViewController: ObservingViewController {
         )
     }
 
-    /// Accept and Decline while the call rings, End once it connects. Rebuilt only when the phase changes.
     private func renderDecisions(_ phase: ActiveCallContent.Phase) {
         guard phase != lastPhase else { return }
         lastPhase = phase
@@ -211,7 +206,6 @@ final class ActiveCallViewController: ObservingViewController {
         view.addSubview(backdrop)
     }
 
-    /// The antenna and the call title on the left, Record on the right.
     private func buildHeader() {
         let antenna = UIImageView(image: UIImage(systemName: "antenna.radiowaves.left.and.right"))
         antenna.tintColor = .lightGray
@@ -226,7 +220,6 @@ final class ActiveCallViewController: ObservingViewController {
         }
     }
 
-    /// The avatar over the name, the number, the duration and the status badge.
     private func buildCenter() {
         avatar.isAccessibilityElement = false
         avatar.layer.borderWidth = 1
@@ -253,7 +246,6 @@ final class ActiveCallViewController: ObservingViewController {
         center.setCustomSpacing(Metrics.initialSpacingAfterDuration, after: durationLabel)
     }
 
-    /// A blurred capsule holding the status dot and the status text.
     private func buildStatusBadge() {
         statusBadge.layer.cornerRadius = Metrics.badgeCornerRadius
         statusBadge.clipsToBounds = true
@@ -272,7 +264,6 @@ final class ActiveCallViewController: ObservingViewController {
         statusBadge.contentView.addPinnedSubview(content, insets: Metrics.badgeInsets)
     }
 
-    /// Mute, Keypad and Speaker.
     private func buildControls() {
         let keypad = CallCircleControl(
             title: "Keypad",
@@ -286,13 +277,11 @@ final class ActiveCallViewController: ObservingViewController {
         }
     }
 
-    /// The in-call controls over the decision buttons.
     private func buildBottom() {
         bottomStack.addArrangedSubview(controls)
         bottomStack.addArrangedSubview(decisions)
     }
 
-    /// The header at the top and the controls at the bottom; the center block sits halfway between them.
     private func buildLayout() {
         for part in [headerBar, center, bottomStack] {
             part.translatesAutoresizingMaskIntoConstraints = false
@@ -359,13 +348,11 @@ final class ActiveCallViewController: ObservingViewController {
     }
 }
 
-/// The call screen's sizes for its width, whether it is compact, and whether the call is ringing.
 private struct CallLayout {
     let avatarSize: CGFloat
     let headerTop: CGFloat
     let headerWidth: CGFloat
     let decisionsWidth: CGFloat
-    /// From the safe area's bottom to the decision buttons.
     let bottomInset: CGFloat
     let bottomSpacing: CGFloat
     let controlSpacing: CGFloat
@@ -403,8 +390,6 @@ private extension ActiveCallContent.Tone {
     }
 }
 
-/// Owns a repeating timer and invalidates it when released, which happens when the call screen is. The screen's
-/// deinit cannot reach its main-actor properties, so it cannot invalidate the timer itself.
 private final class RepeatingTimer {
     private let timer: Timer
 
@@ -418,7 +403,6 @@ private final class RepeatingTimer {
 }
 
 private enum Metrics {
-    /// Below this height the screen uses its compact sizes even in a regular width.
     static let compactHeight: CGFloat = 700
     static let headerSpacing: CGFloat = 10
     static let recordButtonSize: CGFloat = 44
@@ -434,7 +418,6 @@ private enum Metrics {
     static let controlSize: CGFloat = 62
     static let decisionSize: CGFloat = 76
     static let decisionSpacing: CGFloat = 100
-    // Replaced by CallLayout on the first render.
     static let initialAvatarSize: CGFloat = 116
     static let initialHeaderTop: CGFloat = 18
     static let initialHeaderWidth: CGFloat = 362

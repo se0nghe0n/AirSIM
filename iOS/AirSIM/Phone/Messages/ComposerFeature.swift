@@ -1,15 +1,11 @@
 import ComposableArchitecture
 import Foundation
 
-/// The New Message sheet: a recipient with contact suggestions, a body, and Send. MessagesFeature runs the send.
 @Reducer
 struct ComposerFeature {
-    /// A contact offered under the recipient field.
     struct Suggestion: Equatable {
         let name: String
-        /// The contact's first number, shown under its name.
         let phone: String?
-        /// What choosing it addresses: the contact's first number, else the typed text.
         let recipient: String
     }
 
@@ -37,7 +33,6 @@ struct ComposerFeature {
                 && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        /// The name of the contact the recipient already names.
         var recognizedName: String? {
             snapshot.contacts.contact(for: recipient)?.name
         }

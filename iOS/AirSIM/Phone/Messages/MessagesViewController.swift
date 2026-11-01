@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The Messages tab's conversation list. It pushes the open conversation's thread and reconciles a native Back
-/// with the feature.
 @MainActor
 @ViewAction(for: MessagesFeature.self)
 final class MessagesViewController: PhoneTableController, UINavigationControllerDelegate {
@@ -115,7 +113,6 @@ final class MessagesViewController: PhoneTableController, UINavigationController
         showConversationIfNeeded(sender)
     }
 
-    /// Pushes the open conversation's thread unless it is already on top or on its way out.
     func showConversationIfNeeded(_ sender: String) {
         guard store.conversation == sender else { return }
         loadViewIfNeeded()
@@ -150,7 +147,6 @@ final class MessagesViewController: PhoneTableController, UINavigationController
 
     // MARK: UINavigationControllerDelegate
 
-    /// A native Back to this list closes the thread it last pushed.
     func navigationController(
         _ navigationController: UINavigationController,
         didShow viewController: UIViewController,

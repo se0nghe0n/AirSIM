@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-/// The in-app call screen and its DTMF keypad: Accept and Decline while a call rings, then mute, speaker, recording,
-/// the keypad and End.
 @Reducer
 struct ActiveCallFeature {
     @ObservableState
@@ -10,7 +8,6 @@ struct ActiveCallFeature {
         @SharedReader fileprivate var snapshot: AirSIMSnapshot
         @Presents var keypad: KeypadFeature.State?
 #if DEBUG
-        /// Shown instead of the backend's call for layout screenshots; see `CallRecord.layoutPreview(arguments:)`.
         var layoutPreviewCall: CallRecord?
 #endif
 
@@ -18,7 +15,6 @@ struct ActiveCallFeature {
             _snapshot = snapshot
         }
 
-        /// The call presented in app; the root shows the call window while there is one.
         var call: CallRecord? {
 #if DEBUG
             if let layoutPreviewCall {
@@ -96,7 +92,6 @@ struct ActiveCallFeature {
 
 #if DEBUG
 extension CallRecord {
-    /// The call `--airsim-layout-call incoming|active` shows for layout screenshots. The backend never reports it.
     static func layoutPreview(arguments: [String]) -> CallRecord? {
         guard let flag = arguments.firstIndex(of: "--airsim-layout-call"),
               arguments.indices.contains(flag + 1),

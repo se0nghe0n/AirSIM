@@ -1,13 +1,10 @@
 import ComposableArchitecture
 import Foundation
 
-/// The app shell: backend snapshot intake, tab selection, the onboarding gate, URL routing and the
-/// root error alert.
 @Reducer
 struct AirSIMFeature {
     @ObservableState
     struct State: Equatable {
-        /// The backend projection. `receive(_:into:)` is its only writer.
         @Shared var snapshot: AirSIMSnapshot
         var dial: DialFeature.State
         var selectedTab = PhoneTab.dial
@@ -126,7 +123,7 @@ struct AirSIMFeature {
 
             case .recents(.delegate(.call(let number))),
                  .contacts(.delegate(.call(let number))):
-                return dial(number, state: &state)
+                return dialAndRememberTab(number, state: &state)
 
             case .composeMessage(let recipient),
                  .recents(.delegate(.message(let recipient))),
@@ -152,7 +149,6 @@ struct AirSIMFeature {
         .ifLet(\.$alert, action: \.alert)
     }
 
-    /// The one place backend state enters the tree.
     private func receive(_ value: AirSIMSnapshot, into state: inout State) -> Effect<Action> {
         if state.snapshot != value {
             state.$snapshot.withLock { $0 = value }
@@ -179,8 +175,7 @@ struct AirSIMFeature {
         return .none
     }
 
-    /// A call back from another tab: show the number on Dial, persist that tab, and dial.
-    private func dial(_ number: String, state: inout State) -> Effect<Action> {
+    private func dialAndRememberTab(_ number: String, state: inout State) -> Effect<Action> {
         state.dial.edit(number)
         state.selectedTab = .dial
         return .merge(
@@ -189,7 +184,12 @@ struct AirSIMFeature {
         )
     }
 
-    /// A message from any tab or link: show Messages, persist that tab, and compose once onboarding allows it.
+    private func dialWithoutRememberingTab(_ number: String, state: inout State) -> Effect<Action> {
+        state.dial.holdDraft(number)
+        state.selectedTab = .dial
+        return command(.dialNumber(number))
+    }
+
     private func compose(to recipient: String, state: inout State) -> Effect<Action> {
         state.composeMessage(to: recipient)
         return command(.persistTab(.messages))
@@ -201,11 +201,7 @@ struct AirSIMFeature {
             return compose(to: recipient, state: &state)
 
         case .call(let number):
-            // Unlike a call back from Recents or Contacts, a tel: link does not persist the Dial tab.
-            state.selectedTab = .dial
-            state.dial.number = number
-            state.dial.hasDraft = true
-            return command(.dialNumber(number))
+            return dialWithoutRememberingTab(number, state: &state)
 
         case let .liveActivity(action, callID):
             // The backend gate runs immediately before execution. The UI

@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The in-call keypad sheet. Each key sends one DTMF tone; the label shows the digits sent so far.
 @MainActor
 @ViewAction(for: KeypadFeature.self)
 final class DTMFKeypadViewController: ObservingViewController {
@@ -40,7 +39,6 @@ final class DTMFKeypadViewController: ObservingViewController {
 
     // MARK: Layout
 
-    /// The digits over the key rows, centered in the safe area.
     private func buildStack() {
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)

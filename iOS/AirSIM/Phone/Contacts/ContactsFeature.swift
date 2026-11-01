@@ -1,18 +1,13 @@
 import ComposableArchitecture
 import Foundation
 
-/// The address book, shown as the Contacts tab and as the composer's contact picker. Each screen keeps its
-/// own search, so the picker's never filters the tab.
 @Reducer
 struct ContactsFeature {
     enum Mode: Equatable {
-        /// The Contacts tab: a row per contact, opening its details.
         case browse
-        /// The composer's picker: a row per number, choosing it.
         case pick
     }
 
-    /// What shows instead of the list while contacts cannot be read.
     enum AccessPrompt: Equatable {
         case allowAccess
         case openSettings
@@ -43,7 +38,6 @@ struct ContactsFeature {
             }
         }
 
-        /// Nil once the address book can be read.
         var accessPrompt: AccessPrompt? {
             guard !snapshot.contacts.isAuthorized else { return nil }
             return snapshot.contacts.authorization == .denied ? .openSettings : .allowAccess

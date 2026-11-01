@@ -1237,7 +1237,6 @@ struct RecentsFeatureTests {
 
     @Test func `A row drawn before a history refresh still calls and messages the number it showed`() async throws {
         let shown = try #require(RecentsFeature.State(snapshot: SharedReader(value: snapshot())).row(id: "preview-recent-2"))
-        // The refresh dropped that call, e.g. past the history limit, while its card was still open.
         let store = TestStore(initialState: RecentsFeature.State(snapshot: SharedReader(value: AirSIMSnapshot()))) { RecentsFeature() }
         await store.send(.view(.callTapped(shown)))
         await store.receive(\.delegate.call, "+1 202 555 0102")
@@ -1315,7 +1314,6 @@ struct DialFeatureTests {
         #expect(dial.number == "1001" && dial.lastBackendNumber == "200" && dial.hasDraft)
         dial.reconcile(backendNumber: "1001")
         #expect(dial.number == "1001" && dial.lastBackendNumber == "1001" && !dial.hasDraft)
-        // A tel: link marks its number a draft even when the backend already reports it.
         dial.hasDraft = true
         dial.reconcile(backendNumber: "1001")
         #expect(!dial.hasDraft)
@@ -1488,7 +1486,6 @@ struct DialFeatureTests {
 
 @MainActor
 struct ContactsFeatureTests {
-    /// The preview contacts unless `contacts` says otherwise.
     private func snapshot(
         _ contacts: [ContactStore.Contact]? = nil,
         authorization: ContactAuthorizationState = .authorized
@@ -1519,7 +1516,6 @@ struct ContactsFeatureTests {
         let directory = ContactDirectory(all: AirSIMPreviewFixtures.contacts, isAuthorized: true, authorization: .authorized)
         #expect(directory.contacts(matching: "   ").map(\.name) == ["Mina Kim", "Alex Rivera"])
         #expect(directory.contacts(matching: "  alex").map(\.name) == ["Alex Rivera"])
-        // Only Mina's second number contains 0101.
         #expect(directory.contacts(matching: "0101 ").map(\.name) == ["Mina Kim"])
         #expect(directory.contacts(matching: "+1202555").map(\.name) == ["Mina Kim", "Alex Rivera"])
         #expect(directory.contacts(matching: "Sam").isEmpty)
@@ -1609,7 +1605,6 @@ struct ContactsFeatureTests {
 struct MessagesFeatureTests {
     private let stranger = "+1 202 555 0199"
 
-    /// The preview contacts unless `contacts` says otherwise.
     private func snapshot(
         contacts: [ContactStore.Contact]? = nil,
         messages: [SMSMessage] = [],
@@ -1752,7 +1747,6 @@ struct MessagesFeatureTests {
         #expect(directory.suggestions(for: " alex ").map(\.name) == ["Alex Rivera"])
         #expect(directory.suggestions(for: "0102").map(\.name) == ["Alex Rivera"])
         #expect(directory.suggestions(for: "lee").map(\.name) == ["Lee 1", "Lee 2", "Lee 3", "Lee 4", "Lee 5"])
-        // A recipient that already names a contact needs no suggestions, even when others match it.
         #expect(directory.suggestions(for: "+12025550102").isEmpty)
         #expect(directory.suggestions(for: "+1202555").map(\.name) == ["Mina Kim", "Alex Rivera", "Lee 1", "Lee 2", "Lee 3"])
     }
@@ -2432,7 +2426,7 @@ struct TCARootNavigationTests {
         await store.send(.settings(.pairing(.view(.opened)))) { $0.settings.pairing.code = "" }
         await store.receive(\.settings.pairing.delegate.opened) { $0.settings.pairing.localOnly = true }
         await store.send(.settings(.pairing(.view(.disappeared)))) { $0.settings.pairing.message = "" }
-        await store.receive(\.settings.pairing.delegate.closed)
+        await store.receive(\.settings.pairing.delegate.disappeared)
         await store.send(.settings(.view(.modeChanged(.automatic)))) { $0.settings.mode = .automatic }
         await store.send(.settings(.pairing(.view(.opened)))) { $0.settings.pairing.localOnly = false }
         await store.receive(\.settings.pairing.delegate.opened)
@@ -2905,7 +2899,6 @@ struct SettingsFeatureTests {
         #expect(state.relayURL == "https://relay.example")
         #expect(!state.liveActivityEnabled)
         let seeded = state
-        // The first snapshot carries the same preferences and must not count as a change from another scene.
         state.reconcile(with: snapshot)
         #expect(state == seeded)
     }
@@ -3037,12 +3030,12 @@ struct SettingsFeatureTests {
         }
         await store.send(.settings(.view(.startPairingTapped))) { $0.settings.pairingFromOnboarding = true }
         await store.send(.settings(.pairing(.view(.disappeared))))
-        await store.receive(\.settings.pairing.delegate.closed) { $0.settings.pairingFromOnboarding = false }
+        await store.receive(\.settings.pairing.delegate.disappeared) { $0.settings.pairingFromOnboarding = false }
         let online = try onlineSnapshot()
         await store.send(.snapshot(online)) { $0.$snapshot.withLock { $0 = online } }
         await store.send(.settings(.view(.startPairingTapped))) { $0.settings.pairingFromOnboarding = true }
         await store.send(.settings(.pairing(.view(.disappeared))))
-        await store.receive(\.settings.pairing.delegate.closed) { $0.settings.pairingFromOnboarding = false }
+        await store.receive(\.settings.pairing.delegate.disappeared) { $0.settings.pairingFromOnboarding = false }
         await store.receive(\.settings.delegate.onboardingCompleted) { $0.firstConnectionComplete = true }
         await store.finish()
         #expect(commands.value == ["completeOnboarding"])
@@ -3055,7 +3048,7 @@ struct SettingsFeatureTests {
             $0.airSIM = client(commands: commands)
         }
         await store.send(.settings(.pairing(.view(.disappeared))))
-        await store.receive(\.settings.pairing.delegate.closed)
+        await store.receive(\.settings.pairing.delegate.disappeared)
         await store.finish()
         #expect(commands.value.isEmpty && !store.state.firstConnectionComplete)
     }

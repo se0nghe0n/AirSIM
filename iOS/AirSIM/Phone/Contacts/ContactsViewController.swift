@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The Contacts tab, and in pick mode the composer's contact picker.
 @MainActor
 @ViewAction(for: ContactsFeature.self)
 final class ContactsViewController: PhoneTableController, UISearchResultsUpdating {
@@ -105,7 +104,6 @@ final class ContactsViewController: PhoneTableController, UISearchResultsUpdatin
         return configuration
     }
 
-    /// The access prompt and the empty list share one style, with the text in a centered column.
     private func applyEmptyStyle(to configuration: inout UIContentUnavailableConfiguration) {
         configuration.textProperties.font = UIFontMetrics(forTextStyle: .title3)
             .scaledFont(for: .systemFont(ofSize: 20, weight: .bold))

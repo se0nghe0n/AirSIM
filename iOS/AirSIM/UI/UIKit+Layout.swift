@@ -17,7 +17,6 @@ extension UIStackView {
 }
 
 extension UIView {
-    /// Adds `subview` and pins its four edges to this view's edges, inset by `insets`.
     func addPinnedSubview(_ subview: UIView, insets: UIEdgeInsets = .zero) {
         subview.translatesAutoresizingMaskIntoConstraints = false
         addSubview(subview)

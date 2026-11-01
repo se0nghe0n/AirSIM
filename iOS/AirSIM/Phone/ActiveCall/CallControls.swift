@@ -1,6 +1,5 @@
 import UIKit
 
-/// The call screen's near-black background, with a blue glow at the top right and a cyan glow at the bottom left.
 @MainActor
 final class CallBackdropView: UIView {
     private let topGlow = CAGradientLayer()
@@ -31,8 +30,6 @@ final class CallBackdropView: UIView {
     }
 }
 
-/// A round call button over its caption. Accept, Decline and End are filled with their color; Mute, Keypad and
-/// Speaker are glass, tinted while on.
 @MainActor
 final class CallCircleControl: UIButton {
     private let caption = phoneLabel(size: 12, color: UIColor.white.withAlphaComponent(0.88))
@@ -41,7 +38,6 @@ final class CallCircleControl: UIButton {
     private var sizeConstraints: [NSLayoutConstraint] = []
     private let material = UIVisualEffectView(effect: nil)
     private let gradient = CAGradientLayer()
-    /// Filled with the color passed at creation instead of glass.
     private let isDecision: Bool
 
     init(title: String, icon: String, size: CGFloat, color: UIColor? = nil, action: @escaping () -> Void) {
@@ -92,7 +88,6 @@ final class CallCircleControl: UIButton {
         }
     }
 
-    /// The circle, with its gradient or glass, its border and shadow, and the icon centered in it.
     private func buildCircle(size: CGFloat, color: UIColor?, isLarge: Bool) {
         if isDecision {
             circle.layer.insertSublayer(gradient, at: 0)
@@ -131,7 +126,6 @@ final class CallCircleControl: UIButton {
         ])
     }
 
-    /// The circle over its caption, filling the button.
     private func buildStack(size: CGFloat, isLarge: Bool) {
         caption.textAlignment = .center
         if isLarge {
@@ -151,7 +145,6 @@ final class CallCircleControl: UIButton {
         }
     }
 
-    /// `color` mixed 12% toward white, opaque: the top of a filled button's gradient.
     private static func highlight(_ color: UIColor) -> UIColor {
         var red: CGFloat = 0
         var green: CGFloat = 0
@@ -168,7 +161,6 @@ final class CallCircleControl: UIButton {
 }
 
 private enum Metrics {
-    /// Accept, Decline and End use this size and get a larger icon, caption and shadow.
     static let largeSize: CGFloat = 76
     static let iconSize: CGFloat = 24
     static let largeIconSize: CGFloat = 28

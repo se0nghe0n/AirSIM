@@ -63,7 +63,6 @@ struct PhoneSection {
     var rows: [PhoneRow]
 }
 
-/// How a table's rows change between two renders, given each section's row identities.
 enum PhoneRowUpdate: Equatable {
     case unchanged
     case reload
@@ -165,7 +164,6 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
         }
     }
 
-    /// Rows and sections that keep their identity are not reloaded, so their content is refreshed in place.
     private func reconfigureVisibleRows() {
         for path in table.indexPathsForVisibleRows ?? [] {
             guard row(at: path) != nil, let cell = table.cellForRow(at: path) else { continue }
@@ -237,7 +235,6 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
         return content
     }
 
-    /// Replaces the cell's hosted view with `control`: a row body alone, or an accessory under or beside the title.
     private func host(_ control: UIView, in cell: PhoneTableCell, for row: PhoneRow, isBody: Bool) {
         cell.controlHost?.removeFromSuperview()
         let host = UIStackView(

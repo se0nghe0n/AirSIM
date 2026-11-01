@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// Pairs with an Android phone on the local network: the local-only choice, connection steps, each discovered phone
-/// with its code field, and the result.
 @MainActor
 @ViewAction(for: PairingFeature.self)
 final class SamsungPairingViewController: PhoneTableController {

@@ -1,7 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The Dial tab: the number being typed and the contact it matches, the Android Agent card, and the keypad.
 @MainActor
 @ViewAction(for: DialFeature.self)
 final class DialPadViewController: ObservingViewController {
@@ -23,7 +22,6 @@ final class DialPadViewController: ObservingViewController {
         self?.send(.callTapped)
     }
     private let deleteButton = phoneButton("Delete", image: "delete.left", color: .secondaryLabel) {}
-    /// The four key rows and the Call row, which share their spacing and width.
     private var keypadRows: [UIStackView] = []
     private var keypadRowWidths: [NSLayoutConstraint] = []
     private lazy var contentWidth = stack.widthAnchor.constraint(equalToConstant: Metrics.initialContentWidth)
@@ -136,7 +134,6 @@ final class DialPadViewController: ObservingViewController {
         ])
     }
 
-    /// The number over the name of the contact it matches.
     private func buildNumber() {
         numberLabel.font = UIFont.systemFont(ofSize: 36, weight: .light).rounded()
         numberLabel.adjustsFontSizeToFitWidth = true
@@ -152,7 +149,6 @@ final class DialPadViewController: ObservingViewController {
         ])
     }
 
-    /// Hosts the agent card, which render() replaces; tapping it opens the Paired Android Agents sheet.
     private func buildAgentButton() {
         agentButton.titleLabel?.numberOfLines = 3
         stack.addArrangedSubview(agentButton)
@@ -162,7 +158,6 @@ final class DialPadViewController: ObservingViewController {
         ])
     }
 
-    /// Four rows of keys, then a row with Call in the middle column and Delete on the right.
     private func buildKeypad() {
         for keyRow in DialKey.rows {
             let row = UIStackView(axis: .horizontal, spacing: Metrics.initialKeySpacing, distribution: .fillEqually)
@@ -213,7 +208,6 @@ final class DialPadViewController: ObservingViewController {
         return button
     }
 
-    /// Glass keys on iOS 26, filled and outlined keys before it.
     private func keyConfiguration(_ key: DialKey) -> UIButton.Configuration {
         var configuration: UIButton.Configuration
         if #available(iOS 26.0, *) {
@@ -281,7 +275,6 @@ final class DialPadViewController: ObservingViewController {
         ))
     }
 
-    /// Sizes the number, the keys and their spacing to the screen.
     private func applyLayout(_ metrics: DialPadLayoutMetrics) {
         keyHeight?.constant = metrics.keySize
         contentWidth.constant = metrics.contentWidth
@@ -343,7 +336,6 @@ final class DialPadViewController: ObservingViewController {
     }
 }
 
-/// A keypad key: its digit and the letters under it.
 private struct DialKey {
     let digit: String
     let letters: String
@@ -363,7 +355,6 @@ private struct DialKey {
     ]
 }
 
-/// The keypad's sizes for the size of the safe area and the width class.
 private struct DialPadLayoutMetrics {
     let contentWidth: CGFloat
     let keySize: CGFloat
@@ -404,14 +395,11 @@ private enum Metrics {
     static let sideMargin: CGFloat = 16
     static let verticalMargin: CGFloat = 4
     static let numberToContactSpacing: CGFloat = 2
-    /// With a current agent; the card is shorter while none is current.
     static let agentCardHeight: CGFloat = 94
     static let agentCardHeightWithoutCurrent: CGFloat = 74
     static let letterKern: CGFloat = 1.4
     static let dimmedCallOpacity: CGFloat = 0.4
-    /// Applied on top of the dimming while Call is disabled.
     static let disabledCallOpacityFactor: CGFloat = 0.5
-    // Until the first layout pass sizes the keypad to the screen.
     static let initialContentWidth: CGFloat = 360
     static let initialSectionSpacing: CGFloat = 12
     static let initialNumberHeight: CGFloat = 46

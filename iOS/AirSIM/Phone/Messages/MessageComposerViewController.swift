@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The New Message sheet. Its presenter dismisses it from state; a swipe-down writes the closed state back through
-/// that presentation.
 @MainActor
 @ViewAction(for: ComposerFeature.self)
 final class MessageComposerViewController: ObservingViewController, UITextViewDelegate {
@@ -120,7 +118,6 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         navigationItem.rightBarButtonItem = sendItem
     }
 
-    /// The choose-contact button, "To:", the recipient field, and the name of the contact it matches.
     private func buildRecipientBar() -> UIStackView {
         recipient.placeholder = "Enter number or name"
         recipient.keyboardType = .phonePad
@@ -171,7 +168,6 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         return scroll
     }
 
-    /// The message field and Send, over the caption.
     private func buildEntry() -> UIStackView {
         content.font = .preferredFont(forTextStyle: .body)
         content.delegate = self
@@ -230,7 +226,6 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         ])
     }
 
-    /// A full-width hairline whose top is `offset` from `anchor`.
     private func addSeparator(top anchor: NSLayoutYAxisAnchor, offset: CGFloat) {
         let separator = UIView()
         separator.backgroundColor = UIColor.separator.withAlphaComponent(0.10)
@@ -263,7 +258,6 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
 
 private enum Metrics {
     static let horizontalMargin: CGFloat = 16
-    /// Between the controls in the recipient bar and in the message row.
     static let itemSpacing: CGFloat = 9
     static let recipientBarHeight: CGFloat = 52
     static let chooseButtonWidth: CGFloat = 26
@@ -273,11 +267,9 @@ private enum Metrics {
     static let textInsets = UIEdgeInsets(top: 9, left: 13, bottom: 9, right: 13)
     static let minimumContentHeight: CGFloat = 40
     static let maximumContentHeight: CGFloat = 130
-    /// The narrowest width the message is measured at, before the field has been laid out.
     static let minimumContentFittingWidth: CGFloat = 180
     static let sendButtonSize: CGFloat = 36
     static let captionSpacing: CGFloat = 5
-    /// Between the message entry and the separator above it, and the keyboard below it.
     static let entryMargin: CGFloat = 10
     static let separatorHeight: CGFloat = 0.5
 }

@@ -1,6 +1,5 @@
 import UIKit
 
-/// A symbol over a centered heading and detail, for a list with nothing to show yet.
 @MainActor
 func phoneEmptyState(_ title: String, image: String, detail: String) -> UIView {
     let symbol = UIImageView(image: UIImage(systemName: image))

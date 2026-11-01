@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import UIKit
 
-/// The card shown when a recent call is touched and held. It owns no state: it shows one row and sends
-/// Recents actions after it closes.
 @MainActor
 @ViewAction(for: RecentsFeature.self)
 final class RecentCallDetailsViewController: UIViewController {
@@ -99,7 +97,6 @@ final class RecentCallDetailsViewController: UIViewController {
     ) -> UIButton {
         let button = phoneButton(title, image: image, color: color) { [weak self] in
             guard let self else { return }
-            // The completion keeps the card alive until the request is sent.
             self.dismiss(animated: true) { self.send(action) }
         }
         button.configuration?.cornerStyle = .medium

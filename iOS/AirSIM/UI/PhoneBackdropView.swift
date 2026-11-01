@@ -1,6 +1,5 @@
 import UIKit
 
-/// The plain-list background: white in light mode, a blue-black base under a bottom blue gradient in dark mode.
 @MainActor
 final class PhoneBackdropView: UIView {
     private let gradient = CAGradientLayer()
