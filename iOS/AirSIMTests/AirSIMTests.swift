@@ -345,7 +345,11 @@ struct AirSIMTests {
             }
             try await waitUntil({ completion != nil }, "connect did not suspend")
             current = UUID() // Hangup, followed by a new call, while connect is pending.
-            if succeeds { completion?.resume() } else { completion?.resume(throwing: URLError(.networkConnectionLost)) }
+            if succeeds {
+                completion?.resume()
+            } else {
+                completion?.resume(throwing: URLError(.networkConnectionLost))
+            }
             await recovery.value
             #expect(connected == 0)
             #expect(failed == 0)
@@ -1856,7 +1860,9 @@ struct ContactsFeatureTests {
         AirSIMClient(
             snapshots: { AsyncStream { $0.finish() } },
             command: { command in
-                if case .contacts(let request) = command { contactRequests.withValue { $0.append(request) } }
+                if case .contacts(let request) = command {
+                    contactRequests.withValue { $0.append(request) }
+                }
             },
             sendSMS: { _, _ in .init(success: true) },
             selfTest: { AsyncStream { $0.finish() } },
@@ -2811,7 +2817,9 @@ struct TCAUIKitFeatureTests {
         let release = AsyncStream<Void>.makeStream()
         var dependency = client()
         dependency.sendSMS = { _, body in
-            if body == "late" { for await _ in release.stream { break } }
+            if body == "late" {
+                for await _ in release.stream { break }
+            }
             return result.value
         }
         var state = MessagesFeature.State(snapshot: snapshot)
@@ -3045,7 +3053,9 @@ struct TCARootNavigationTests {
         let cleared = LockIsolated(0)
         var dependency = client
         dependency.command = { command in
-            if case .clearError = command { cleared.withValue { $0 += 1 } }
+            if case .clearError = command {
+                cleared.withValue { $0 += 1 }
+            }
         }
         var snapshot = AirSIMSnapshot()
         snapshot.errorMessage = "Backend failure"
@@ -3227,7 +3237,11 @@ struct TCACallKeypadTests {
     private func client(dtmf: LockIsolated<[String]> = .init([])) -> AirSIMClient {
         AirSIMClient(
             snapshots: { AsyncStream { _ in } },
-            command: { command in if case .dtmf(let digit) = command { dtmf.withValue { $0.append(digit) } } },
+            command: { command in
+                if case .dtmf(let digit) = command {
+                    dtmf.withValue { $0.append(digit) }
+                }
+            },
             sendSMS: { _, _ in .init(success: false) },
             selfTest: { AsyncStream { $0.finish() } },
             pairing: { AsyncStream { $0.finish() } },
@@ -4128,7 +4142,8 @@ private func presentedSheet(_ presenter: UIViewController, other: UIViewControll
     -> UINavigationController?
 {
     try await eventually {
-        guard let sheet = presenter.presentedViewController as? UINavigationController, sheet !== other,
+        guard let sheet = presenter.presentedViewController as? UINavigationController,
+            sheet !== other,
             !sheet.isBeingPresented
         else { return nil }
         return sheet
@@ -4138,7 +4153,10 @@ private func presentedSheet(_ presenter: UIViewController, other: UIViewControll
 @MainActor
 private final class SpeculativeNavigationController: UINavigationController {
     var pendingStack: [UIViewController]?
-    override var topViewController: UIViewController? { pendingStack?.last ?? super.topViewController }
+
+    override var topViewController: UIViewController? {
+        pendingStack?.last ?? super.topViewController
+    }
 
     override var viewControllers: [UIViewController] {
         get { pendingStack ?? super.viewControllers }
@@ -4574,7 +4592,8 @@ struct UIKitAdversarialRegressionTests {
                 window.layoutIfNeeded()
                 guard
                     let thread = (root.tabs.selectedViewController as? UINavigationController)?.topViewController
-                        as? MessageThreadViewController, thread.viewIfLoaded?.window != nil
+                        as? MessageThreadViewController,
+                    thread.viewIfLoaded?.window != nil
                 else { return nil }
                 return thread
             }
@@ -4659,7 +4678,8 @@ struct UIKitAdversarialRegressionTests {
         withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.activeCall(.view(.keypadButtonTapped))) }
         return try await eventually {
             guard let nav = callWindow.rootViewController?.presentedViewController as? UINavigationController,
-                nav !== previous, !nav.isBeingPresented
+                nav !== previous,
+                !nav.isBeingPresented
             else { return nil }
             return nav
         }

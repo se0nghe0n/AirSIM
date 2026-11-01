@@ -245,7 +245,9 @@ struct SMSStatus: Codable, Sendable {
     }
 }
 
-struct RejectResponse: Codable, Sendable { let rejected: Bool }
+struct RejectResponse: Codable, Sendable {
+    let rejected: Bool
+}
 
 struct SMSSendResult: Codable, Sendable {
     let sent: Bool
@@ -257,7 +259,9 @@ struct SMSSendResult: Codable, Sendable {
     }
 }
 
-struct RelayErrorResponse: Decodable, Sendable { let error: String }
+struct RelayErrorResponse: Decodable, Sendable {
+    let error: String
+}
 
 // MARK: - Module
 

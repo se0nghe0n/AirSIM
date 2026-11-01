@@ -94,10 +94,13 @@ struct IncomingVoIPCall: Equatable, Sendable {
         generation: UInt64 = 1,
         mediaTransport: CloudMediaTransport = .webRTC
     ) throws {
-        guard !outgoingCallID.isEmpty, secret.count >= 24,
+        guard !outgoingCallID.isEmpty,
+            secret.count >= 24,
             var components = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
-            components.scheme?.lowercased() == "wss", components.host?.isEmpty == false,
-            components.user == nil, components.password == nil
+            components.scheme?.lowercased() == "wss",
+            components.host?.isEmpty == false,
+            components.user == nil,
+            components.password == nil
         else {
             throw VoIPPushPayloadError.invalidCallUUID
         }
@@ -169,12 +172,14 @@ struct IncomingVoIPCall: Equatable, Sendable {
     }
 
     private static func authenticatedMediaURL(from userInfo: [AnyHashable: Any]) -> URL? {
-        guard let secret = nonEmpty(userInfo["call_secret"] as? String), secret.count >= 24,
+        guard let secret = nonEmpty(userInfo["call_secret"] as? String),
+            secret.count >= 24,
             let rawURL = nonEmpty(userInfo["media_url"] as? String),
             var components = URLComponents(string: rawURL),
             components.scheme?.lowercased() == "wss",
             components.host?.isEmpty == false,
-            components.user == nil, components.password == nil
+            components.user == nil,
+            components.password == nil
         else { return nil }
         components.queryItems = [
             URLQueryItem(name: "role", value: "iphone")
@@ -557,7 +562,8 @@ enum RelayEndpoint {
         guard var components = URLComponents(string: base.trimmingCharacters(in: .whitespacesAndNewlines)),
             components.scheme?.lowercased() == "https",
             components.host?.isEmpty == false,
-            components.user == nil, components.password == nil
+            components.user == nil,
+            components.password == nil
         else { return nil }
         let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let requestedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -853,7 +859,8 @@ final class VoIPPushController: NSObject {
     }
 
     func setLiveActivityEnabled(_ enabled: Bool) {
-        if enabled, #available(iOS 17.2, *),
+        if enabled,
+            #available(iOS 17.2, *),
             let token = Activity<AirSIMCallActivityAttributes>.pushToStartToken
         {
             UserDefaults.standard.set(
@@ -1165,7 +1172,9 @@ final class VoIPPushController: NSObject {
         var missing: [String] = []
         if !CloudModePreference.isEnabled() { missing.append("Cloud mode is not enabled") }
         if !readiness.relayURLReady { missing.append("Invalid Relay HTTPS URL") }
-        if !readiness.deviceIdentityReady { missing.append("Device identity has not been generated") }
+        if !readiness.deviceIdentityReady {
+            missing.append("Device identity has not been generated")
+        }
         if !readiness.voIPTokenReady { missing.append("PushKit token is not ready") }
         if !readiness.alertTokenReady { missing.append("Notification token is not ready") }
         guard missing.isEmpty, let registration = currentRegistration() else {
@@ -1318,7 +1327,8 @@ final class VoIPPushController: NSObject {
             message: nil,
             mediaTransport: mediaTransport
         )
-        guard enqueue.accepted, let call = enqueue.call,
+        guard enqueue.accepted,
+            let call = enqueue.call,
             let uuid = UUID(uuidString: call.callUUID),
             let mediaURL = URL(string: call.mediaURL)
         else {
@@ -1513,7 +1523,9 @@ final class VoIPPushController: NSObject {
         guard http.statusCode == 200 else {
             throw CloudAgentStatusError.relayFailure(statusCode: http.statusCode, data: data)
         }
-        struct ResponseBody: Decodable { let registered: Bool }
+        struct ResponseBody: Decodable {
+            let registered: Bool
+        }
         guard let result = try? JSONDecoder().decode(ResponseBody.self, from: data),
             result.registered
         else { throw CloudAgentStatusError.invalidResponse }

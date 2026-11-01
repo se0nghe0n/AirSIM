@@ -297,7 +297,9 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             replyHandler(["ok": false, "error": "Enter a valid phone number"])
             return
         }
-        guard pendingWatchDialID == nil, watchOutgoingCall == nil, localWatchCall == nil,
+        guard pendingWatchDialID == nil,
+            watchOutgoingCall == nil,
+            localWatchCall == nil,
             CallKitController.shared.currentSystemCallUUID == nil
         else {
             replyHandler(["ok": false, "error": "A call or dial request is already in progress"])
@@ -313,7 +315,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             cancelledWatchDialIDs.remove(requestID)
         }
         do {
-            if let model, let (api, webRTCRoute) = await model.readyVoWLANRoute(),
+            if let model,
+                let (api, webRTCRoute) = await model.readyVoWLANRoute(),
                 case .vowlan = webRTCRoute
             {
                 guard !cancelledWatchDialIDs.contains(requestID) else {
@@ -436,7 +439,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
     private func waitForOutgoingCall(api: AirSIMAPI, number: String) async -> CallRecord? {
         for _ in 0..<12 {
             if let call = try? await api.callStatus().active,
-                call.direction == "outgoing", call.number == nil || call.number == number
+                call.direction == "outgoing",
+                call.number == nil || call.number == number
             {
                 return call
             }
@@ -450,9 +454,11 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
-        guard let callID = message["call_id"] as? String, !callID.isEmpty,
+        guard let callID = message["call_id"] as? String,
+            !callID.isEmpty,
             let uuid = (message["call_uuid"] as? String).flatMap(UUID.init(uuidString:)),
-            localWatchCall == nil, let model,
+            localWatchCall == nil,
+            let model,
             let (api, webRTCRoute) = await model.readyVoWLANRoute(),
             case .vowlan = webRTCRoute
         else {
@@ -531,8 +537,10 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         _ message: WatchMessage,
         replyHandler: @escaping ([String: Any]) -> Void
     ) async {
-        guard let callID = message["call_id"] as? String, !callID.isEmpty,
-            let model, let (api, _) = await model.readyVoWLANRoute()
+        guard let callID = message["call_id"] as? String,
+            !callID.isEmpty,
+            let model,
+            let (api, _) = await model.readyVoWLANRoute()
         else {
             replyHandler(["ok": false, "error": "VoWLAN is not ready"])
             return
@@ -697,7 +705,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         guard message["event"] as? String == "watch_voip_registration",
             let token = message["watch_voip_token"] as? String,
             let bundleID = message["watch_bundle_id"] as? String,
-            !token.isEmpty, !bundleID.isEmpty
+            !token.isEmpty,
+            !bundleID.isEmpty
         else { return false }
         VoIPPushController.shared.storeWatchVoIPRegistration(token: token, bundleID: bundleID)
         #if DEBUG
@@ -713,7 +722,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
         else { return false }
         let callID = message["call_id"] as? String
         let uuid = (message["call_uuid"] as? String).flatMap(UUID.init(uuidString:))
-        if let active = watchOutgoingCall, active.call.callID == callID,
+        if let active = watchOutgoingCall,
+            active.call.callID == callID,
             phase == WatchCallPhase.ended.rawValue
         {
             let call = active.call

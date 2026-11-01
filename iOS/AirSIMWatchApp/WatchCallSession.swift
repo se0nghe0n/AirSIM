@@ -100,7 +100,8 @@ final class WatchCallSession: NSObject {
             errorMessage = "Enter a valid phone number"
             return
         }
-        guard voIPCall == nil, call.phase == .idle || call.phase == .ended,
+        guard voIPCall == nil,
+            call.phase == .idle || call.phase == .ended,
             !isDialing
         else {
             errorMessage = "End the current call first"
@@ -247,7 +248,8 @@ final class WatchCallSession: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let age = Date().timeIntervalSince(payload.updatedAt)
-            if payload.phase == .incoming, self.voIPCall == nil,
+            if payload.phase == .incoming,
+                self.voIPCall == nil,
                 !self.endedCallIDs.contains(payload.callID),
                 (-5...45).contains(age),
                 let uuid = payload.callUUID,
@@ -493,7 +495,9 @@ extension WatchCallSession: @preconcurrency CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
-        guard let voIPCall, voIPCall.isOutgoing, voIPCall.uuid == action.callUUID,
+        guard let voIPCall,
+            voIPCall.isOutgoing,
+            voIPCall.uuid == action.callUUID,
             voIPCall.media == .iphoneWebRTC
         else {
             action.fail()
@@ -537,7 +541,8 @@ extension WatchCallSession: @preconcurrency CXProviderDelegate {
                         self.answered = true
                         self.answering = false
                         action.fulfill()
-                    } else if voIPCall.media == .iphoneWebRTC, !voIPCall.endsOnVoWLAN,
+                    } else if voIPCall.media == .iphoneWebRTC,
+                        !voIPCall.endsOnVoWLAN,
                         self.cloudMediaAllowed
                     {
                         self.answerOnIPhone(voIPCall, action: action)
@@ -596,8 +601,10 @@ extension WatchCallSession: @preconcurrency CXProviderDelegate {
     }
 
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
-        guard let current = voIPCall, current.uuid == action.callUUID,
-            let connectivity, connectivity.isReachable
+        guard let current = voIPCall,
+            current.uuid == action.callUUID,
+            let connectivity,
+            connectivity.isReachable
         else {
             action.fail()
             return

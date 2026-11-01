@@ -106,7 +106,8 @@ enum CallKitEndDecision {
         systemCallAnswered: Bool,
         activeIncomingRinging: Bool
     ) -> Route {
-        if hasIncomingPush, !systemCallAnswered,
+        if hasIncomingPush,
+            !systemCallAnswered,
             transport != .vowlan
         {
             return .cloudReject
@@ -397,7 +398,10 @@ final class AppModel {
             )
         }
 
-        if values.isEmpty, let cloudStatus, cloudStatusIsFresh, cloudStatus.cloudOnline,
+        if values.isEmpty,
+            let cloudStatus,
+            cloudStatusIsFresh,
+            cloudStatus.cloudOnline,
             cloudStatus.activeAgentID.map({ PairedAndroidDeviceStore.permits($0) }) != false
         {
             let fallbackID = cloudStatus.activeAgentID ?? "cloud-agent"
@@ -561,7 +565,9 @@ final class AppModel {
 
     private var boundCloudReady: Bool {
         guard CloudModePreference.isEnabled() else { return false }
-        if let active = cloudAgentStatus?.activeAgentID, !PairedAndroidDeviceStore.permits(active) { return false }
+        if let active = cloudAgentStatus?.activeAgentID, !PairedAndroidDeviceStore.permits(active) {
+            return false
+        }
         guard let boundAgentID else {
             return cloudAgentStatus?.cloudOnline == true
                 || (!PairedAndroidDeviceStore.hasForgottenDevices() && connectionSummary == .cloudOnly)
@@ -589,7 +595,8 @@ final class AppModel {
         let generation = cloudStatusRefreshGeneration
         cloudStatusRefreshTask = Task { [weak self] in
             let status = try? await VoIPPushController.shared.fetchCloudAgentStatus()
-            guard let self, !Task.isCancelled,
+            guard let self,
+                !Task.isCancelled,
                 generation == self.cloudStatusRefreshGeneration
             else { return }
             self.cloudAgentDirectory = status
@@ -995,8 +1002,10 @@ final class AppModel {
             let callSyncSnapshot = callLifecycleSnapshot
             let callSyncAttempt = outgoingAttemptID
             await VoIPPushController.shared.syncRegistration(with: result.api)
-            guard !Task.isCancelled, generation == pollingGeneration,
-                callLifecycleSnapshot == callSyncSnapshot, outgoingAttemptID == callSyncAttempt
+            guard !Task.isCancelled,
+                generation == pollingGeneration,
+                callLifecycleSnapshot == callSyncSnapshot,
+                outgoingAttemptID == callSyncAttempt
             else { return }
             if AppRefreshPolicy.shouldRefreshSupplementalState(appIsActive: appIsActive) {
                 scheduleModuleMetadataRefresh(generation: generation, api: result.api)
@@ -1077,7 +1086,8 @@ final class AppModel {
                 backgroundStandby.resumeAfterCall()
                 isMuted = false
             }
-            if appIsActive, status.active?.state == "active",
+            if appIsActive,
+                status.active?.state == "active",
                 Date() >= nextAudioDiagnosticRefresh,
                 let audioConfig = try? await AgentPollingRouteSelector.select(
                     primary: result.api,
@@ -1199,7 +1209,9 @@ final class AppModel {
             )
             if cloudStatus?.cloudOnline == true {
                 isReconnecting = true
-                if let version = cloudStatus?.agentVersion, !version.isEmpty { agentVersion = version }
+                if let version = cloudStatus?.agentVersion, !version.isEmpty {
+                    agentVersion = version
+                }
                 connectionMessage = cloudConnectionMessage(for: cloudStatus!)
                 // Unreachable local control does not mean the module is offline. Keep Dynamic Island standby while the
                 // Relay heartbeat is fresh;
@@ -1443,7 +1455,8 @@ final class AppModel {
         }
         if callKit.managesCurrentCall {
             // A background intent can initialize this model after PushKit reported the call.
-            if let push = callKit.currentIncomingPush, push.callID == callID,
+            if let push = callKit.currentIncomingPush,
+                push.callID == callID,
                 callLifecycleSnapshot.callID == nil
             {
                 callKitDidReceiveIncoming(push)
@@ -1684,8 +1697,10 @@ final class AppModel {
         let next = Task { () -> (any Error)? in
             _ = await previous?.value
             let current = callLifecycleSnapshot
-            guard current.callID == call.callID, current.callUUID == call.callUUID,
-                current.state.representsCall, current.state != .ending
+            guard current.callID == call.callID,
+                current.callUUID == call.callUUID,
+                current.state.representsCall,
+                current.state != .ending
             else { return nil }
             do {
                 try await deliver()
@@ -2166,7 +2181,8 @@ final class AppModel {
             backgroundStandby.resumeAfterCall()
             return
         }
-        guard !Task.isCancelled, callLifecycleSnapshot.callUUID == vowlanCallUUID,
+        guard !Task.isCancelled,
+            callLifecycleSnapshot.callUUID == vowlanCallUUID,
             callLifecycleSnapshot.generation == vowlanGeneration,
             callLifecycleSnapshot.state == .active
         else {
@@ -2186,7 +2202,8 @@ final class AppModel {
     /// A Watch is only a controller. Start the same iPhone media path used by
     /// in-app calls instead of merely registering an Android audio host.
     func startWatchLocalAudio(call: CallRecord, api: AirSIMAPI) async {
-        guard let webRTCRoute = Self.webRTCRoute(for: api.route), call.state == "active",
+        guard let webRTCRoute = Self.webRTCRoute(for: api.route),
+            call.state == "active",
             !callLifecycleStore.suppressesPresentation(callID: call.id)
         else { return }
         guard applyAgentCallRecord(call) || callLifecycleSnapshot.callID == call.id else { return }
@@ -2212,7 +2229,9 @@ final class AppModel {
         // PushKit may resume in the background before the Bonjour browser. If the latest successful poll came from
         // VoWLAN,
         // reuse that authenticated endpoint; never mistake the generic isOnline flag for VoWLAN.
-        guard isOnline, !isReconnecting, let cached = lastSuccessfulLocalAPI,
+        guard isOnline,
+            !isReconnecting,
+            let cached = lastSuccessfulLocalAPI,
             case let .vowlan(endpoint, credential) = cached.route,
             permitsVoWLANEndpoint(endpoint)
         else { return nil }
@@ -2606,7 +2625,8 @@ extension AppModel: CallKitActionHandling {
                 }
                 callKit.bindOutgoingBackendCall(outgoing.callID)
                 try await IPhoneCloudCallSession.shared.answer(outgoing)
-                guard outgoingAttemptID == attempt, !Task.isCancelled,
+                guard outgoingAttemptID == attempt,
+                    !Task.isCancelled,
                     !callLifecycleStore.suppressesPresentation(callID: outgoing.callID)
                 else {
                     if IPhoneCloudCallSession.shared.call?.uuid == outgoing.uuid {

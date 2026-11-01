@@ -50,7 +50,9 @@ final class SamsungPairingBrowser {
                 .sorted { $0.expiresAt < $1.expiresAt }
             Task { @MainActor in
                 self?.services = parsed
-                if !parsed.isEmpty { self?.stateText = "Found \(parsed.count) devices available to pair" }
+                if !parsed.isEmpty {
+                    self?.stateText = "Found \(parsed.count) devices available to pair"
+                }
             }
         }
         browser = active

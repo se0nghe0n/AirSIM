@@ -121,7 +121,9 @@ final class MessagesViewController: PhoneTableController, UINavigationController
         // A pop exposes the destination stack before its transition completes.
         // Reapplying the same route here would replace the departing controller.
         guard renderedThreadID != sender else { return }
-        if let current = nav.topViewController as? MessageThreadViewController, current.sender == sender { return }
+        if let current = nav.topViewController as? MessageThreadViewController, current.sender == sender {
+            return
+        }
         if let transition = nav.transitionCoordinator {
             transition.animate(alongsideTransition: nil) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.showConversationIfNeeded(sender) }

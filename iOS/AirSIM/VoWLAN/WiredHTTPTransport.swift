@@ -214,7 +214,8 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         for (name, value) in headers.sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
             guard !name.isEmpty,
                 name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_".contains($0)) }),
-                !value.contains("\r"), !value.contains("\n")
+                !value.contains("\r"),
+                !value.contains("\n")
             else {
                 throw WiredHTTPError.invalidRequest
             }

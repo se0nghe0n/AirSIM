@@ -202,7 +202,8 @@ struct WatchVoIPCall: Equatable, Sendable {
         var endsOnVoWLAN = false
         if userInfo["media_route"] as? String == "vowlan" {
             endsOnVoWLAN = true
-            guard userInfo["pcm_host"] == nil, userInfo["pcm_port"] == nil,
+            guard userInfo["pcm_host"] == nil,
+                userInfo["pcm_port"] == nil,
                 userInfo["pcm_secret"] == nil,
                 WatchCloudAudioPlan.accepts(transport: userInfo["media_transport"] as? String)
             else {
@@ -308,7 +309,8 @@ enum WatchDialNumber {
     static func validated(_ input: String) -> String? {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowed = CharacterSet(charactersIn: "+*#0123456789")
-        guard !value.isEmpty, value.count <= 82,
+        guard !value.isEmpty,
+            value.count <= 82,
             value.unicodeScalars.allSatisfy({ allowed.contains($0) })
         else { return nil }
         return value

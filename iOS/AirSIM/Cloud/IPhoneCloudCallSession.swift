@@ -587,10 +587,12 @@ final class IPhoneCloudCallSession {
                     )
                 }
                 // A queued callback can outlive hangup or even the next call.
-                guard let call = session.call, session.media.isCurrentConnection(connection),
+                guard let call = session.call,
+                    session.media.isCurrentConnection(connection),
                     control.matches(callID: call.callID, uuid: call.uuid, generation: call.generation)
                 else { return }
-                if status == "peer_connected", session.usesWebRTC,
+                if status == "peer_connected",
+                    session.usesWebRTC,
                     CloudWebRTCReadiness.shouldRenegotiatePeer(role: control.role)
                 {
                     session.restartWebRTCNegotiation()
@@ -955,7 +957,9 @@ final class IPhoneCloudCallSession {
 
     func setMuted(_ muted: Bool) { media.setMuted(muted) }
 
-    var recordingSource: CallRecordingSource? { call.map { .init(callUUID: $0.uuid) } }
+    var recordingSource: CallRecordingSource? {
+        call.map { .init(callUUID: $0.uuid) }
+    }
 
     func recordAudioRoute(_ route: String) {
         guard call != nil else { return }
@@ -1027,15 +1031,21 @@ final class IPhoneCloudCallSession {
     /// Resend once, shortly, after an explicit "not yet". Only inside the current confirmation
     /// window, so the overall answer budget and its final failure state are unchanged.
     private func scheduleQuickAnswerReplay() {
-        guard answered, !answerAcknowledged, answerRetryTask != nil,
-            quickAnswerReplayTask == nil, let uuid = call?.uuid
+        guard answered,
+            !answerAcknowledged,
+            answerRetryTask != nil,
+            quickAnswerReplayTask == nil,
+            let uuid = call?.uuid
         else { return }
         quickAnswerReplayTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(CloudCallAnswerPolicy.quickReplayDelay))
             guard let self, !Task.isCancelled else { return }
             quickAnswerReplayTask = nil
-            guard answered, !answerAcknowledged, answerRetryTask != nil,
-                let call, call.uuid == uuid
+            guard answered,
+                !answerAcknowledged,
+                answerRetryTask != nil,
+                let call,
+                call.uuid == uuid
             else { return }
             media.sendControl("answer", call: call)
         }
@@ -1092,8 +1102,12 @@ final class IPhoneCloudCallSession {
     }
 
     private func startWebRTCIfReady() {
-        guard usesWebRTC, audioStartupPermitted, answerAcknowledged,
-            canAttemptAudio, !media.isAudioRunning, webRTCStartTask == nil,
+        guard usesWebRTC,
+            audioStartupPermitted,
+            answerAcknowledged,
+            canAttemptAudio,
+            !media.isAudioRunning,
+            webRTCStartTask == nil,
             !CallKitController.shared.managesCurrentCall || CallKitController.shared.audioSessionIsActive,
             let call
         else { return }
@@ -1103,14 +1117,19 @@ final class IPhoneCloudCallSession {
         if !audioState.isRetrying { audioState = .starting }
         webRTCStartTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { if webRTCStartID == id { webRTCStartTask = nil } }
+            defer {
+                if webRTCStartID == id { webRTCStartTask = nil }
+            }
             do {
                 let permission = await AVAudioApplication.requestRecordPermission()
                 guard permission else { throw IPhoneCloudCallError.microphonePermissionDenied }
                 let iceWaitStarted = ProcessInfo.processInfo.systemUptime
                 let config = try await icePreparation.configuration(for: call)
-                guard !Task.isCancelled, self.call?.uuid == call.uuid,
-                    webRTCStartID == id, audioStartupPermitted, answerAcknowledged,
+                guard !Task.isCancelled,
+                    self.call?.uuid == call.uuid,
+                    webRTCStartID == id,
+                    audioStartupPermitted,
+                    answerAcknowledged,
                     !CallKitController.shared.managesCurrentCall || CallKitController.shared.audioSessionIsActive
                 else { return }
                 traceAudio(
@@ -1194,7 +1213,9 @@ final class IPhoneCloudCallSession {
     }
 
     private func recoverConnectionIfNeeded() {
-        guard reconnectTask == nil, let call, answered,
+        guard reconnectTask == nil,
+            let call,
+            answered,
             let url = call.authenticatedMediaURL,
             let secret = call.mediaSecret
         else { return }
@@ -1208,7 +1229,9 @@ final class IPhoneCloudCallSession {
         reconnectID = id
         reconnectTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { if reconnectID == id { reconnectTask = nil } }
+            defer {
+                if reconnectID == id { reconnectTask = nil }
+            }
             let delays = CloudCallRetryPolicy.reconnectDelays
             await CloudCallRecoveryCoordinator.run(
                 delays: delays,
@@ -1260,7 +1283,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var networkSession: URLSession?
     private var connectionID = UUID()
 
-    func isCurrentConnection(_ id: UUID) -> Bool { queue.sync { connectionID == id } }
+    func isCurrentConnection(_ id: UUID) -> Bool {
+        queue.sync { connectionID == id }
+    }
 
     private var muted = false
     private var stopped = true
@@ -1270,7 +1295,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         queue.sync { webSocket != nil && !stopped }
     }
 
-    var isAudioRunning: Bool { queue.sync { webRTCPeer != nil } }
+    var isAudioRunning: Bool {
+        queue.sync { webRTCPeer != nil }
+    }
 
     var audioRouteDescription: String {
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
@@ -1317,9 +1344,13 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 servers: servers,
                 queue: queue,
                 signal: { [weak self, weak socket] signal in
-                    guard let self, let socket, self.webSocket === socket, self.connectionID == owner,
+                    guard let self,
+                        let socket,
+                        self.webSocket === socket,
+                        self.connectionID == owner,
                         self.webRTCPeer?.sessionID == signal.sessionID,
-                        let data = try? JSONEncoder().encode(signal), let text = String(data: data, encoding: .utf8)
+                        let data = try? JSONEncoder().encode(signal),
+                        let text = String(data: data, encoding: .utf8)
                     else { return }
                     socket.send(.string(text)) { [weak self] error in
                         guard error != nil else { return }
@@ -1393,7 +1424,11 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                             continuation.resume(throwing: IPhoneCloudCallError.connectionClosed)
                             return
                         }
-                        if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
                     }
                 }
             }
@@ -1402,7 +1437,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
 
     func sendControl(_ action: String, call: IncomingVoIPCall) {
         queue.async { [weak self] in
-            guard let self, let socket = webSocket,
+            guard let self,
+                let socket = webSocket,
                 let (text, envelope) = controlText(action: action, call: call)
             else { return }
             traceControl(envelope, phase: "sending")
@@ -1489,7 +1525,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    func stopAudio() { queue.sync { stopAudioLocked() } }
+    func stopAudio() {
+        queue.sync { stopAudioLocked() }
+    }
 
     private func stopAudioLocked() {
         webRTCPeer?.close()
@@ -1541,7 +1579,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         if let data = text.data(using: .utf8),
             let signal = try? JSONDecoder().decode(CloudWebRTCSignal.self, from: data)
         {
-            guard webRTCMode, let call = webRTCCall, let peer = webRTCPeer,
+            guard webRTCMode,
+                let call = webRTCCall,
+                let peer = webRTCPeer,
                 signal.matches(call: call, sessionID: peer.sessionID)
             else { return }
             peer.receive(signal)

@@ -21,7 +21,9 @@ enum WebRTCCallAudioSession {
 
 /// Shared v1 wire format. SDP and ICE are deliberately never included in diagnostics.
 struct CloudWebRTCSignal: Codable, Equatable, Sendable {
-    enum Action: String, Codable, Sendable { case offer = "webrtc_offer", answer = "webrtc_answer", ice = "webrtc_ice" }
+    enum Action: String, Codable, Sendable {
+        case offer = "webrtc_offer", answer = "webrtc_answer", ice = "webrtc_ice"
+    }
 
     struct Candidate: Codable, Equatable, Sendable {
         let candidate: String
@@ -171,7 +173,9 @@ struct CloudICEConfiguration: Decodable, Sendable {
     let iceServers: [CloudICEServer]
     let ttl: Int
 
-    enum CodingKeys: String, CodingKey { case iceServers = "ice_servers", ttl }
+    enum CodingKeys: String, CodingKey {
+        case iceServers = "ice_servers", ttl
+    }
 
     static func request(for call: IncomingVoIPCall) throws -> URLRequest {
         guard let mediaURL = call.authenticatedMediaURL,
@@ -335,7 +339,9 @@ struct CloudWebRTCStatistics {
     mutating func fields(for records: [String: Record], at time: TimeInterval) -> [String: String] {
         var fields: [String: String] = [:]
         func audio(_ record: Record) -> Bool {
-            if let kind = record.values["kind"] ?? record.values["mediaType"] { return kind == "audio" }
+            if let kind = record.values["kind"] ?? record.values["mediaType"] {
+                return kind == "audio"
+            }
             guard let id = record.values["codecId"] else { return false }
             return records[id]?.values["mimeType"]?.lowercased().hasPrefix("audio/") == true
         }
@@ -372,19 +378,24 @@ struct CloudWebRTCStatistics {
             transportIDs.isEmpty
             ? records.filter { $0.value.type == "transport" }.map(\.value)
             : transportIDs.compactMap { records[$0] }.filter { $0.type == "transport" }
-        if transports.count == 1, let id = transports.first?.values["selectedCandidatePairId"],
-            let pair = records[id], pair.type == "candidate-pair", pair.values["state"] == "succeeded"
+        if transports.count == 1,
+            let id = transports.first?.values["selectedCandidatePairId"],
+            let pair = records[id],
+            pair.type == "candidate-pair",
+            pair.values["state"] == "succeeded"
         {
             copy(pair, prefix: "candidate-pair", keys: ["currentRoundTripTime", "availableOutgoingBitrate"])
             if let rtt = number(pair.values["currentRoundTripTime"]), rtt >= 0 {
                 fields["path_rtt_ms"] = formatted(rtt * 1_000)
             }
-            if let id = pair.values["localCandidateId"], let candidate = records[id],
+            if let id = pair.values["localCandidateId"],
+                let candidate = records[id],
                 candidate.type == "local-candidate"
             {
                 copy(candidate, prefix: "local-candidate", keys: ["candidateType", "protocol"])
             }
-            if let id = pair.values["remoteCandidateId"], let candidate = records[id],
+            if let id = pair.values["remoteCandidateId"],
+                let candidate = records[id],
                 candidate.type == "remote-candidate"
             {
                 copy(candidate, prefix: "remote-candidate", keys: ["candidateType", "protocol"])
@@ -413,7 +424,9 @@ struct CloudWebRTCStatistics {
         // packetsLost may fall when a late packet corrects the loss estimate.
         // The other cumulative counters must not run backwards.
         for key in keys where key != "packetsLost" {
-            if let old = previous.counters[key], let new = counters[key], new < old { return fields }
+            if let old = previous.counters[key], let new = counters[key], new < old {
+                return fields
+            }
         }
         func delta(_ key: String) -> Double? {
             guard let old = previous.counters[key], let new = counters[key] else { return nil }
@@ -601,8 +614,11 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     }
 
     func receive(_ message: CloudWebRTCSignal, answering: Bool = false) {
-        guard message.isValid, message.callUUID == callUUID, message.generation == generation,
-            message.sessionID == sessionID, let peer
+        guard message.isValid,
+            message.callUUID == callUUID,
+            message.generation == generation,
+            message.sessionID == sessionID,
+            let peer
         else { return }
         switch message.action {
         case .answer, .offer:
@@ -740,8 +756,13 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     }
 
     private func publishHostLocal() {
-        guard hostOnly, hostLocalReady, hostGatheringComplete, !hostLocalSent,
-            let action = hostLocalAction, let sdp = peer?.localDescription?.sdp, !sdp.isEmpty
+        guard hostOnly,
+            hostLocalReady,
+            hostGatheringComplete,
+            !hostLocalSent,
+            let action = hostLocalAction,
+            let sdp = peer?.localDescription?.sdp,
+            !sdp.isEmpty
         else { return }
         hostLocalSent = true
         signal(.init(action: action, callUUID: callUUID, generation: generation, sessionID: sessionID, sdp: sdp))

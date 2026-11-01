@@ -187,8 +187,10 @@ final class CallKitController: NSObject {
     }
 
     func reportCurrentOutgoingConnected() {
-        guard currentDirection == "outgoing", let uuid = currentUUID,
-            currentState != "active", systemCallReported
+        guard currentDirection == "outgoing",
+            let uuid = currentUUID,
+            currentState != "active",
+            systemCallReported
         else { return }
         currentState = "active"
         provider.reportOutgoingCall(with: uuid, connectedAt: Date())
@@ -268,7 +270,9 @@ final class CallKitController: NSObject {
 
     /// Cloud calls do not pass through the local status poll that normally binds this ID.
     func bindOutgoingBackendCall(_ callID: String) {
-        guard !callID.isEmpty, currentDirection == "outgoing", currentUUID != nil,
+        guard !callID.isEmpty,
+            currentDirection == "outgoing",
+            currentUUID != nil,
             currentBackendID == nil || currentBackendID == callID
         else { return }
         currentBackendID = callID
@@ -605,7 +609,9 @@ final class CallKitController: NSObject {
         outgoingStartInFlight = true
         let operationID = UUID()
         outgoingStartID = operationID
-        defer { if outgoingStartID == operationID { outgoingStartInFlight = false } }
+        defer {
+            if outgoingStartID == operationID { outgoingStartInFlight = false }
+        }
         do {
             guard let handler else { throw CallKitBridgeError.handlerUnavailable }
             // Besides transactions submitted in-app, the system may hand outgoing calls directly to the provider

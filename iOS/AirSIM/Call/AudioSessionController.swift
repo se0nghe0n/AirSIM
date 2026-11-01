@@ -33,7 +33,9 @@ struct VoWLANWebRTCSession: Encodable, Equatable, Sendable {
 }
 
 struct VoWLANWebRTCStatus: Decodable, Equatable, Sendable {
-    enum State: String, Decodable, Sendable { case preparing, ready, failed, closed }
+    enum State: String, Decodable, Sendable {
+        case preparing, ready, failed, closed
+    }
 
     let version: Int
     let callUUID: UUID
@@ -226,10 +228,13 @@ final class AudioSessionController {
                         self.signalingTask = Task { @MainActor [weak self] in
                             do {
                                 let answer = try await api.exchangeVoWLANWebRTC(signal)
-                                guard let self, !Task.isCancelled, self.localSession == identity,
+                                guard let self,
+                                    !Task.isCancelled,
+                                    self.localSession == identity,
                                     let peer = self.vowlanPeer
                                 else { return }
-                                guard answer.isValid, answer.action == .answer,
+                                guard answer.isValid,
+                                    answer.action == .answer,
                                     answer.callUUID == identity.callUUID,
                                     answer.generation == identity.generation,
                                     answer.sessionID == identity.sessionID
@@ -276,7 +281,9 @@ final class AudioSessionController {
         }
         startupTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(30))
-            guard !Task.isCancelled, let self, self.localSession == identity,
+            guard !Task.isCancelled,
+                let self,
+                self.localSession == identity,
                 !self.localReadiness.isReady
             else { return }
             self.failLocalSession(identity, message: "Android call audio was not ready within 30 seconds")
@@ -369,7 +376,9 @@ final class AudioSessionController {
         statusTask = nil
         startupTimeoutTask?.cancel()
         startupTimeoutTask = nil
-        if let peer = vowlanPeer { vowlanQueue.async { peer.close() } }
+        if let peer = vowlanPeer {
+            vowlanQueue.async { peer.close() }
+        }
         vowlanPeer = nil
         if let previous, let api {
             Task { try? await api.stopVoWLANWebRTC(previous) }
@@ -391,7 +400,9 @@ final class AudioSessionController {
     func setMuted(_ muted: Bool) {
         CallAudioRecorder.shared.setMuted(muted)
         self.muted = muted
-        if let peer = vowlanPeer { vowlanQueue.async { peer.setMuted(muted) } }
+        if let peer = vowlanPeer {
+            vowlanQueue.async { peer.setMuted(muted) }
+        }
     }
 
     /// Plays the incoming ringtone or outgoing ringback tone based on module call state, yielding immediately to native

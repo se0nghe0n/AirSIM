@@ -71,7 +71,11 @@ enum AndroidAgentBindingPreference {
 
     static func set(_ agentID: String?, defaults: UserDefaults = .standard) {
         let value = agentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if value.isEmpty { defaults.removeObject(forKey: key) } else { defaults.set(value, forKey: key) }
+        if value.isEmpty {
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(value, forKey: key)
+        }
     }
 }
 

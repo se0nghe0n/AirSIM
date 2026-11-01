@@ -124,7 +124,8 @@ final class LiveActivityController {
         if !enabled {
             let revision = visibilityRevision
             Task { @MainActor [weak self] in
-                guard let self, !self.enabled,
+                guard let self,
+                    !self.enabled,
                     self.visibilityRevision == revision
                 else { return }
                 await self.stop()

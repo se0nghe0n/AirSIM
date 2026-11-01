@@ -76,7 +76,9 @@ struct AirSIMAPI: Sendable {
     init(route: LocalAgentRoute = .unavailable) {
         self.route = route
         self.baseURL = route.baseURL
-        if let baseURL { precondition(Self.isAllowedLocalURL(baseURL), "Agent URL must be local HTTP") }
+        if let baseURL {
+            precondition(Self.isAllowedLocalURL(baseURL), "Agent URL must be local HTTP")
+        }
         self.transport = WiredHTTPTransport()
     }
 
@@ -172,8 +174,13 @@ struct AirSIMAPI: Sendable {
         try await post("api/calls/hangup", LocalCallControlBody(callID: callID))
     }
 
-    func sendDTMF(_ digit: String) async throws { try await post("api/calls/dtmf", ["digit": digit]) }
-    func setAudioMuted(_ muted: Bool) async throws { try await post("api/calls/audio/mute", ["muted": muted]) }
+    func sendDTMF(_ digit: String) async throws {
+        try await post("api/calls/dtmf", ["digit": digit])
+    }
+
+    func setAudioMuted(_ muted: Bool) async throws {
+        try await post("api/calls/audio/mute", ["muted": muted])
+    }
 
     func warmAudioHost() async throws {
         try await post("api/calls/audio/host/warmup", EmptyBody())
@@ -193,7 +200,9 @@ struct AirSIMAPI: Sendable {
         try await post("api/calls/webrtc/stop", session, timeout: 5)
     }
 
-    func audioHostConfig() async throws -> MaVoAudioHostConfig { try await get("api/calls/audio/host/config") }
+    func audioHostConfig() async throws -> MaVoAudioHostConfig {
+        try await get("api/calls/audio/host/config")
+    }
 
     func sendSMS(to phone: String, message: String) async throws -> SMSSendResult {
         try await postDecoded("api/sms/send", ["phone": phone, "message": message], timeout: 80)
@@ -343,5 +352,8 @@ enum APIError: LocalizedError {
     }
 }
 
-private struct APIErrorPayload: Decodable { let error: String? }
+private struct APIErrorPayload: Decodable {
+    let error: String?
+}
+
 private struct EmptyBody: Encodable {}

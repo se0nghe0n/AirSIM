@@ -189,7 +189,8 @@ struct VoWLANRecoveryGate {
     private var nextAttemptAt = Date.distantPast
 
     mutating func shouldAttempt(for availability: VoWLANAvailability, at now: Date) -> Bool {
-        guard availability != .unpaired, !availability.isOnlineForDisplay,
+        guard availability != .unpaired,
+            !availability.isOnlineForDisplay,
             now >= nextAttemptAt
         else { return false }
         nextAttemptAt = now.addingTimeInterval(10)
@@ -305,7 +306,9 @@ final class VoWLANController {
                 if let endpoint {
                     self.disappearanceTask?.cancel()
                     self.discoveredEndpoint = endpoint
-                    if self.availability.endpoint == endpoint, self.availability.isReady() { return }
+                    if self.availability.endpoint == endpoint, self.availability.isReady() {
+                        return
+                    }
                     self.availability = .discovered(endpoint, at: Date())
                     await AgentVerboseTraceRecorder.shared.recordEvent(
                         source: "ios",
@@ -369,7 +372,8 @@ final class VoWLANController {
         guard disappearanceTask == nil else { return }
         disappearanceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(8))
-            guard let self, !Task.isCancelled,
+            guard let self,
+                !Task.isCancelled,
                 self.browserLifecycle.accepts(generation)
             else { return }
             self.disappearanceTask = nil
@@ -434,7 +438,8 @@ final class VoWLANController {
                 defer { session.finishTasksAndInvalidate() }
                 return try await session.data(for: request)
             }
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+            guard let http = response as? HTTPURLResponse,
+                http.statusCode == 200,
                 let identity = try? JSONDecoder().decode(VoWLANHealthIdentity.self, from: data),
                 identity.ok
             else {
@@ -482,8 +487,10 @@ final class VoWLANController {
 
     private nonisolated static func parseAgent(_ result: NWBrowser.Result) -> VoWLANDiscoveredAgent? {
         guard case let .bonjour(record) = result.metadata,
-            record["v"] == "1", let host = record["host"],
-            let controlText = record["control_port"], let control = UInt16(controlText)
+            record["v"] == "1",
+            let host = record["host"],
+            let controlText = record["control_port"],
+            let control = UInt16(controlText)
         else { return nil }
         guard let endpoint = try? VoWLANEndpoint(host: host, controlPort: control) else {
             return nil

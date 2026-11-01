@@ -878,8 +878,12 @@ struct CloudWebRTCTests {
                         },
                         failure: { Issue.record("Offerer native negotiation failed") },
                         statistics: { fields in
-                            if fields["codec.mimeType"]?.lowercased() == "audio/opus" { negotiatedOpus = true }
-                            if fields["local-candidate.candidateType"] == "relay" { observedRelayCandidate = true }
+                            if fields["codec.mimeType"]?.lowercased() == "audio/opus" {
+                                negotiatedOpus = true
+                            }
+                            if fields["local-candidate.candidateType"] == "relay" {
+                                observedRelayCandidate = true
+                            }
                             if fields["local-candidate.candidateType"] != nil
                                 && fields["remote-candidate.candidateType"] != nil
                             {
@@ -975,12 +979,26 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
     let outputNumberOfChannels = 1
     let inputLatency = 0.0
     let outputLatency = 0.0
-    var isInitialized: Bool { lock.withLock { deviceDelegate != nil } }
+
+    var isInitialized: Bool {
+        lock.withLock { deviceDelegate != nil }
+    }
+
     let isPlayoutInitialized = true
     let isRecordingInitialized = true
-    var isPlaying: Bool { lock.withLock { playing } }
-    var isRecording: Bool { lock.withLock { recording } }
-    var receivedAudibleFrames: Int { lock.withLock { audibleFrames } }
+
+    var isPlaying: Bool {
+        lock.withLock { playing }
+    }
+
+    var isRecording: Bool {
+        lock.withLock { recording }
+    }
+
+    var receivedAudibleFrames: Int {
+        lock.withLock { audibleFrames }
+    }
+
     private let lock = NSLock()
     private var deviceDelegate: RTCAudioDeviceDelegate?
     private var playing = false
@@ -1065,7 +1083,9 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
                     )
                     _ = delegate.getPlayoutData(&flags, &timestamp, 0, 480, &list)
                 }
-                if samples.contains(where: { abs(Int($0)) > 100 }) { lock.withLock { audibleFrames += 1 } }
+                if samples.contains(where: { abs(Int($0)) > 100 }) {
+                    lock.withLock { audibleFrames += 1 }
+                }
             }
             Thread.sleep(forTimeInterval: 0.01)
         }

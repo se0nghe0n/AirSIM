@@ -194,7 +194,11 @@ final class LiveActivityCallActionDispatcher {
     func perform(_ action: AirSIMLiveActivityAction, callID: String) async throws {
         guard !callID.isEmpty else { throw LiveActivityCallError.staleCall }
         guard let handler else { throw LiveActivityCallError.unavailable }
-        do { try await handler(action, callID) } catch let error as LiveActivityCallError { throw error } catch {
+        do {
+            try await handler(action, callID)
+        } catch let error as LiveActivityCallError {
+            throw error
+        } catch {
             throw LiveActivityCallError.unavailable
         }
     }

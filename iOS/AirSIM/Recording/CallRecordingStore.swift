@@ -10,7 +10,9 @@ struct CallRecordingSource: Equatable, Sendable {
     let callUUID: UUID
 }
 
-enum CallRecordingChannel: Sendable { case local, remote }
+enum CallRecordingChannel: Sendable {
+    case local, remote
+}
 
 struct CallRecordingFile: Codable, Identifiable, Sendable, Equatable {
     let id: UUID
@@ -141,7 +143,9 @@ final class CallAudioRecorder: @unchecked Sendable {
         atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) {
         // Copy/resample synchronously; never retain the caller's buffer.
-        guard sampleRate.isFinite, sampleRate >= 8_000, sampleRate <= 192_000,
+        guard sampleRate.isFinite,
+            sampleRate >= 8_000,
+            sampleRate <= 192_000,
             samples.count <= 196_608
         else { return }
         let outputCount = Int(Double(samples.count) * 8_000 / sampleRate)
@@ -154,7 +158,9 @@ final class CallAudioRecorder: @unchecked Sendable {
                     let lower = Int(Double(index) * sampleRate / 8_000)
                     let upper = min(samples.count, max(lower + 1, Int(Double(index + 1) * sampleRate / 8_000)))
                     var sum: Float = 0
-                    for position in lower..<upper { sum += samples[position].isFinite ? samples[position] : 0 }
+                    for position in lower..<upper {
+                        sum += samples[position].isFinite ? samples[position] : 0
+                    }
                     let value = sum / Float(upper - lower) * (normalized ? 32_767 : 1)
                     output[index] = Int16(value.isFinite ? max(-32_768, min(32_767, value)) : 0).littleEndian
                 }
@@ -344,7 +350,9 @@ final class CallAudioRecorder: @unchecked Sendable {
                     active.remoteEnd = offset + count
                 }
             }
-            if let (id, error) = ingressError, id == active.admission.id { fail(active, error: error) }
+            if let (id, error) = ingressError, id == active.admission.id {
+                fail(active, error: error)
+            }
         } catch { fail(active, error: (error as? CallRecordingError) ?? .storage) }
     }
 
@@ -426,13 +434,17 @@ final class CallAudioRecorder: @unchecked Sendable {
         }
     }
 
-    func url(for file: CallRecordingFile) -> URL { directory.appendingPathComponent(file.id.uuidString + ".wav") }
+    func url(for file: CallRecordingFile) -> URL {
+        directory.appendingPathComponent(file.id.uuidString + ".wav")
+    }
 
     func delete(_ file: CallRecordingFile) async throws {
         try await perform {
             let url = self.url(for: file)
             let metadata = url.deletingPathExtension().appendingPathExtension("json")
-            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
             if FileManager.default.fileExists(atPath: metadata.path) {
                 try FileManager.default.removeItem(at: metadata)
             }
@@ -477,7 +489,9 @@ final class CallRecordingStore {
     private(set) var recordings: [CallRecordingFile] = []
 
     private(set) var errorMessage: String? {
-        didSet { if let errorMessage { onErrorMessage?(errorMessage) } }
+        didSet {
+            if let errorMessage { onErrorMessage?(errorMessage) }
+        }
     }
 
     /// AppModel forwards recording errors to its own global banner; the callback is part of the bridging pipeline and

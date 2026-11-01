@@ -20,7 +20,11 @@ struct DialFeature {
         var displayText: String { number.isEmpty ? "Enter number" : number }
         var showsPlaceholder: Bool { number.isEmpty }
         var contactName: String? { snapshot.contacts.contact(for: number)?.name }
-        var canCall: Bool { !number.isEmpty && !snapshot.isBusy && snapshot.canStartOutgoingCommand }
+
+        var canCall: Bool {
+            !number.isEmpty && !snapshot.isBusy && snapshot.canStartOutgoingCommand
+        }
+
         var callIsDimmed: Bool { number.isEmpty || !snapshot.canStartOutgoingCommand }
         var canDelete: Bool { !number.isEmpty }
         var playsInputClick: Bool { !snapshot.isMuted }

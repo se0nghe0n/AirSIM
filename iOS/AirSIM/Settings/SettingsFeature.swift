@@ -90,7 +90,11 @@ struct SettingsFeature {
 
         var devices: [PairedDeviceRow] { snapshot.pairedDeviceHistory.map(PairedDeviceRow.init) }
         var remoteCallsStatus: String { modeUsesCloud ? "Enabled" : "Disabled" }
-        var selfTestTitle: String { selfTestRunning ? "Run Cloud Self-Test · Running…" : "Run Cloud Self-Test" }
+
+        var selfTestTitle: String {
+            selfTestRunning ? "Run Cloud Self-Test · Running…" : "Run Cloud Self-Test"
+        }
+
         var canRunSelfTest: Bool { modeUsesCloud && !selfTestRunning }
 
         var selfTestFooter: String {
