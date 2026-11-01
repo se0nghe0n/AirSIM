@@ -116,7 +116,8 @@ final class ContactsViewController: PhoneTableController, UISearchResultsUpdatin
         configuration.imageToTextPadding = 24
         configuration.textToSecondaryTextPadding = 2
         configuration.textToButtonPadding = 28
-        let width = traitCollection.horizontalSizeClass == .compact
+        let width =
+            traitCollection.horizontalSizeClass == .compact
             ? Metrics.compactTextWidth
             : Metrics.regularTextWidth
         let margin = max(Metrics.minimumTextMargin, (view.bounds.width - width) / 2)

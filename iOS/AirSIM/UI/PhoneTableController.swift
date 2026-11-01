@@ -118,7 +118,8 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
         let next = updated.map { $0.rows.map(\.id) }
         // A hidden/new table may not have consumed its last reload yet. Resolve
         // UIKit's old counts before replacing the data source used by the batch.
-        let canApplyUpdates = table.window != nil && table.numberOfSections == previous.count
+        let canApplyUpdates =
+            table.window != nil && table.numberOfSections == previous.count
             && previous.indices.allSatisfy { table.numberOfRows(inSection: $0) == previous[$0].count }
         sections = updated
         apply(canApplyUpdates ? PhoneRowUpdate(from: previous, to: next) : .reload)
@@ -188,7 +189,8 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
         let row = sections[path.section].rows[path.row]
         let phoneCell = cell as? PhoneTableCell
         let unchangedBody = row.bodyViewProvider != nil && phoneCell?.bodyIdentity == row.bodyIdentity
-        let bodyView = unchangedBody
+        let bodyView =
+            unchangedBody
             ? phoneCell?.controlHost?.arrangedSubviews.last
             : row.bodyView ?? row.bodyViewProvider?()
         phoneCell?.bodyIdentity = row.bodyViewProvider == nil ? nil : row.bodyIdentity
@@ -265,7 +267,8 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
         var content = section.defaultContentConfiguration()
         content.text = text
         content.textProperties.color = .secondaryLabel
-        content.textProperties.font = header
+        content.textProperties.font =
+            header
             ? UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 17, weight: .semibold))
             : UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .systemFont(ofSize: 13, weight: .regular))
         content.textProperties.numberOfLines = 0
@@ -291,7 +294,8 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
     }
 
     private func layoutTable() {
-        let expansion = tableStyle == .insetGrouped && traitCollection.horizontalSizeClass == .compact
+        let expansion =
+            tableStyle == .insetGrouped && traitCollection.horizontalSizeClass == .compact
             ? Metrics.compactGroupExpansion
             : 0
         view.addPinnedSubview(table, insets: UIEdgeInsets(top: 0, left: -expansion, bottom: 0, right: -expansion))
@@ -316,7 +320,8 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "row")
+        let cell =
+            tableView.dequeueReusableCell(withIdentifier: "row")
             ?? PhoneTableCell(style: .subtitle, reuseIdentifier: "row")
         configure(cell, at: indexPath)
         return cell

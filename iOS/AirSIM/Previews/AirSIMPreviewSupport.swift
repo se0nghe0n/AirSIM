@@ -17,6 +17,7 @@ enum AirSIMPreviewEnvironment {
 enum AirSIMPreviewFixtures {
     static let date = Date(timeIntervalSince1970: 1_793_268_000)
     nonisolated static let phone = "+1 202 555 0100"
+
     static let contact = ContactStore.Contact(
         id: "preview-mina",
         name: "Mina Kim",
@@ -24,6 +25,7 @@ enum AirSIMPreviewFixtures {
         emails: ["mina@example.com"],
         photoData: nil
     )
+
     static let contacts = [
         contact,
         ContactStore.Contact(
@@ -34,6 +36,7 @@ enum AirSIMPreviewFixtures {
             photoData: nil
         ),
     ]
+
     static let agents = [
         AndroidAgentPresentation(
             id: "preview-samsung",
@@ -54,6 +57,7 @@ enum AirSIMPreviewFixtures {
             isCurrent: false
         ),
     ]
+
     static let messages = [
         SMSMessage(
             sender: phone,
@@ -80,6 +84,7 @@ enum AirSIMPreviewFixtures {
             direction: .incoming
         ),
     ]
+
     static let history = [
         CallRecord(
             id: "preview-recent-1",
@@ -115,6 +120,7 @@ enum AirSIMPreviewFixtures {
             missed: true
         ),
     ]
+
     static let recordings = [
         CallRecordingFile(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
@@ -133,14 +139,16 @@ enum AirSIMPreviewFixtures {
             bytes: 2_048_000
         ),
     ]
+
     static let pairingServices = [
         SamsungPairingService(
             endpoint: .service(name: "Samsung Galaxy", type: "_airsim-pair._tcp", domain: "local.", interface: nil),
             sessionID: "preview-pairing",
             serverPublicKey: Data(repeating: 0, count: 32),
             expiresAt: date.addingTimeInterval(600)
-        ),
+        )
     ]
+
     static var selfTestReport: CloudSelfTestReport {
         var report = CloudSelfTestReport.initial
         for index in report.steps.indices {

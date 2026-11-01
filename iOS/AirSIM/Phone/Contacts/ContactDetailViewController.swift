@@ -69,7 +69,12 @@ final class ContactDetailViewController: PhoneTableController {
         return PhoneRow(
             id: phone,
             title: "",
-            bodyView: UIStackView([number, UIView(), message, call], axis: .horizontal, spacing: 12, alignment: .center)
+            bodyView: UIStackView(
+                [number, UIView(), message, call],
+                axis: .horizontal,
+                spacing: 12,
+                alignment: .center
+            )
         )
     }
 }

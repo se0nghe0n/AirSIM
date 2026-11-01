@@ -11,6 +11,7 @@ enum WebRTCCallAudioSession {
         rtc.audioSessionDidActivate(session)
         rtc.isAudioEnabled = true
     }
+
     static func didDeactivate(_ session: AVAudioSession) {
         let rtc = RTCAudioSession.sharedInstance()
         rtc.isAudioEnabled = false
@@ -21,27 +22,32 @@ enum WebRTCCallAudioSession {
 /// Shared v1 wire format. SDP and ICE are deliberately never included in diagnostics.
 struct CloudWebRTCSignal: Codable, Equatable, Sendable {
     enum Action: String, Codable, Sendable { case offer = "webrtc_offer", answer = "webrtc_answer", ice = "webrtc_ice" }
+
     struct Candidate: Codable, Equatable, Sendable {
         let candidate: String
         let sdpMid: String?
         let sdpMlineIndex: Int32
+
         enum CodingKeys: String, CodingKey {
             case candidate
             case sdpMid = "sdp_mid"
             case sdpMlineIndex = "sdp_mline_index"
         }
     }
+
     let action: Action
     let callUUID: UUID
     let generation: UInt64
     let sessionID: UUID
     var sdp: String? = nil
     var candidate: Candidate? = nil
+
     enum CodingKeys: String, CodingKey {
         case action, generation, sdp, candidate
         case callUUID = "call_uuid"
         case sessionID = "session_id"
     }
+
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(action, forKey: .action)
@@ -55,11 +61,17 @@ struct CloudWebRTCSignal: Codable, Equatable, Sendable {
     func matches(call: IncomingVoIPCall, sessionID: UUID) -> Bool {
         callUUID == call.uuid && generation == call.generation && self.sessionID == sessionID
     }
+
     var isValid: Bool {
         guard generation > 0 else { return false }
         switch action {
         case .offer, .answer: return candidate == nil && sdp.map { !$0.isEmpty && $0.utf8.count <= 48 * 1024 } == true
-        case .ice: return sdp == nil && candidate.map { !$0.candidate.isEmpty && $0.candidate.utf16.count <= 4096 && ($0.sdpMid?.utf16.count ?? 0) <= 256 && $0.sdpMlineIndex >= 0 } == true
+        case .ice:
+            return sdp == nil
+                && candidate.map {
+                    !$0.candidate.isEmpty && $0.candidate.utf16.count <= 4096 && ($0.sdpMid?.utf16.count ?? 0) <= 256
+                        && $0.sdpMlineIndex >= 0
+                } == true
         }
     }
 }
@@ -78,8 +90,12 @@ final class CloudWebRTCAnswerHandshake {
         connectionConfirmed = false
     }
 
-    func agentReconnected(role: String?, stopMedia: () -> Void,
-                          replayAnswer: () -> Void, scheduleConfirmation: () -> Void) {
+    func agentReconnected(
+        role: String?,
+        stopMedia: () -> Void,
+        replayAnswer: () -> Void,
+        scheduleConfirmation: () -> Void
+    ) {
         guard CloudWebRTCReadiness.shouldRenegotiatePeer(role: role) else { return }
         invalidate(requiringAnswerOK: true)
         stopMedia()
@@ -92,8 +108,12 @@ final class CloudWebRTCAnswerHandshake {
         sendAnswer()
     }
 
-    func confirm(status: String = "answer_ok", isOutgoing: Bool = false,
-                 callConnected: () -> Void = {}, _ startMedia: () -> Void) {
+    func confirm(
+        status: String = "answer_ok",
+        isOutgoing: Bool = false,
+        callConnected: () -> Void = {},
+        _ startMedia: () -> Void
+    ) {
         let prepared = isOutgoing && status == "media_prepared"
         let connected = status == "answer_ok" || (status == "active" && (!requiresAnswerOK || acknowledged))
         guard prepared || connected else { return }
@@ -114,20 +134,25 @@ struct CloudWebRTCReadiness: Equatable, Sendable {
     private(set) var nativeReady = false
     private(set) var agentReady = false
     var isReady: Bool { sessionID != nil && nativeReady && agentReady }
+
     mutating func begin(_ sessionID: UUID) { self = .init(sessionID: sessionID) }
     mutating func reset() { self = .init() }
+
     mutating func nativeConnected(_ sessionID: UUID) {
         guard self.sessionID == sessionID else { return }
         nativeReady = true
     }
+
     mutating func nativeDisconnected(_ sessionID: UUID) {
         guard self.sessionID == sessionID else { return }
         nativeReady = false
     }
+
     mutating func agentConnected(_ sessionID: UUID) {
         guard self.sessionID == sessionID else { return }
         agentReady = true
     }
+
     mutating func agentRecovering() { agentReady = false }
     static func shouldRenegotiatePeer(role: String?) -> Bool { role == "agent" }
 }
@@ -136,6 +161,7 @@ struct CloudICEServer: Decodable, Sendable {
     let urls: [String]
     let username: String?
     let credential: String?
+
     var native: RTCIceServer {
         RTCIceServer(urlStrings: urls, username: username, credential: credential)
     }
@@ -144,13 +170,15 @@ struct CloudICEServer: Decodable, Sendable {
 struct CloudICEConfiguration: Decodable, Sendable {
     let iceServers: [CloudICEServer]
     let ttl: Int
+
     enum CodingKeys: String, CodingKey { case iceServers = "ice_servers", ttl }
 
     static func request(for call: IncomingVoIPCall) throws -> URLRequest {
         guard let mediaURL = call.authenticatedMediaURL,
-              var url = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
-              let secret = call.mediaSecret,
-              !secret.isEmpty else { throw IPhoneCloudCallError.mediaUnavailable }
+            var url = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
+            let secret = call.mediaSecret,
+            !secret.isEmpty
+        else { throw IPhoneCloudCallError.mediaUnavailable }
         url.scheme = "https"
         url.path = "/v1/calls/\(call.uuid.uuidString.lowercased())/ice"
         url.queryItems = [URLQueryItem(name: "role", value: "iphone")]
@@ -169,9 +197,11 @@ struct CloudICEConfiguration: Decodable, Sendable {
             throw CloudWebRTCError.iceUnavailable
         }
         let config = try JSONDecoder().decode(Self.self, from: data)
-        guard config.ttl > 0, config.iceServers.contains(where: {
-            $0.urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
-        }) else { throw CloudWebRTCError.turnUnavailable }
+        guard config.ttl > 0,
+            config.iceServers.contains(where: {
+                $0.urls.contains { $0.hasPrefix("turn:") || $0.hasPrefix("turns:") }
+            })
+        else { throw CloudWebRTCError.turnUnavailable }
         return config
     }
 }
@@ -186,21 +216,28 @@ final class CloudICEPreparation {
         let endpoint: URL?
         let authorization: String?
     }
+
     private struct Prepared {
         let configuration: CloudICEConfiguration
         let validUntil: TimeInterval
     }
+
     private struct Pending {
         let id: UUID
         let identity: Identity
         let task: Task<Prepared, Error>
     }
+
     private var pending: Pending?
     private let fetch: (IncomingVoIPCall) async throws -> CloudICEConfiguration
     private let now: () -> TimeInterval
 
-    init(fetch: @escaping (IncomingVoIPCall) async throws -> CloudICEConfiguration = { try await CloudICEConfiguration.fetch(for: $0) },
-         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    init(
+        fetch: @escaping (IncomingVoIPCall) async throws -> CloudICEConfiguration = {
+            try await CloudICEConfiguration.fetch(for: $0)
+        },
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) {
         self.fetch = fetch
         self.now = now
     }
@@ -239,8 +276,12 @@ final class CloudICEPreparation {
 
     private func prepare(for call: IncomingVoIPCall) throws -> Pending {
         let request = try CloudICEConfiguration.request(for: call)
-        let identity = Identity(callUUID: call.uuid, generation: call.generation,
-                                endpoint: request.url, authorization: request.value(forHTTPHeaderField: "Authorization"))
+        let identity = Identity(
+            callUUID: call.uuid,
+            generation: call.generation,
+            endpoint: request.url,
+            authorization: request.value(forHTTPHeaderField: "Authorization")
+        )
         if let pending, pending.identity == identity { return pending }
         cancel()
         let startedAt = now()
@@ -251,8 +292,10 @@ final class CloudICEPreparation {
             // Start the lease at request time, leaving room for network delay
             // and clock differences. A reconnect may reuse only a fresh lease.
             let ttl = Double(configuration.ttl)
-            return Prepared(configuration: configuration,
-                            validUntil: startedAt + ttl - min(30, ttl * 0.1))
+            return Prepared(
+                configuration: configuration,
+                validUntil: startedAt + ttl - min(30, ttl * 0.1)
+            )
         }
         let requestState = Pending(id: UUID(), identity: identity, task: task)
         pending = requestState
@@ -262,6 +305,7 @@ final class CloudICEPreparation {
 
 enum CloudWebRTCError: LocalizedError {
     case iceUnavailable, turnUnavailable, negotiationFailed, candidateOverflow
+
     var errorDescription: String? {
         switch self {
         case .iceUnavailable: return "WebRTC ICE configuration is unavailable."
@@ -279,11 +323,13 @@ struct CloudWebRTCStatistics {
         let type: String
         let values: [String: String]
     }
+
     private struct Sample {
         let id: String
         let time: TimeInterval
         let counters: [String: Double]
     }
+
     private var previous: Sample?
 
     mutating func fields(for records: [String: Record], at time: TimeInterval) -> [String: String] {
@@ -305,30 +351,42 @@ struct CloudWebRTCStatistics {
         }
         let inbound = single("inbound-rtp")
         let outbound = single("outbound-rtp")
-        copy(inbound?.value, prefix: "inbound-rtp", keys: [
-            "packetsReceived", "bytesReceived", "packetsLost", "jitter", "concealedSamples",
-            "totalSamplesReceived", "jitterBufferDelay", "jitterBufferEmittedCount"
-        ])
+        copy(
+            inbound?.value,
+            prefix: "inbound-rtp",
+            keys: [
+                "packetsReceived", "bytesReceived", "packetsLost", "jitter", "concealedSamples",
+                "totalSamplesReceived", "jitterBufferDelay", "jitterBufferEmittedCount",
+            ]
+        )
         copy(outbound?.value, prefix: "outbound-rtp", keys: ["packetsSent", "bytesSent"])
         let codecID = inbound?.value.values["codecId"] ?? outbound?.value.values["codecId"]
         copy(codecID.flatMap { records[$0] }, prefix: "codec", keys: ["mimeType", "clockRate", "channels"])
 
-        let transportIDs = Set([inbound?.value.values["transportId"], outbound?.value.values["transportId"]].compactMap { $0 })
+        let transportIDs = Set(
+            [inbound?.value.values["transportId"], outbound?.value.values["transportId"]].compactMap { $0 }
+        )
         // The native audio-only peer normally has one transport. Refuse to pick
         // a path if the report is ambiguous or its reference is incomplete.
-        let transports = transportIDs.isEmpty
+        let transports =
+            transportIDs.isEmpty
             ? records.filter { $0.value.type == "transport" }.map(\.value)
             : transportIDs.compactMap { records[$0] }.filter { $0.type == "transport" }
         if transports.count == 1, let id = transports.first?.values["selectedCandidatePairId"],
-           let pair = records[id], pair.type == "candidate-pair", pair.values["state"] == "succeeded" {
+            let pair = records[id], pair.type == "candidate-pair", pair.values["state"] == "succeeded"
+        {
             copy(pair, prefix: "candidate-pair", keys: ["currentRoundTripTime", "availableOutgoingBitrate"])
             if let rtt = number(pair.values["currentRoundTripTime"]), rtt >= 0 {
                 fields["path_rtt_ms"] = formatted(rtt * 1_000)
             }
-            if let id = pair.values["localCandidateId"], let candidate = records[id], candidate.type == "local-candidate" {
+            if let id = pair.values["localCandidateId"], let candidate = records[id],
+                candidate.type == "local-candidate"
+            {
                 copy(candidate, prefix: "local-candidate", keys: ["candidateType", "protocol"])
             }
-            if let id = pair.values["remoteCandidateId"], let candidate = records[id], candidate.type == "remote-candidate" {
+            if let id = pair.values["remoteCandidateId"], let candidate = records[id],
+                candidate.type == "remote-candidate"
+            {
                 copy(candidate, prefix: "remote-candidate", keys: ["candidateType", "protocol"])
             }
         }
@@ -336,12 +394,19 @@ struct CloudWebRTCStatistics {
             fields["rx_jitter_ms"] = formatted(jitter * 1_000)
         }
 
-        guard let inbound else { previous = nil; return fields }
-        let keys = ["packetsReceived", "packetsLost", "concealedSamples", "totalSamplesReceived",
-                    "jitterBufferDelay", "jitterBufferEmittedCount"]
-        let counters = Dictionary(uniqueKeysWithValues: keys.compactMap { key -> (String, Double)? in
-            number(inbound.value.values[key]).map { (key, $0) }
-        })
+        guard let inbound else {
+            previous = nil
+            return fields
+        }
+        let keys = [
+            "packetsReceived", "packetsLost", "concealedSamples", "totalSamplesReceived",
+            "jitterBufferDelay", "jitterBufferEmittedCount",
+        ]
+        let counters = Dictionary(
+            uniqueKeysWithValues: keys.compactMap { key -> (String, Double)? in
+                number(inbound.value.values[key]).map { (key, $0) }
+            }
+        )
         let current = Sample(id: inbound.key, time: time, counters: counters)
         defer { previous = current }
         guard let previous, previous.id == current.id, current.time > previous.time else { return fields }
@@ -372,6 +437,7 @@ struct CloudWebRTCStatistics {
         guard let value, let number = Double(value), number.isFinite else { return nil }
         return number
     }
+
     private func formatted(_ number: Double) -> String {
         String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), number)
     }
@@ -384,8 +450,10 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         RTCInitializeSSL()
         RTCSetMinDebugLogLevel(.none)
     }()
+
     /// Native setup never activates capture; CallKit or the in-app call owns it.
     static func prepareFactory() { _ = initializeNative }
+
     private var recordingAudio: CloudWebRTCRecordingAudio?
     private var ownedFactory: RTCPeerConnectionFactory?
 
@@ -415,12 +483,21 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     private(set) var isConnected = false
     let usesHostICE: Bool
 
-    init(callUUID: UUID, generation: UInt64, sessionID: UUID = UUID(), servers: [RTCIceServer],
-         queue: DispatchQueue, factory factoryOverride: RTCPeerConnectionFactory? = nil, relayOnly: Bool = false,
-         hostOnly: Bool = false,
-         signal: @escaping (CloudWebRTCSignal) -> Void, connected: @escaping () -> Void,
-         disconnected: @escaping () -> Void = {},
-         failure: @escaping () -> Void, statistics: @escaping ([String: String]) -> Void) throws {
+    init(
+        callUUID: UUID,
+        generation: UInt64,
+        sessionID: UUID = UUID(),
+        servers: [RTCIceServer],
+        queue: DispatchQueue,
+        factory factoryOverride: RTCPeerConnectionFactory? = nil,
+        relayOnly: Bool = false,
+        hostOnly: Bool = false,
+        signal: @escaping (CloudWebRTCSignal) -> Void,
+        connected: @escaping () -> Void,
+        disconnected: @escaping () -> Void = {},
+        failure: @escaping () -> Void,
+        statistics: @escaping ([String: String]) -> Void
+    ) throws {
         self.callUUID = callUUID
         self.generation = generation
         self.sessionID = sessionID
@@ -440,9 +517,12 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         } else {
             let audio = CloudWebRTCRecordingAudio(source: .init(callUUID: callUUID))
             let native = RTCPeerConnectionFactory(
-                audioDeviceModuleType: .platformDefault, bypassVoiceProcessing: false,
-                encoderFactory: RTCVideoEncoderFactoryH264(), decoderFactory: RTCVideoDecoderFactoryH264(),
-                audioProcessingModule: audio.module)
+                audioDeviceModuleType: .platformDefault,
+                bypassVoiceProcessing: false,
+                encoderFactory: RTCVideoEncoderFactoryH264(),
+                decoderFactory: RTCVideoDecoderFactoryH264(),
+                audioProcessingModule: audio.module
+            )
             recordingAudio = audio
             ownedFactory = native
             factory = native
@@ -453,8 +533,13 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         if relayOnly { config.iceTransportPolicy = .relay }
         config.sdpSemantics = .unifiedPlan
         config.continualGatheringPolicy = hostOnly ? .gatherOnce : .gatherContinually
-        guard let peer = factory.peerConnection(with: config,
-            constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil), delegate: self) else {
+        guard
+            let peer = factory.peerConnection(
+                with: config,
+                constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil),
+                delegate: self
+            )
+        else {
             throw CloudWebRTCError.negotiationFailed
         }
         self.peer = peer
@@ -476,6 +561,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
     func setMuted(_ muted: Bool) {
         track?.isEnabled = !muted
     }
+
     func close() {
         timer?.cancel()
         timer = nil
@@ -488,14 +574,27 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         localCandidates.removeAll()
         isConnected = false
     }
-    private func fail() { guard peer != nil else { return }; close(); failure() }
+
+    private func fail() {
+        guard peer != nil else { return }
+        close()
+        failure()
+    }
 
     func offer() {
         guard let peer else { return }
-        peer.offer(for: RTCMediaConstraints(mandatoryConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "false"], optionalConstraints: nil)) { [weak self] sdp, error in
+        peer.offer(
+            for: RTCMediaConstraints(
+                mandatoryConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "false"],
+                optionalConstraints: nil
+            )
+        ) { [weak self] sdp, error in
             self?.queue.async { [weak self] in
                 guard let self, self.peer === peer else { return }
-                guard error == nil, let sdp else { self.fail(); return }
+                guard error == nil, let sdp else {
+                    self.fail()
+                    return
+                }
                 self.setLocal(sdp, action: .offer)
             }
         }
@@ -503,7 +602,8 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
 
     func receive(_ message: CloudWebRTCSignal, answering: Bool = false) {
         guard message.isValid, message.callUUID == callUUID, message.generation == generation,
-              message.sessionID == sessionID, let peer else { return }
+            message.sessionID == sessionID, let peer
+        else { return }
         switch message.action {
         case .answer, .offer:
             guard (message.action == .offer) == answering, !remoteDescriptionSet, let sdp = message.sdp else { return }
@@ -511,15 +611,22 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             peer.setRemoteDescription(description) { [weak self] error in
                 self?.queue.async { [weak self] in
                     guard let self, self.peer === peer else { return }
-                    guard error == nil else { self.fail(); return }
+                    guard error == nil else {
+                        self.fail()
+                        return
+                    }
                     self.remoteDescriptionSet = true
                     for candidate in self.remoteCandidates { self.add(candidate, to: peer) }
                     self.remoteCandidates.removeAll()
                     if answering {
-                        peer.answer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)) { [weak self] answer, error in
+                        peer.answer(for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)) {
+                            [weak self] answer, error in
                             self?.queue.async { [weak self] in
                                 guard let self, self.peer === peer else { return }
-                                guard error == nil, let answer else { self.fail(); return }
+                                guard error == nil, let answer else {
+                                    self.fail()
+                                    return
+                                }
                                 self.setLocal(answer, action: .answer)
                             }
                         }
@@ -529,9 +636,13 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         case .ice:
             guard let wire = message.candidate else { return }
             let candidate = RTCIceCandidate(sdp: wire.candidate, sdpMLineIndex: wire.sdpMlineIndex, sdpMid: wire.sdpMid)
-            if remoteDescriptionSet { add(candidate, to: peer) }
-            else if remoteCandidates.count < 128 { remoteCandidates.append(candidate) }
-            else { fail() }
+            if remoteDescriptionSet {
+                add(candidate, to: peer)
+            } else if remoteCandidates.count < 128 {
+                remoteCandidates.append(candidate)
+            } else {
+                fail()
+            }
         }
     }
 
@@ -546,6 +657,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
 
     /// One second of 20 ms Opus. Fast accelerate lets NetEq shorten a grown buffer.
     static let jitterBufferMaxPackets: Int32 = 50
+
     static func configurePlayout(_ config: RTCConfiguration) {
         config.audioJitterBufferMaxPackets = jitterBufferMaxPackets
         config.audioJitterBufferFastAccelerate = true
@@ -578,8 +690,16 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         if let index = result.firstIndex(where: { $0.hasPrefix("a=fmtp:\(opus) ") }) {
             let prefix = "a=fmtp:\(opus) "
             let other = result[index].dropFirst(prefix.count).split(separator: ";").map(String.init)
-                .filter { !["stereo", "sprop-stereo", "useinbandfec", "usedtx", "minptime"].contains($0.split(separator: "=").first.map(String.init) ?? "") }
-            result[index] = prefix + (other + ["minptime=20", "useinbandfec=1", "usedtx=1", "stereo=0", "sprop-stereo=0"]).joined(separator: ";")
+                .filter {
+                    !["stereo", "sprop-stereo", "useinbandfec", "usedtx", "minptime"].contains(
+                        $0.split(separator: "=").first.map(String.init) ?? ""
+                    )
+                }
+            result[index] =
+                prefix
+                + (other + ["minptime=20", "useinbandfec=1", "usedtx=1", "stereo=0", "sprop-stereo=0"]).joined(
+                    separator: ";"
+                )
         }
         if let index = result.firstIndex(where: { $0.hasPrefix("a=rtpmap:\(opus) ") }) {
             result.insert(contentsOf: ["a=ptime:20", "a=maxptime:20"], at: index)
@@ -593,31 +713,56 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         peer.setLocalDescription(description) { [weak self] error in
             self?.queue.async { [weak self] in
                 guard let self, self.peer === peer else { return }
-                guard error == nil else { self.fail(); return }
+                guard error == nil else {
+                    self.fail()
+                    return
+                }
                 if self.hostOnly {
                     self.hostLocalAction = action
                     self.hostLocalReady = true
                     self.publishHostLocal()
                     return
                 }
-                self.signal(.init(action: action, callUUID: self.callUUID, generation: self.generation, sessionID: self.sessionID, sdp: description.sdp))
+                self.signal(
+                    .init(
+                        action: action,
+                        callUUID: self.callUUID,
+                        generation: self.generation,
+                        sessionID: self.sessionID,
+                        sdp: description.sdp
+                    )
+                )
                 self.localDescriptionSent = true
                 for candidate in self.localCandidates { self.send(candidate) }
                 self.localCandidates.removeAll()
             }
         }
     }
+
     private func publishHostLocal() {
         guard hostOnly, hostLocalReady, hostGatheringComplete, !hostLocalSent,
-              let action = hostLocalAction, let sdp = peer?.localDescription?.sdp, !sdp.isEmpty else { return }
+            let action = hostLocalAction, let sdp = peer?.localDescription?.sdp, !sdp.isEmpty
+        else { return }
         hostLocalSent = true
         signal(.init(action: action, callUUID: callUUID, generation: generation, sessionID: sessionID, sdp: sdp))
     }
 
     private func send(_ candidate: RTCIceCandidate) {
-        signal(.init(action: .ice, callUUID: callUUID, generation: generation, sessionID: sessionID,
-            candidate: .init(candidate: candidate.sdp, sdpMid: candidate.sdpMid, sdpMlineIndex: candidate.sdpMLineIndex)))
+        signal(
+            .init(
+                action: .ice,
+                callUUID: callUUID,
+                generation: generation,
+                sessionID: sessionID,
+                candidate: .init(
+                    candidate: candidate.sdp,
+                    sdpMid: candidate.sdpMid,
+                    sdpMlineIndex: candidate.sdpMLineIndex
+                )
+            )
+        )
     }
+
     func collectStatistics() {
         guard let peer, !statisticsPending else { return }
         statisticsPending = true
@@ -635,10 +780,12 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             }
         }
     }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
         queue.async { [weak self] in
             guard let self, self.peer === peerConnection, newState == .complete else { return }
@@ -646,16 +793,23 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             self.publishHostLocal()
         }
     }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         queue.async { [weak self] in
             guard let self, self.peer === peerConnection, !self.hostOnly else { return }
-            if self.localDescriptionSent { self.send(candidate) }
-            else if self.localCandidates.count < 128 { self.localCandidates.append(candidate) }
-            else { self.fail() }
+            if self.localDescriptionSent {
+                self.send(candidate)
+            } else if self.localCandidates.count < 128 {
+                self.localCandidates.append(candidate)
+            } else {
+                self.fail()
+            }
         }
     }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
         queue.async { [weak self] in
             guard let self, self.peer === peerConnection else { return }
@@ -670,6 +824,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             }
         }
     }
+
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {
         queue.async { [weak self] in
             guard let self, self.peer === peerConnection else { return }
@@ -678,7 +833,8 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
             case .failed: self.fail()
             case .disconnected:
                 self.queue.asyncAfter(deadline: .now() + 8) { [weak self] in
-                    guard let self, self.peer === peerConnection, peerConnection.iceConnectionState == .disconnected else { return }
+                    guard let self, self.peer === peerConnection, peerConnection.iceConnectionState == .disconnected
+                    else { return }
                     self.fail()
                 }
             default: break

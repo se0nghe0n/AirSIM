@@ -29,6 +29,7 @@ struct DialFeature {
         var currentAgent: AndroidAgentPresentation? { snapshot.currentAndroidAgent }
         var agentCount: Int { snapshot.pairedAndroidAgents.count }
         var cloudModeEnabled: Bool { snapshot.cloudModeEnabled }
+
         var agentRows: [PairedAgentRow] {
             snapshot.pairedAndroidAgents.map { PairedAgentRow(agent: $0, cloudModeEnabled: snapshot.cloudModeEnabled) }
         }

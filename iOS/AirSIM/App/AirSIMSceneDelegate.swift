@@ -20,9 +20,9 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     private func connectUI() {
-#if DEBUG
+        #if DEBUG
         guard !AirSIMPreviewEnvironment.isActive else { return }
-#endif
+        #endif
         guard root == nil, let window else { return }
         let model = AirSIMUIModel.shared
         let store = AirSIMFeature.liveStore(model: model, settings: AirSIMUIModel.settings)
@@ -42,9 +42,9 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
-#if DEBUG
+        #if DEBUG
         guard !AirSIMPreviewEnvironment.isActive else { return }
-#endif
+        #endif
         connectUI()
         // Scene-based apps no longer receive applicationDidBecomeActive on the app delegate.
         (UIApplication.shared.delegate as? AirSIMAppDelegate)?.applicationDidBecomeActive(UIApplication.shared)

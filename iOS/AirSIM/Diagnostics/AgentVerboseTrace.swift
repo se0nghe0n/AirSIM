@@ -31,6 +31,7 @@ struct AgentVerboseTraceEntry: Codable, Identifiable, Sendable, Equatable {
 
 actor AgentVerboseTraceRecorder {
     static let preferenceKey = "agent_verbose_trace_enabled"
+
     static let shared = AgentVerboseTraceRecorder(
         initiallyEnabled: UserDefaults.standard.bool(forKey: preferenceKey),
         maxEntries: 1_200,
@@ -47,7 +48,8 @@ actor AgentVerboseTraceRecorder {
         self.maxEntries = max(1, maxEntries)
         self.persistenceURL = persistenceURL
         let loaded = Self.load(from: persistenceURL)
-        entries = loaded.count > self.maxEntries
+        entries =
+            loaded.count > self.maxEntries
             ? Array(loaded.suffix(self.maxEntries))
             : loaded
     }
@@ -176,8 +178,9 @@ actor AgentVerboseTraceRecorder {
 
     private static func load(from url: URL?) -> [AgentVerboseTraceEntry] {
         guard let url,
-              let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode([AgentVerboseTraceEntry].self, from: data) else {
+            let data = try? Data(contentsOf: url),
+            let decoded = try? JSONDecoder().decode([AgentVerboseTraceEntry].self, from: data)
+        else {
             return []
         }
         return decoded

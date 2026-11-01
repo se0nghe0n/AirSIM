@@ -68,10 +68,12 @@ struct CallLifecycleSnapshot: Equatable, Sendable {
 /// Single reducer for per-call state. All sources must submit events rather than mutating the final state directly.
 struct CallLifecycleStore: Sendable {
     private(set) var snapshot: CallLifecycleSnapshot = .idle
+
     private struct RetiredCall: Hashable, Sendable {
         let id: String
         let uuid: UUID
     }
+
     private var retired: [RetiredCall] = []
 
     func suppressesPresentation(callID: String) -> Bool {
@@ -91,13 +93,16 @@ struct CallLifecycleStore: Sendable {
         let identity = RetiredCall(id: event.callID, uuid: event.callUUID)
         // A reconnect's generation is not permission to revoke a local end intent.
         // Retain older identities too, so a delayed push cannot return after the next call.
-        if suppressesPresentation(callID: event.callID), !event.state.isTerminal, event.state != .ending { return false }
+        if suppressesPresentation(callID: event.callID), !event.state.isTerminal, event.state != .ending {
+            return false
+        }
         let sameIdentity = snapshot.callID == event.callID && snapshot.callUUID == event.callUUID
         if snapshot.generation > 0, !sameIdentity {
             // Legacy protocols set generation = 1 for every call; allow a new ringing/connecting call
             // with a different identity only after the previous call enters ending or reaches a terminal state.
             guard snapshot.state.isTerminal || snapshot.state == .ending,
-                  event.state == .ringing || event.state == .connecting else { return false }
+                event.state == .ringing || event.state == .connecting
+            else { return false }
         } else if event.generation < snapshot.generation {
             return false
         } else if event.generation == snapshot.generation, snapshot.generation > 0 {

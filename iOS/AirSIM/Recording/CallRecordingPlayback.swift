@@ -8,7 +8,10 @@ final class CallRecordingPlayback: NSObject, AVAudioPlayerDelegate {
     @ObservationIgnored private var player: AVAudioPlayer?
 
     func toggle(_ recording: CallRecordingFile, url: URL) throws {
-        if playingID == recording.id { stop(); return }
+        if playingID == recording.id {
+            stop()
+            return
+        }
         stop()
         do {
             let session = AVAudioSession.sharedInstance()

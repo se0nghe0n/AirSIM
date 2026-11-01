@@ -2,7 +2,8 @@ import ActivityKit
 import AppIntents
 import Foundation
 
-/// Shared Live Activity payload between the main app and the Dynamic Island extension; fields must stay compact and Codable.
+/// Shared Live Activity payload between the main app and the Dynamic Island extension; fields must stay compact and
+/// Codable.
 struct AirSIMCallActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         enum Transport: String, Codable, Hashable {
@@ -40,7 +41,8 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
         let phase: Phase
         let startedAt: Date
         let transport: Transport?
-        /// Cellular state of the module SIM; shown only in standby so offline and call states do not carry stale snapshots.
+        /// Cellular state of the module SIM; shown only in standby so offline and call states do not carry stale
+        /// snapshots.
         let signalDBM: Int?
         let operatorName: String?
         let networkMode: String?
@@ -48,7 +50,8 @@ struct AirSIMCallActivityAttributes: ActivityAttributes {
         let downloadBytesPerSecond: Double?
         let uploadBytesPerSecond: Double?
         /// Android Agent currently used for dialing and media routing. Kept optional for backward compatibility with
-        /// ContentState payloads pushed by older Relays and to prevent existing Live Activities from failing to decode across upgrades.
+        /// ContentState payloads pushed by older Relays and to prevent existing Live Activities from failing to decode
+        /// across upgrades.
         let agentDeviceName: String?
         let agentPhoneNumber: String?
         let agentKind: String?
@@ -170,13 +173,14 @@ enum AirSIMLiveActivityActionURL {
 
     static func parse(_ url: URL) -> (action: AirSIMLiveActivityAction, callID: String)? {
         guard url.scheme?.lowercased() == "airsim",
-              url.host?.lowercased() == "call",
-              let action = AirSIMLiveActivityAction(
+            url.host?.lowercased() == "call",
+            let action = AirSIMLiveActivityAction(
                 rawValue: url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
-              ),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let callID = components.queryItems?.first(where: { $0.name == "call_id" })?.value,
-              !callID.isEmpty else { return nil }
+            ),
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let callID = components.queryItems?.first(where: { $0.name == "call_id" })?.value,
+            !callID.isEmpty
+        else { return nil }
         return (action, callID)
     }
 }
@@ -190,15 +194,20 @@ final class LiveActivityCallActionDispatcher {
     func perform(_ action: AirSIMLiveActivityAction, callID: String) async throws {
         guard !callID.isEmpty else { throw LiveActivityCallError.staleCall }
         guard let handler else { throw LiveActivityCallError.unavailable }
-        do { try await handler(action, callID) }
-        catch let error as LiveActivityCallError { throw error }
-        catch { throw LiveActivityCallError.unavailable }
+        do { try await handler(action, callID) } catch let error as LiveActivityCallError { throw error } catch {
+            throw LiveActivityCallError.unavailable
+        }
     }
 }
 
 enum LiveActivityCallActionPolicy {
-    static func shouldPerform(_ action: AirSIMLiveActivityAction, callID: String,
-                              currentCallID: String?, state: String?, direction: String?) throws -> Bool {
+    static func shouldPerform(
+        _ action: AirSIMLiveActivityAction,
+        callID: String,
+        currentCallID: String?,
+        state: String?,
+        direction: String?
+    ) throws -> Bool {
         guard !callID.isEmpty, callID == currentCallID else { throw LiveActivityCallError.staleCall }
         guard let state, ["incoming", "waiting", "connecting", "dialing", "alerting", "active", "held"].contains(state)
         else { throw LiveActivityCallError.staleCall }
@@ -219,6 +228,7 @@ enum LiveActivityCallActionPolicy {
 
 enum LiveActivityCallError: Error, CustomLocalizedStringResourceConvertible {
     case staleCall, invalidState, unavailable
+
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .staleCall: "This call has ended or was replaced by another call"
@@ -230,12 +240,16 @@ enum LiveActivityCallError: Error, CustomLocalizedStringResourceConvertible {
 
 struct AnswerAirSIMCallIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Answer AirSIM Call"
+
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
+
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     @Parameter(title: "Call ID") var callID: String
+
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
+
     @MainActor
     func perform() async throws -> some IntentResult {
         try await LiveActivityCallActionDispatcher.shared.perform(.answer, callID: callID)
@@ -245,12 +259,16 @@ struct AnswerAirSIMCallIntent: LiveActivityIntent {
 
 struct RejectAirSIMCallIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Decline AirSIM Call"
+
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
+
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     @Parameter(title: "Call ID") var callID: String
+
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
+
     @MainActor
     func perform() async throws -> some IntentResult {
         try await LiveActivityCallActionDispatcher.shared.perform(.reject, callID: callID)
@@ -260,12 +278,16 @@ struct RejectAirSIMCallIntent: LiveActivityIntent {
 
 struct HangUpAirSIMCallIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "End AirSIM Call"
+
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
+
     static var authenticationPolicy: IntentAuthenticationPolicy { .alwaysAllowed }
     @Parameter(title: "Call ID") var callID: String
+
     init() { callID = "" }
     init(callID: String) { self.callID = callID }
+
     @MainActor
     func perform() async throws -> some IntentResult {
         try await LiveActivityCallActionDispatcher.shared.perform(.hangup, callID: callID)

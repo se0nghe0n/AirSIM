@@ -8,7 +8,7 @@ import UserNotifications
 @main
 @MainActor
 final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-#if DEBUG
+    #if DEBUG
     private lazy var coldLaunchCallHandler = ColdLaunchCallKitHandler()
     private lazy var historyStore = LocalHistoryStore()
 
@@ -21,10 +21,10 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
             _ = historyStore
         }
     }
-#else
+    #else
     private let coldLaunchCallHandler = ColdLaunchCallKitHandler()
     private let historyStore = LocalHistoryStore()
-#endif
+    #endif
 
     // MARK: - Application lifecycle
 
@@ -32,9 +32,9 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-#if DEBUG
+        #if DEBUG
         guard !AirSIMPreviewEnvironment.isActive else { return true }
-#endif
+        #endif
         LiveActivityCallActionDispatcher.shared.handler = { action, callID in
             if CallKitController.shared.managesCurrentCall {
                 try await CallKitController.shared.performLiveActivityAction(action, callID: callID)
@@ -57,20 +57,23 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
             VoIPPushController.shared.start()
             application.registerForRemoteNotifications()
         }
-#if DEBUG
-        print(!policy.startsCloud
-            ? "[AirSIM Local] Skipped APNs and PushKit registration"
-            : "[AirSIM APNs] Started user notification and PushKit registration")
-#endif
+        #if DEBUG
+        print(
+            !policy.startsCloud
+                ? "[AirSIM Local] Skipped APNs and PushKit registration"
+                : "[AirSIM APNs] Started user notification and PushKit registration"
+        )
+        #endif
         return true
     }
 
     /// Scene-based apps do not receive this callback from UIKit; `AirSIMSceneDelegate` forwards it.
     func applicationDidBecomeActive(_ application: UIApplication) {
-#if DEBUG
+        #if DEBUG
         guard !AirSIMPreviewEnvironment.isActive else { return }
-#endif
-        // The initial authorization prompt may return after didFinishLaunching; re-registering on foreground entry is idempotent.
+        #endif
+        // The initial authorization prompt may return after didFinishLaunching; re-registering on foreground entry is
+        // idempotent.
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.start()
         application.registerForRemoteNotifications()
@@ -85,9 +88,9 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
     ) {
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.storeAlertToken(deviceToken)
-#if DEBUG
+        #if DEBUG
         print("[AirSIM APNs] User notification token updated; bytes=\(deviceToken.count)")
-#endif
+        #endif
     }
 
     func application(
@@ -96,9 +99,9 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
     ) {
         guard ConnectionModeRuntimePolicy(mode: ConnectionModePreference.selected()).startsCloud else { return }
         VoIPPushController.shared.clearAlertToken()
-#if DEBUG
+        #if DEBUG
         print("[AirSIM APNs] User notification token registration failed: \(error.localizedDescription)")
-#endif
+        #endif
     }
 
     func application(
@@ -111,11 +114,13 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
             return
         }
         if userInfo["event"] as? String == "call_owner",
-           userInfo["owner"] as? String == "watch" {
+            userInfo["owner"] as? String == "watch"
+        {
             let callID = userInfo["call_id"] as? String
             let uuid = (userInfo["call_uuid"] as? String).flatMap(UUID.init(uuidString:))
             if CallKitController.shared.matchesCurrentCall(callID: callID, uuid: uuid) {
-                let reason: CXCallEndedReason = userInfo["phase"] as? String == "active"
+                let reason: CXCallEndedReason =
+                    userInfo["phase"] as? String == "active"
                     ? .answeredElsewhere : .declinedElsewhere
                 CallKitController.shared.reportCurrentCallEnded(reason: reason)
                 completionHandler(.newData)
@@ -134,9 +139,9 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
         } catch RemoteSMSPushError.unsupportedEvent {
             completionHandler(.noData)
         } catch {
-#if DEBUG
+            #if DEBUG
             print("[AirSIM APNs] Failed to parse SMS push payload: \(error.localizedDescription)")
-#endif
+            #endif
             completionHandler(.failed)
         }
     }
@@ -155,7 +160,8 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
         completionHandler([.banner, .list, .sound])
     }
 
-    /// Handles lock-screen notification actions and controls module calls directly within the system-granted background execution window.
+    /// Handles lock-screen notification actions and controls module calls directly within the system-granted background
+    /// execution window.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -178,17 +184,20 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
             return
         }
         if response.notification.request.content.userInfo["event"] as? String == "incoming_call",
-           actionIdentifier == UNNotificationDefaultActionIdentifier {
+            actionIdentifier == UNNotificationDefaultActionIdentifier
+        {
             IncomingCallPresentationRequest.markPending()
             NotificationCenter.default.post(name: .airsimOpenIncomingCall, object: nil)
             completionHandler()
             return
         }
-        guard actionIdentifier == IncomingCallNotification.answerActionIdentifier
+        guard
+            actionIdentifier == IncomingCallNotification.answerActionIdentifier
                 || actionIdentifier == IncomingCallNotification.rejectActionIdentifier,
-              let callID = response.notification.request.content.userInfo[
-                  IncomingCallNotification.callIDKey
-              ] as? String else {
+            let callID = response.notification.request.content.userInfo[
+                IncomingCallNotification.callIDKey
+            ] as? String
+        else {
             completionHandler()
             return
         }
@@ -205,11 +214,13 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
                     throw CallKitBridgeError.noReachableTransport
                 }
                 let status = try await api.callStatus()
-                // Must match the same call that is still ringing so tapping a stale notification cannot affect a new call.
+                // Must match the same call that is still ringing so tapping a stale notification cannot affect a new
+                // call.
                 guard status.active?.id == callID,
-                      status.active?.direction == "incoming",
-                      let state = status.active?.state,
-                      ["incoming", "waiting"].contains(state) else { return }
+                    status.active?.direction == "incoming",
+                    let state = status.active?.state,
+                    ["incoming", "waiting"].contains(state)
+                else { return }
 
                 if actionIdentifier == IncomingCallNotification.answerActionIdentifier {
                     try await api.answerCall(callID: callID)
@@ -239,7 +250,8 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, @preconcurren
     }
 
     private func persistRemoteSMS(_ pushed: IncomingRemoteSMS) -> Bool {
-        // Long messages carry only a preview in the APNs payload; wait for the next Agent sync to fetch the full body and avoid duplicate local entries.
+        // Long messages carry only a preview in the APNs payload; wait for the next Agent sync to fetch the full body
+        // and avoid duplicate local entries.
         guard !pushed.contentTruncated else { return false }
         var messages = historyStore.loadMessages()
         guard !messages.contains(where: { $0.deliveryID == pushed.deliveryID }) else { return false }

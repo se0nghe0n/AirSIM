@@ -111,9 +111,9 @@ private final class StateAlertPresenter<Action> {
             // Button handlers run after the alert disappears; one still in state then left without a button.
             Task { @MainActor [weak self] in
                 guard let self,
-                      let controller,
-                      self.shown?.controller === controller,
-                      controller.presentingViewController == nil
+                    let controller,
+                    self.shown?.controller === controller,
+                    controller.presentingViewController == nil
                 else { return }
                 self.shown = nil
                 if self.alert()?.id == state.id {

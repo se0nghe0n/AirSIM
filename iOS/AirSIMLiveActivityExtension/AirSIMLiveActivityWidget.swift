@@ -10,11 +10,13 @@ struct AirSIMLiveActivityBundle: WidgetBundle {
     }
 }
 
-/// Keeps the compact standby state minimal while showing network details and call actions in expanded and lock-screen presentations.
+/// Keeps the compact standby state minimal while showing network details and call actions in expanded and lock-screen
+/// presentations.
 struct AirSIMLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: AirSIMCallActivityAttributes.self) { context in
-            // ActivityKit staleness does not prove the module is offline; the app writes `.offline` after failed probes.
+            // ActivityKit staleness does not prove the module is offline; the app writes `.offline` after failed
+            // probes.
             let state = context.state
             lockScreenView(state)
                 .foregroundStyle(.white)
@@ -168,7 +170,8 @@ struct AirSIMLiveActivityWidget: Widget {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         // ActivityKit already provides a system Live Activity container on the lock screen. Adding glassEffect
-        // to the root content on iOS 26 creates a second sampling layer that can render as an empty glass shell on device.
+        // to the root content on iOS 26 creates a second sampling layer that can render as an empty glass shell on
+        // device.
         // A clear activityBackgroundTint enables host Liquid Glass while the body keeps standard layout.
     }
 
@@ -220,7 +223,8 @@ struct AirSIMLiveActivityWidget: Widget {
     }
 
     /// Device name and connection status are already shown at the top of the expanded presentation; keep only a single
-    /// supplementary line at the bottom to avoid duplicating cards and clipping the last line within Dynamic Island height limits.
+    /// supplementary line at the bottom to avoid duplicating cards and clipping the last line within Dynamic Island
+    /// height limits.
     private func expandedAgentDetail(
         _ state: AirSIMCallActivityAttributes.ContentState
     ) -> some View {
@@ -341,10 +345,20 @@ struct AirSIMLiveActivityWidget: Widget {
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 HStack(spacing: IslandActionLayout.buttonSpacing) {
-                    callActionButton(RejectAirSIMCallIntent(callID: state.callID), icon: "phone.down.fill",
-                                   title: "Decline Call", prominent: false, tint: Color.white.opacity(0.17))
-                    callActionButton(AnswerAirSIMCallIntent(callID: state.callID), icon: "phone.fill",
-                                   title: "Answer Call", prominent: true, tint: .green)
+                    callActionButton(
+                        RejectAirSIMCallIntent(callID: state.callID),
+                        icon: "phone.down.fill",
+                        title: "Decline Call",
+                        prominent: false,
+                        tint: Color.white.opacity(0.17)
+                    )
+                    callActionButton(
+                        AnswerAirSIMCallIntent(callID: state.callID),
+                        icon: "phone.fill",
+                        title: "Answer Call",
+                        prominent: true,
+                        tint: .green
+                    )
                 }
                 .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
             }
@@ -356,17 +370,27 @@ struct AirSIMLiveActivityWidget: Widget {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                callActionButton(HangUpAirSIMCallIntent(callID: state.callID), icon: "phone.down.fill",
-                               title: "End Call", prominent: true, tint: .red)
-                    .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
+                callActionButton(
+                    HangUpAirSIMCallIntent(callID: state.callID),
+                    icon: "phone.down.fill",
+                    title: "End Call",
+                    prominent: true,
+                    tint: .red
+                )
+                .frame(width: IslandActionLayout.reservedWidth(for: state.phase), alignment: .trailing)
             }
         case .standby, .cloudStandby, .offline:
             EmptyView()
         }
     }
 
-    private func callActionButton<Intent: AppIntent>(_ intent: Intent,
-                                icon: String, title: String, prominent: Bool, tint: Color) -> some View {
+    private func callActionButton<Intent: AppIntent>(
+        _ intent: Intent,
+        icon: String,
+        title: String,
+        prominent: Bool,
+        tint: Color
+    ) -> some View {
         Button(intent: intent) {
             Image(systemName: icon)
                 .font(.subheadline.weight(.semibold))
@@ -560,8 +584,9 @@ struct AirSIMLiveActivityWidget: Widget {
         for state: AirSIMCallActivityAttributes.ContentState
     ) -> String {
         if state.transport == .vowlan,
-           state.phase != .offline,
-           state.phase != .cloudStandby {
+            state.phase != .offline,
+            state.phase != .cloudStandby
+        {
             return state.transport?.systemImage ?? "wifi"
         }
         return symbolName(for: state.phase)
@@ -616,21 +641,24 @@ private struct LiveActivityGlassButtonStyle: ViewModifier {
     }
 }
 
-/// The Dynamic Island shell is drawn opaquely by the system; gradients apply only to the native glass info bar inside the island.
+/// The Dynamic Island shell is drawn opaquely by the system; gradients apply only to the native glass info bar inside
+/// the island.
 private struct ProgressiveIslandGlassSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOSApplicationExtension 26.0, *) {
             content.background {
                 Color.clear
-                    .glassEffect(.regular.tint(.white.opacity(0.12)),
-                                 in: .rect(cornerRadius: 14))
+                    .glassEffect(
+                        .regular.tint(.white.opacity(0.12)),
+                        in: .rect(cornerRadius: 14)
+                    )
                     .mask {
                         LinearGradient(
                             stops: [
                                 .init(color: .clear, location: 0),
                                 .init(color: .white.opacity(0.45), location: 0.42),
-                                .init(color: .white, location: 1)
+                                .init(color: .white, location: 1),
                             ],
                             startPoint: .top,
                             endPoint: .bottom
@@ -650,8 +678,10 @@ private struct ProgressiveIslandGlassSurface: ViewModifier {
             }
         } else {
             content
-                .background(.ultraThinMaterial,
-                            in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(
+                    .ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
         }
     }
 }

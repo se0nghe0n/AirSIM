@@ -12,14 +12,19 @@ import WatchConnectivity
 @Observable
 final class WatchCallSession: NSObject {
     private(set) var call = WatchCallPayload(
-        callID: "", callUUID: nil, phase: .idle, number: nil,
-        callerName: nil, updatedAt: Date()
+        callID: "",
+        callUUID: nil,
+        phase: .idle,
+        number: nil,
+        callerName: nil,
+        updatedAt: Date()
     )
+
     private(set) var isSendingAction = false
     private(set) var isDialing = false
     var errorMessage: String?
-	private(set) var pushStatus = "Registering Watch VoIP…"
-	private(set) var audioStatus = "Call audio plays on iPhone"
+    private(set) var pushStatus = "Registering Watch VoIP…"
+    private(set) var audioStatus = "Call audio plays on iPhone"
 
     private let provider: CXProvider
     private let callController = CXCallController()
@@ -30,7 +35,7 @@ final class WatchCallSession: NSObject {
     @ObservationIgnored private var answering = false
     @ObservationIgnored private var dialRequestID: UUID?
     @ObservationIgnored private var activeDialRequestID: UUID?
-	@ObservationIgnored private var pendingWatchToken: Data?
+    @ObservationIgnored private var pendingWatchToken: Data?
     @ObservationIgnored private var endedCallIDs = Set<String>()
     private let cloudMediaPreferenceKey = "airsim.watch.cloud-media-allowed"
 
@@ -47,12 +52,11 @@ final class WatchCallSession: NSObject {
         provider = CXProvider(configuration: configuration)
         super.init()
 
-
         provider.setDelegate(self, queue: .main)
         let registry = PKPushRegistry(queue: .main)
         registry.delegate = self
         pushRegistry = registry
-		registry.desiredPushTypes = [.voIP]
+        registry.desiredPushTypes = [.voIP]
 
         if WCSession.isSupported() {
             let session = WCSession.default
@@ -77,9 +81,13 @@ final class WatchCallSession: NSObject {
 
     func requestLatestState() {
         guard let connectivity, connectivity.isReachable else { return }
-        connectivity.sendMessage(["action": "status"], replyHandler: { [weak self] reply in
-            self?.receiveMirror(reply)
-        }, errorHandler: nil)
+        connectivity.sendMessage(
+            ["action": "status"],
+            replyHandler: { [weak self] reply in
+                self?.receiveMirror(reply)
+            },
+            errorHandler: nil
+        )
     }
 
     func answer() { request(answer: true) }
@@ -92,7 +100,8 @@ final class WatchCallSession: NSObject {
             return
         }
         guard voIPCall == nil, call.phase == .idle || call.phase == .ended,
-              !isDialing else {
+            !isDialing
+        else {
             errorMessage = "End the current call first"
             return
         }
@@ -104,19 +113,23 @@ final class WatchCallSession: NSObject {
         dialRequestID = requestID
         isDialing = true
         errorMessage = nil
-        connectivity.sendMessage([
-            "action": "dial", "request_id": requestID.uuidString, "number": number,
-        ], replyHandler: { [weak self] reply in
-            DispatchQueue.main.async { self?.receiveDialReply(reply, requestID: requestID) }
-        }, errorHandler: { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self, self.dialRequestID == requestID else { return }
-                self.dialRequestID = nil
-                self.isDialing = false
-                self.errorMessage = "iPhone did not respond to the call request: \(error.localizedDescription)"
-                self.abortCompanionDial(requestID)
+        connectivity.sendMessage(
+            [
+                "action": "dial", "request_id": requestID.uuidString, "number": number,
+            ],
+            replyHandler: { [weak self] reply in
+                DispatchQueue.main.async { self?.receiveDialReply(reply, requestID: requestID) }
+            },
+            errorHandler: { [weak self] error in
+                DispatchQueue.main.async {
+                    guard let self, self.dialRequestID == requestID else { return }
+                    self.dialRequestID = nil
+                    self.isDialing = false
+                    self.errorMessage = "iPhone did not respond to the call request: \(error.localizedDescription)"
+                    self.abortCompanionDial(requestID)
+                }
             }
-        })
+        )
     }
 
     func cancelDial() {
@@ -162,8 +175,12 @@ final class WatchCallSession: NSObject {
                         self.voIPCall = nil
                         self.activeDialRequestID = nil
                         self.call = WatchCallPayload(
-                            callID: "", callUUID: nil, phase: .idle, number: nil,
-                            callerName: nil, updatedAt: Date()
+                            callID: "",
+                            callUUID: nil,
+                            phase: .idle,
+                            number: nil,
+                            callerName: nil,
+                            updatedAt: Date()
                         )
                     }
                 }
@@ -177,7 +194,8 @@ final class WatchCallSession: NSObject {
     private func abortCompanionDial(_ requestID: UUID) {
         connectivity?.sendMessage(
             ["action": "cancel_dial", "request_id": requestID.uuidString],
-            replyHandler: { _ in }, errorHandler: nil
+            replyHandler: { _ in },
+            errorHandler: nil
         )
     }
 
@@ -186,7 +204,8 @@ final class WatchCallSession: NSObject {
             errorMessage = "No system call is available"
             return
         }
-        let action: CXCallAction = answer
+        let action: CXCallAction =
+            answer
             ? CXAnswerCallAction(call: uuid)
             : CXEndCallAction(call: uuid)
         isSendingAction = true
@@ -208,11 +227,14 @@ final class WatchCallSession: NSObject {
             callerName: voIPCall.callerName,
             updatedAt: Date()
         )
-        notifyCompanion(event: "watch_call_owner", extra: [
-            "call_id": voIPCall.callID,
-            "call_uuid": voIPCall.uuid.uuidString,
-            "phase": phase.rawValue,
-        ])
+        notifyCompanion(
+            event: "watch_call_owner",
+            extra: [
+                "call_id": voIPCall.callID,
+                "call_uuid": voIPCall.uuid.uuidString,
+                "phase": phase.rawValue,
+            ]
+        )
     }
 
     private func receiveMirror(_ dictionary: [String: Any]) {
@@ -224,15 +246,16 @@ final class WatchCallSession: NSObject {
             guard let self else { return }
             let age = Date().timeIntervalSince(payload.updatedAt)
             if payload.phase == .incoming, self.voIPCall == nil,
-               !self.endedCallIDs.contains(payload.callID),
-               (-5...45).contains(age),
-               let uuid = payload.callUUID,
-               let incoming = try? WatchVoIPCall(userInfo: [
+                !self.endedCallIDs.contains(payload.callID),
+                (-5...45).contains(age),
+                let uuid = payload.callUUID,
+                let incoming = try? WatchVoIPCall(userInfo: [
                     "event": "incoming_call", "call_id": payload.callID,
                     "call_uuid": uuid.uuidString, "number": payload.number ?? "",
                     "caller_name": payload.callerName ?? "",
                     "expires_at": Date().addingTimeInterval(45).timeIntervalSince1970,
-               ]) {
+                ])
+            {
                 self.voIPCall = incoming
                 self.call = payload
                 let update = CXCallUpdate()
@@ -270,43 +293,50 @@ final class WatchCallSession: NSObject {
     }
 
     private func sendWatchToken(_ token: Data) {
-		pendingWatchToken = token
-		pushStatus = "Watch VoIP registered. Syncing with iPhone…"
-#if DEBUG
-		print("[AirSIM Watch PushKit] Token generated; bytes=\(token.count), WC=\(connectivity?.activationState.rawValue ?? -1)")
-#endif
-        notifyCompanion(event: "watch_voip_registration", extra: [
-            "watch_voip_token": token.map { String(format: "%02x", $0) }.joined(),
-            "watch_bundle_id": Bundle.main.bundleIdentifier ?? "com.example.airsim.watchkitapp",
-        ])
+        pendingWatchToken = token
+        pushStatus = "Watch VoIP registered. Syncing with iPhone…"
+        #if DEBUG
+        print(
+            "[AirSIM Watch PushKit] Token generated; bytes=\(token.count), WC=\(connectivity?.activationState.rawValue ?? -1)"
+        )
+        #endif
+        notifyCompanion(
+            event: "watch_voip_registration",
+            extra: [
+                "watch_voip_token": token.map { String(format: "%02x", $0) }.joined(),
+                "watch_bundle_id": Bundle.main.bundleIdentifier ?? "com.example.airsim.watchkitapp",
+            ]
+        )
     }
 
     private func notifyCompanion(event: String, extra: [String: Any]) {
-		guard let connectivity, connectivity.activationState == .activated else {
-#if DEBUG
-			print("[AirSIM Watch WC] Waiting for activation; event=\(event)")
-#endif
-			return
-		}
+        guard let connectivity, connectivity.activationState == .activated else {
+            #if DEBUG
+            print("[AirSIM Watch WC] Waiting for activation; event=\(event)")
+            #endif
+            return
+        }
         var payload = extra
         payload["event"] = event
-		do {
-			try connectivity.updateApplicationContext(payload)
-		} catch {
-#if DEBUG
-			print("[AirSIM Watch WC] updateApplicationContext failed: \(error.localizedDescription)")
-#endif
-		}
-		connectivity.transferUserInfo(payload)
+        do {
+            try connectivity.updateApplicationContext(payload)
+        } catch {
+            #if DEBUG
+            print("[AirSIM Watch WC] updateApplicationContext failed: \(error.localizedDescription)")
+            #endif
+        }
+        connectivity.transferUserInfo(payload)
         if connectivity.isReachable {
             connectivity.sendMessage(payload, replyHandler: nil, errorHandler: nil)
         }
-		if event == "watch_voip_registration" {
-			pushStatus = "Watch VoIP synced"
-		}
-#if DEBUG
-		print("[AirSIM Watch WC] Sent; event=\(event), reachable=\(connectivity.isReachable), queued=\(connectivity.outstandingUserInfoTransfers.count)")
-#endif
+        if event == "watch_voip_registration" {
+            pushStatus = "Watch VoIP synced"
+        }
+        #if DEBUG
+        print(
+            "[AirSIM Watch WC] Sent; event=\(event), reachable=\(connectivity.isReachable), queued=\(connectivity.outstandingUserInfoTransfers.count)"
+        )
+        #endif
     }
 
     private func recordEnded(_ callID: String) {
@@ -315,10 +345,13 @@ final class WatchCallSession: NSObject {
     }
 
     private func requestLocalEnd(_ call: WatchVoIPCall) {
-        notifyCompanion(event: "watch_local_end", extra: [
-            "action": "watch_local_end", "call_id": call.callID,
-            "call_uuid": call.uuid.uuidString,
-        ])
+        notifyCompanion(
+            event: "watch_local_end",
+            extra: [
+                "action": "watch_local_end", "call_id": call.callID,
+                "call_uuid": call.uuid.uuidString,
+            ]
+        )
     }
 
     private func answerOnIPhone(_ call: WatchVoIPCall, action: CXAnswerCallAction) {
@@ -330,7 +363,9 @@ final class WatchCallSession: NSObject {
         }
         connectivity.sendMessage(
             WatchCloudAudioPlan.companionControl(
-                action: "answer", callID: call.callID, callUUID: call.uuid
+                action: "answer",
+                callID: call.callID,
+                callUUID: call.uuid
             ),
             replyHandler: { [weak self] reply in
                 DispatchQueue.main.async {
@@ -357,7 +392,6 @@ final class WatchCallSession: NSObject {
         )
     }
 
-
 }
 
 extension WatchCallSession: PKPushRegistryDelegate {
@@ -372,10 +406,13 @@ extension WatchCallSession: PKPushRegistryDelegate {
 
     func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
         guard type == .voIP else { return }
-        notifyCompanion(event: "watch_voip_registration", extra: [
-            "watch_voip_token": "",
-            "watch_bundle_id": Bundle.main.bundleIdentifier ?? "com.example.airsim.watchkitapp",
-        ])
+        notifyCompanion(
+            event: "watch_voip_registration",
+            extra: [
+                "watch_voip_token": "",
+                "watch_bundle_id": Bundle.main.bundleIdentifier ?? "com.example.airsim.watchkitapp",
+            ]
+        )
     }
 
     func pushRegistry(
@@ -384,7 +421,10 @@ extension WatchCallSession: PKPushRegistryDelegate {
         for type: PKPushType,
         completion: @escaping () -> Void
     ) {
-        guard type == .voIP else { completion(); return }
+        guard type == .voIP else {
+            completion()
+            return
+        }
         do {
             let incoming = try WatchVoIPCall(userInfo: payload.dictionaryPayload)
             if voIPCall?.callID == incoming.callID || endedCallIDs.contains(incoming.callID) {
@@ -429,26 +469,37 @@ extension WatchCallSession: CXProviderDelegate {
             notifyCompanion(
                 event: "watch_call_control",
                 extra: WatchCloudAudioPlan.companionControl(
-                    action: "end", callID: voIPCall.callID, callUUID: voIPCall.uuid
+                    action: "end",
+                    callID: voIPCall.callID,
+                    callUUID: voIPCall.uuid
                 )
             )
         }
         if voIPCall != nil { publishLocalPhase(.ended) }
         if let activeDialRequestID { abortCompanionDial(activeDialRequestID) }
-        voIPCall = nil; answered = false; answering = false
+        voIPCall = nil
+        answered = false
+        answering = false
         activeDialRequestID = nil
     }
 
     func provider(_ provider: CXProvider, perform action: CXStartCallAction) {
         guard let voIPCall, voIPCall.isOutgoing, voIPCall.uuid == action.callUUID,
-              voIPCall.media == .iphoneWebRTC else { action.fail(); return }
+            voIPCall.media == .iphoneWebRTC
+        else {
+            action.fail()
+            return
+        }
         provider.reportOutgoingCall(with: voIPCall.uuid, startedConnectingAt: Date())
         answered = true
         action.fulfill()
     }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        guard let voIPCall, voIPCall.uuid == action.callUUID else { action.fail(); return }
+        guard let voIPCall, voIPCall.uuid == action.callUUID else {
+            action.fail()
+            return
+        }
         answering = true
         publishLocalPhase(.connecting)
         guard let connectivity, connectivity.isReachable else {
@@ -457,40 +508,46 @@ extension WatchCallSession: CXProviderDelegate {
             action.fail()
             return
         }
-        connectivity.sendMessage([
-            "action": "watch_local_answer", "call_id": voIPCall.callID,
-            "call_uuid": voIPCall.uuid.uuidString,
-        ], replyHandler: { [weak self] reply in
-            DispatchQueue.main.async {
-                guard let self, self.voIPCall?.uuid == voIPCall.uuid else { return }
-                if let allowed = reply["cloud_media_allowed"] as? Bool {
-                    UserDefaults.standard.set(allowed, forKey: self.cloudMediaPreferenceKey)
+        connectivity.sendMessage(
+            [
+                "action": "watch_local_answer", "call_id": voIPCall.callID,
+                "call_uuid": voIPCall.uuid.uuidString,
+            ],
+            replyHandler: { [weak self] reply in
+                DispatchQueue.main.async {
+                    guard let self, self.voIPCall?.uuid == voIPCall.uuid else { return }
+                    if let allowed = reply["cloud_media_allowed"] as? Bool {
+                        UserDefaults.standard.set(allowed, forKey: self.cloudMediaPreferenceKey)
+                    }
+                    if reply["ok"] as? Bool == true,
+                        reply["media_route"] as? String == "vowlan",
+                        WatchCloudAudioPlan.accepts(transport: reply["media_transport"] as? String)
+                    {
+                        self.voIPCall = voIPCall.usingIPhoneVoWLANAudio()
+                        self.answered = true
+                        self.answering = false
+                        action.fulfill()
+                    } else if voIPCall.media == .iphoneWebRTC, !voIPCall.endsOnVoWLAN,
+                        self.cloudMediaAllowed
+                    {
+                        self.answerOnIPhone(voIPCall, action: action)
+                    } else {
+                        self.answering = false
+                        self.errorMessage = reply["error"] as? String ?? "VoWLAN is unavailable on iPhone"
+                        action.fail()
+                    }
                 }
-                if reply["ok"] as? Bool == true,
-                   reply["media_route"] as? String == "vowlan",
-                   WatchCloudAudioPlan.accepts(transport: reply["media_transport"] as? String) {
-                    self.voIPCall = voIPCall.usingIPhoneVoWLANAudio()
-                    self.answered = true
+            },
+            errorHandler: { [weak self] error in
+                DispatchQueue.main.async {
+                    guard let self, self.voIPCall?.uuid == voIPCall.uuid else { return }
+                    // An uncertain local answer must not switch transport or answer twice.
                     self.answering = false
-                    action.fulfill()
-                } else if voIPCall.media == .iphoneWebRTC, !voIPCall.endsOnVoWLAN,
-                          self.cloudMediaAllowed {
-                    self.answerOnIPhone(voIPCall, action: action)
-                } else {
-                    self.answering = false
-                    self.errorMessage = reply["error"] as? String ?? "VoWLAN is unavailable on iPhone"
+                    self.errorMessage = "iPhone did not confirm answering: \(error.localizedDescription)"
                     action.fail()
                 }
             }
-        }, errorHandler: { [weak self] error in
-            DispatchQueue.main.async {
-                guard let self, self.voIPCall?.uuid == voIPCall.uuid else { return }
-                // An uncertain local answer must not switch transport or answer twice.
-                self.answering = false
-                self.errorMessage = "iPhone did not confirm answering: \(error.localizedDescription)"
-                action.fail()
-            }
-        })
+        )
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
@@ -499,10 +556,13 @@ extension WatchCallSession: CXProviderDelegate {
             if voIPCall.endsOnVoWLAN {
                 requestLocalEnd(voIPCall)
             } else if case .pendingLocal = voIPCall.media, !answered {
-                notifyCompanion(event: "watch_local_reject", extra: [
-                    "action": "watch_local_reject", "call_id": voIPCall.callID,
-                    "call_uuid": voIPCall.uuid.uuidString,
-                ])
+                notifyCompanion(
+                    event: "watch_local_reject",
+                    extra: [
+                        "action": "watch_local_reject", "call_id": voIPCall.callID,
+                        "call_uuid": voIPCall.uuid.uuidString,
+                    ]
+                )
             } else if voIPCall.isOutgoing && !answered, let activeDialRequestID {
                 abortCompanionDial(activeDialRequestID)
             } else {
@@ -510,31 +570,47 @@ extension WatchCallSession: CXProviderDelegate {
                 notifyCompanion(
                     event: "watch_call_control",
                     extra: WatchCloudAudioPlan.companionControl(
-                        action: control, callID: voIPCall.callID, callUUID: voIPCall.uuid
+                        action: control,
+                        callID: voIPCall.callID,
+                        callUUID: voIPCall.uuid
                     )
                 )
             }
             publishLocalPhase(.ended)
         }
-        voIPCall = nil; answered = false; answering = false
+        voIPCall = nil
+        answered = false
+        answering = false
         activeDialRequestID = nil
         action.fulfill()
     }
 
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
         guard let current = voIPCall, current.uuid == action.callUUID,
-              let connectivity, connectivity.isReachable else { action.fail(); return }
+            let connectivity, connectivity.isReachable
+        else {
+            action.fail()
+            return
+        }
         var message = WatchCloudAudioPlan.companionControl(
-            action: "mute", callID: current.callID, callUUID: current.uuid)
+            action: "mute",
+            callID: current.callID,
+            callUUID: current.uuid
+        )
         message["muted"] = action.isMuted
-        connectivity.sendMessage(message, replyHandler: { [weak self] reply in
-            DispatchQueue.main.async {
-                guard self?.voIPCall?.uuid == current.uuid, reply["ok"] as? Bool == true else {
-                    action.fail(); return
+        connectivity.sendMessage(
+            message,
+            replyHandler: { [weak self] reply in
+                DispatchQueue.main.async {
+                    guard self?.voIPCall?.uuid == current.uuid, reply["ok"] as? Bool == true else {
+                        action.fail()
+                        return
+                    }
+                    action.fulfill()
                 }
-                action.fulfill()
-            }
-        }, errorHandler: { _ in action.fail() })
+            },
+            errorHandler: { _ in action.fail() }
+        )
     }
 
     // This is a companion controller, never an independent Watch audio device.
@@ -544,14 +620,14 @@ extension WatchCallSession: CXProviderDelegate {
 }
 
 extension WatchCallSession: WCSessionDelegate {
-	func sessionReachabilityDidChange(_ session: WCSession) {
-#if DEBUG
-		print("[AirSIM Watch WC] reachable=\(session.isReachable)")
-#endif
-		if session.isReachable, let token = pendingWatchToken ?? pushRegistry.pushToken(for: .voIP) {
-			sendWatchToken(token)
-		}
-	}
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        #if DEBUG
+        print("[AirSIM Watch WC] reachable=\(session.isReachable)")
+        #endif
+        if session.isReachable, let token = pendingWatchToken ?? pushRegistry.pushToken(for: .voIP) {
+            sendWatchToken(token)
+        }
+    }
 
     func session(
         _ session: WCSession,
@@ -559,11 +635,13 @@ extension WatchCallSession: WCSessionDelegate {
         error: Error?
     ) {
         if activationState == .activated {
-			let token = pendingWatchToken ?? pushRegistry.pushToken(for: .voIP)
-#if DEBUG
-			print("[AirSIM Watch WC] Activation completed; token=\(token == nil ? "none" : "present") error=\(error?.localizedDescription ?? "none")")
-#endif
-			if let token { sendWatchToken(token) }
+            let token = pendingWatchToken ?? pushRegistry.pushToken(for: .voIP)
+            #if DEBUG
+            print(
+                "[AirSIM Watch WC] Activation completed; token=\(token == nil ? "none" : "present") error=\(error?.localizedDescription ?? "none")"
+            )
+            #endif
+            if let token { sendWatchToken(token) }
             if !session.receivedApplicationContext.isEmpty { receiveMirror(session.receivedApplicationContext) }
             requestLatestState()
         }
@@ -581,4 +659,3 @@ extension WatchCallSession: WCSessionDelegate {
         receiveMirror(message)
     }
 }
-

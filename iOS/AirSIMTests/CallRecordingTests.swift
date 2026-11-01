@@ -7,6 +7,7 @@ import WebRTC
 struct CallRecordingTests {
     private let source = CallRecordingSource(callUUID: UUID())
     private let otherSource = CallRecordingSource(callUUID: UUID())
+
     @Test func `WebRTC module actually registers and retains both recording observers`() throws {
         let audio = CloudWebRTCRecordingAudio(source: source)
         // Test the real SDK getters, not a mock initializer: this SDK accepts
@@ -38,12 +39,17 @@ struct CallRecordingTests {
     }
 
     private func fixture() throws -> (CallAudioRecorder, URL) {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            UUID().uuidString,
+            isDirectory: true
+        )
         return (CallAudioRecorder(directoryURL: directory), directory)
     }
+
     private func pcm(_ values: [Int16]) -> Data {
         values.withUnsafeBufferPointer { Data(buffer: $0) }
     }
+
     private func samples(_ url: URL) throws -> [Int16] {
         let wav = try Data(contentsOf: url)
         #expect(String(data: wav.prefix(4), encoding: .ascii) == "RIFF")
@@ -81,7 +87,14 @@ struct CallRecordingTests {
         _ = try await recorder.start(callID: "mute", source: source, atUptime: 10)
         let local: [Float] = [32_000, -32_000]
         local.withUnsafeBufferPointer {
-            recorder.appendFloat32($0, sampleRate: 8_000, normalized: false, channel: .local, source: source, atUptime: 10)
+            recorder.appendFloat32(
+                $0,
+                sampleRate: 8_000,
+                normalized: false,
+                channel: .local,
+                source: source,
+                atUptime: 10
+            )
         }
         recorder.appendPCM16(pcm([123, -456]), channel: .remote, source: source, atUptime: 10)
         let file = try await recorder.stop()
@@ -94,12 +107,26 @@ struct CallRecordingTests {
         _ = try await recorder.start(callID: "float", source: source, atUptime: 10)
         var floats: [Float] = [1_000, 1_000, -2_000, -2_000]
         floats.withUnsafeBufferPointer {
-            recorder.appendFloat32($0, sampleRate: 16_000, normalized: false, channel: .local, source: source, atUptime: 10)
+            recorder.appendFloat32(
+                $0,
+                sampleRate: 16_000,
+                normalized: false,
+                channel: .local,
+                source: source,
+                atUptime: 10
+            )
         }
         floats = [0, 0, 0, 0]
         let normalized: [Float] = [1, -1]
         normalized.withUnsafeBufferPointer {
-            recorder.appendFloat32($0, sampleRate: 8_000, normalized: true, channel: .remote, source: source, atUptime: 10)
+            recorder.appendFloat32(
+                $0,
+                sampleRate: 8_000,
+                normalized: true,
+                channel: .remote,
+                source: source,
+                atUptime: 10
+            )
         }
         let file = try await recorder.stop()
         #expect(try samples(recorder.url(for: file)) == [1_000, 32_767, -2_000, -32_767])
@@ -185,8 +212,12 @@ struct CallRecordingTests {
         let chunk = pcm([Int16](repeating: 5_000, count: 160))
         DispatchQueue.concurrentPerform(iterations: 2) { direction in
             for frame in 0..<100 {
-                recorder.appendPCM16(chunk, channel: direction == 0 ? .local : .remote,
-                    source: source, atUptime: 100 + Double(frame) * 0.02)
+                recorder.appendPCM16(
+                    chunk,
+                    channel: direction == 0 ? .local : .remote,
+                    source: source,
+                    atUptime: 100 + Double(frame) * 0.02
+                )
             }
         }
         let file = try await recorder.stop()

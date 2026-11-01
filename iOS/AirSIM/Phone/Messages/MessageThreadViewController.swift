@@ -15,10 +15,12 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
     let reply = UITextView()
     private let replyPlaceholder = phoneLabel("Message", color: .placeholderText)
     private lazy var replyHeight = reply.heightAnchor.constraint(equalToConstant: Metrics.minimumReplyHeight)
+
     private lazy var sendButton = phoneButton("Send", image: "arrow.up.circle.fill") { [weak self] in
         guard let self else { return }
         send(.sendTapped(to: sender))
     }
+
     private var lastIDs: [String] = []
     private var firstLoad = true
 
@@ -123,7 +125,7 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
                 UIMenu(children: [
                     UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
                         UIPasteboard.general.string = message.content
-                    },
+                    }
                 ])
             },
             bodyViewProvider: { PhoneMessageBubble(message: message) },
@@ -189,7 +191,10 @@ final class MessageThreadViewController: PhoneTableController, UITextViewDelegat
         ])
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: Metrics.barMargin),
-            bar.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -Metrics.barMargin),
+            bar.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -Metrics.barMargin
+            ),
             bar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -Metrics.barMargin),
         ])
     }

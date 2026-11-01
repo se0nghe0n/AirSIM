@@ -8,6 +8,7 @@ struct SamsungPairingService: Identifiable, Equatable {
     let expiresAt: Date
 
     var id: String { sessionID }
+
     var displayName: String {
         if case let .service(name, _, _, _) = endpoint { return name }
         return "Android Phone Bridge"
@@ -64,13 +65,14 @@ final class SamsungPairingBrowser {
 
     private nonisolated static func parse(_ result: NWBrowser.Result) -> SamsungPairingService? {
         guard case let .bonjour(record) = result.metadata,
-              record["v"] == "1",
-              let sessionID = record["session"],
-              let keyText = record["key"],
-              let serverPublicKey = Data(base64URL: keyText),
-              serverPublicKey.count == 32,
-              let expiresText = record["expires"],
-              let expiresMillis = Double(expiresText) else { return nil }
+            record["v"] == "1",
+            let sessionID = record["session"],
+            let keyText = record["key"],
+            let serverPublicKey = Data(base64URL: keyText),
+            serverPublicKey.count == 32,
+            let expiresText = record["expires"],
+            let expiresMillis = Double(expiresText)
+        else { return nil }
         return SamsungPairingService(
             endpoint: result.endpoint,
             sessionID: sessionID,
@@ -138,6 +140,7 @@ enum SamsungPairingClient {
         let configured: Bool
         let deviceIDHint: String?
         let agentID: String?
+
         enum CodingKeys: String, CodingKey {
             case configured
             case deviceIDHint = "device_id_hint"
@@ -145,7 +148,9 @@ enum SamsungPairingClient {
         }
     }
 
-    static func pair(service: SamsungPairingService, code: String, registration: AgentPushRegistration) async throws -> String {
+    static func pair(service: SamsungPairingService, code: String, registration: AgentPushRegistration) async throws
+        -> String
+    {
         guard code.range(of: #"^[0-9]{6}$"#, options: .regularExpression) != nil else {
             throw SamsungPairingClientError.invalidCode
         }
@@ -157,11 +162,13 @@ enum SamsungPairingClient {
             sessionID: service.sessionID,
             code: code
         )
-        let body = try JSONEncoder().encode(Claim(
-            sessionID: service.sessionID,
-            clientPublicKey: sealed.clientPublicKey.base64URL,
-            sealedRegistration: sealed.combined.base64URL
-        ))
+        let body = try JSONEncoder().encode(
+            Claim(
+                sessionID: service.sessionID,
+                clientPublicKey: sealed.clientPublicKey.base64URL,
+                sealedRegistration: sealed.combined.base64URL
+            )
+        )
         let responseData = try await exchange(endpoint: service.endpoint, body: body)
         let response = try JSONDecoder().decode(Response.self, from: responseData)
         guard response.configured else { throw SamsungPairingClientError.rejected }
@@ -211,21 +218,40 @@ private final class PairingExchangeState: @unchecked Sendable {
     }
 
     func send(body: Data) {
-        var request = Data("POST /pair/v1/claim HTTP/1.1\r\nHost: airsim-pair.local\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
+        var request = Data(
+            "POST /pair/v1/claim HTTP/1.1\r\nHost: airsim-pair.local\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+                .utf8
+        )
         request.append(body)
-        connection.send(content: request, completion: .contentProcessed { [weak self] error in
-            if let error { self?.finish(.failure(error)); return }
-            self?.receive()
-        })
+        connection.send(
+            content: request,
+            completion: .contentProcessed { [weak self] error in
+                if let error {
+                    self?.finish(.failure(error))
+                    return
+                }
+                self?.receive()
+            }
+        )
     }
 
     private func receive() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] content, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
+            [weak self] content, _, isComplete, error in
             guard let self else { return }
             if let content { self.received.append(content) }
-            if let error { self.finish(.failure(error)); return }
-            if self.received.count > 65_536 { self.finish(.failure(SamsungPairingClientError.responseTooLarge)); return }
-            if isComplete { self.finish(self.parseResponse()); return }
+            if let error {
+                self.finish(.failure(error))
+                return
+            }
+            if self.received.count > 65_536 {
+                self.finish(.failure(SamsungPairingClientError.responseTooLarge))
+                return
+            }
+            if isComplete {
+                self.finish(self.parseResponse())
+                return
+            }
             self.receive()
         }
     }
@@ -233,14 +259,18 @@ private final class PairingExchangeState: @unchecked Sendable {
     private func parseResponse() -> Result<Data, Error> {
         let marker = Data("\r\n\r\n".utf8)
         guard let range = received.range(of: marker),
-              let firstLine = String(data: received[..<range.lowerBound], encoding: .utf8)?.split(separator: "\n").first,
-              firstLine.contains(" 200 ") else { return .failure(SamsungPairingClientError.rejected) }
+            let firstLine = String(data: received[..<range.lowerBound], encoding: .utf8)?.split(separator: "\n").first,
+            firstLine.contains(" 200 ")
+        else { return .failure(SamsungPairingClientError.rejected) }
         return .success(Data(received[range.upperBound...]))
     }
 
     func finish(_ result: Result<Data, Error>) {
         lock.lock()
-        guard !finished else { lock.unlock(); return }
+        guard !finished else {
+            lock.unlock()
+            return
+        }
         finished = true
         lock.unlock()
         connection.cancel()
@@ -250,6 +280,7 @@ private final class PairingExchangeState: @unchecked Sendable {
 
 enum SamsungPairingClientError: LocalizedError {
     case invalidCode, expired, rejected, responseTooLarge, connectionClosed, registrationUnavailable, pairingBusy
+
     var errorDescription: String? {
         switch self {
         case .invalidCode: return "Enter the six-digit code shown on Android"
@@ -257,7 +288,9 @@ enum SamsungPairingClientError: LocalizedError {
         case .rejected: return "Android rejected pairing. Check the code and try again."
         case .responseTooLarge: return "Android returned an invalid response"
         case .connectionClosed: return "The local network connection to Android was lost"
-        case .registrationUnavailable: return "Relay/push configuration is not ready. Configure cloud settings first, or enable Local-Only Pairing for a local connection."
+        case .registrationUnavailable:
+            return
+                "Relay/push configuration is not ready. Configure cloud settings first, or enable Local-Only Pairing for a local connection."
         case .pairingBusy: return "Another pairing is in progress. Try again shortly."
         }
     }

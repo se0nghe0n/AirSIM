@@ -2,18 +2,22 @@ import Foundation
 
 enum CallHistoryPolicy {
     static func merged(
-        local: [CallRecord], remote: [CallRecord],
-        deletedIDs: Set<String>, limit: Int
+        local: [CallRecord],
+        remote: [CallRecord],
+        deletedIDs: Set<String>,
+        limit: Int
     ) -> [CallRecord] {
         var byID: [String: CallRecord] = [:]
         for record in local + remote where !deletedIDs.contains(record.id) {
             if let existing = byID[record.id], existing.updatedAt > record.updatedAt { continue }
             byID[record.id] = record
         }
-        return Array(byID.values.sorted {
-            if $0.startedAt == $1.startedAt { return $0.id < $1.id }
-            return $0.startedAt > $1.startedAt
-        }.prefix(max(0, limit)))
+        return Array(
+            byID.values.sorted {
+                if $0.startedAt == $1.startedAt { return $0.id < $1.id }
+                return $0.startedAt > $1.startedAt
+            }.prefix(max(0, limit))
+        )
     }
 }
 
@@ -24,14 +28,16 @@ final class LocalHistoryStore {
     private let deletedCallIDsURL: URL
 
     init(fileManager: FileManager = .default, directoryURL: URL? = nil) {
-        let durableRoot = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
+        let durableRoot =
+            fileManager.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent("Documents", isDirectory: true)
-        let resolvedDirectoryURL = directoryURL
+            .appendingPathComponent("Documents", isDirectory: true)
+        let resolvedDirectoryURL =
+            directoryURL
             ?? durableRoot.appendingPathComponent("AirSIM", isDirectory: true)
         callHistoryURL = resolvedDirectoryURL.appendingPathComponent("call-history.json")
         messagesURL = resolvedDirectoryURL.appendingPathComponent("messages.json")
@@ -105,8 +111,8 @@ final class LocalHistoryStore {
     }
 
     private static func log(_ message: String) {
-#if DEBUG
+        #if DEBUG
         print("[AirSIM LocalHistory] \(message)")
-#endif
+        #endif
     }
 }

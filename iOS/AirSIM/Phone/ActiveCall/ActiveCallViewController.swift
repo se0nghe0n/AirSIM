@@ -14,9 +14,11 @@ final class ActiveCallViewController: ObservingViewController {
 
     private let headerBar = UIStackView(axis: .horizontal, spacing: Metrics.headerSpacing, alignment: .center)
     private let headerLabel = phoneLabel(size: 16, color: .lightGray)
+
     private lazy var recordButton = phoneButton("Record", image: "record.circle", color: .white) { [weak self] in
         self?.send(.recordButtonTapped)
     }
+
     private let center = UIStackView(axis: .vertical, spacing: Metrics.centerSpacing, alignment: .center)
     private let avatar = UIImageView()
     private let nameLabel = phoneLabel(size: 38, color: .white)
@@ -27,6 +29,7 @@ final class ActiveCallViewController: ObservingViewController {
     private let statusLabel = phoneLabel(size: 12, color: .white)
     private let bottomStack = UIStackView(axis: .vertical, spacing: Metrics.initialBottomSpacing, alignment: .center)
     private let controls = UIStackView(axis: .horizontal, spacing: Metrics.initialControlSpacing, alignment: .top)
+
     private lazy var muteControl = CallCircleControl(
         title: "Mute",
         icon: "mic.fill",
@@ -34,6 +37,7 @@ final class ActiveCallViewController: ObservingViewController {
     ) { [weak self] in
         self?.send(.muteButtonTapped)
     }
+
     private lazy var speakerControl = CallCircleControl(
         title: "Speaker",
         icon: "speaker.fill",
@@ -41,24 +45,30 @@ final class ActiveCallViewController: ObservingViewController {
     ) { [weak self] in
         self?.send(.speakerButtonTapped)
     }
+
     private let decisions = UIStackView(
         axis: .horizontal,
         spacing: Metrics.decisionSpacing,
         alignment: .top,
         distribution: .equalSpacing
     )
+
     private var lastPhase: ActiveCallContent.Phase?
     private lazy var avatarWidth = avatar.widthAnchor.constraint(equalToConstant: Metrics.initialAvatarSize)
+
     private lazy var headerTop = headerBar.topAnchor.constraint(
         equalTo: view.safeAreaLayoutGuide.topAnchor,
         constant: Metrics.initialHeaderTop
     )
+
     private lazy var headerWidth = headerBar.widthAnchor.constraint(equalToConstant: Metrics.initialHeaderWidth)
     private lazy var decisionsWidth = decisions.widthAnchor.constraint(equalToConstant: Metrics.initialDecisionsWidth)
+
     private lazy var bottomInset = bottomStack.bottomAnchor.constraint(
         equalTo: view.safeAreaLayoutGuide.bottomAnchor,
         constant: -Metrics.initialBottomInset
     )
+
     private var durationTimer: RepeatingTimer?
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }

@@ -7,20 +7,20 @@ struct ActiveCallFeature {
     struct State: Equatable {
         @SharedReader fileprivate var snapshot: AirSIMSnapshot
         @Presents var keypad: KeypadFeature.State?
-#if DEBUG
+        #if DEBUG
         var layoutPreviewCall: CallRecord?
-#endif
+        #endif
 
         init(snapshot: SharedReader<AirSIMSnapshot>) {
             _snapshot = snapshot
         }
 
         var call: CallRecord? {
-#if DEBUG
+            #if DEBUG
             if let layoutPreviewCall {
                 return layoutPreviewCall
             }
-#endif
+            #endif
             return snapshot.inAppPresentedCall
         }
 
@@ -28,9 +28,9 @@ struct ActiveCallFeature {
             call.map { ActiveCallContent(call: $0, snapshot: snapshot) }
         }
 
-#if DEBUG
+        #if DEBUG
         var isLayoutPreview: Bool { layoutPreviewCall != nil }
-#endif
+        #endif
     }
 
     enum Action: ViewAction {
@@ -94,8 +94,8 @@ struct ActiveCallFeature {
 extension CallRecord {
     static func layoutPreview(arguments: [String]) -> CallRecord? {
         guard let flag = arguments.firstIndex(of: "--airsim-layout-call"),
-              arguments.indices.contains(flag + 1),
-              ["incoming", "active"].contains(arguments[flag + 1])
+            arguments.indices.contains(flag + 1),
+            ["incoming", "active"].contains(arguments[flag + 1])
         else { return nil }
         return CallRecord(
             id: "layout-preview",

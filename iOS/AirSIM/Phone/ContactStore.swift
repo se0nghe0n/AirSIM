@@ -55,7 +55,8 @@ struct ContactFetcher: Sendable {
         var contacts: [ContactStore.Contact] = []
         try store.enumerateContacts(with: request) { contact, _ in
             let cjkName = Self.containsCJK(contact.givenName + contact.familyName)
-            let nameParts = cjkName
+            let nameParts =
+                cjkName
                 ? [contact.familyName, contact.givenName]
                 : [contact.givenName, contact.familyName]
             let separator = cjkName ? "" : " "
@@ -64,13 +65,15 @@ struct ContactFetcher: Sendable {
                 .map { ContactStore.normalized($0.value.stringValue) }
                 .filter { !$0.isEmpty }
             guard !name.isEmpty, !phones.isEmpty else { return }
-            contacts.append(.init(
-                id: contact.identifier,
-                name: name,
-                phones: phones,
-                emails: contact.emailAddresses.map { $0.value as String },
-                photoData: contact.thumbnailImageData
-            ))
+            contacts.append(
+                .init(
+                    id: contact.identifier,
+                    name: name,
+                    phones: phones,
+                    emails: contact.emailAddresses.map { $0.value as String },
+                    photoData: contact.thumbnailImageData
+                )
+            )
         }
         return contacts
     }
@@ -121,7 +124,8 @@ final class ContactStore {
 
     init(fileManager: FileManager = .default) {
         cache = ContactCacheStore(fileManager: fileManager)
-        // Contacts belong to phone data. Show the local copy first while the module is offline or the system contacts DB is temporarily unreadable.
+        // Contacts belong to phone data. Show the local copy first while the module is offline or the system contacts
+        // DB is temporarily unreadable.
         contacts = cache.load()
         let state = ContactFetcher().authorizationState()
         authorizationState = state
@@ -148,7 +152,8 @@ final class ContactStore {
 
     private func refresh(userInitiated: Bool) async {
         do {
-            // After a reboot, an empty array may be read before data protection unlocks; retry the disk cache on every foreground refresh.
+            // After a reboot, an empty array may be read before data protection unlocks; retry the disk cache on every
+            // foreground refresh.
             let cachedContacts = cache.load()
             if !cachedContacts.isEmpty {
                 contacts = cachedContacts
@@ -184,7 +189,8 @@ final class ContactStore {
             }
 
             isAuthorized = true
-            // Prefer the restored cache for non-user-initiated refreshes to avoid enumerating all contacts on every tab switch.
+            // Prefer the restored cache for non-user-initiated refreshes to avoid enumerating all contacts on every tab
+            // switch.
             guard userInitiated || contacts.isEmpty else {
                 errorMessage = nil
                 return
@@ -225,13 +231,14 @@ private final class ContactCacheStore {
     private let fileURL: URL
 
     init(fileManager: FileManager = .default) {
-        let durableRoot = fileManager.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first
+        let durableRoot =
+            fileManager.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent("Documents", isDirectory: true)
+            .appendingPathComponent("Documents", isDirectory: true)
         let directory = durableRoot.appendingPathComponent("AirSIM", isDirectory: true)
         fileURL = directory.appendingPathComponent("contacts.json")
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -260,8 +267,8 @@ private final class ContactCacheStore {
     }
 
     private static func log(_ message: String) {
-#if DEBUG
+        #if DEBUG
         print("[AirSIM Contacts] \(message)")
-#endif
+        #endif
     }
 }

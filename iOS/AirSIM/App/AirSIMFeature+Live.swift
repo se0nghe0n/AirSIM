@@ -10,9 +10,9 @@ extension AirSIMFeature {
         state.firstConnectionComplete = snapshot.preferenceOnboardingComplete
         let savedTab = UserDefaults.standard.string(forKey: "airsim.selected-tab") ?? ""
         state.selectedTab = PhoneTab(rawValue: savedTab) ?? .dial
-#if DEBUG
+        #if DEBUG
         state.activeCall.layoutPreviewCall = .layoutPreview(arguments: ProcessInfo.processInfo.arguments)
-#endif
+        #endif
         let store = Store(initialState: state) {
             AirSIMFeature()
         } withDependencies: {

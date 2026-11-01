@@ -6,9 +6,9 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     // MARK: Store
 
     let store: StoreOf<AirSIMFeature>
-#if DEBUG
+    #if DEBUG
     private var isPreview = false
-#endif
+    #endif
 
     // MARK: Views
 
@@ -23,9 +23,11 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     private(set) var callWindow: UIWindow?
     /// The window the call window covers; hidden from VoiceOver until the call window closes.
     private weak var callHostWindow: UIWindow?
+
     var activeCallController: ActiveCallViewController? {
         (callWindow?.rootViewController as? ActiveCallContainerViewController)?.call
     }
+
     private var notificationTokens: [NSObjectProtocol] = []
 
     // MARK: Lifecycle
@@ -35,12 +37,12 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         super.init(nibName: nil, bundle: nil)
     }
 
-#if DEBUG
+    #if DEBUG
     convenience init(previewStore: StoreOf<AirSIMFeature>) {
         self.init(store: previewStore)
         isPreview = true
     }
-#endif
+    #endif
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
@@ -176,10 +178,10 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         }
         // Errors wait for onboarding to close: its dismiss call would only close an alert presented above it.
         guard let alert,
-              alertController == nil,
-              view.window != nil,
-              store.firstConnectionComplete,
-              firstConnection == nil
+            alertController == nil,
+            view.window != nil,
+            store.firstConnectionComplete,
+            firstConnection == nil
         else { return }
         var host = callWindow?.rootViewController ?? self
         while let next = host.presentedViewController, !next.isBeingDismissed {
@@ -221,11 +223,11 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
             closeCallWindow()
             return
         }
-#if DEBUG
+        #if DEBUG
         if store.activeCall.isLayoutPreview {
             UIDevice.current.isProximityMonitoringEnabled = false
         }
-#endif
+        #endif
         if callWindow == nil {
             openCallWindow()
         }
@@ -236,9 +238,9 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     private func openCallWindow() {
         guard let host = view.window ?? presentedViewController?.viewIfLoaded?.window else { return }
         let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-#if DEBUG
+        #if DEBUG
         controller.isPresentationPreview = store.activeCall.isLayoutPreview || isPreview
-#endif
+        #endif
         let window = host.windowScene.map(UIWindow.init(windowScene:)) ?? UIWindow(frame: host.frame)
         window.windowLevel = .normal + 1
         window.overrideUserInterfaceStyle = host.overrideUserInterfaceStyle
@@ -299,9 +301,9 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     }
 
     func consumePendingSMS() {
-#if DEBUG
+        #if DEBUG
         guard !isPreview else { return }
-#endif
+        #endif
         if let sender = IncomingSMSPresentationRequest.consume() {
             openSMSConversation(sender)
         }

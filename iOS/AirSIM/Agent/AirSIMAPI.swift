@@ -43,7 +43,8 @@ enum AirSIMRoutePolicy {
 
 /// Authenticated local API for the Android Standalone Agent.
 struct AirSIMAPI: Sendable {
-    /// Android Telecom waits up to 12 seconds for confirmation; VoWLAN must time out after the Agent confirmation window,
+    /// Android Telecom waits up to 12 seconds for confirmation; VoWLAN must time out after the Agent confirmation
+    /// window,
     /// otherwise iPhone may misclassify an in-progress non-idempotent dial as failed and trigger duplicate calls.
     static let voWLANDialTimeout: TimeInterval = 15
 
@@ -79,7 +80,8 @@ struct AirSIMAPI: Sendable {
         self.transport = WiredHTTPTransport()
     }
 
-    /// Restricts privileged control endpoints to loopback or private networks to prevent accidental requests to public hosts.
+    /// Restricts privileged control endpoints to loopback or private networks to prevent accidental requests to public
+    /// hosts.
     private static func isAllowedLocalURL(_ url: URL) -> Bool {
         guard url.scheme == "http", let host = url.host?.lowercased() else { return false }
         if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
@@ -94,6 +96,7 @@ struct AirSIMAPI: Sendable {
 
     func health() async throws -> AgentHealth { try await get("api/health") }
     func callStatus() async throws -> CallStatus { try await get("api/calls/status") }
+
     func waitForAgentEvent(after revision: UInt64, timeout: TimeInterval = 15) async throws -> AgentEventStatus {
         let boundedTimeout = min(30, max(1, timeout))
         var components = URLComponents(
@@ -102,28 +105,35 @@ struct AirSIMAPI: Sendable {
         )!
         components.queryItems = [
             URLQueryItem(name: "after", value: String(revision)),
-            URLQueryItem(name: "timeout_ms", value: String(Int(boundedTimeout * 1_000)))
+            URLQueryItem(name: "timeout_ms", value: String(Int(boundedTimeout * 1_000))),
         ]
         var request = URLRequest(url: components.url!)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = boundedTimeout + 5
         return try await decoded(request)
     }
+
     func messages() async throws -> [SMSMessage] { try await get("api/sms") }
+
     func acknowledgeCallHistory(ids: [String]) async throws {
         guard !ids.isEmpty else { return }
         try await post("api/calls/history/ack", ["ids": ids])
     }
+
     func acknowledgeMessages(ids: [String]) async throws {
         let validIDs = ids.filter { !$0.isEmpty }
         guard !validIDs.isEmpty else { return }
         try await post("api/sms/ack", ["ids": validIDs])
     }
+
     func smsStatus() async throws -> SMSStatus { try await get("api/sms/status") }
+
     func registerVoIPPush(_ registration: AgentPushRegistration) async throws {
         try await post("api/push/register", registration)
     }
+
     func pushStatus() async throws -> AgentPushStatus { try await get("api/push/status") }
+
     func setPushCloudEnabled(_ enabled: Bool) async throws {
         try await post("api/push/mode", ["enabled": enabled])
     }
@@ -137,7 +147,8 @@ struct AirSIMAPI: Sendable {
             )
         } catch {
             let originalError = error
-            // ATD is non-idempotent: if the response connection is reset by the module, only poll status to confirm—never auto-resend.
+            // ATD is non-idempotent: if the response connection is reset by the module, only poll status to
+            // confirm—never auto-resend.
             for delay in [0.25, 0.5, 1.0, 1.5] {
                 try? await Task.sleep(for: .seconds(delay))
                 guard let status = try? await callStatus(), let call = status.active else { continue }
@@ -148,17 +159,22 @@ struct AirSIMAPI: Sendable {
             throw originalError
         }
     }
+
     func answerCall(callID: String? = nil) async throws {
         try await post("api/calls/answer", LocalCallControlBody(callID: callID))
     }
+
     func rejectCall(callID: String? = nil) async throws -> RejectResponse {
         try await postDecoded("api/calls/reject", LocalCallControlBody(callID: callID))
     }
+
     func hangupCall(callID: String? = nil) async throws {
         try await post("api/calls/hangup", LocalCallControlBody(callID: callID))
     }
+
     func sendDTMF(_ digit: String) async throws { try await post("api/calls/dtmf", ["digit": digit]) }
     func setAudioMuted(_ muted: Bool) async throws { try await post("api/calls/audio/mute", ["muted": muted]) }
+
     func warmAudioHost() async throws {
         try await post("api/calls/audio/host/warmup", EmptyBody())
     }
@@ -167,18 +183,22 @@ struct AirSIMAPI: Sendable {
         let data = try await raw(method: "POST", path: "api/calls/webrtc", body: signal, timeout: 25)
         return try Self.decode(CloudWebRTCSignal.self, from: data)
     }
+
     func voWLANWebRTCStatus(_ session: VoWLANWebRTCSession) async throws -> VoWLANWebRTCStatus {
         let data = try await raw(method: "POST", path: "api/calls/webrtc/status", body: session, timeout: 5)
         return try Self.decode(VoWLANWebRTCStatus.self, from: data)
     }
+
     func stopVoWLANWebRTC(_ session: VoWLANWebRTCSession) async throws {
         try await post("api/calls/webrtc/stop", session, timeout: 5)
     }
+
     func audioHostConfig() async throws -> MaVoAudioHostConfig { try await get("api/calls/audio/host/config") }
 
     func sendSMS(to phone: String, message: String) async throws -> SMSSendResult {
         try await postDecoded("api/sms/send", ["phone": phone, "message": message], timeout: 80)
     }
+
     func refreshSMS() async throws { try await post("api/sms/refresh", EmptyBody()) }
     func clearModuleSMS() async throws { try await post("api/sms/clear-module", EmptyBody()) }
     // MARK: Status, Network, Location & Debug
@@ -212,7 +232,9 @@ struct AirSIMAPI: Sendable {
         return try Self.decode(Response.self, from: data)
     }
 
-    private func raw<Body: Encodable>(method: String, path: String, body: Body, timeout: TimeInterval) async throws -> Data {
+    private func raw<Body: Encodable>(method: String, path: String, body: Body, timeout: TimeInterval) async throws
+        -> Data
+    {
         var request = URLRequest(url: try endpoint(path))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -244,8 +266,9 @@ struct AirSIMAPI: Sendable {
         }()
         let uploadBytes: Int = {
             guard let uploadFileURL,
-                  let attributes = try? FileManager.default.attributesOfItem(atPath: uploadFileURL.path),
-                  let size = attributes[.size] as? NSNumber else { return 0 }
+                let attributes = try? FileManager.default.attributesOfItem(atPath: uploadFileURL.path),
+                let size = attributes[.size] as? NSNumber
+            else { return 0 }
             return size.intValue
         }()
         let trace = await AgentVerboseTraceRecorder.shared.begin(

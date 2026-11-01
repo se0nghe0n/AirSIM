@@ -41,7 +41,8 @@ struct CallStatus: Codable, Sendable {
     }
 }
 
-/// Unified Agent event snapshot; calls and SMS share a single long-poll to avoid keeping two concurrent background USB requests.
+/// Unified Agent event snapshot; calls and SMS share a single long-poll to avoid keeping two concurrent background USB
+/// requests.
 struct AgentEventStatus: Codable, Sendable {
     let revision: UInt64
     let smsRevision: UInt64
@@ -189,7 +190,8 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     let timestamp: Date
     /// Stable identifier in the module delivery queue; also used for deduplication between push and local sync.
     var deliveryID: String?
-    /// Legacy modules lack a direction field and default to incoming SMS; marked as outgoing by the app after successful send.
+    /// Legacy modules lack a direction field and default to incoming SMS; marked as outgoing by the app after
+    /// successful send.
     var direction: SMSDirection? = nil
 
     var isOutgoing: Bool { direction == .outgoing }
@@ -197,7 +199,8 @@ struct SMSMessage: Codable, Equatable, Sendable, Identifiable {
     /// Newer Agents align APNs and local sync via delivery_id; legacy versions fall back to content fingerprints.
     var id: String {
         if let deliveryID, !deliveryID.isEmpty { return "delivery:\(deliveryID)" }
-        return "\(sender)\u{0}\(timestamp.timeIntervalSince1970)\u{0}\(content)\u{0}\(direction?.rawValue ?? SMSDirection.incoming.rawValue)"
+        return
+            "\(sender)\u{0}\(timestamp.timeIntervalSince1970)\u{0}\(content)\u{0}\(direction?.rawValue ?? SMSDirection.incoming.rawValue)"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -222,9 +225,11 @@ enum SMSHistoryPolicy {
             deliveryID: nil,
             direction: .outgoing
         )
-        return Array((messages + [sentMessage])
-            .sorted { $0.timestamp > $1.timestamp }
-            .prefix(max(0, limit)))
+        return Array(
+            (messages + [sentMessage])
+                .sorted { $0.timestamp > $1.timestamp }
+                .prefix(max(0, limit))
+        )
     }
 }
 
@@ -241,6 +246,7 @@ struct SMSStatus: Codable, Sendable {
 }
 
 struct RejectResponse: Codable, Sendable { let rejected: Bool }
+
 struct SMSSendResult: Codable, Sendable {
     let sent: Bool
     let segments: Int?
@@ -318,7 +324,8 @@ struct MaVoAudioHostConfig: Codable, Sendable {
     }
 }
 
-/// Cumulative PCM statistics from the module voice bridge; peak is PCM16 absolute amplitude, where 0 indicates pure silence.
+/// Cumulative PCM statistics from the module voice bridge; peak is PCM16 absolute amplitude, where 0 indicates pure
+/// silence.
 struct VoicePCMStatistics: Codable, Sendable {
     let uplinkBytes: UInt64
     let uplinkFrames: UInt64

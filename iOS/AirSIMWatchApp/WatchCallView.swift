@@ -55,12 +55,17 @@ struct WatchCallView: View {
         .alert("Connection Status", isPresented: $showConnectionStatus) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("\(session.pushStatus)\n\(session.audioStatus)\nCalling requires a reachable paired iPhone and an available VoWLAN or cloud connection. The watch controls calls; the paired iPhone microphone, speaker, or connected headset carries the audio.")
+            Text(
+                "\(session.pushStatus)\n\(session.audioStatus)\nCalling requires a reachable paired iPhone and an available VoWLAN or cloud connection. The watch controls calls; the paired iPhone microphone, speaker, or connected headset carries the audio."
+            )
         }
-        .alert("Call Failed", isPresented: Binding(
-            get: { session.errorMessage != nil },
-            set: { if !$0 { session.errorMessage = nil } }
-        )) {
+        .alert(
+            "Call Failed",
+            isPresented: Binding(
+                get: { session.errorMessage != nil },
+                set: { if !$0 { session.errorMessage = nil } }
+            )
+        ) {
             Button("OK", role: .cancel) { session.errorMessage = nil }
         } message: {
             Text(session.errorMessage ?? "")
@@ -69,7 +74,9 @@ struct WatchCallView: View {
 
     private var numberDisplay: some View {
         HStack(spacing: 5) {
-            Button { append("+") } label: {
+            Button {
+                append("+")
+            } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 36, height: 36)
@@ -89,7 +96,9 @@ struct WatchCallView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .accessibilityLabel(dialNumber.isEmpty ? "No phone number entered" : "Phone number, \(dialNumber)")
 
-            Button { showConnectionStatus = true } label: {
+            Button {
+                showConnectionStatus = true
+            } label: {
                 Image(systemName: "info.circle")
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -106,7 +115,9 @@ struct WatchCallView: View {
     }
 
     private func digitButton(_ digit: String, width: CGFloat, height: CGFloat) -> some View {
-        Button { append(digit) } label: {
+        Button {
+            append(digit)
+        } label: {
             Text(digit)
                 .font(.system(size: min(25, height * 0.57), weight: .medium, design: .rounded))
                 .frame(width: width, height: height)
@@ -133,8 +144,7 @@ struct WatchCallView: View {
 
     private func callButton(width: CGFloat, height: CGFloat) -> some View {
         Button {
-            if session.isDialing { session.cancelDial() }
-            else { session.dial(dialNumber) }
+            if session.isDialing { session.cancelDial() } else { session.dial(dialNumber) }
         } label: {
             Image(systemName: session.isDialing ? "xmark" : "phone.fill")
                 .font(.system(size: 20, weight: .semibold))
@@ -148,10 +158,13 @@ struct WatchCallView: View {
 
     private var currentCall: some View {
         VStack(spacing: 10) {
-            Image(systemName: session.call.phase == .incoming ? "phone.arrow.down.left.fill" : "antenna.radiowaves.left.and.right")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(session.call.phase == .incoming ? .green : .blue)
-                .symbolEffect(.pulse, isActive: session.call.phase == .incoming)
+            Image(
+                systemName: session.call.phase == .incoming
+                    ? "phone.arrow.down.left.fill" : "antenna.radiowaves.left.and.right"
+            )
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(session.call.phase == .incoming ? .green : .blue)
+            .symbolEffect(.pulse, isActive: session.call.phase == .incoming)
 
             Text(session.displayName)
                 .font(.headline)

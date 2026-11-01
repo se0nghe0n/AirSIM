@@ -102,7 +102,8 @@ struct PairingFeature {
             case .view(.pairTapped(let service)):
                 guard state.canPair else { return .none }
                 state.pairingID = service.id
-                state.message = state.localOnly
+                state.message =
+                    state.localOnly
                     ? "Encrypting and saving the local VoWLAN key…"
                     : "Encrypting and saving to the Android Agent…"
                 return .run { [client, code = state.code, localOnly = state.localOnly] send in

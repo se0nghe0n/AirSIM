@@ -33,12 +33,15 @@ struct VoWLANDiscoveredAgent: Equatable, Identifiable, Sendable {
     let agentKind: String?
 
     func refreshed(with identity: VoWLANHealthIdentity) -> Self {
-        Self(id: identity.agentID?.isEmpty == false ? identity.agentID! : id,
-             endpoint: endpoint,
-             deviceName: identity.deviceName?.isEmpty == false ? identity.deviceName! : deviceName,
-             manufacturer: identity.manufacturer ?? manufacturer, model: identity.model ?? model,
-             phoneNumber: identity.phoneNumber?.isEmpty == false ? identity.phoneNumber : nil,
-             agentKind: identity.agentKind ?? agentKind)
+        Self(
+            id: identity.agentID?.isEmpty == false ? identity.agentID! : id,
+            endpoint: endpoint,
+            deviceName: identity.deviceName?.isEmpty == false ? identity.deviceName! : deviceName,
+            manufacturer: identity.manufacturer ?? manufacturer,
+            model: identity.model ?? model,
+            phoneNumber: identity.phoneNumber?.isEmpty == false ? identity.phoneNumber : nil,
+            agentKind: identity.agentKind ?? agentKind
+        )
     }
 }
 
@@ -187,7 +190,8 @@ struct VoWLANRecoveryGate {
 
     mutating func shouldAttempt(for availability: VoWLANAvailability, at now: Date) -> Bool {
         guard availability != .unpaired, !availability.isOnlineForDisplay,
-              now >= nextAttemptAt else { return false }
+            now >= nextAttemptAt
+        else { return false }
         nextAttemptAt = now.addingTimeInterval(10)
         return true
     }
@@ -199,7 +203,8 @@ struct VoWLANRecoveryGate {
 @Observable
 final class VoWLANController {
     private(set) var availability: VoWLANAvailability =
-        VoWLANCredentialStore.load() == nil ? .unpaired : .discovering {
+        VoWLANCredentialStore.load() == nil ? .unpaired : .discovering
+    {
         didSet { onAvailabilityChange?(availability) }
     }
 
@@ -264,7 +269,9 @@ final class VoWLANController {
         beginBrowsing(generation: generation)
         Task {
             await AgentVerboseTraceRecorder.shared.recordEvent(
-                source: "ios", category: "vowlan", phase: "browser_restarted",
+                source: "ios",
+                category: "vowlan",
+                phase: "browser_restarted",
                 title: "VoWLAN Browser Restarted",
                 fields: ["generation": String(generation)]
             )
@@ -291,7 +298,8 @@ final class VoWLANController {
                     return $0.deviceName.localizedCaseInsensitiveCompare($1.deviceName) == .orderedAscending
                 }
                 let bound = AndroidAgentBindingPreference.selected()
-                let endpoint = agents.first(where: { $0.id == bound })?.endpoint
+                let endpoint =
+                    agents.first(where: { $0.id == bound })?.endpoint
                     ?? (bound == nil ? self.discoveredEndpoint.flatMap { endpoints.contains($0) ? $0 : nil } : nil)
                     ?? (bound == nil ? agents.first?.endpoint : nil)
                 if let endpoint {
@@ -300,7 +308,9 @@ final class VoWLANController {
                     if self.availability.endpoint == endpoint, self.availability.isReady() { return }
                     self.availability = .discovered(endpoint, at: Date())
                     await AgentVerboseTraceRecorder.shared.recordEvent(
-                        source: "ios", category: "vowlan", phase: "discovered",
+                        source: "ios",
+                        category: "vowlan",
+                        phase: "discovered",
                         title: "VoWLAN Discovered",
                         fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort)]
                     )
@@ -325,9 +335,13 @@ final class VoWLANController {
                         VoWLANProbeRecovery.userFacingMessage(for: error)
                     )
                     await AgentVerboseTraceRecorder.shared.recordEvent(
-                        source: "ios", category: "vowlan", phase: "browser_failed",
-                        title: "VoWLAN Browser Failed", detail: error.localizedDescription,
-                        fields: ["generation": String(generation)], isFailure: true
+                        source: "ios",
+                        category: "vowlan",
+                        phase: "browser_failed",
+                        title: "VoWLAN Browser Failed",
+                        detail: error.localizedDescription,
+                        fields: ["generation": String(generation)],
+                        isFailure: true
                     )
                 }
             }
@@ -356,7 +370,8 @@ final class VoWLANController {
         disappearanceTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(8))
             guard let self, !Task.isCancelled,
-                  self.browserLifecycle.accepts(generation) else { return }
+                self.browserLifecycle.accepts(generation)
+            else { return }
             self.disappearanceTask = nil
             if let endpoint = self.discoveredEndpoint {
                 self.availability = .discovered(endpoint, at: Date())
@@ -383,7 +398,8 @@ final class VoWLANController {
     /// failed health probe must not wait for Android to advertise again.
     func recoverIfNeeded() async {
         guard VoWLANCredentialStore.load() != nil,
-              recoveryGate.shouldAttempt(for: availability, at: Date()) else { return }
+            recoveryGate.shouldAttempt(for: availability, at: Date())
+        else { return }
         let browserWasRunning = browserLifecycle.isRunning
         startBrowsing()
         await probeNow()
@@ -404,7 +420,9 @@ final class VoWLANController {
         do {
             let (data, response) = try await VoWLANProbeRecovery.run {
                 let signed = try VoWLANRequestSigner(secret: credential.secret).sign(
-                    method: "GET", path: "/v1/health", body: Data()
+                    method: "GET",
+                    path: "/v1/health",
+                    body: Data()
                 )
                 var request = URLRequest(url: endpoint.controlBaseURL.appendingPathComponent("v1/health"))
                 request.timeoutInterval = 3
@@ -417,8 +435,9 @@ final class VoWLANController {
                 return try await session.data(for: request)
             }
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                  let identity = try? JSONDecoder().decode(VoWLANHealthIdentity.self, from: data),
-                  identity.ok else {
+                let identity = try? JSONDecoder().decode(VoWLANHealthIdentity.self, from: data),
+                identity.ok
+            else {
                 throw VoWLANControllerError.authenticationFailed
             }
             guard epoch == identityEpoch, discoveredEndpoint == endpoint else { return }
@@ -434,7 +453,9 @@ final class VoWLANController {
             }
             availability = .verified(endpoint, at: Date())
             await AgentVerboseTraceRecorder.shared.recordEvent(
-                source: "ios", category: "vowlan", phase: "verified",
+                source: "ios",
+                category: "vowlan",
+                phase: "verified",
                 title: "VoWLAN Signed Health Check Passed",
                 fields: ["host": endpoint.host, "control_port": String(endpoint.controlPort)]
             )
@@ -442,8 +463,11 @@ final class VoWLANController {
             guard epoch == identityEpoch else { return }
             availability = .unavailable(VoWLANProbeRecovery.userFacingMessage(for: error))
             await AgentVerboseTraceRecorder.shared.recordEvent(
-                source: "ios", category: "vowlan", phase: "failed",
-                title: "VoWLAN Health Check Failed", detail: error.localizedDescription,
+                source: "ios",
+                category: "vowlan",
+                phase: "failed",
+                title: "VoWLAN Health Check Failed",
+                detail: error.localizedDescription,
                 isFailure: true
             )
         }
@@ -458,8 +482,9 @@ final class VoWLANController {
 
     private nonisolated static func parseAgent(_ result: NWBrowser.Result) -> VoWLANDiscoveredAgent? {
         guard case let .bonjour(record) = result.metadata,
-              record["v"] == "1", let host = record["host"],
-              let controlText = record["control_port"], let control = UInt16(controlText) else { return nil }
+            record["v"] == "1", let host = record["host"],
+            let controlText = record["control_port"], let control = UInt16(controlText)
+        else { return nil }
         guard let endpoint = try? VoWLANEndpoint(host: host, controlPort: control) else {
             return nil
         }

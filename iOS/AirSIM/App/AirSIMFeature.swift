@@ -122,13 +122,13 @@ struct AirSIMFeature {
                 return command(.presentCall)
 
             case .recents(.delegate(.call(let number))),
-                 .contacts(.delegate(.call(let number))):
+                .contacts(.delegate(.call(let number))):
                 return dialAndRememberTab(number, state: &state)
 
             case .composeMessage(let recipient),
-                 .recents(.delegate(.message(let recipient))),
-                 .contacts(.delegate(.message(let recipient))),
-                 .messages(.delegate(.compose(let recipient))):
+                .recents(.delegate(.message(let recipient))),
+                .contacts(.delegate(.message(let recipient))),
+                .messages(.delegate(.compose(let recipient))):
                 return compose(to: recipient, state: &state)
 
             case .messages(.delegate(.unreportedSendFailure(let error))):

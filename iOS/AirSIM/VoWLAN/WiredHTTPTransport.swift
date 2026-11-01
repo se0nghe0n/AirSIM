@@ -13,9 +13,10 @@ final class WiredHTTPTransport: @unchecked Sendable {
 
     func send(_ request: URLRequest, uploadFileURL: URL? = nil) async throws -> WiredHTTPResponse {
         guard let url = request.url,
-              url.scheme?.lowercased() == "http",
-              let host = url.host,
-              let port = NWEndpoint.Port(rawValue: UInt16(url.port ?? 80)) else {
+            url.scheme?.lowercased() == "http",
+            let host = url.host,
+            let port = NWEndpoint.Port(rawValue: UInt16(url.port ?? 80))
+        else {
             throw WiredHTTPError.invalidRequest
         }
 
@@ -113,15 +114,18 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
     }
 
     func start() {
-        // NWConnection callbacks use weak references; the operation retains itself until the request finishes to prevent premature deallocation.
+        // NWConnection callbacks use weak references; the operation retains itself until the request finishes to
+        // prevent premature deallocation.
         keepAlive = self
-#if DEBUG
+        #if DEBUG
         connection.pathUpdateHandler = { [weak self] path in
             guard self != nil else { return }
             let interfaces = path.availableInterfaces.map { "\($0.name):\($0.type)" }.joined(separator: ",")
-            print("[AirSIM Network] route=wifi status=\(path.status) reason=\(path.unsatisfiedReason) available=\(interfaces)")
+            print(
+                "[AirSIM Network] route=wifi status=\(path.status) reason=\(path.unsatisfiedReason) available=\(interfaces)"
+            )
         }
-#endif
+        #endif
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -136,10 +140,10 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
                 self.sendRequest()
             case let .failed(error):
                 self.finish(.failure(WiredHTTPError.connectionFailed(error.localizedDescription)))
-#if DEBUG
+            #if DEBUG
             case let .waiting(error):
                 print("[AirSIM Network] route=wifi waiting=\(error.localizedDescription)")
-#endif
+            #endif
             case .cancelled:
                 if !self.finished { self.finish(.failure(WiredHTTPError.connectionClosed)) }
             default:
@@ -148,7 +152,8 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         }
         connection.start(queue: queue)
 
-        // When strict path constraints do not match, the connection may stay waiting; the request has not been sent yet, so the caller can safely decide whether to fall back.
+        // When strict path constraints do not match, the connection may stay waiting; the request has not been sent
+        // yet, so the caller can safely decide whether to fall back.
         queue.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard let self, !self.finished, !self.requestStarted else { return }
             self.finish(.failure(WiredHTTPError.wiredPathUnavailable))
@@ -208,8 +213,9 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
         var lines = ["\(method) \(path) HTTP/1.1"]
         for (name, value) in headers.sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
             guard !name.isEmpty,
-                  name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_".contains($0)) }),
-                  !value.contains("\r"), !value.contains("\n") else {
+                name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_".contains($0)) }),
+                !value.contains("\r"), !value.contains("\n")
+            else {
                 throw WiredHTTPError.invalidRequest
             }
             lines.append("\(name): \(value)")
@@ -285,7 +291,8 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
                 self.responseData.append(data)
             }
             if let error {
-                // The module occasionally closes the connection with RST when executing ATD; if a complete HTTP response has arrived, use it rather than reporting a false failure.
+                // The module occasionally closes the connection with RST when executing ATD; if a complete HTTP
+                // response has arrived, use it rather than reporting a false failure.
                 if let response = try? WiredHTTPResponseParser.parse(self.responseData) {
                     self.finish(.success(response))
                 } else {
@@ -316,20 +323,23 @@ private final class WiredHTTPRequestOperation: @unchecked Sendable {
 
 }
 
-/// Standalone HTTP/1.1 response parser for network-free testing of fixed-length and chunked responses from the Go Agent.
+/// Standalone HTTP/1.1 response parser for network-free testing of fixed-length and chunked responses from the Go
+/// Agent.
 enum WiredHTTPResponseParser {
     static func parse(_ data: Data) throws -> WiredHTTPResponse {
         let separator = Data("\r\n\r\n".utf8)
         guard let range = data.range(of: separator),
-              let headerText = String(data: data[..<range.lowerBound], encoding: .isoLatin1) else {
+            let headerText = String(data: data[..<range.lowerBound], encoding: .isoLatin1)
+        else {
             throw WiredHTTPError.invalidResponse
         }
         let lines = headerText.components(separatedBy: "\r\n")
         guard let statusLine = lines.first else { throw WiredHTTPError.invalidResponse }
         let statusFields = statusLine.split(separator: " ", maxSplits: 2)
         guard statusFields.count >= 2,
-              statusFields[0].hasPrefix("HTTP/"),
-              let statusCode = Int(statusFields[1]) else {
+            statusFields[0].hasPrefix("HTTP/"),
+            let statusCode = Int(statusFields[1])
+        else {
             throw WiredHTTPError.invalidResponse
         }
 
@@ -363,17 +373,19 @@ enum WiredHTTPResponseParser {
 
         while cursor < data.endIndex {
             guard let sizeRange = data[cursor...].range(of: lineBreak),
-                  let sizeLine = String(data: data[cursor..<sizeRange.lowerBound], encoding: .ascii),
-                  let sizeToken = sizeLine.split(separator: ";", maxSplits: 1).first,
-                  let size = Int(sizeToken.trimmingCharacters(in: .whitespaces), radix: 16) else {
+                let sizeLine = String(data: data[cursor..<sizeRange.lowerBound], encoding: .ascii),
+                let sizeToken = sizeLine.split(separator: ";", maxSplits: 1).first,
+                let size = Int(sizeToken.trimmingCharacters(in: .whitespaces), radix: 16)
+            else {
                 throw WiredHTTPError.invalidResponse
             }
             cursor = sizeRange.upperBound
             if size == 0 { return decoded }
             guard size > 0,
-                  let chunkEnd = data.index(cursor, offsetBy: size, limitedBy: data.endIndex),
-                  data.distance(from: chunkEnd, to: data.endIndex) >= 2,
-                  data[chunkEnd..<data.index(chunkEnd, offsetBy: 2)] == lineBreak else {
+                let chunkEnd = data.index(cursor, offsetBy: size, limitedBy: data.endIndex),
+                data.distance(from: chunkEnd, to: data.endIndex) >= 2,
+                data[chunkEnd..<data.index(chunkEnd, offsetBy: 2)] == lineBreak
+            else {
                 throw WiredHTTPError.incompleteResponse
             }
             decoded.append(data[cursor..<chunkEnd])

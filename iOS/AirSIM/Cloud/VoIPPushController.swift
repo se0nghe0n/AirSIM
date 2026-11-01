@@ -44,11 +44,13 @@ struct IncomingVoIPCall: Equatable, Sendable {
             throw VoIPPushPayloadError.unsupportedEvent
         }
         guard let rawCallID = userInfo["call_id"] as? String,
-              !rawCallID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            !rawCallID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
             throw VoIPPushPayloadError.missingCallID
         }
         guard let rawUUID = userInfo["call_uuid"] as? String,
-              let uuid = UUID(uuidString: rawUUID) else {
+            let uuid = UUID(uuidString: rawUUID)
+        else {
             throw VoIPPushPayloadError.invalidCallUUID
         }
 
@@ -70,14 +72,16 @@ struct IncomingVoIPCall: Equatable, Sendable {
             }
             ttsText = candidateTTS
         } else {
-            // Regular incoming calls never speak text carried in push payloads, preventing accidental TTS on real calls.
+            // Regular incoming calls never speak text carried in push payloads, preventing accidental TTS on real
+            // calls.
             ttsText = nil
         }
         authenticatedMediaURL = Self.authenticatedMediaURL(from: userInfo)
         mediaSecret = authenticatedMediaURL != nil ? Self.nonEmpty(userInfo["call_secret"] as? String) : nil
-        let advertised = CloudMediaTransport(
-            rawValue: Self.nonEmpty(userInfo["media_transport"] as? String) ?? ""
-        ) ?? .webRTC
+        let advertised =
+            CloudMediaTransport(
+                rawValue: Self.nonEmpty(userInfo["media_transport"] as? String) ?? ""
+            ) ?? .webRTC
         requestedMediaTransport = Self.cloudMediaTransport(advertised)
     }
 
@@ -91,13 +95,14 @@ struct IncomingVoIPCall: Equatable, Sendable {
         mediaTransport: CloudMediaTransport = .webRTC
     ) throws {
         guard !outgoingCallID.isEmpty, secret.count >= 24,
-              var components = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
-              components.scheme?.lowercased() == "wss", components.host?.isEmpty == false,
-              components.user == nil, components.password == nil else {
+            var components = URLComponents(url: mediaURL, resolvingAgainstBaseURL: false),
+            components.scheme?.lowercased() == "wss", components.host?.isEmpty == false,
+            components.user == nil, components.password == nil
+        else {
             throw VoIPPushPayloadError.invalidCallUUID
         }
         components.queryItems = [
-            URLQueryItem(name: "role", value: "iphone"),
+            URLQueryItem(name: "role", value: "iphone")
         ]
         guard let authenticatedURL = components.url else {
             throw VoIPPushPayloadError.invalidCallUUID
@@ -148,7 +153,8 @@ struct IncomingVoIPCall: Equatable, Sendable {
 
     private static func nonEmpty(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else { return nil }
+            !trimmed.isEmpty
+        else { return nil }
         return trimmed
     }
 
@@ -164,13 +170,14 @@ struct IncomingVoIPCall: Equatable, Sendable {
 
     private static func authenticatedMediaURL(from userInfo: [AnyHashable: Any]) -> URL? {
         guard let secret = nonEmpty(userInfo["call_secret"] as? String), secret.count >= 24,
-              let rawURL = nonEmpty(userInfo["media_url"] as? String),
-              var components = URLComponents(string: rawURL),
-              components.scheme?.lowercased() == "wss",
-              components.host?.isEmpty == false,
-              components.user == nil, components.password == nil else { return nil }
+            let rawURL = nonEmpty(userInfo["media_url"] as? String),
+            var components = URLComponents(string: rawURL),
+            components.scheme?.lowercased() == "wss",
+            components.host?.isEmpty == false,
+            components.user == nil, components.password == nil
+        else { return nil }
         components.queryItems = [
-            URLQueryItem(name: "role", value: "iphone"),
+            URLQueryItem(name: "role", value: "iphone")
         ]
         return components.url
     }
@@ -245,10 +252,11 @@ enum RelayHealthValidation {
 
     static func version(statusCode: Int, data: Data) -> String? {
         guard statusCode == 200,
-              let payload = try? JSONDecoder().decode(Payload.self, from: data),
-              payload.ok,
-              payload.service == "airsim-push-relay",
-              !payload.version.isEmpty else { return nil }
+            let payload = try? JSONDecoder().decode(Payload.self, from: data),
+            payload.ok,
+            payload.service == "airsim-push-relay",
+            !payload.version.isEmpty
+        else { return nil }
         return payload.version
     }
 }
@@ -291,19 +299,32 @@ struct ConnectionModePresentation: Equatable, Sendable {
                 mode: .cloud,
                 title: "Cloud",
                 status: cloudOnline ? "Connected" : "Unreachable",
-                detail: cloudOnline ? "Relay and Agent heartbeat are healthy" : "Run the cloud self-test to diagnose the issue"
+                detail: cloudOnline
+                    ? "Relay and Agent heartbeat are healthy" : "Run the cloud self-test to diagnose the issue"
             )
         }
         switch selectedMode {
         case .vowlan:
-            return .init(mode: .vowlan, title: "VoWLAN", status: "Unreachable",
-                         detail: "No paired and authenticated VoWLAN Agent found")
+            return .init(
+                mode: .vowlan,
+                title: "VoWLAN",
+                status: "Unreachable",
+                detail: "No paired and authenticated VoWLAN Agent found"
+            )
         case .cloud:
-            return .init(mode: .cloud, title: "Cloud", status: "Unreachable",
-                         detail: "Run the cloud self-test to diagnose the issue")
+            return .init(
+                mode: .cloud,
+                title: "Cloud",
+                status: "Unreachable",
+                detail: "Run the cloud self-test to diagnose the issue"
+            )
         case .automatic:
-            return .init(mode: .offline, title: "Automatic", status: "No Available Route",
-                         detail: "Checking VoWLAN, then cloud for a call route")
+            return .init(
+                mode: .offline,
+                title: "Automatic",
+                status: "No Available Route",
+                detail: "Checking VoWLAN, then cloud for a call route"
+            )
         }
     }
 }
@@ -337,7 +358,12 @@ struct CloudSelfTestReport: Equatable, Sendable {
         steps: [
             CloudSelfTestStep(id: .configuration, title: "Local Configuration", state: .pending, detail: "Waiting"),
             CloudSelfTestStep(id: .relayIdentity, title: "Relay Identity", state: .pending, detail: "Waiting"),
-            CloudSelfTestStep(id: .deviceRegistration, title: "Device Registration", state: .pending, detail: "Waiting"),
+            CloudSelfTestStep(
+                id: .deviceRegistration,
+                title: "Device Registration",
+                state: .pending,
+                detail: "Waiting"
+            ),
             CloudSelfTestStep(id: .agentHeartbeat, title: "Agent Heartbeat", state: .pending, detail: "Waiting"),
         ],
         completedAt: nil
@@ -374,8 +400,7 @@ enum PushRegistrationRetryPolicy {
     static func quotaRetryDate(now: Date) -> Date {
         // Worker free-tier requests reset at midnight UTC. Recheck sooner if the
         // account is upgraded before then, without retrying every 30 seconds.
-        let nextMidnightUTC = Date(timeIntervalSince1970:
-            (floor(now.timeIntervalSince1970 / 86_400) + 1) * 86_400 + 10)
+        let nextMidnightUTC = Date(timeIntervalSince1970: (floor(now.timeIntervalSince1970 / 86_400) + 1) * 86_400 + 10)
         return min(now.addingTimeInterval(300), nextMidnightUTC)
     }
 }
@@ -403,12 +428,14 @@ enum PushDeviceIdentity {
         var bytes = Array(SHA256.hash(data: Data(deviceSecret.utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0f) | 0x40
         bytes[8] = (bytes[8] & 0x3f) | 0x80
-        let uuid = UUID(uuid: (
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5], bytes[6], bytes[7],
-            bytes[8], bytes[9], bytes[10], bytes[11],
-            bytes[12], bytes[13], bytes[14], bytes[15]
-        ))
+        let uuid = UUID(
+            uuid: (
+                bytes[0], bytes[1], bytes[2], bytes[3],
+                bytes[4], bytes[5], bytes[6], bytes[7],
+                bytes[8], bytes[9], bytes[10], bytes[11],
+                bytes[12], bytes[13], bytes[14], bytes[15]
+            )
+        )
         return uuid.uuidString.lowercased()
     }
 }
@@ -434,7 +461,8 @@ enum CloudAgentStatusError: LocalizedError {
 
     static func relayFailure(statusCode: Int, data: Data) -> Self {
         if statusCode == 429,
-           String(data: data, encoding: .utf8)?.contains("1027") == true {
+            String(data: data, encoding: .utf8)?.contains("1027") == true
+        {
             return .requestLimitExceeded
         }
         return .relayHTTP(statusCode)
@@ -445,7 +473,9 @@ enum CloudAgentStatusError: LocalizedError {
         case .unavailable: return "Cloud status is not configured"
         case .invalidRelayURL: return "Relay requires HTTPS"
         case .invalidResponse: return "Invalid Relay status response"
-        case .requestLimitExceeded: return "Relay daily request quota exhausted (Cloudflare 1027). Wait for the quota to reset or upgrade the Workers plan."
+        case .requestLimitExceeded:
+            return
+                "Relay daily request quota exhausted (Cloudflare 1027). Wait for the quota to reset or upgrade the Workers plan."
         case let .relayHTTP(statusCode): return "Relay request failed (HTTP \(statusCode))"
         }
     }
@@ -477,6 +507,7 @@ private struct CloudCommandEnqueueResponse: Decodable {
         let callSecret: String
         let mediaURL: String
         let mediaTransport: CloudMediaTransport?
+
         enum CodingKeys: String, CodingKey {
             case callID = "call_id"
             case callUUID = "call_uuid"
@@ -486,11 +517,13 @@ private struct CloudCommandEnqueueResponse: Decodable {
             case mediaTransport = "media_transport"
         }
     }
+
     let accepted: Bool
     let commandID: String
     let status: String
     let agentConnected: Bool
     let call: Call?
+
     enum CodingKeys: String, CodingKey {
         case accepted
         case commandID = "command_id"
@@ -507,10 +540,12 @@ struct CloudCommandResultResponse: Decodable {
         let segments: Int?
         let history: [CallRecord]?
     }
+
     let commandID: String
     let status: String
     let result: Result?
     let error: String?
+
     enum CodingKeys: String, CodingKey {
         case commandID = "command_id"
         case status, result, error
@@ -520,12 +555,15 @@ struct CloudCommandResultResponse: Decodable {
 enum RelayEndpoint {
     static func url(base: String, path: String) -> URL? {
         guard var components = URLComponents(string: base.trimmingCharacters(in: .whitespacesAndNewlines)),
-              components.scheme?.lowercased() == "https",
-              components.host?.isEmpty == false,
-              components.user == nil, components.password == nil else { return nil }
+            components.scheme?.lowercased() == "https",
+            components.host?.isEmpty == false,
+            components.user == nil, components.password == nil
+        else { return nil }
         let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let requestedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        components.path = "/" + [basePath, requestedPath]
+        components.path =
+            "/"
+            + [basePath, requestedPath]
             .filter { !$0.isEmpty }
             .joined(separator: "/")
         components.query = nil
@@ -689,12 +727,14 @@ struct IncomingRemoteSMS: Equatable, Sendable {
             throw RemoteSMSPushError.unsupportedEvent
         }
         guard let deliveryID = Self.nonEmpty(userInfo["delivery_id"] as? String),
-              let sender = Self.nonEmpty(userInfo["sender"] as? String),
-              let content = Self.nonEmpty(userInfo["content"] as? String) else {
+            let sender = Self.nonEmpty(userInfo["sender"] as? String),
+            let content = Self.nonEmpty(userInfo["content"] as? String)
+        else {
             throw RemoteSMSPushError.incomplete
         }
         guard let rawTimestamp = userInfo["timestamp"] as? String,
-              let timestamp = Self.parseTimestamp(rawTimestamp) else {
+            let timestamp = Self.parseTimestamp(rawTimestamp)
+        else {
             throw RemoteSMSPushError.invalidTimestamp
         }
         self.deliveryID = deliveryID
@@ -728,12 +768,14 @@ struct IncomingRemoteSMS: Equatable, Sendable {
 
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else { return nil }
+            !value.isEmpty
+        else { return nil }
         return value
     }
 }
 
-/// PushKit is the entry point for waking CallKit after the app is suspended or terminated; module USB long-polling remains the foreground fallback.
+/// PushKit is the entry point for waking CallKit after the app is suspended or terminated; module USB long-polling
+/// remains the foreground fallback.
 @MainActor
 final class VoIPPushController: NSObject {
     static let shared = VoIPPushController()
@@ -771,18 +813,18 @@ final class VoIPPushController: NSObject {
         if let registry {
             // Reassigning prompts the system to re-verify existing credentials after authorization or network changes.
             registry.desiredPushTypes = [.voIP]
-#if DEBUG
+            #if DEBUG
             print("[AirSIM PushKit] Refreshed VoIP token registration")
-#endif
+            #endif
             return
         }
         let registry = PKPushRegistry(queue: .main)
         registry.delegate = self
         registry.desiredPushTypes = [.voIP]
         self.registry = registry
-#if DEBUG
+        #if DEBUG
         print("[AirSIM PushKit] Created VoIP token registration")
-#endif
+        #endif
     }
 
     func setLocalModeEnabled(_ enabled: Bool) {
@@ -801,9 +843,9 @@ final class VoIPPushController: NSObject {
             observedActivityIDs.removeAll()
             UIApplication.shared.unregisterForRemoteNotifications()
             Task { await IPhoneCloudCallSession.shared.end() }
-#if DEBUG
+            #if DEBUG
             print("[AirSIM Local] Disabled PushKit, APNs, and Relay registration")
-#endif
+            #endif
         } else {
             start()
             UIApplication.shared.registerForRemoteNotifications()
@@ -812,7 +854,8 @@ final class VoIPPushController: NSObject {
 
     func setLiveActivityEnabled(_ enabled: Bool) {
         if enabled, #available(iOS 17.2, *),
-           let token = Activity<AirSIMCallActivityAttributes>.pushToStartToken {
+            let token = Activity<AirSIMCallActivityAttributes>.pushToStartToken
+        {
             UserDefaults.standard.set(
                 VoIPPushToken.hex(token),
                 forKey: Keys.liveActivityPushToStartToken
@@ -830,7 +873,8 @@ final class VoIPPushController: NSObject {
                 for await token in Activity<AirSIMCallActivityAttributes>.pushToStartTokenUpdates {
                     guard let self, !Task.isCancelled else { return }
                     guard !LocalModePreference.isEnabled(),
-                          LiveActivityVisibilityPreference.isEnabled() else { continue }
+                        LiveActivityVisibilityPreference.isEnabled()
+                    else { continue }
                     UserDefaults.standard.set(
                         VoIPPushToken.hex(token),
                         forKey: Keys.liveActivityPushToStartToken
@@ -878,18 +922,21 @@ final class VoIPPushController: NSObject {
         callID: String
     ) async {
         guard !LocalModePreference.isEnabled(),
-              LiveActivityVisibilityPreference.isEnabled() else { return }
+            LiveActivityVisibilityPreference.isEnabled()
+        else { return }
         guard let registration = currentRegistration(),
-              let url = RelayEndpoint.url(
+            let url = RelayEndpoint.url(
                 base: registration.relayURL,
                 path: "v1/live-activities/register"
-              ) else { return }
+            )
+        else { return }
         struct Body: Encodable {
             let deviceID: String
             let deviceSecret: String
             let activityID: String
             let callID: String
             let updateToken: String
+
             enum CodingKeys: String, CodingKey {
                 case deviceID = "device_id"
                 case deviceSecret = "device_secret"
@@ -902,13 +949,15 @@ final class VoIPPushController: NSObject {
         request.httpMethod = "POST"
         request.timeoutInterval = 8
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONEncoder().encode(Body(
-            deviceID: registration.deviceID,
-            deviceSecret: registration.deviceSecret,
-            activityID: activityID,
-            callID: callID,
-            updateToken: token
-        ))
+        request.httpBody = try? JSONEncoder().encode(
+            Body(
+                deviceID: registration.deviceID,
+                deviceSecret: registration.deviceSecret,
+                activityID: activityID,
+                callID: callID,
+                updateToken: token
+            )
+        )
         let configuration = URLSessionConfiguration.ephemeral
         _ = try? await URLSession(configuration: configuration).data(for: request)
     }
@@ -971,12 +1020,13 @@ final class VoIPPushController: NSObject {
             return
         }
         guard Date() >= nextRegistrationAttempt,
-              let registration = currentRegistration() else { return }
+            let registration = currentRegistration()
+        else { return }
         let fingerprint = [
             registration.token, registration.alertToken, registration.watchVoIPToken,
             registration.watchBundleID, registration.liveActivityPushToStartToken,
             registration.bundleID, registration.environment,
-            registration.relayURL, registration.deviceID
+            registration.relayURL, registration.deviceID,
         ].joined(separator: "|")
         var agentRegistered = !PushRegistrationAttemptPolicy.shouldRegisterAgent(
             fingerprint: fingerprint,
@@ -995,12 +1045,12 @@ final class VoIPPushController: NSObject {
                 Task { await syncRegistration(with: latestRegistrationAPI) }
             }
         }
-#if DEBUG
+        #if DEBUG
         print(
-            "[AirSIM PushKit] Synchronizing with Agent; VoIP=present, alert=\(registration.alertToken.isEmpty ? "none" : "present"), " +
-            "env=\(registration.environment), Relay=\(registration.relayURL.isEmpty ? "unconfigured" : "configured")"
+            "[AirSIM PushKit] Synchronizing with Agent; VoIP=present, alert=\(registration.alertToken.isEmpty ? "none" : "present"), "
+                + "env=\(registration.environment), Relay=\(registration.relayURL.isEmpty ? "unconfigured" : "configured")"
         )
-#endif
+        #endif
         if !agentRegistered, pairingGate.beginAgentWrite() {
             defer { pairingGate.endAgentWrite() }
             do {
@@ -1010,55 +1060,59 @@ final class VoIPPushController: NSObject {
                     // refresh for other paired devices remains independent below.
                     agentRegistered = true
                 } else {
-                try await api.registerVoIPPush(registration)
-                lastRegisteredFingerprint = fingerprint
-                lastRegisteredRoute = api.route
-                agentRegistered = true
-#if DEBUG
-                print("[AirSIM PushKit] Agent accepted device registration")
-                Task {
-                    try? await Task.sleep(for: .seconds(8))
-                    do {
-                        let status = try await api.pushStatus()
-                        print(
-                            "[AirSIM PushKit] Agent status; configured=\(status.configured), " +
-                            "callPush=\(status.callPushReady), smsPush=\(status.messagePushReady), " +
-                            "error=\(status.lastError?.isEmpty == false ? status.lastError! : "none")"
-                        )
-                    } catch {
-                        print("[AirSIM PushKit] Failed to read Agent push status: \(error.localizedDescription)")
+                    try await api.registerVoIPPush(registration)
+                    lastRegisteredFingerprint = fingerprint
+                    lastRegisteredRoute = api.route
+                    agentRegistered = true
+                    #if DEBUG
+                    print("[AirSIM PushKit] Agent accepted device registration")
+                    Task {
+                        try? await Task.sleep(for: .seconds(8))
+                        do {
+                            let status = try await api.pushStatus()
+                            print(
+                                "[AirSIM PushKit] Agent status; configured=\(status.configured), "
+                                    + "callPush=\(status.callPushReady), smsPush=\(status.messagePushReady), "
+                                    + "error=\(status.lastError?.isEmpty == false ? status.lastError! : "none")"
+                            )
+                        } catch {
+                            print("[AirSIM PushKit] Failed to read Agent push status: \(error.localizedDescription)")
+                        }
                     }
-                }
-#endif
+                    #endif
                 }
             } catch {
-#if DEBUG
+                #if DEBUG
                 print("[AirSIM PushKit] Failed to register token with module: \(error.localizedDescription)")
-#endif
+                #endif
             }
         }
 
-        if !relayRegistered, PushRegistrationRetryPolicy.shouldAttemptRelay(
-            now: Date(), retryAfter: nextRelayRegistrationAttempt
-        ) {
+        if !relayRegistered,
+            PushRegistrationRetryPolicy.shouldAttemptRelay(
+                now: Date(),
+                retryAfter: nextRelayRegistrationAttempt
+            )
+        {
             do {
                 try await registerDirectlyWithRelay(registration)
                 lastRelayRegisteredFingerprint = fingerprint
                 relayRegistered = true
                 nextRelayRegistrationAttempt = .distantPast
-#if DEBUG
+                #if DEBUG
                 print("[AirSIM PushKit] Relay accepted direct device registration")
-#endif
+                #endif
             } catch {
                 if case CloudAgentStatusError.requestLimitExceeded = error {
                     nextRelayRegistrationAttempt = PushRegistrationRetryPolicy.quotaRetryDate(now: Date())
                 }
-#if DEBUG
+                #if DEBUG
                 print("[AirSIM PushKit] Direct Relay sync failed: \(error.localizedDescription)")
-#endif
+                #endif
             }
         }
-        // Continue low-frequency retries when Relay succeeds but local Agent is unreachable so the module receives the same credentials once back online.
+        // Continue low-frequency retries when Relay succeeds but local Agent is unreachable so the module receives the
+        // same credentials once back online.
         let needsRetry = PushRegistrationRetryPolicy.needsRetry(
             agentRegistered: agentRegistered,
             relayRegistered: relayRegistered
@@ -1067,9 +1121,11 @@ final class VoIPPushController: NSObject {
             previousRoute: attemptedRoute,
             currentRoute: latestRegistrationAPI.route
         )
-        let retryDelay = agentRegistered
+        let retryDelay =
+            agentRegistered
             ? max(30, nextRelayRegistrationAttempt.timeIntervalSinceNow) : 30
-        nextRegistrationAttempt = agentRegistered && relayRegistered || routeWasSuperseded
+        nextRegistrationAttempt =
+            agentRegistered && relayRegistered || routeWasSuperseded
             ? .distantPast
             : Date().addingTimeInterval(retryDelay)
         if needsRetry, !routeWasSuperseded {
@@ -1096,7 +1152,8 @@ final class VoIPPushController: NSObject {
         )
     }
 
-    /// Verifies the control plane only without placing calls or sending SMS: local credentials -> Relay identity -> registration auth -> Agent heartbeat.
+    /// Verifies the control plane only without placing calls or sending SMS: local credentials -> Relay identity ->
+    /// registration auth -> Agent heartbeat.
     func runCloudSelfTest(
         onUpdate: @MainActor @escaping (CloudSelfTestReport) -> Void = { _ in }
     ) async -> CloudSelfTestReport {
@@ -1112,7 +1169,11 @@ final class VoIPPushController: NSObject {
         if !readiness.voIPTokenReady { missing.append("PushKit token is not ready") }
         if !readiness.alertTokenReady { missing.append("Notification token is not ready") }
         guard missing.isEmpty, let registration = currentRegistration() else {
-            report.fail(.configuration, detail: missing.isEmpty ? "Device registration information is incomplete" : missing.joined(separator: "; "))
+            report.fail(
+                .configuration,
+                detail: missing.isEmpty
+                    ? "Device registration information is incomplete" : missing.joined(separator: "; ")
+            )
             onUpdate(report)
             return report
         }
@@ -1130,7 +1191,10 @@ final class VoIPPushController: NSObject {
             report.update(.relayIdentity, state: .passed, detail: "airsim-push-relay · v\(version)")
             onUpdate(report)
         } catch {
-            report.fail(.relayIdentity, detail: "Relay is unreachable or its identity does not match: \(error.localizedDescription)")
+            report.fail(
+                .relayIdentity,
+                detail: "Relay is unreachable or its identity does not match: \(error.localizedDescription)"
+            )
             onUpdate(report)
             return report
         }
@@ -1147,12 +1211,19 @@ final class VoIPPushController: NSObject {
             return report
         }
 
-        report.update(.agentHeartbeat, state: .running, detail: "Checking for an Android Agent heartbeat in the last 90 seconds")
+        report.update(
+            .agentHeartbeat,
+            state: .running,
+            detail: "Checking for an Android Agent heartbeat in the last 90 seconds"
+        )
         onUpdate(report)
         do {
             let status = try await fetchCloudAgentStatusForDiagnostics()
             guard status.cloudOnline else {
-                report.fail(.agentHeartbeat, detail: "Relay connected, but no Android Agent heartbeat in the last 90 seconds")
+                report.fail(
+                    .agentHeartbeat,
+                    detail: "Relay connected, but no Android Agent heartbeat in the last 90 seconds"
+                )
                 onUpdate(report)
                 return report
             }
@@ -1181,7 +1252,8 @@ final class VoIPPushController: NSObject {
     }
 
     /// Checks whether the Agent is still online via the latest Relay heartbeat when local USB/ECM is unreachable.
-    /// Device secrets in the request body are encoded in memory only using an ephemeral URLSession that never writes to disk.
+    /// Device secrets in the request body are encoded in memory only using an ephemeral URLSession that never writes to
+    /// disk.
     func fetchCloudAgentStatus() async throws -> CloudAgentStatus {
         guard CloudModePreference.isEnabled() else {
             throw CloudAgentStatusError.unavailable
@@ -1194,10 +1266,12 @@ final class VoIPPushController: NSObject {
         guard let registration = currentRegistration() else {
             throw CloudAgentStatusError.unavailable
         }
-        guard let url = RelayEndpoint.url(
-            base: registration.relayURL,
-            path: "v1/devices/status"
-        ) else { throw CloudAgentStatusError.invalidRelayURL }
+        guard
+            let url = RelayEndpoint.url(
+                base: registration.relayURL,
+                path: "v1/devices/status"
+            )
+        else { throw CloudAgentStatusError.invalidRelayURL }
 
         struct RequestBody: Encodable {
             let deviceID: String
@@ -1214,10 +1288,12 @@ final class VoIPPushController: NSObject {
         request.timeoutInterval = 5
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(RequestBody(
-            deviceID: registration.deviceID,
-            deviceSecret: registration.deviceSecret
-        ))
+        request.httpBody = try JSONEncoder().encode(
+            RequestBody(
+                deviceID: registration.deviceID,
+                deviceSecret: registration.deviceSecret
+            )
+        )
 
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 5
@@ -1243,8 +1319,9 @@ final class VoIPPushController: NSObject {
             mediaTransport: mediaTransport
         )
         guard enqueue.accepted, let call = enqueue.call,
-              let uuid = UUID(uuidString: call.callUUID),
-              let mediaURL = URL(string: call.mediaURL) else {
+            let uuid = UUID(uuidString: call.callUUID),
+            let mediaURL = URL(string: call.mediaURL)
+        else {
             throw CloudCommandError.invalidResponse
         }
         let outcome = try await waitForCloudCommand(commandID: commandID, timeout: timeout)
@@ -1281,7 +1358,10 @@ final class VoIPPushController: NSObject {
     func fetchCloudCallHistory() async throws -> [CallRecord] {
         let commandID = UUID()
         let enqueue = try await enqueueCloudCommand(
-            commandID: commandID, type: "call_history", number: "", message: nil
+            commandID: commandID,
+            type: "call_history",
+            number: "",
+            message: nil
         )
         guard enqueue.accepted else { throw CloudCommandError.invalidResponse }
         let outcome = try await waitForCloudCommand(commandID: commandID, timeout: 20)
@@ -1315,7 +1395,8 @@ final class VoIPPushController: NSObject {
     ) async throws -> CloudCommandEnqueueResponse {
         guard CloudModePreference.isEnabled() else { throw CloudCommandError.cloudModeDisabled }
         guard let registration = currentRegistration(),
-              let url = RelayEndpoint.url(base: registration.relayURL, path: "v1/commands/enqueue") else {
+            let url = RelayEndpoint.url(base: registration.relayURL, path: "v1/commands/enqueue")
+        else {
             throw CloudCommandError.unavailable
         }
         var body: [String: String] = [
@@ -1330,9 +1411,11 @@ final class VoIPPushController: NSObject {
         return try await relayRequest(url: url, body: body, as: CloudCommandEnqueueResponse.self)
     }
 
-    private func waitForCloudCommand(commandID: UUID, timeout: TimeInterval) async throws -> CloudCommandResultResponse {
+    private func waitForCloudCommand(commandID: UUID, timeout: TimeInterval) async throws -> CloudCommandResultResponse
+    {
         guard let registration = currentRegistration(),
-              let url = RelayEndpoint.url(base: registration.relayURL, path: "v1/commands/result") else {
+            let url = RelayEndpoint.url(base: registration.relayURL, path: "v1/commands/result")
+        else {
             throw CloudCommandError.unavailable
         }
         let deadline = Date().addingTimeInterval(timeout)
@@ -1403,10 +1486,12 @@ final class VoIPPushController: NSObject {
     }
 
     private func registerDirectlyWithRelay(_ registration: AgentPushRegistration) async throws {
-        guard let url = RelayEndpoint.url(
-            base: registration.relayURL,
-            path: "v1/devices/register"
-        ) else { throw CloudAgentStatusError.invalidRelayURL }
+        guard
+            let url = RelayEndpoint.url(
+                base: registration.relayURL,
+                path: "v1/devices/register"
+            )
+        else { throw CloudAgentStatusError.invalidRelayURL }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 8
@@ -1417,11 +1502,11 @@ final class VoIPPushController: NSObject {
         configuration.timeoutIntervalForRequest = 8
         configuration.timeoutIntervalForResource = 10
         let (data, response) = try await URLSession(configuration: configuration).data(for: request)
-#if DEBUG
+        #if DEBUG
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             print("[AirSIM PushKit] Relay registration rejected; HTTP=\(http.statusCode)")
         }
-#endif
+        #endif
         guard let http = response as? HTTPURLResponse else {
             throw CloudAgentStatusError.invalidResponse
         }
@@ -1430,7 +1515,8 @@ final class VoIPPushController: NSObject {
         }
         struct ResponseBody: Decodable { let registered: Bool }
         guard let result = try? JSONDecoder().decode(ResponseBody.self, from: data),
-              result.registered else { throw CloudAgentStatusError.invalidResponse }
+            result.registered
+        else { throw CloudAgentStatusError.invalidResponse }
     }
 
     private func store(token: String) {
@@ -1474,7 +1560,8 @@ final class VoIPPushController: NSObject {
     func pairingRegistration(localOnly: Bool = LocalModePreference.isEnabled()) -> AgentPushRegistration? {
         guard let secret = try? VoWLANCredentialStore.loadOrCreate().encodedSecret else { return nil }
         return try? SamsungPairingRegistrationPolicy.registration(
-            localOnly: localOnly, vowlanSecret: secret,
+            localOnly: localOnly,
+            vowlanSecret: secret,
             cloudRegistration: { self.currentRegistration(allowLocalMode: true) }
         )
     }
@@ -1482,16 +1569,16 @@ final class VoIPPushController: NSObject {
     private func currentRegistration(allowLocalMode: Bool = false) -> AgentPushRegistration? {
         guard allowLocalMode || !LocalModePreference.isEnabled() else { return nil }
         guard let token = UserDefaults.standard.string(forKey: Keys.token), !token.isEmpty else {
-#if DEBUG
+            #if DEBUG
             print("[AirSIM PushKit] No VoIP token yet, skipping sync")
-#endif
+            #endif
             return nil
         }
         let defaults = UserDefaults.standard
         guard let secret = Self.loadOrCreateDeviceSecret() else {
-#if DEBUG
+            #if DEBUG
             print("[AirSIM PushKit] Unable to create device secret, skipping sync")
-#endif
+            #endif
             return nil
         }
         let deviceID = PushDeviceIdentity.deviceID(deviceSecret: secret)
@@ -1526,12 +1613,13 @@ final class VoIPPushController: NSObject {
             kSecAttrService as String: Keys.keychainService,
             kSecAttrAccount as String: Keys.keychainAccount,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
         if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-           let data = item as? Data,
-           let value = String(data: data, encoding: .utf8) {
+            let data = item as? Data,
+            let value = String(data: data, encoding: .utf8)
+        {
             return value
         }
 
@@ -1545,7 +1633,7 @@ final class VoIPPushController: NSObject {
             kSecAttrService as String: Keys.keychainService,
             kSecAttrAccount as String: Keys.keychainAccount,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecValueData as String: Data(value.utf8)
+            kSecValueData as String: Data(value.utf8),
         ]
         guard SecItemAdd(add as CFDictionary, nil) == errSecSuccess else { return nil }
         return value
@@ -1561,9 +1649,9 @@ extension VoIPPushController: PKPushRegistryDelegate {
         guard type == .voIP else { return }
         let token = VoIPPushToken.hex(pushCredentials.token)
         Task { @MainActor [weak self] in
-#if DEBUG
+            #if DEBUG
             print("[AirSIM PushKit] VoIP token updated; bytes=\(pushCredentials.token.count)")
-#endif
+            #endif
             self?.store(token: token)
         }
     }
@@ -1574,9 +1662,9 @@ extension VoIPPushController: PKPushRegistryDelegate {
     ) {
         guard type == .voIP else { return }
         Task { @MainActor [weak self] in
-#if DEBUG
+            #if DEBUG
             print("[AirSIM PushKit] VoIP token invalidated")
-#endif
+            #endif
             UserDefaults.standard.removeObject(forKey: Keys.token)
             self?.resetRegistrationBackoff()
         }
@@ -1613,9 +1701,9 @@ extension VoIPPushController: PKPushRegistryDelegate {
                     }
                 }
             } catch {
-#if DEBUG
+                #if DEBUG
                 print("[AirSIM PushKit] Dropping invalid incoming call push: \(error.localizedDescription)")
-#endif
+                #endif
                 completion()
             }
         }

@@ -107,6 +107,7 @@ private enum AvatarGradient {
         UIColor(red: 0.66, green: 0.78, blue: 0.92, alpha: 1),
         UIColor(red: 0.43, green: 0.49, blue: 0.79, alpha: 1),
     ]
+
     static let unnamed = [
         UIColor(red: 0.64, green: 0.76, blue: 0.91, alpha: 1),
         UIColor(red: 0.43, green: 0.48, blue: 0.78, alpha: 1),

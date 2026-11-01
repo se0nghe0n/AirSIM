@@ -32,10 +32,12 @@ enum ConnectionModePreference {
             if rawValue == "bluetooth" { return .automatic }
             if let mode = AirSIMConnectionMode(rawValue: rawValue) { return mode }
         }
-        // Compatible with the two pre-upgrade boolean toggles; do not rewrite on read to avoid side effects in tests and extensions.
+        // Compatible with the two pre-upgrade boolean toggles; do not rewrite on read to avoid side effects in tests
+        // and extensions.
         if defaults.bool(forKey: LocalModePreference.key) { return .vowlan }
         if defaults.object(forKey: CloudModePreference.key) != nil,
-           !defaults.bool(forKey: CloudModePreference.key) {
+            !defaults.bool(forKey: CloudModePreference.key)
+        {
             return .vowlan
         }
         return .automatic
@@ -62,14 +64,14 @@ enum AndroidAgentBindingPreference {
 
     static func selected(defaults: UserDefaults = .standard) -> String? {
         guard let value = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else { return nil }
+            !value.isEmpty
+        else { return nil }
         return value
     }
 
     static func set(_ agentID: String?, defaults: UserDefaults = .standard) {
         let value = agentID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if value.isEmpty { defaults.removeObject(forKey: key) }
-        else { defaults.set(value, forKey: key) }
+        if value.isEmpty { defaults.removeObject(forKey: key) } else { defaults.set(value, forKey: key) }
     }
 }
 
@@ -85,15 +87,18 @@ enum PairedAndroidDeviceStore {
 
     static func records(defaults: UserDefaults = .standard) -> [PairedAndroidDeviceRecord] {
         guard let data = defaults.data(forKey: recordsKey),
-              let values = try? JSONDecoder().decode([PairedAndroidDeviceRecord].self, from: data) else { return [] }
+            let values = try? JSONDecoder().decode([PairedAndroidDeviceRecord].self, from: data)
+        else { return [] }
         return values.filter { permits($0.id, defaults: defaults) }
     }
+
     static func remember(_ record: PairedAndroidDeviceRecord, defaults: UserDefaults = .standard) {
         guard !record.id.isEmpty, permits(record.id, defaults: defaults) else { return }
         var values = records(defaults: defaults).filter { $0.id != record.id }
         values.append(record)
         defaults.set(try? JSONEncoder().encode(values), forKey: recordsKey)
     }
+
     static func forget(_ id: String, defaults: UserDefaults = .standard) {
         var forgotten = Set(defaults.stringArray(forKey: forgottenKey) ?? [])
         forgotten.insert(id)
@@ -103,12 +108,15 @@ enum PairedAndroidDeviceStore {
             AndroidAgentBindingPreference.set(nil, defaults: defaults)
         }
     }
+
     static func permits(_ id: String, defaults: UserDefaults = .standard) -> Bool {
         !(defaults.stringArray(forKey: forgottenKey) ?? []).contains(id)
     }
+
     static func hasForgottenDevices(defaults: UserDefaults = .standard) -> Bool {
         !(defaults.stringArray(forKey: forgottenKey) ?? []).isEmpty
     }
+
     static func allowPairing(_ id: String, defaults: UserDefaults = .standard) {
         defaults.set((defaults.stringArray(forKey: forgottenKey) ?? []).filter { $0 != id }, forKey: forgottenKey)
     }

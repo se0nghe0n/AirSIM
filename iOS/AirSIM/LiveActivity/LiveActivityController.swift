@@ -41,7 +41,8 @@ enum LiveActivityStateBuilder {
         idleStartedAt: Date
     ) -> AirSIMCallActivityAttributes.ContentState {
         // Show offline only when both local control and Relay heartbeat are unreachable; use a dedicated
-        // cloud standby state while the cloud heartbeat is fresh to avoid misreporting a VoWLAN disconnect as full module offline.
+        // cloud standby state while the cloud heartbeat is fresh to avoid misreporting a VoWLAN disconnect as full
+        // module offline.
         guard moduleOnline || cloudOnline else {
             return .init(
                 callID: "",
@@ -105,7 +106,8 @@ enum LiveActivityStateBuilder {
     }
 }
 
-/// The main app pre-starts and continuously syncs the Dynamic Island; background execution can only update an existing Live Activity.
+/// The main app pre-starts and continuously syncs the Dynamic Island; background execution can only update an existing
+/// Live Activity.
 @MainActor
 final class LiveActivityController {
     private var activity: Activity<AirSIMCallActivityAttributes>?
@@ -114,7 +116,8 @@ final class LiveActivityController {
     private var enabled = true
     private var visibilityRevision = 0
 
-    /// Immediately ends system activities when turned off by the user; recreated on demand by the next module status sync when re-enabled.
+    /// Immediately ends system activities when turned off by the user; recreated on demand by the next module status
+    /// sync when re-enabled.
     func setEnabled(_ enabled: Bool) {
         self.enabled = enabled
         visibilityRevision &+= 1
@@ -122,7 +125,8 @@ final class LiveActivityController {
             let revision = visibilityRevision
             Task { @MainActor [weak self] in
                 guard let self, !self.enabled,
-                      self.visibilityRevision == revision else { return }
+                    self.visibilityRevision == revision
+                else { return }
                 await self.stop()
             }
         }
@@ -140,16 +144,22 @@ final class LiveActivityController {
     ) async {
         guard enabled, UIDevice.current.userInterfaceIdiom == .phone else { return }
         resolveExistingActivity()
-#if DEBUG
-        let requestedPhase = call != nil ? "call" : (moduleOnline ? "standby" : (cloudOnline ? "cloud_standby" : "offline"))
-        print("[AirSIM LiveActivity] requestedPhase=\(requestedPhase) appActive=\(appIsActive) authorized=\(ActivityAuthorizationInfo().areActivitiesEnabled) existingCount=\(Activity<AirSIMCallActivityAttributes>.activities.count) selected=\(activity?.id ?? "none")")
-#endif
+        #if DEBUG
+        let requestedPhase =
+            call != nil ? "call" : (moduleOnline ? "standby" : (cloudOnline ? "cloud_standby" : "offline"))
+        print(
+            "[AirSIM LiveActivity] requestedPhase=\(requestedPhase) appActive=\(appIsActive) authorized=\(ActivityAuthorizationInfo().areActivitiesEnabled) existingCount=\(Activity<AirSIMCallActivityAttributes>.activities.count) selected=\(activity?.id ?? "none")"
+        )
+        #endif
 
         if activity == nil {
-            // iOS does not guarantee local activity creation in the background. Allow creation while offline in the foreground
-            // to replace orphaned activities still displayed by the system after an app upgrade when Activity.activities no longer returns handles.
+            // iOS does not guarantee local activity creation in the background. Allow creation while offline in the
+            // foreground
+            // to replace orphaned activities still displayed by the system after an app upgrade when
+            // Activity.activities no longer returns handles.
             guard LiveActivityCreationPolicy.shouldCreate(appIsActive: appIsActive, hasActivity: false),
-                  ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+                ActivityAuthorizationInfo().areActivitiesEnabled
+            else { return }
             do {
                 let initialState = LiveActivityStateBuilder.make(
                     call: call,
@@ -174,14 +184,14 @@ final class LiveActivityController {
                 if let activity {
                     VoIPPushController.shared.observeLiveActivity(activity)
                 }
-#if DEBUG
+                #if DEBUG
                 print("[AirSIM LiveActivity] created id=\(activity?.id ?? "none") phase=\(initialState.phase.rawValue)")
-#endif
+                #endif
                 lastState = initialState
             } catch {
-#if DEBUG
+                #if DEBUG
                 print("[AirSIM LiveActivity] create_failed error=\(String(describing: error))")
-#endif
+                #endif
                 return
             }
         } else if let activity {
@@ -195,7 +205,8 @@ final class LiveActivityController {
                 agent: agent,
                 idleStartedAt: idleStartedAt
             )
-            // Online/offline state is determined by actual module requests; do not use ActivityKit stale as a connectivity probe.
+            // Online/offline state is determined by actual module requests; do not use ActivityKit stale as a
+            // connectivity probe.
             guard nextState != lastState else { return }
             await activity.update(
                 ActivityContent(
@@ -203,9 +214,9 @@ final class LiveActivityController {
                     staleDate: nil
                 )
             )
-#if DEBUG
+            #if DEBUG
             print("[AirSIM LiveActivity] updated id=\(activity.id) phase=\(nextState.phase.rawValue)")
-#endif
+            #endif
             lastState = nextState
         }
     }
@@ -236,10 +247,10 @@ final class LiveActivityController {
         if let activity {
             VoIPPushController.shared.observeLiveActivity(activity)
         }
-#if DEBUG
+        #if DEBUG
         let summary = existing.map { "\($0.id):\($0.content.state.phase.rawValue)" }.joined(separator: ",")
         print("[AirSIM LiveActivity] resolved count=\(existing.count) activities=[\(summary)]")
-#endif
+        #endif
         lastState = activity?.content.state
     }
 

@@ -72,14 +72,18 @@ final class AirSIMSettingsViewController: PhoneTableController {
     // MARK: Rows
 
     private func modeSection() -> PhoneSection {
-        PhoneSection(title: "Connection Mode", footer: store.modeDetail, rows: [
-            PhoneRow(
-                id: "mode",
-                title: "Connection Mode",
-                accessory: modeControl,
-                accessoryInline: true
-            ),
-        ])
+        PhoneSection(
+            title: "Connection Mode",
+            footer: store.modeDetail,
+            rows: [
+                PhoneRow(
+                    id: "mode",
+                    title: "Connection Mode",
+                    accessory: modeControl,
+                    accessoryInline: true
+                )
+            ]
+        )
     }
 
     private func currentConnectionSection() -> PhoneSection {
@@ -152,7 +156,8 @@ final class AirSIMSettingsViewController: PhoneTableController {
     private func liveActivitySection() -> PhoneSection {
         PhoneSection(
             title: "Dynamic Island and Live Activities",
-            footer: "Turning this off ends AirSIM Dynamic Island and Lock Screen Live Activities. Calls and messages remain available.",
+            footer:
+                "Turning this off ends AirSIM Dynamic Island and Lock Screen Live Activities. Calls and messages remain available.",
             rows: [
                 PhoneRow(
                     id: "activity",
@@ -160,7 +165,7 @@ final class AirSIMSettingsViewController: PhoneTableController {
                     image: "platter.filled.top.iphone",
                     accessory: activitySwitch,
                     accessoryInline: true
-                ),
+                )
             ]
         )
     }
@@ -191,7 +196,8 @@ final class AirSIMSettingsViewController: PhoneTableController {
         }
         return PhoneSection(
             title: "Cloud Relay",
-            footer: "Local VoWLAN remains available when cloud mode is off. Remote calls and messages require a cloud Relay and valid device registration.",
+            footer:
+                "Local VoWLAN remains available when cloud mode is off. Remote calls and messages require a cloud Relay and valid device registration.",
             rows: rows
         )
     }
@@ -205,7 +211,7 @@ final class AirSIMSettingsViewController: PhoneTableController {
                 color: .systemBlue,
                 enabled: store.canRunSelfTest,
                 action: { [weak self] in self?.send(.runSelfTestTapped) }
-            ),
+            )
         ]
         rows += store.selfTestSteps.map(selfTestStepRow)
         if let result = store.selfTestResult {
@@ -231,15 +237,18 @@ final class AirSIMSettingsViewController: PhoneTableController {
     }
 
     private func aboutSection() -> PhoneSection {
-        PhoneSection(title: "About", rows: [
-            valueRow(id: "project", title: "Project", detail: "AirSIM · Samsung"),
-            PhoneRow(
-                id: "appearance",
-                title: "Appearance",
-                accessory: appearanceControl,
-                accessoryInline: true
-            ),
-        ])
+        PhoneSection(
+            title: "About",
+            rows: [
+                valueRow(id: "project", title: "Project", detail: "AirSIM · Samsung"),
+                PhoneRow(
+                    id: "appearance",
+                    title: "Appearance",
+                    accessory: appearanceControl,
+                    accessoryInline: true
+                ),
+            ]
+        )
     }
 
     private func valueRow(id: String, title: String, detail: String) -> PhoneRow {
@@ -290,7 +299,8 @@ final class AirSIMSettingsViewController: PhoneTableController {
     private func confirmForget(_ device: PairedDeviceRow) {
         confirmPhoneAction(
             "Delete this device's local pairing record?",
-            message: "Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.",
+            message:
+                "Clears this device's local record, binding, and cache. Calls, messages, and other devices are unaffected. Pair again to enable automatic connection. Remote credentials on an offline device are not automatically revoked.",
             actionTitle: "Delete \(device.name)"
         ) { [weak self] in
             self?.send(.forgetDeviceConfirmed(device.id))

@@ -120,7 +120,7 @@ struct MessagesFeature {
                 return .send(.delegate(.compose("")))
 
             case .view(.conversationTapped(let sender)),
-                 .view(.threadLoaded(let sender)):
+                .view(.threadLoaded(let sender)):
                 guard state.conversation != sender else { return .none }
                 state.openConversation(sender)
                 return .none
@@ -140,8 +140,8 @@ struct MessagesFeature {
             case .view(.sendTapped(let to)):
                 let body = state.reply
                 guard !state.sending,
-                      !to.trimmingCharacters(in: .whitespaces).isEmpty,
-                      !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    !to.trimmingCharacters(in: .whitespaces).isEmpty,
+                    !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 else { return .none }
                 let id = uuid()
                 state.sendID = id

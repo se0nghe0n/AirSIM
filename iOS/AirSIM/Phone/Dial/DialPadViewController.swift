@@ -13,14 +13,18 @@ final class DialPadViewController: ObservingViewController {
     private let stack = UIStackView(axis: .vertical, spacing: Metrics.initialSectionSpacing, alignment: .center)
     private let numberLabel = phoneLabel(size: 36)
     private let contactLabel = phoneLabel(size: 16, color: .systemGreen)
+
     private lazy var agentButton = phoneButton("Paired Android Agents") { [weak self] in
         self?.showPairedAgents()
     }
+
     private var agentCard: UIView?
     private var keys: [(key: DialKey, button: UIButton)] = []
+
     private lazy var callButton = phoneButton("Dial", image: "phone.fill", color: .white) { [weak self] in
         self?.send(.callTapped)
     }
+
     private let deleteButton = phoneButton("Delete", image: "delete.left", color: .secondaryLabel) {}
     private var keypadRows: [UIStackView] = []
     private var keypadRowWidths: [NSLayoutConstraint] = []
@@ -95,7 +99,8 @@ final class DialPadViewController: ObservingViewController {
         card.isUserInteractionEnabled = false
         agentButton.addPinnedSubview(card)
         agentCard = card
-        agentHeight.constant = store.currentAgent == nil
+        agentHeight.constant =
+            store.currentAgent == nil
             ? Metrics.agentCardHeightWithoutCurrent
             : Metrics.agentCardHeight
     }
@@ -268,11 +273,13 @@ final class DialPadViewController: ObservingViewController {
         let area = view.safeAreaLayoutGuide.layoutFrame
         guard area.size != lastLayoutSize else { return }
         lastLayoutSize = area.size
-        applyLayout(DialPadLayoutMetrics(
-            availableHeight: area.height,
-            availableWidth: area.width,
-            compactWidth: traitCollection.horizontalSizeClass == .compact
-        ))
+        applyLayout(
+            DialPadLayoutMetrics(
+                availableHeight: area.height,
+                availableWidth: area.width,
+                compactWidth: traitCollection.horizontalSizeClass == .compact
+            )
+        )
     }
 
     private func applyLayout(_ metrics: DialPadLayoutMetrics) {

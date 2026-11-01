@@ -6,13 +6,16 @@ func check(_ condition: @autoclosure () -> Bool, _ message: String) {
 
 do {
     let now = ISO8601DateFormatter().date(from: "2026-09-27T10:00:00Z")!
-    let call = try WatchVoIPCall(userInfo: [
-        "event": "incoming_call",
-        "call_id": "local-incoming-watch",
-        "call_uuid": "D9B59660-05BB-4EA8-9AEB-4505B35C93F9",
-        "number": "10086",
-        "expires_at": "2026-09-27T10:00:45Z",
-    ], now: now)
+    let call = try WatchVoIPCall(
+        userInfo: [
+            "event": "incoming_call",
+            "call_id": "local-incoming-watch",
+            "call_uuid": "D9B59660-05BB-4EA8-9AEB-4505B35C93F9",
+            "number": "10086",
+            "expires_at": "2026-09-27T10:00:45Z",
+        ],
+        now: now
+    )
     check(call.callID == "local-incoming-watch", "Wrong local call ID")
     check(call.media == .pendingLocal, "Local incoming media must be obtained from iPhone")
     let outgoing = try WatchVoIPCall(outgoingReply: [

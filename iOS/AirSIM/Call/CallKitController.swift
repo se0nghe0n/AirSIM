@@ -6,6 +6,7 @@ enum CallKitSynchronizationPolicy {
         currentBackendID == endedID
     }
 }
+
 import Foundation
 
 /// Forwards system CallKit actions to the module control layer; main-actor isolated to protect AppModel state.
@@ -91,7 +92,8 @@ struct IncomingCallDeduplicator {
     }
 }
 
-/// Maintains a 1-to-1 mapping between module calls and system call UUIDs, handling lock-screen and system call UI actions.
+/// Maintains a 1-to-1 mapping between module calls and system call UUIDs, handling lock-screen and system call UI
+/// actions.
 @MainActor
 final class CallKitController: NSObject {
     static let shared = CallKitController()
@@ -149,9 +151,9 @@ final class CallKitController: NSObject {
         }
         audioSessionIsActive = false
         resetCurrentCall()
-#if DEBUG
+        #if DEBUG
         debugLog("CallKit disabled in local mode")
-#endif
+        #endif
     }
 
     var managesCurrentCall: Bool {
@@ -181,14 +183,16 @@ final class CallKitController: NSObject {
         return backendMatches && uuidMatches
     }
 
-    /// Ends local CallKit immediately once a paired device takes over the same call to prevent dual ringing or media contention.
+    /// Ends local CallKit immediately once a paired device takes over the same call to prevent dual ringing or media
+    /// contention.
     func reportCurrentCallEnded(reason: CXCallEndedReason) {
         finishCurrentCall(previous: nil, reason: reason)
     }
 
     func reportCurrentOutgoingConnected() {
         guard currentDirection == "outgoing", let uuid = currentUUID,
-              currentState != "active", systemCallReported else { return }
+            currentState != "active", systemCallReported
+        else { return }
         currentState = "active"
         provider.reportOutgoingCall(with: uuid, connectedAt: Date())
     }
@@ -240,7 +244,8 @@ final class CallKitController: NSObject {
         handler?.callKitDidReceiveIncoming(call)
     }
 
-    /// Lets the system take over the outgoing call transaction first; the actual module ATD is executed only inside the CXProvider delegate callback.
+    /// Lets the system take over the outgoing call transaction first; the actual module ATD is executed only inside the
+    /// CXProvider delegate callback.
     func startOutgoingCall(number: String) async throws {
         guard isAvailable else { throw CallKitBridgeError.unavailable }
         guard currentUUID == nil else { throw CallKitBridgeError.callInProgress }
@@ -267,14 +272,22 @@ final class CallKitController: NSObject {
     /// Cloud calls do not pass through the local status poll that normally binds this ID.
     func bindOutgoingBackendCall(_ callID: String) {
         guard !callID.isEmpty, currentDirection == "outgoing", currentUUID != nil,
-              currentBackendID == nil || currentBackendID == callID else { return }
+            currentBackendID == nil || currentBackendID == callID
+        else { return }
         currentBackendID = callID
     }
 
     func performLiveActivityAction(_ action: AirSIMLiveActivityAction, callID: String) async throws {
         guard managesCurrentCall else { throw LiveActivityCallError.unavailable }
-        guard try LiveActivityCallActionPolicy.shouldPerform(action, callID: callID,
-                currentCallID: currentBackendID, state: currentState, direction: currentDirection) else { return }
+        guard
+            try LiveActivityCallActionPolicy.shouldPerform(
+                action,
+                callID: callID,
+                currentCallID: currentBackendID,
+                state: currentState,
+                direction: currentDirection
+            )
+        else { return }
         switch action {
         case .answer: try await answerCurrentCall()
         case .reject, .hangup: try await endCurrentCall()
@@ -308,7 +321,8 @@ final class CallKitController: NSObject {
         try await requestSystemAction(CXSetMutedCallAction(call: uuid, muted: muted))
     }
 
-    /// In-app keypad digits also go through CallKit transactions so the system call screen and in-app UI do not maintain separate DTMF states.
+    /// In-app keypad digits also go through CallKit transactions so the system call screen and in-app UI do not
+    /// maintain separate DTMF states.
     func playDTMF(_ digits: String) async throws {
         guard let uuid = currentUUID, systemCallReported else {
             throw CallKitBridgeError.noSystemCall
@@ -322,7 +336,8 @@ final class CallKitController: NSObject {
 
     /// Synchronizes incoming and outgoing call lifecycle with the system after each module poll.
     func synchronize(call: CallRecord?, previous: CallRecord?, callerName: String?) {
-        // Keep only the in-app state machine once CallKit is denied by the system; do not continue fabricating system call UUIDs.
+        // Keep only the in-app state machine once CallKit is denied by the system; do not continue fabricating system
+        // call UUIDs.
         guard isAvailable else {
             if call == nil { resetCurrentCall() }
             return
@@ -332,13 +347,16 @@ final class CallKitController: NSObject {
             // close the system call immediately without waiting for empty-CLCC debouncing.
             if previous?.endedAt != nil {
                 guard let previous,
-                      CallKitSynchronizationPolicy.mayFinishEndedHistory(
-                        currentBackendID: currentBackendID, endedID: previous.id
-                      ) else { return }
+                    CallKitSynchronizationPolicy.mayFinishEndedHistory(
+                        currentBackendID: currentBackendID,
+                        endedID: previous.id
+                    )
+                else { return }
                 finishCurrentCall(previous: previous)
                 return
             }
-            // An occasional empty AT+CLCC response does not mean the call ended; retain the UUID so speaker/mute transactions do not fail with unknown UUID.
+            // An occasional empty AT+CLCC response does not mean the call ended; retain the UUID so speaker/mute
+            // transactions do not fail with unknown UUID.
             if currentDirection == "outgoing", outgoingStartInFlight { return }
             if currentUUID != nil, systemCallReported || currentDirection == "outgoing" {
                 missingCallPolls += 1
@@ -349,7 +367,8 @@ final class CallKitController: NSObject {
         }
 
         if call.direction == "outgoing" {
-            // Synchronize only system outgoing calls started via startOutgoingCall; do not fabricate UUIDs for external ATD calls.
+            // Synchronize only system outgoing calls started via startOutgoingCall; do not fabricate UUIDs for external
+            // ATD calls.
             guard currentDirection == "outgoing", let uuid = currentUUID else { return }
             if let backendID = currentBackendID, backendID != call.id {
                 finishCurrentCall(previous: previous, reason: .failed)
@@ -376,7 +395,8 @@ final class CallKitController: NSObject {
             finishCurrentCall(previous: previous, reason: .failed)
         }
         if currentUUID == nil,
-           !incomingDeduplicator.shouldAccept(callID: call.id, uuid: nil) {
+            !incomingDeduplicator.shouldAccept(callID: call.id, uuid: nil)
+        {
             debugLog("Ignoring late module state for ended call")
             return
         }
@@ -414,7 +434,9 @@ final class CallKitController: NSObject {
                     }
                     self.systemCallReported = false
                     self.incomingReportFailed = true
-                    self.handler?.callKitDidFail("Unable to show system incoming call screen: \(error.localizedDescription)")
+                    self.handler?.callKitDidFail(
+                        "Unable to show system incoming call screen: \(error.localizedDescription)"
+                    )
                     self.finishIncomingReport(error)
                 } else {
                     self.debugLog("System incoming call reported successfully")
@@ -473,8 +495,7 @@ final class CallKitController: NSObject {
         try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<Void, Error>) in
             callController.request(CXTransaction(action: action)) { error in
-                if let error { continuation.resume(throwing: error) }
-                else { continuation.resume() }
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
             }
         }
     }
@@ -487,18 +508,21 @@ final class CallKitController: NSObject {
         } catch {
             let nsError = error as NSError
             if nsError.domain == CXErrorDomainRequestTransaction,
-               nsError.code == CXErrorCodeRequestTransactionError.Code.unknownCallUUID.rawValue {
+                nsError.code == CXErrorCodeRequestTransactionError.Code.unknownCallUUID.rawValue
+            {
                 throw CallKitBridgeError.staleSystemCall
             }
             throw error
         }
     }
 
-    /// Personal team signing or restricted devices may return requesttransaction/unentitled; automatically fall back to in-app calls.
+    /// Personal team signing or restricted devices may return requesttransaction/unentitled; automatically fall back to
+    /// in-app calls.
     private func disableCallKitIfUnentitled(_ error: Error) -> Bool {
         let error = error as NSError
         guard error.domain == CXErrorDomainRequestTransaction,
-              error.code == CXErrorCodeRequestTransactionError.Code.unentitled.rawValue else {
+            error.code == CXErrorCodeRequestTransactionError.Code.unentitled.rawValue
+        else {
             return false
         }
         entitlementAvailable = false
@@ -509,9 +533,9 @@ final class CallKitController: NSObject {
 
     /// Logs only state and system error codes during device debugging to avoid writing phone numbers to device logs.
     private func debugLog(_ message: String) {
-#if DEBUG
+        #if DEBUG
         print("[AirSIM CallKit] \(message)")
-#endif
+        #endif
     }
 
     private func resetCurrentCall() {
@@ -551,8 +575,10 @@ final class CallKitController: NSObject {
                 prepare: { try handler.callKitPrepareAudioSession() },
                 fulfill: {
                     self.currentState = "connecting"
-                    // The system transaction confirms only that the user accepted the call. Cloud WebSocket, Telecom, and WebRTC
-                    // are established asynchronously afterward and must not block CallKit from activating AVAudioSession.
+                    // The system transaction confirms only that the user accepted the call. Cloud WebSocket, Telecom,
+                    // and WebRTC
+                    // are established asynchronously afterward and must not block CallKit from activating
+                    // AVAudioSession.
                     action.fulfill()
                 },
                 backend: { try await handler.callKitAnswer(origin: origin) }
@@ -603,7 +629,8 @@ final class CallKitController: NSObject {
                 fulfill: {
                     self.provider.reportOutgoingCall(with: action.callUUID, startedConnectingAt: Date())
                     self.systemCallReported = true
-                    // Let CallKit establish the system call and audio session first; cloud dial polling can take up to 25s
+                    // Let CallKit establish the system call and audio session first; cloud dial polling can take up to
+                    // 25s
                     // and must not block CXStartCallAction, otherwise both system UI and didActivate will lag.
                     action.fulfill()
                 },

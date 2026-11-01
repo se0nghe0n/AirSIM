@@ -11,8 +11,10 @@ final class CloudWebRTCRecordingAudio {
         capture = CallRecordingWebRTCObserver(channel: .local, source: source)
         render = CallRecordingWebRTCObserver(channel: .remote, source: source)
         module = RTCDefaultAudioProcessingModule(
-            config: nil, capturePostProcessingDelegate: nil,
-            renderPreProcessingDelegate: nil)
+            config: nil,
+            capturePostProcessingDelegate: nil,
+            renderPreProcessingDelegate: nil
+        )
         // SDK 144.7559.15's adapter initializer ignores its delegate argument.
         // The property setters actually bind the weak native callbacks. Keep
         // both observers strongly owned here for their owning peer factory's lifetime.
@@ -41,10 +43,16 @@ private final class CallRecordingWebRTCObserver: NSObject, RTCAudioCustomProcess
         // AudioBuffer contains FloatS16, not normalized [-1, 1] floats. Its
         // borrowed pointer is copied only while recording, never retained.
         let samples = UnsafeBufferPointer(
-            start: audioBuffer.rawBuffer(forChannel: 0), count: audioBuffer.frames)
+            start: audioBuffer.rawBuffer(forChannel: 0),
+            count: audioBuffer.frames
+        )
         CallAudioRecorder.shared.appendFloat32(
-            samples, sampleRate: sampleRate, normalized: false,
-            channel: channel, source: source)
+            samples,
+            sampleRate: sampleRate,
+            normalized: false,
+            channel: channel,
+            source: source
+        )
     }
 
     func audioProcessingRelease() {}

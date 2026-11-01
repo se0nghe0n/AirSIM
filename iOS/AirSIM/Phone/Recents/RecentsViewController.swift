@@ -13,6 +13,7 @@ final class RecentsViewController: PhoneTableController {
     override var tableStyle: UITableView.Style { .plain }
     private let statusLabel = phoneLabel(size: 13, color: .secondaryLabel)
     private let statusBanner = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterial))
+
     private lazy var refreshButton = UIBarButtonItem(
         image: UIImage(systemName: "arrow.clockwise"),
         primaryAction: UIAction { [weak self] _ in self?.send(.refreshTapped) }
@@ -134,10 +135,10 @@ final class RecentsViewController: PhoneTableController {
 
     @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began,
-              let path = table.indexPathForRow(at: gesture.location(in: table)),
-              let id = row(at: path)?.id,
-              let row = store.state.row(id: id),
-              row.dialNumber != nil
+            let path = table.indexPathForRow(at: gesture.location(in: table)),
+            let id = row(at: path)?.id,
+            let row = store.state.row(id: id),
+            row.dialNumber != nil
         else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let details = RecentCallDetailsViewController(row: row, store: store)

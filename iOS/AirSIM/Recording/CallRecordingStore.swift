@@ -9,6 +9,7 @@ import UIKit
 struct CallRecordingSource: Equatable, Sendable {
     let callUUID: UUID
 }
+
 enum CallRecordingChannel: Sendable { case local, remote }
 
 struct CallRecordingFile: Codable, Identifiable, Sendable, Equatable {
@@ -22,6 +23,7 @@ struct CallRecordingFile: Codable, Identifiable, Sendable, Equatable {
 
 enum CallRecordingError: LocalizedError {
     case busy, empty, overloaded, limit, invalidAudio, storage
+
     var errorDescription: String? {
         switch self {
         case .busy: return "A recording is already being processed."
@@ -50,6 +52,7 @@ final class CallAudioRecorder: @unchecked Sendable {
     private var pendingError: (UUID, CallRecordingError)?
     private var session: Session? // Writer queue only.
     private let directory: URL
+
     private lazy var signal: DispatchSourceUserDataAdd = {
         let source = DispatchSource.makeUserDataAddSource(queue: queue)
         source.setEventHandler { [weak self] in self?.drain() }
@@ -62,12 +65,14 @@ final class CallAudioRecorder: @unchecked Sendable {
         let source: CallRecordingSource
         let uptime: TimeInterval
     }
+
     private struct Packet {
         let id: UUID
         let channel: CallRecordingChannel
         let frame: Int
         let pcm: Data
     }
+
     private final class Session {
         let admission: Admission
         let callID: String
@@ -80,38 +85,65 @@ final class CallAudioRecorder: @unchecked Sendable {
         var localEnd = 0
         var remoteEnd = 0
         var error: Error?
-        init(admission: Admission, callID: String, local: FileHandle, remote: FileHandle,
-             localURL: URL, remoteURL: URL, failure: @escaping @Sendable (UUID, Error) -> Void) {
-            self.admission = admission; self.callID = callID; startedAt = Date()
-            self.local = local; self.remote = remote
-            self.localURL = localURL; self.remoteURL = remoteURL; self.failure = failure
+
+        init(
+            admission: Admission,
+            callID: String,
+            local: FileHandle,
+            remote: FileHandle,
+            localURL: URL,
+            remoteURL: URL,
+            failure: @escaping @Sendable (UUID, Error) -> Void
+        ) {
+            self.admission = admission
+            self.callID = callID
+            startedAt = Date()
+            self.local = local
+            self.remote = remote
+            self.localURL = localURL
+            self.remoteURL = remoteURL
+            self.failure = failure
         }
     }
 
     init(directoryURL: URL? = nil) {
-        directory = directoryURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        directory =
+            directoryURL
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CallRecordings", isDirectory: true)
         _ = signal // Initialize before any audio callback.
     }
 
     func setMuted(_ value: Bool) {
-        lock.lock(); muted = value; lock.unlock()
+        lock.lock()
+        muted = value
+        lock.unlock()
     }
 
-    func appendPCM16(_ pcm: Data, channel: CallRecordingChannel, source: CallRecordingSource,
-                     atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    func appendPCM16(
+        _ pcm: Data,
+        channel: CallRecordingChannel,
+        source: CallRecordingSource,
+        atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
         append(channel: channel, source: source, uptime: atUptime, inputCount: pcm.count / 2) { silence in
             guard pcm.count % 2 == 0 else { return nil }
             return silence ? Data(count: pcm.count) : Data(pcm)
         }
     }
 
-    func appendFloat32(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double, normalized: Bool,
-                       channel: CallRecordingChannel, source: CallRecordingSource,
-                       atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    func appendFloat32(
+        _ samples: UnsafeBufferPointer<Float>,
+        sampleRate: Double,
+        normalized: Bool,
+        channel: CallRecordingChannel,
+        source: CallRecordingSource,
+        atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) {
         // Copy/resample synchronously; never retain the caller's buffer.
         guard sampleRate.isFinite, sampleRate >= 8_000, sampleRate <= 192_000,
-              samples.count <= 196_608 else { return }
+            samples.count <= 196_608
+        else { return }
         let outputCount = Int(Double(samples.count) * 8_000 / sampleRate)
         append(channel: channel, source: source, uptime: atUptime, inputCount: outputCount) { silence in
             var data = Data(count: outputCount * 2)
@@ -131,20 +163,39 @@ final class CallAudioRecorder: @unchecked Sendable {
         }
     }
 
-    private func append(channel: CallRecordingChannel, source: CallRecordingSource, uptime: TimeInterval,
-                        inputCount: Int, copy: (Bool) -> Data?) {
+    private func append(
+        channel: CallRecordingChannel,
+        source: CallRecordingSource,
+        uptime: TimeInterval,
+        inputCount: Int,
+        copy: (Bool) -> Data?
+    ) {
         lock.lock()
-        guard let active = admission, active.source == source else { lock.unlock(); return }
-        guard uptime.isFinite, inputCount > 0 else { lock.unlock(); return }
+        guard let active = admission, active.source == source else {
+            lock.unlock()
+            return
+        }
+        guard uptime.isFinite, inputCount > 0 else {
+            lock.unlock()
+            return
+        }
         let elapsed = max(0, uptime - active.uptime)
         let failure: CallRecordingError?
-        if elapsed >= Double(Self.maximumFrames) / 8_000 { failure = .limit }
-        else if inputCount > 8_192 { failure = .invalidAudio }
-        else if pendingBytes + reservedBytes + inputCount * 2 > 262_144 { failure = .overloaded }
-        else { failure = nil }
+        if elapsed >= Double(Self.maximumFrames) / 8_000 {
+            failure = .limit
+        } else if inputCount > 8_192 {
+            failure = .invalidAudio
+        } else if pendingBytes + reservedBytes + inputCount * 2 > 262_144 {
+            failure = .overloaded
+        } else {
+            failure = nil
+        }
         if let failure {
-            pendingError = (active.id, failure); admission = nil; lock.unlock()
-            signal.add(data: 1); return
+            pendingError = (active.id, failure)
+            admission = nil
+            lock.unlock()
+            signal.add(data: 1)
+            return
         }
         let silence = channel == .local && muted
         reservedBytes += inputCount * 2
@@ -152,11 +203,17 @@ final class CallAudioRecorder: @unchecked Sendable {
         // Conversion and copying run outside the very short admission critical section.
         var data = copy(silence)
         lock.lock()
-        guard admission?.id == active.id else { lock.unlock(); return }
+        guard admission?.id == active.id else {
+            lock.unlock()
+            return
+        }
         reservedBytes -= inputCount * 2
         guard data != nil else {
-            pendingError = (active.id, .invalidAudio); admission = nil; lock.unlock()
-            signal.add(data: 1); return
+            pendingError = (active.id, .invalidAudio)
+            admission = nil
+            lock.unlock()
+            signal.add(data: 1)
+            return
         }
         // A mute transition during conversion must also erase that in-flight local buffer.
         if channel == .local && muted && !silence { data = Data(count: inputCount * 2) }
@@ -166,9 +223,12 @@ final class CallAudioRecorder: @unchecked Sendable {
         signal.add(data: 1)
     }
 
-    func start(callID: String, source: CallRecordingSource,
-               atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
-               onFailure: @escaping @Sendable (UUID, Error) -> Void = { _, _ in }) async throws -> UUID {
+    func start(
+        callID: String,
+        source: CallRecordingSource,
+        atUptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        onFailure: @escaping @Sendable (UUID, Error) -> Void = { _, _ in }
+    ) async throws -> UUID {
         try await perform {
             guard self.session == nil else { throw CallRecordingError.busy }
             try self.prepareDirectory()
@@ -176,17 +236,31 @@ final class CallAudioRecorder: @unchecked Sendable {
             let localURL = self.directory.appendingPathComponent(id.uuidString + ".local.raw")
             let remoteURL = self.directory.appendingPathComponent(id.uuidString + ".remote.raw")
             do {
-                try Data().write(to: localURL); try Data().write(to: remoteURL)
-                try self.protect(localURL); try self.protect(remoteURL)
+                try Data().write(to: localURL)
+                try Data().write(to: remoteURL)
+                try self.protect(localURL)
+                try self.protect(remoteURL)
                 let local = try FileHandle(forUpdating: localURL)
                 let remote: FileHandle
-                do { remote = try FileHandle(forUpdating: remoteURL) }
-                catch { try? local.close(); throw error }
+                do { remote = try FileHandle(forUpdating: remoteURL) } catch {
+                    try? local.close()
+                    throw error
+                }
                 self.lock.lock()
                 let active = Admission(id: id, source: source, uptime: atUptime)
-                self.pending.removeAll(keepingCapacity: true); self.pendingBytes = 0; self.reservedBytes = 0; self.pendingError = nil
-                self.session = Session(admission: active, callID: callID, local: local, remote: remote,
-                                       localURL: localURL, remoteURL: remoteURL, failure: onFailure)
+                self.pending.removeAll(keepingCapacity: true)
+                self.pendingBytes = 0
+                self.reservedBytes = 0
+                self.pendingError = nil
+                self.session = Session(
+                    admission: active,
+                    callID: callID,
+                    local: local,
+                    remote: remote,
+                    localURL: localURL,
+                    remoteURL: remoteURL,
+                    failure: onFailure
+                )
                 self.admission = active
                 self.lock.unlock()
                 return id
@@ -201,10 +275,13 @@ final class CallAudioRecorder: @unchecked Sendable {
     func stop() async throws -> CallRecordingFile {
         try await perform {
             guard let active = self.session else { throw CallRecordingError.empty }
-            self.lock.lock(); self.admission = nil; self.lock.unlock()
+            self.lock.lock()
+            self.admission = nil
+            self.lock.unlock()
             self.drain()
             defer {
-                try? active.local.close(); try? active.remote.close()
+                try? active.local.close()
+                try? active.remote.close()
                 try? FileManager.default.removeItem(at: active.localURL)
                 try? FileManager.default.removeItem(at: active.remoteURL)
                 self.session = nil
@@ -216,8 +293,14 @@ final class CallAudioRecorder: @unchecked Sendable {
             let metadataURL = outputURL.deletingPathExtension().appendingPathExtension("json")
             do {
                 try self.finalize(active, frames: frames, outputURL: outputURL)
-                let file = CallRecordingFile(id: active.admission.id, callID: active.callID,
-                    startedAt: active.startedAt, duration: Double(frames) / 8_000, fileName: name, bytes: 44 + frames * 4)
+                let file = CallRecordingFile(
+                    id: active.admission.id,
+                    callID: active.callID,
+                    startedAt: active.startedAt,
+                    duration: Double(frames) / 8_000,
+                    fileName: name,
+                    bytes: 44 + frames * 4
+                )
                 try JSONEncoder().encode(file).write(to: metadataURL, options: .atomic)
                 try self.protect(metadataURL)
                 return file
@@ -233,7 +316,9 @@ final class CallAudioRecorder: @unchecked Sendable {
         lock.lock()
         let packets = pending
         let ingressError = pendingError
-        pending = []; pendingBytes = 0; pendingError = nil
+        pending = []
+        pendingBytes = 0
+        pendingError = nil
         lock.unlock()
         guard let active = session, active.error == nil else { return }
         do {
@@ -242,7 +327,8 @@ final class CallAudioRecorder: @unchecked Sendable {
                 // The sample clock is authoritative within a continuous stream.
                 // Scheduling jitter must not trim speech or insert a hole each callback.
                 // Larger interruptions retain their wall-clock gap as silence.
-                let frame = previous > 0 && abs(packet.frame - previous) <= 800
+                let frame =
+                    previous > 0 && abs(packet.frame - previous) <= 800
                     ? previous : packet.frame
                 let skip = max(0, previous - frame)
                 let count = packet.pcm.count / 2 - skip
@@ -252,8 +338,11 @@ final class CallAudioRecorder: @unchecked Sendable {
                 let handle = packet.channel == .local ? active.local : active.remote
                 try handle.seek(toOffset: UInt64(offset * 2)) // Sparse holes read back as silence.
                 try handle.write(contentsOf: packet.pcm.dropFirst(skip * 2))
-                if packet.channel == .local { active.localEnd = offset + count }
-                else { active.remoteEnd = offset + count }
+                if packet.channel == .local {
+                    active.localEnd = offset + count
+                } else {
+                    active.remoteEnd = offset + count
+                }
             }
             if let (id, error) = ingressError, id == active.admission.id { fail(active, error: error) }
         } catch { fail(active, error: (error as? CallRecordingError) ?? .storage) }
@@ -274,13 +363,28 @@ final class CallAudioRecorder: @unchecked Sendable {
         let output = try FileHandle(forWritingTo: outputURL)
         defer { try? output.close() }
         var header = Data("RIFF".utf8)
-        func u32(_ n: Int) { var value = UInt32(n).littleEndian; withUnsafeBytes(of: &value) { header.append(contentsOf: $0) } }
-        func u16(_ n: Int) { var value = UInt16(n).littleEndian; withUnsafeBytes(of: &value) { header.append(contentsOf: $0) } }
-        u32(36 + frames * 4); header.append(Data("WAVEfmt ".utf8)); u32(16)
-        u16(1); u16(2); u32(8_000); u32(32_000); u16(4); u16(16)
-        header.append(Data("data".utf8)); u32(frames * 4)
+        func u32(_ n: Int) {
+            var value = UInt32(n).littleEndian
+            withUnsafeBytes(of: &value) { header.append(contentsOf: $0) }
+        }
+        func u16(_ n: Int) {
+            var value = UInt16(n).littleEndian
+            withUnsafeBytes(of: &value) { header.append(contentsOf: $0) }
+        }
+        u32(36 + frames * 4)
+        header.append(Data("WAVEfmt ".utf8))
+        u32(16)
+        u16(1)
+        u16(2)
+        u32(8_000)
+        u32(32_000)
+        u16(4)
+        u16(16)
+        header.append(Data("data".utf8))
+        u32(frames * 4)
         try output.write(contentsOf: header)
-        try active.local.seek(toOffset: 0); try active.remote.seek(toOffset: 0)
+        try active.local.seek(toOffset: 0)
+        try active.remote.seek(toOffset: 0)
         for start in stride(from: 0, to: frames, by: 8_192) {
             let count = min(8_192, frames - start)
             let left = try active.local.read(upToCount: count * 2) ?? Data()
@@ -290,8 +394,14 @@ final class CallAudioRecorder: @unchecked Sendable {
                 left.withUnsafeBytes { (l: UnsafeRawBufferPointer) in
                     right.withUnsafeBytes { (r: UnsafeRawBufferPointer) in
                         for i in 0..<count {
-                            if i * 2 + 1 < l.count { out[i * 4] = l[i * 2]; out[i * 4 + 1] = l[i * 2 + 1] }
-                            if i * 2 + 1 < r.count { out[i * 4 + 2] = r[i * 2]; out[i * 4 + 3] = r[i * 2 + 1] }
+                            if i * 2 + 1 < l.count {
+                                out[i * 4] = l[i * 2]
+                                out[i * 4 + 1] = l[i * 2 + 1]
+                            }
+                            if i * 2 + 1 < r.count {
+                                out[i * 4 + 2] = r[i * 2]
+                                out[i * 4 + 3] = r[i * 2 + 1]
+                            }
                         }
                     }
                 }
@@ -307,9 +417,10 @@ final class CallAudioRecorder: @unchecked Sendable {
             return try FileManager.default.contentsOfDirectory(at: self.directory, includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "json" }.compactMap { url in
                     guard let data = try? Data(contentsOf: url),
-                          let file = try? JSONDecoder().decode(CallRecordingFile.self, from: data),
-                          file.fileName == file.id.uuidString + ".wav",
-                          FileManager.default.fileExists(atPath: self.url(for: file).path) else { return nil }
+                        let file = try? JSONDecoder().decode(CallRecordingFile.self, from: data),
+                        file.fileName == file.id.uuidString + ".wav",
+                        FileManager.default.fileExists(atPath: self.url(for: file).path)
+                    else { return nil }
                     return file
                 }.sorted { $0.startedAt > $1.startedAt }
         }
@@ -322,7 +433,9 @@ final class CallAudioRecorder: @unchecked Sendable {
             let url = self.url(for: file)
             let metadata = url.deletingPathExtension().appendingPathExtension("json")
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-            if FileManager.default.fileExists(atPath: metadata.path) { try FileManager.default.removeItem(at: metadata) }
+            if FileManager.default.fileExists(atPath: metadata.path) {
+                try FileManager.default.removeItem(at: metadata)
+            }
         }
     }
 
@@ -332,18 +445,19 @@ final class CallAudioRecorder: @unchecked Sendable {
         // No session owns scratch files during first use after process launch.
         if session == nil {
             for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-                where file.pathExtension == "raw" { try? FileManager.default.removeItem(at: file) }
+            where file.pathExtension == "raw" { try? FileManager.default.removeItem(at: file) }
         }
     }
 
     private func protect(_ url: URL) throws {
         var target = url
-        var values = URLResourceValues(); values.isExcludedFromBackup = true
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
         try target.setResourceValues(values)
         var attributes: [FileAttributeKey: Any] = [.posixPermissions: url.hasDirectoryPath ? 0o700 : 0o600]
-#if os(iOS)
+        #if os(iOS)
         attributes[.protectionKey] = FileProtectionType.completeUntilFirstUserAuthentication
-#endif
+        #endif
         try FileManager.default.setAttributes(attributes, ofItemAtPath: url.path)
     }
 
@@ -361,25 +475,32 @@ final class CallRecordingStore {
     private(set) var isRecording = false
     private(set) var isBusy = false
     private(set) var recordings: [CallRecordingFile] = []
+
     private(set) var errorMessage: String? {
         didSet { if let errorMessage { onErrorMessage?(errorMessage) } }
     }
-    /// AppModel forwards recording errors to its own global banner; the callback is part of the bridging pipeline and does not participate in observation.
+
+    /// AppModel forwards recording errors to its own global banner; the callback is part of the bridging pipeline and
+    /// does not participate in observation.
     @ObservationIgnored var onErrorMessage: ((String) -> Void)?
     @ObservationIgnored private(set) var currentCallID: String?
     @ObservationIgnored private let recorder: CallAudioRecorder
     @ObservationIgnored private var sessionID: UUID?
     @ObservationIgnored private var finishAfterStart = false
     @ObservationIgnored private var failureDuringStart: (UUID, Error)?
-#if canImport(UIKit)
+    #if canImport(UIKit)
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-#endif
+    #endif
 
     init(recorder: CallAudioRecorder = .shared) { self.recorder = recorder }
 
     func start(callID: String, source: CallRecordingSource) async throws {
         guard !isBusy, !isRecording else { throw CallRecordingError.busy }
-        isBusy = true; currentCallID = callID; finishAfterStart = false; failureDuringStart = nil; errorMessage = nil
+        isBusy = true
+        currentCallID = callID
+        finishAfterStart = false
+        failureDuringStart = nil
+        errorMessage = nil
         do {
             let id = try await recorder.start(callID: callID, source: source) { [weak self] id, error in
                 Task { @MainActor [weak self] in
@@ -393,13 +514,20 @@ final class CallRecordingStore {
                     try? await self.stop()
                 }
             }
-            sessionID = id; isRecording = true; isBusy = false
+            sessionID = id
+            isRecording = true
+            isBusy = false
             if let (failedID, error) = failureDuringStart, failedID == id {
                 errorMessage = error.localizedDescription
                 try await stop()
-            } else if finishAfterStart { try await stop() }
+            } else if finishAfterStart {
+                try await stop()
+            }
         } catch {
-            isBusy = false; isRecording = false; currentCallID = nil; sessionID = nil
+            isBusy = false
+            isRecording = false
+            currentCallID = nil
+            sessionID = nil
             errorMessage = error.localizedDescription
             endBackgroundTask()
             throw error
@@ -408,45 +536,67 @@ final class CallRecordingStore {
 
     func stop() async throws {
         guard isRecording, !isBusy else { return }
-        isBusy = true; isRecording = false
+        isBusy = true
+        isRecording = false
         beginBackgroundTask()
-        defer { isBusy = false; currentCallID = nil; sessionID = nil; endBackgroundTask() }
+        defer {
+            isBusy = false
+            currentCallID = nil
+            sessionID = nil
+            endBackgroundTask()
+        }
         do {
             let file = try await recorder.stop()
             recordings.insert(file, at: 0)
-        } catch { errorMessage = error.localizedDescription; throw error }
+        } catch {
+            errorMessage = error.localizedDescription
+            throw error
+        }
     }
 
     func finishCall(_ callID: String?) {
         guard let callID, currentCallID == callID else { return }
         beginBackgroundTask()
-        if isBusy { finishAfterStart = true; return }
+        if isBusy {
+            finishAfterStart = true
+            return
+        }
         Task { try? await stop() }
     }
 
     func reload() async {
-        do { recordings = try await recorder.recordings() }
-        catch { errorMessage = CallRecordingError.storage.localizedDescription }
+        do { recordings = try await recorder.recordings() } catch {
+            errorMessage = CallRecordingError.storage.localizedDescription
+        }
     }
+
     func url(for recording: CallRecordingFile) -> URL { recorder.url(for: recording) }
+
     func delete(_ recording: CallRecordingFile) async throws {
-        do { try await recorder.delete(recording); recordings.removeAll { $0.id == recording.id } }
-        catch { errorMessage = CallRecordingError.storage.localizedDescription; throw error }
+        do {
+            try await recorder.delete(recording)
+            recordings.removeAll { $0.id == recording.id }
+        } catch {
+            errorMessage = CallRecordingError.storage.localizedDescription
+            throw error
+        }
     }
 
     private func beginBackgroundTask() {
-#if canImport(UIKit)
+        #if canImport(UIKit)
         guard backgroundTask == .invalid else { return }
         backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save call recording") { [weak self] in
             self?.errorMessage = "Recording save was interrupted by the system."
             self?.endBackgroundTask()
         }
-#endif
+        #endif
     }
+
     private func endBackgroundTask() {
-#if canImport(UIKit)
+        #if canImport(UIKit)
         guard backgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(backgroundTask); backgroundTask = .invalid
-#endif
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
+        #endif
     }
 }

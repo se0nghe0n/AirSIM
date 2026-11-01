@@ -150,7 +150,12 @@ final class CallRecordingsViewController: PhoneTableController {
         guard let url = store.state.shareURL(for: recording) else { return }
         let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
         sheet.popoverPresentationController?.sourceView = view
-        sheet.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+        sheet.popoverPresentationController?.sourceRect = CGRect(
+            x: view.bounds.midX,
+            y: view.bounds.midY,
+            width: 1,
+            height: 1
+        )
         present(sheet, animated: true)
     }
 

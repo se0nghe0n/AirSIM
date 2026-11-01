@@ -75,23 +75,26 @@ final class SamsungPairingViewController: PhoneTableController {
     }
 
     private func stepsSection() -> PhoneSection {
-        PhoneSection(title: "Connection Steps", rows: [
-            PhoneRow(
-                id: "wifi",
-                title: "Connect both devices to the same Wi-Fi",
-                image: "wifi"
-            ),
-            PhoneRow(
-                id: "hotspot",
-                title: "Or connect this device to the Android hotspot",
-                image: "personalhotspot"
-            ),
-            PhoneRow(
-                id: "start",
-                title: "Tap Start One-Time Pairing in the Android app",
-                image: "key"
-            ),
-        ])
+        PhoneSection(
+            title: "Connection Steps",
+            rows: [
+                PhoneRow(
+                    id: "wifi",
+                    title: "Connect both devices to the same Wi-Fi",
+                    image: "wifi"
+                ),
+                PhoneRow(
+                    id: "hotspot",
+                    title: "Or connect this device to the Android hotspot",
+                    image: "personalhotspot"
+                ),
+                PhoneRow(
+                    id: "start",
+                    title: "Tap Start One-Time Pairing in the Android app",
+                    image: "key"
+                ),
+            ]
+        )
     }
 
     private func discoveredSection() -> PhoneSection {
@@ -136,12 +139,15 @@ final class SamsungPairingViewController: PhoneTableController {
 
     private func resultSection() -> PhoneSection {
         guard let message = store.resultMessage else { return PhoneSection(rows: []) }
-        return PhoneSection(title: "Result", rows: [
-            PhoneRow(
-                id: "result",
-                title: message
-            ),
-        ])
+        return PhoneSection(
+            title: "Result",
+            rows: [
+                PhoneRow(
+                    id: "result",
+                    title: message
+                )
+            ]
+        )
     }
 
     // MARK: Layout

@@ -16,7 +16,8 @@ extension Notification.Name {
     static let airsimOpenIncomingCall = Notification.Name("AirSIMOpenIncomingCall")
 }
 
-/// Stable identifiers used by lock-screen incoming call notifications; actions do not require device unlock or force the app UI open.
+/// Stable identifiers used by lock-screen incoming call notifications; actions do not require device unlock or force
+/// the app UI open.
 enum IncomingCallNotification {
     static let categoryIdentifier = "AIRSIM_INCOMING_CALL"
     static let mirrorCategoryIdentifier = "AIRSIM_INCOMING_CALL_MIRROR"
@@ -64,13 +65,13 @@ enum IncomingCallPresentationRequest {
         return pending
     }
 
-
     static func isPending(defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: key)
     }
 }
 
-/// When a notification is tapped, the initial UIKit screen may not have subscribed to events yet; store only the sender without persisting SMS body text.
+/// When a notification is tapped, the initial UIKit screen may not have subscribed to events yet; store only the sender
+/// without persisting SMS body text.
 enum IncomingSMSPresentationRequest {
     static let key = "airsim.pending-sms-sender"
 
@@ -85,7 +86,8 @@ enum IncomingSMSPresentationRequest {
     }
 }
 
-/// Responds to system answer/reject actions before the foreground state model is initialized; AppModel takes over the handler once started.
+/// Responds to system answer/reject actions before the foreground state model is initialized; AppModel takes over the
+/// handler once started.
 @MainActor
 final class ColdLaunchCallKitHandler: CallKitActionHandling {
     private let vowlan = VoWLANController()
@@ -95,8 +97,9 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
     func availableSamsungAPI() async -> AirSIMAPI? {
         await vowlan.probeNow()
         guard vowlan.availability.isOnlineForDisplay,
-              let endpoint = vowlan.availability.endpoint,
-              let credential = VoWLANCredentialStore.load() else { return nil }
+            let endpoint = vowlan.availability.endpoint,
+            let credential = VoWLANCredentialStore.load()
+        else { return nil }
         return AirSIMAPI(route: .vowlan(endpoint: endpoint, credential: credential))
     }
 
@@ -104,13 +107,16 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
         guard let api = await availableSamsungAPI() else { throw CallKitBridgeError.noReachableTransport }
         try await api.dial(number: number)
     }
+
     func callKitAnswer(origin: CallAnswerOrigin) async throws {
         if let pushedCall = CallKitController.shared.currentIncomingPush,
-           pushedCall.isVirtual {
+            pushedCall.isVirtual
+        {
             try VirtualCallTTSController.shared.prepare(pushedCall)
         } else if CloudModePreference.isEnabled(),
-                  let pushedCall = CallKitController.shared.currentIncomingPush,
-                  pushedCall.authenticatedMediaURL != nil {
+            let pushedCall = CallKitController.shared.currentIncomingPush,
+            pushedCall.authenticatedMediaURL != nil
+        {
             try await IPhoneCloudCallSession.shared.answer(pushedCall)
         } else if let api = await availableSamsungAPI() {
             try await api.answerCall()
@@ -118,15 +124,18 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
             throw CallKitBridgeError.noReachableTransport
         }
     }
+
     func callKitEnd() async throws {
         if VirtualCallTTSController.shared.isPrepared
-            || CallKitController.shared.currentIncomingPush?.isVirtual == true {
+            || CallKitController.shared.currentIncomingPush?.isVirtual == true
+        {
             VirtualCallTTSController.shared.stop()
             return
         }
         if CloudModePreference.isEnabled(),
-           let pushedCall = CallKitController.shared.currentIncomingPush,
-            pushedCall.authenticatedMediaURL != nil {
+            let pushedCall = CallKitController.shared.currentIncomingPush,
+            pushedCall.authenticatedMediaURL != nil
+        {
             if IPhoneCloudCallSession.shared.isPrepared {
                 await IPhoneCloudCallSession.shared.end()
             } else {
@@ -137,13 +146,15 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
         guard let api = await availableSamsungAPI() else { throw CallKitBridgeError.noReachableTransport }
         let call = (try? await api.callStatus())?.active
         if let call,
-           call.direction == "incoming",
-           ["incoming", "waiting"].contains(call.state) {
+            call.direction == "incoming",
+            ["incoming", "waiting"].contains(call.state)
+        {
             _ = try await api.rejectCall(callID: call.id)
         } else {
             try await api.hangupCall(callID: call?.id)
         }
     }
+
     func callKitSetMuted(_ muted: Bool) async {
         if VirtualCallTTSController.shared.isPrepared {
             VirtualCallTTSController.shared.setMuted(muted)
@@ -151,8 +162,12 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
         }
         IPhoneCloudCallSession.shared.setMuted(muted)
         if !IPhoneCloudCallSession.shared.isPrepared,
-           let api = await availableSamsungAPI() { try? await api.setAudioMuted(muted) }
+            let api = await availableSamsungAPI()
+        {
+            try? await api.setAudioMuted(muted)
+        }
     }
+
     func callKitPlayDTMF(_ digits: String) async throws {
         if VirtualCallTTSController.shared.isPrepared { return }
         for digit in digits where "0123456789*#".contains(digit) {
@@ -160,6 +175,7 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
             try await api.sendDTMF(String(digit))
         }
     }
+
     func callKitAudioSessionDidActivate() async {
         if VirtualCallTTSController.shared.isPrepared {
             VirtualCallTTSController.shared.start()
@@ -167,18 +183,28 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
             IPhoneCloudCallSession.shared.startAudioWithRetry()
         }
     }
+
     func callKitAudioSessionDidDeactivate() {
-        if VirtualCallTTSController.shared.isPrepared { VirtualCallTTSController.shared.stop() }
-        else { IPhoneCloudCallSession.shared.stopAudio() }
+        if VirtualCallTTSController.shared.isPrepared {
+            VirtualCallTTSController.shared.stop()
+        } else {
+            IPhoneCloudCallSession.shared.stopAudio()
+        }
     }
+
     func callKitProviderDidReset() async {
-        if VirtualCallTTSController.shared.isPrepared { VirtualCallTTSController.shared.stop() }
-        else { IPhoneCloudCallSession.shared.stopAudio() }
+        if VirtualCallTTSController.shared.isPrepared {
+            VirtualCallTTSController.shared.stop()
+        } else {
+            IPhoneCloudCallSession.shared.stopAudio()
+        }
     }
+
     func callKitDidFail(_ message: String) {}
 }
 
-/// Maintains silent audio playback in personal sideload mode so iOS continues polling module calls after the screen turns off.
+/// Maintains silent audio playback in personal sideload mode so iOS continues polling module calls after the screen
+/// turns off.
 @MainActor
 final class BackgroundStandbyController {
     private let engine = AVAudioEngine()
@@ -241,7 +267,8 @@ final class BackgroundStandbyController {
         }
     }
 
-    /// Pre-starts when about to enter the background and releases audio hardware immediately upon returning to the foreground.
+    /// Pre-starts when about to enter the background and releases audio hardware immediately upon returning to the
+    /// foreground.
     func setApplicationIsBackground(_ isBackground: Bool) {
         if isBackground {
             prepareForBackground()
@@ -251,14 +278,16 @@ final class BackgroundStandbyController {
         }
     }
 
-    /// The scene still has foreground execution privileges when entering .inactive, so audio must be pre-started at this moment.
+    /// The scene still has foreground execution privileges when entering .inactive, so audio must be pre-started at
+    /// this moment.
     /// Waiting until the .background callback may be too late if the system has already decided to suspend the process.
     func prepareForBackground() {
         appIsBackground = true
         ensureRunning()
     }
 
-    /// Re-verifies that silent playback is still running after returning to the foreground or after a system audio interruption.
+    /// Re-verifies that silent playback is still running after returning to the foreground or after a system audio
+    /// interruption.
     func ensureRunning() {
         guard enabled, appIsBackground, !suspendedForCall else { return }
         retryTask?.cancel()
@@ -272,22 +301,25 @@ final class BackgroundStandbyController {
                 player.scheduleBuffer(silentBuffer, at: nil, options: .loops)
                 player.play()
             }
-#if DEBUG
+            #if DEBUG
             print("[AirSIM Background] standby audio running")
-#endif
+            #endif
         } catch {
-#if DEBUG
+            #if DEBUG
             print("[AirSIM Background] standby audio failed: \(error.localizedDescription)")
-#endif
+            #endif
             scheduleRetry()
         }
     }
 
-    /// Call PCM must exclusively own the voiceChat session and must not contend with background silent playback for the output node.
+    /// Call PCM must exclusively own the voiceChat session and must not contend with background silent playback for the
+    /// output node.
     func suspendForCall() {
-        guard BackgroundStandbySuspensionPolicy.shouldStopAudio(
-            isAlreadySuspended: suspendedForCall
-        ) else { return }
+        guard
+            BackgroundStandbySuspensionPolicy.shouldStopAudio(
+                isAlreadySuspended: suspendedForCall
+            )
+        else { return }
         suspendedForCall = true
         stop(deactivateSession: true)
     }
@@ -326,13 +358,15 @@ final class BackgroundStandbyController {
 
     private func handleInterruption(_ notification: Notification) {
         guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: rawType),
-              type == .ended else { return }
+            let type = AVAudioSession.InterruptionType(rawValue: rawType),
+            type == .ended
+        else { return }
         ensureRunning()
     }
 }
 
-/// Posts a local notification when the app detects an incoming module call in the background, without relying on APNs or remote servers.
+/// Posts a local notification when the app detects an incoming module call in the background, without relying on APNs
+/// or remote servers.
 @MainActor
 final class IncomingCallNotifier {
     private var notifiedCallIDs: [String] = []
@@ -340,17 +374,19 @@ final class IncomingCallNotifier {
     func requestAuthorization() {
         IncomingCallNotification.registerCategory()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-#if DEBUG
+            #if DEBUG
             if let error {
                 print("[AirSIM APNs] Notification authorization failed: \(error.localizedDescription)")
             } else {
                 print("[AirSIM APNs] Notification authorization status: \(granted ? "granted" : "denied")")
             }
-#endif
+            #endif
             Task { @MainActor in
-                guard ConnectionModeRuntimePolicy(
-                    mode: ConnectionModePreference.selected()
-                ).startsCloud else { return }
+                guard
+                    ConnectionModeRuntimePolicy(
+                        mode: ConnectionModePreference.selected()
+                    ).startsCloud
+                else { return }
                 VoIPPushController.shared.start()
                 UIApplication.shared.registerForRemoteNotifications()
             }
@@ -359,10 +395,11 @@ final class IncomingCallNotifier {
 
     func update(call: CallRecord?, callerName: String?, appIsActive: Bool) {
         guard !appIsActive,
-              let call,
-              call.direction == "incoming",
-              ["incoming", "waiting"].contains(call.state),
-              !notifiedCallIDs.contains(call.id) else { return }
+            let call,
+            call.direction == "incoming",
+            ["incoming", "waiting"].contains(call.state),
+            !notifiedCallIDs.contains(call.id)
+        else { return }
 
         notifiedCallIDs.append(call.id)
         if notifiedCallIDs.count > 32 { notifiedCallIDs.removeFirst() }
@@ -386,7 +423,8 @@ final class IncomingCallNotifier {
     }
 }
 
-/// New SMS messages are read individually by the Agent via +CMTI URC; posts a system notification when the app is in the background.
+/// New SMS messages are read individually by the Agent via +CMTI URC; posts a system notification when the app is in
+/// the background.
 @MainActor
 final class IncomingSMSNotifier {
     private var notifiedMessageIDs: [String] = []

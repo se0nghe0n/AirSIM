@@ -47,7 +47,8 @@ enum RecentCallTimeFormatter {
             )
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
-           day == calendar.dateComponents([.year, .month, .day], from: yesterday) {
+            day == calendar.dateComponents([.year, .month, .day], from: yesterday)
+        {
             return "Yesterday"
         }
         if day.year == currentDay.year {

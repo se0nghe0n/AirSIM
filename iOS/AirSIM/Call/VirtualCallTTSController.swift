@@ -73,7 +73,8 @@ final class VirtualCallTTSController: NSObject, AVSpeechSynthesizerDelegate {
     ) {
         Task { @MainActor in
             guard VirtualCallTTSController.shared.isPrepared else { return }
-            // Completion of speech is treated as remote hangup; media state is cleaned up by didDeactivate after CallKit dismisses.
+            // Completion of speech is treated as remote hangup; media state is cleaned up by didDeactivate after
+            // CallKit dismisses.
             CallKitController.shared.reportCurrentCallEnded(reason: .remoteEnded)
         }
     }

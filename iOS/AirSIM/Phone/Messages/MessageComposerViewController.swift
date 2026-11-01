@@ -16,6 +16,7 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
     private let suggestions = UIStackView(axis: .horizontal, spacing: Metrics.suggestionSpacing)
     private let messagePlaceholder = phoneLabel("Message", color: .placeholderText)
     private lazy var contentHeight = content.heightAnchor.constraint(equalToConstant: Metrics.minimumContentHeight)
+
     private lazy var sendButton = phoneButton("Send", image: "arrow.up") { [weak self] in
         self?.send(.sendButtonTapped)
     }
@@ -69,7 +70,8 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         let canSend = store.canSend
         sendButton.isEnabled = canSend
         sendButton.alpha = 1
-        sendButton.configuration?.background.backgroundColor = canSend
+        sendButton.configuration?.background.backgroundColor =
+            canSend
             ? .systemBlue
             : UIColor { $0.userInterfaceStyle == .dark ? .systemGray5 : UIColor(white: 232.0 / 255.0, alpha: 1) }
         sendButton.configuration?.image = UIImage(systemName: "arrow.up")?
@@ -171,14 +173,19 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
     private func buildEntry() -> UIStackView {
         content.font = .preferredFont(forTextStyle: .body)
         content.delegate = self
-        content.backgroundColor = UIColor { $0.userInterfaceStyle == .dark ? .secondarySystemGroupedBackground : .white }
+        content.backgroundColor = UIColor {
+            $0.userInterfaceStyle == .dark ? .secondarySystemGroupedBackground : .white
+        }
         content.layer.cornerRadius = 18
         content.textContainerInset = Metrics.textInsets
         content.accessibilityLabel = "Message"
         messagePlaceholder.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(messagePlaceholder)
         NSLayoutConstraint.activate([
-            messagePlaceholder.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Metrics.textInsets.left),
+            messagePlaceholder.leadingAnchor.constraint(
+                equalTo: content.leadingAnchor,
+                constant: Metrics.textInsets.left
+            ),
             messagePlaceholder.topAnchor.constraint(equalTo: content.topAnchor, constant: Metrics.textInsets.top),
         ])
         contentHeight.isActive = true

@@ -55,11 +55,12 @@ final class AndroidAgentCardView: UIView {
             titleRow.addArrangedSubview(pill("Current", color: .systemGreen))
         }
         titleRow.addArrangedSubview(UIView())
-        let detailText = if let agent {
-            agent.phoneNumber ?? "Number unavailable"
-        } else {
-            "No call route is currently available"
-        }
+        let detailText =
+            if let agent {
+                agent.phoneNumber ?? "Number unavailable"
+            } else {
+                "No call route is currently available"
+            }
         let detail = phoneLabel(detailText, size: 12, color: .secondaryLabel)
         detail.numberOfLines = 1
         return UIStackView([titleRow, detail], axis: .vertical, spacing: Metrics.titleToDetailSpacing)

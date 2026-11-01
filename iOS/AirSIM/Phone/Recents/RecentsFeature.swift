@@ -16,6 +16,7 @@ struct RecentsFeature {
         var rows: [RecentCallRow] {
             snapshot.callHistory.map { RecentCallRow(call: $0, contacts: snapshot.contacts) }
         }
+
         var statusMessage: String? { snapshot.callHistoryMessage }
         var isRefreshing: Bool { snapshot.isRefreshingCallHistory }
 

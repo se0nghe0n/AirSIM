@@ -16,11 +16,13 @@ struct VoWLANWebRTCSession: Encodable, Equatable, Sendable {
     let callUUID: UUID
     let generation: UInt64
     let sessionID: UUID
+
     enum CodingKeys: String, CodingKey {
         case version, generation
         case callUUID = "call_uuid"
         case sessionID = "session_id"
     }
+
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(version, forKey: .version)
@@ -32,17 +34,20 @@ struct VoWLANWebRTCSession: Encodable, Equatable, Sendable {
 
 struct VoWLANWebRTCStatus: Decodable, Equatable, Sendable {
     enum State: String, Decodable, Sendable { case preparing, ready, failed, closed }
+
     let version: Int
     let callUUID: UUID
     let generation: UInt64
     let sessionID: UUID
     let status: State
     let reason: String?
+
     enum CodingKeys: String, CodingKey {
         case version, generation, status, reason
         case callUUID = "call_uuid"
         case sessionID = "session_id"
     }
+
     func matches(_ session: VoWLANWebRTCSession) -> Bool {
         version == session.version && callUUID == session.callUUID
             && generation == session.generation && sessionID == session.sessionID
@@ -97,10 +102,12 @@ final class AudioSessionController {
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     @ObservationIgnored private var startupTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var activationID = UUID()
+
     var recordingSource: CallRecordingSource? {
         guard transportReady, let localSession else { return nil }
         return .init(callUUID: localSession.callUUID)
     }
+
     @ObservationIgnored private let vowlanQueue = DispatchQueue(label: "com.example.airsim.vowlan-webrtc")
     @ObservationIgnored private var callTonePlayer: AVAudioPlayer?
     @ObservationIgnored private var currentCallTone: CallTone?
@@ -112,7 +119,8 @@ final class AudioSessionController {
     @ObservationIgnored private var routeChangeObserver: NSObjectProtocol?
 
     init() {
-        // CallKit, Bluetooth, or Control Center may change the output route; button state must follow the actual audio session.
+        // CallKit, Bluetooth, or Control Center may change the output route; button state must follow the actual audio
+        // session.
         routeChangeObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.routeChangeNotification,
             object: AVAudioSession.sharedInstance(),
@@ -165,7 +173,8 @@ final class AudioSessionController {
                 try rtc.setActive(true)
                 ownsWebRTCAudioActivation = true
             }
-            // Default to the receiver for every call; override the output route only after the user explicitly enables the speaker.
+            // Default to the receiver for every call; override the output route only after the user explicitly enables
+            // the speaker.
             try session.overrideOutputAudioPort(requestedSpeakerOverride ? .speaker : .none)
             refreshRouteDescription()
             switch route {
@@ -212,8 +221,12 @@ final class AudioSessionController {
         let queue = vowlanQueue
         let peer = try queue.sync {
             try CloudWebRTCPeer(
-                callUUID: callUUID, generation: generation, sessionID: identity.sessionID,
-                servers: [], queue: queue, hostOnly: true,
+                callUUID: callUUID,
+                generation: generation,
+                sessionID: identity.sessionID,
+                servers: [],
+                queue: queue,
+                hostOnly: true,
                 signal: { [weak self] signal in
                     Task { @MainActor [weak self] in
                         guard let self, self.localSession == identity else { return }
@@ -221,11 +234,13 @@ final class AudioSessionController {
                             do {
                                 let answer = try await api.exchangeVoWLANWebRTC(signal)
                                 guard let self, !Task.isCancelled, self.localSession == identity,
-                                      let peer = self.vowlanPeer else { return }
+                                    let peer = self.vowlanPeer
+                                else { return }
                                 guard answer.isValid, answer.action == .answer,
-                                      answer.callUUID == identity.callUUID,
-                                      answer.generation == identity.generation,
-                                      answer.sessionID == identity.sessionID else {
+                                    answer.callUUID == identity.callUUID,
+                                    answer.generation == identity.generation,
+                                    answer.sessionID == identity.sessionID
+                                else {
                                     self.failLocalSession(identity, message: "Invalid VoWLAN WebRTC answer")
                                     return
                                 }
@@ -237,32 +252,40 @@ final class AudioSessionController {
                             }
                         }
                     }
-                }, connected: { [weak self] in
+                },
+                connected: { [weak self] in
                     Task { @MainActor [weak self] in
                         guard let self, self.localSession == identity else { return }
                         self.localReadiness.nativeConnected(identity.sessionID)
                         self.publishLocalReadiness()
                     }
-                }, disconnected: { [weak self] in
+                },
+                disconnected: { [weak self] in
                     Task { @MainActor [weak self] in
                         guard let self, self.localSession == identity else { return }
                         self.localReadiness.nativeDisconnected(identity.sessionID)
                         self.publishLocalReadiness()
                     }
-                }, failure: { [weak self] in
+                },
+                failure: { [weak self] in
                     Task { @MainActor [weak self] in
                         self?.failLocalSession(identity, message: "VoWLAN WebRTC failed")
                     }
-                }, statistics: { _ in }
+                },
+                statistics: { _ in }
             )
         }
         vowlanPeer = peer
         let initiallyMuted = muted
-        queue.async { peer.setMuted(initiallyMuted); peer.offer() }
+        queue.async {
+            peer.setMuted(initiallyMuted)
+            peer.offer()
+        }
         startupTimeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(30))
             guard !Task.isCancelled, let self, self.localSession == identity,
-                  !self.localReadiness.isReady else { return }
+                !self.localReadiness.isReady
+            else { return }
             self.failLocalSession(identity, message: "Android call audio was not ready within 30 seconds")
         }
     }
@@ -318,7 +341,8 @@ final class AudioSessionController {
     private func publishLocalReadiness() {
         transportReady = localReadiness.isReady
         routeDescription = transportReady ? "VoWLAN WebRTC" : "Connecting VoWLAN WebRTC…"
-        diagnosticDescription = transportReady
+        diagnosticDescription =
+            transportReady
             ? "WebRTC and Android carrier audio ready"
             : "Waiting for WebRTC and Android carrier audio"
         if transportReady {
@@ -346,9 +370,12 @@ final class AudioSessionController {
         localSession = nil
         localAPI = nil
         localReadiness.reset()
-        signalingTask?.cancel(); signalingTask = nil
-        statusTask?.cancel(); statusTask = nil
-        startupTimeoutTask?.cancel(); startupTimeoutTask = nil
+        signalingTask?.cancel()
+        signalingTask = nil
+        statusTask?.cancel()
+        statusTask = nil
+        startupTimeoutTask?.cancel()
+        startupTimeoutTask = nil
         if let peer = vowlanPeer { vowlanQueue.async { peer.close() } }
         vowlanPeer = nil
         if let previous, let api {
@@ -356,7 +383,8 @@ final class AudioSessionController {
         }
     }
 
-    /// Declares the voice category before CallKit executes an action; actual activation happens when the system invokes didActivate.
+    /// Declares the voice category before CallKit executes an action; actual activation happens when the system invokes
+    /// didActivate.
     func prepareForCallKit() throws {
         resetSpeakerPreferenceForNewCall()
         let rtc = RTCAudioSession.sharedInstance()
@@ -373,7 +401,8 @@ final class AudioSessionController {
         if let peer = vowlanPeer { vowlanQueue.async { peer.setMuted(muted) } }
     }
 
-    /// Plays the incoming ringtone or outgoing ringback tone based on module call state, yielding immediately to native WebRTC once connected.
+    /// Plays the incoming ringtone or outgoing ringback tone based on module call state, yielding immediately to native
+    /// WebRTC once connected.
     func updateCallTone(for call: CallRecord?) {
         guard !active else {
             stopCallTone()
@@ -399,7 +428,8 @@ final class AudioSessionController {
         callTonePlayer?.stop()
         callTonePlayer = nil
         currentCallTone = nil
-        // Idle polling calls this method repeatedly; never deactivate the session used by background standby when no ringtone is playing.
+        // Idle polling calls this method repeatedly; never deactivate the session used by background standby when no
+        // ringtone is playing.
         // After CallKit invokes didActivate, the audio session may only be deactivated by the system.
         guard hadTone, deactivateSession, !active, !sessionActivationManagedByCallKit else { return }
         try? AVAudioSession.sharedInstance().setActive(
@@ -408,7 +438,8 @@ final class AudioSessionController {
         )
     }
 
-    /// Toggles the output route for the current call; turning off the speaker hands routing back to the system to select the receiver or connected Bluetooth device.
+    /// Toggles the output route for the current call; turning off the speaker hands routing back to the system to
+    /// select the receiver or connected Bluetooth device.
     func setSpeakerEnabled(_ enabled: Bool) {
         requestedSpeakerOverride = enabled
         speakerRoutePending = !SpeakerRoutePolicy.routeMatches(
@@ -420,10 +451,12 @@ final class AudioSessionController {
 
     func toggleSpeakerRoute() {
         let pendingTarget = speakerRoutePending ? requestedSpeakerOverride : nil
-        setSpeakerEnabled(SpeakerRoutePolicy.toggledTarget(
-            currentRouteIsSpeaker: speakerEnabled,
-            pendingTarget: pendingTarget
-        ))
+        setSpeakerEnabled(
+            SpeakerRoutePolicy.toggledTarget(
+                currentRouteIsSpeaker: speakerEnabled,
+                pendingTarget: pendingTarget
+            )
+        )
     }
 
     func resetSpeakerPreferenceForNewCall() {
@@ -435,7 +468,8 @@ final class AudioSessionController {
     }
 
     /// A brief window exists between CallKit didActivate and AVAudioEngine actually starting.
-    /// Switching routes during this window returns OSStatus -50, so preserve the user selection and retry with a bounded count.
+    /// Switching routes during this window returns OSStatus -50, so preserve the user selection and retry with a
+    /// bounded count.
     func retryRequestedSpeakerRoute() {
         let requested = requestedSpeakerOverride
         speakerRouteRetryTask?.cancel()
@@ -456,7 +490,8 @@ final class AudioSessionController {
                         requested ? .speaker : .none
                     )
                     // API return only indicates the system accepted the request; currentRoute updates asynchronously.
-                    // Wait for a brief confirmation window before updating button highlight from the actual output port.
+                    // Wait for a brief confirmation window before updating button highlight from the actual output
+                    // port.
                     try? await Task.sleep(for: .seconds(SpeakerRoutePolicy.routeVerificationDelay))
                     guard !Task.isCancelled, requestedSpeakerOverride == requested else { return }
                     refreshRouteDescription()
@@ -467,7 +502,8 @@ final class AudioSessionController {
                         return
                     }
                 } catch {
-                    // Preserve the selection while the audio session has not yet been activated by CallKit and wait for the next short retry.
+                    // Preserve the selection while the audio session has not yet been activated by CallKit and wait for
+                    // the next short retry.
                 }
             }
             refreshRouteDescription()
@@ -485,7 +521,9 @@ final class AudioSessionController {
             details.append("Module audio route is not ready")
         }
         if let statistics = config.statistics, config.statisticsAvailable == true {
-            details.append("D5 ↑\(statistics.uplinkBytes)B peak \(statistics.uplinkPeak) · D6 ↓\(statistics.downlinkBytes)B peak \(statistics.downlinkPeak)")
+            details.append(
+                "D5 ↑\(statistics.uplinkBytes)B peak \(statistics.uplinkPeak) · D6 ↓\(statistics.downlinkBytes)B peak \(statistics.downlinkPeak)"
+            )
         } else if config.routeRunning == true {
             details.append("Android carrier audio started, waiting for statistics")
         }
@@ -542,7 +580,8 @@ final class AudioSessionController {
 
         do {
             let session = AVAudioSession.sharedInstance()
-            // Module incoming calls are phone alerts; use .playback so they remain audible in silent mode and duck other audio.
+            // Module incoming calls are phone alerts; use .playback so they remain audible in silent mode and duck
+            // other audio.
             try session.setCategory(.playback, mode: .default, options: [.duckOthers])
             try session.setActive(true)
             let player = try AVAudioPlayer(data: SynthesizedCallTone.wavData(for: tone))
@@ -573,19 +612,26 @@ final class AudioSessionController {
 
     private func refreshRouteDescription() {
         let session = AVAudioSession.sharedInstance()
-        let input = session.currentRoute.inputs.map { "\($0.portName)[\($0.portType.rawValue)]" }.joined(separator: ", ")
-        let output = session.currentRoute.outputs.map { "\($0.portName)[\($0.portType.rawValue)]" }.joined(separator: ", ")
+        let input = session.currentRoute.inputs.map { "\($0.portName)[\($0.portType.rawValue)]" }.joined(
+            separator: ", "
+        )
+        let output = session.currentRoute.outputs.map { "\($0.portName)[\($0.portType.rawValue)]" }.joined(
+            separator: ", "
+        )
         let inputs = session.availableInputs?.map(\.portName).joined(separator: ", ") ?? "None"
         let routedToSpeaker = session.currentRoute.outputs.contains { $0.portType == .builtInSpeaker }
         if speakerEnabled != routedToSpeaker {
             speakerEnabled = routedToSpeaker
         }
-        speakerRoutePending = speakerRouteRetryTask != nil && !SpeakerRoutePolicy.routeMatches(
-            requestedSpeaker: requestedSpeakerOverride,
-            currentRouteIsSpeaker: routedToSpeaker
-        )
+        speakerRoutePending =
+            speakerRouteRetryTask != nil
+            && !SpeakerRoutePolicy.routeMatches(
+                requestedSpeaker: requestedSpeakerOverride,
+                currentRouteIsSpeaker: routedToSpeaker
+            )
         let carrier = vowlanPeer == nil ? "Call audio" : "VoWLAN WebRTC"
-        routeDescription = "\(input.isEmpty ? "No Input" : input) ↔ \(carrier) ↔ \(output.isEmpty ? "No Output" : output) (available inputs: \(inputs))"
+        routeDescription =
+            "\(input.isEmpty ? "No Input" : input) ↔ \(carrier) ↔ \(output.isEmpty ? "No Output" : output) (available inputs: \(inputs))"
         IPhoneCloudCallSession.shared.recordAudioRoute(output.isEmpty ? "unknown" : output)
     }
 
@@ -601,7 +647,8 @@ final class AudioSessionController {
 
 }
 
-/// Tone type used during call waiting; the associated value also detects whether the user switched the incoming ringtone.
+/// Tone type used during call waiting; the associated value also detects whether the user switched the incoming
+/// ringtone.
 private enum CallTone: Equatable {
     case incoming(String)
     case outgoingWaiting
@@ -649,12 +696,14 @@ private enum SynthesizedCallTone {
                     continue
                 }
                 let time = Double(index) / Double(sampleRate)
-                let wave = segment.frequencies.reduce(0.0) {
-                    $0 + sin(2 * .pi * $1 * time)
-                } / Double(segment.frequencies.count)
+                let wave =
+                    segment.frequencies.reduce(0.0) {
+                        $0 + sin(2 * .pi * $1 * time)
+                    } / Double(segment.frequencies.count)
                 // Apply a 10 ms fade-in/fade-out at both ends of each segment to avoid clicks from waveform truncation.
                 let edge = min(index, sampleCount - index - 1)
-                let envelope = envelopeSamples > 0
+                let envelope =
+                    envelopeSamples > 0
                     ? min(1, Double(edge) / Double(envelopeSamples))
                     : 1
                 let value = max(-1, min(1, wave * segment.amplitude * envelope))
@@ -726,7 +775,6 @@ private enum SynthesizedCallTone {
         withUnsafeBytes(of: &littleEndian) { data.append(contentsOf: $0) }
     }
 }
-
 
 enum VoiceAudioError: LocalizedError {
     case tonePlaybackFailed

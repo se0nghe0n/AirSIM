@@ -28,11 +28,13 @@ struct AirSIMSnapshot: Equatable, Sendable {
     var callAudioStatusText = ""
     var canStartOutgoingCommand = false
     var canToggleRecording = false
+
     var connectionModePresentation = ConnectionModePresentation.make(
         vowlanOnline: false,
         cloudModeEnabled: false,
         cloudOnline: false
     )
+
     var pairedAndroidAgents: [AndroidAgentPresentation] = []
     var currentAndroidAgent: AndroidAgentPresentation?
     var pairedDeviceHistory: [AndroidAgentPresentation] = []

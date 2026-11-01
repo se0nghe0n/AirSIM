@@ -42,6 +42,8 @@ Each screen is a view controller marked `@ViewAction(for:)` with its feature and
 
 A view controller file reads top to bottom in `// MARK:` sections: Store, Views, Lifecycle, Rendering, Rows, Layout, Navigation, Actions and UIKit delegates. Layout numbers it reuses go in a `private enum Metrics`, and its `#Preview`s close the file under `#if DEBUG`.
 
+Swift sources follow `iOS/.swift-format` (4-space indent, 120 columns, one argument per line when a call wraps, no `;` between statements). Run `xcrun swift-format format -i -r iOS/AirSIM iOS/AirSIMTests iOS/AirSIMWatchApp iOS/AirSIMLiveActivityExtension iOS/Shared` before committing, and keep a blank line between declarations that span several lines.
+
 ## Client capabilities
 
 - One-time encrypted pairing with an Android device; see the [verified hardware and compatibility scope](../README.md#android-compatibility-and-verification)

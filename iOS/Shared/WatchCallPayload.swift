@@ -51,9 +51,10 @@ struct WatchCallPayload: Equatable, Sendable {
 
     init?(dictionary: [String: Any]) {
         guard dictionary["event"] as? String == "watch_call_state",
-              let phaseValue = dictionary["phase"] as? String,
-              let phase = WatchCallPhase(rawValue: phaseValue),
-              let updatedAt = dictionary["updated_at"] as? TimeInterval else { return nil }
+            let phaseValue = dictionary["phase"] as? String,
+            let phase = WatchCallPhase(rawValue: phaseValue),
+            let updatedAt = dictionary["updated_at"] as? TimeInterval
+        else { return nil }
         let callID = dictionary["call_id"] as? String ?? ""
         let uuidValue = dictionary["call_uuid"] as? String
         self.init(
@@ -111,7 +112,11 @@ enum WatchCloudAudioPlan {
     }
 
     static func dialReply(
-        requestID: UUID, callID: String, callUUID: UUID, number: String, expiresAt: Date
+        requestID: UUID,
+        callID: String,
+        callUUID: UUID,
+        number: String,
+        expiresAt: Date
     ) -> [String: Any] {
         [
             "ok": true,
@@ -167,7 +172,8 @@ struct WatchVoIPCall: Equatable, Sendable {
             throw WatchVoIPPayloadError.missingCallID
         }
         guard let rawUUID = userInfo["call_uuid"] as? String,
-              let uuid = UUID(uuidString: rawUUID) else {
+            let uuid = UUID(uuidString: rawUUID)
+        else {
             throw WatchVoIPPayloadError.invalidCallUUID
         }
         let expiresAt = Self.date(from: userInfo["expires_at"])
@@ -177,15 +183,17 @@ struct WatchVoIPCall: Equatable, Sendable {
         if userInfo["media_route"] as? String == "vowlan" {
             endsOnVoWLAN = true
             guard userInfo["pcm_host"] == nil, userInfo["pcm_port"] == nil,
-                  userInfo["pcm_secret"] == nil,
-                  WatchCloudAudioPlan.accepts(transport: userInfo["media_transport"] as? String) else {
+                userInfo["pcm_secret"] == nil,
+                WatchCloudAudioPlan.accepts(transport: userInfo["media_transport"] as? String)
+            else {
                 throw WatchVoIPPayloadError.legacyPCMNotCarrier
             }
             media = .iphoneWebRTC
         } else if userInfo["media_route"] as? String == WatchCloudAudioPlan.iphoneRoute
             || userInfo["call_secret"] != nil
             || userInfo["media_url"] != nil
-            || userInfo["media_transport"] != nil {
+            || userInfo["media_transport"] != nil
+        {
             let rawTransport = userInfo["media_transport"] as? String
             guard WatchCloudAudioPlan.accepts(transport: rawTransport) else {
                 throw WatchVoIPPayloadError.legacyPCMNotCarrier
@@ -208,7 +216,8 @@ struct WatchVoIPCall: Equatable, Sendable {
         let route = outgoingReply["media_route"] as? String
         if route != "vowlan" {
             guard route == WatchCloudAudioPlan.iphoneRoute,
-                  WatchCloudAudioPlan.accepts(transport: outgoingReply["media_transport"] as? String) else {
+                WatchCloudAudioPlan.accepts(transport: outgoingReply["media_transport"] as? String)
+            else {
                 throw WatchVoIPPayloadError.legacyPCMNotCarrier
             }
         }
@@ -229,15 +238,25 @@ struct WatchVoIPCall: Equatable, Sendable {
 
     func usingIPhoneVoWLANAudio() -> WatchVoIPCall {
         WatchVoIPCall(
-            callID: callID, uuid: uuid, number: number, callerName: callerName,
-            expiresAt: expiresAt, media: .iphoneWebRTC, isOutgoing: isOutgoing,
+            callID: callID,
+            uuid: uuid,
+            number: number,
+            callerName: callerName,
+            expiresAt: expiresAt,
+            media: .iphoneWebRTC,
+            isOutgoing: isOutgoing,
             endsOnVoWLAN: true
         )
     }
 
     private init(
-        callID: String, uuid: UUID, number: String?, callerName: String?,
-        expiresAt: Date?, media: WatchCallMedia, isOutgoing: Bool,
+        callID: String,
+        uuid: UUID,
+        number: String?,
+        callerName: String?,
+        expiresAt: Date?,
+        media: WatchCallMedia,
+        isOutgoing: Bool,
         endsOnVoWLAN: Bool = false
     ) {
         self.callID = callID
@@ -252,7 +271,8 @@ struct WatchVoIPCall: Equatable, Sendable {
 
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !value.isEmpty else { return nil }
+            !value.isEmpty
+        else { return nil }
         return value
     }
 
@@ -269,7 +289,8 @@ enum WatchDialNumber {
         let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowed = CharacterSet(charactersIn: "+*#0123456789")
         guard !value.isEmpty, value.count <= 82,
-              value.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+            value.unicodeScalars.allSatisfy({ allowed.contains($0) })
+        else { return nil }
         return value
     }
 }
