@@ -73,12 +73,9 @@ final class AirSIMPresentation {
 struct ContactsPresentation {
     let owner: AirSIMPresentation
     var contacts: [ContactStore.Contact] { owner.snapshot.contacts.all }
-    var isAuthorized: Bool { owner.snapshot.contacts.isAuthorized }
-    var authorizationState: ContactAuthorizationState { owner.snapshot.contacts.authorization }
     func contact(for number: String) -> ContactStore.Contact? { owner.snapshot.contacts.contact(for: number) }
     func displayName(for number: String?) -> String { owner.snapshot.contacts.displayName(for: number) }
     func loadIfAuthorized() async { await owner.perform(.contacts(false)) }
-    func requestAccessAndLoad() async { await owner.perform(.contacts(true)) }
 }
 @MainActor
 struct AudioPresentation {

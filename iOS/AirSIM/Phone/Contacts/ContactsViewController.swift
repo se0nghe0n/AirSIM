@@ -1,104 +1,221 @@
+import ComposableArchitecture
 import UIKit
 
-/// A contact may store duplicate entries for the same phone number; since duplicate rows are interchangeable
-/// during selection and dialing, deduplicate by number so phone-derived table row IDs stay unique.
-enum ContactPhoneListPolicy {
-    static func displayPhones(for phones: [String]) -> [String] {
-        var seen = Set<String>()
-        return phones.filter { seen.insert($0).inserted }
-    }
-}
-
+/// The Contacts tab, and in pick mode the composer's contact picker.
 @MainActor
+@ViewAction(for: ContactsFeature.self)
 final class ContactsViewController: PhoneTableController, UISearchResultsUpdating {
+    // MARK: Store
+
+    let store: StoreOf<ContactsFeature>
+
+    // MARK: Views
+
     override var tableStyle: UITableView.Style { .plain }
-    let model: AirSIMPresentation
-    let onCall: (String) -> Void
-    let onMessage: (String) -> Void
-    var onSelect: ((String) -> Void)?
     private let search = UISearchController(searchResultsController: nil)
-    init(model: AirSIMPresentation, onCall: @escaping (String) -> Void, onMessage: @escaping (String) -> Void) { self.model = model; self.onCall = onCall; self.onMessage = onMessage; super.init(nibName: nil, bundle: nil) }
+
+    // MARK: Lifecycle
+
+    init(store: StoreOf<ContactsFeature>) {
+        self.store = store
+        super.init(nibName: nil, bundle: nil)
+    }
+
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        if onSelect != nil { model.store.send(.contactPickerSearchChanged("")) }
-        search.searchBar.text = onSelect == nil ? model.store.contactSearch : model.store.contactPickerSearch
-        search.searchResultsUpdater = self; search.obscuresBackgroundDuringPresentation = false; search.searchBar.placeholder = "Search name or number"; navigationItem.searchController = search; navigationItem.hidesSearchBarWhenScrolling = false
-        enableRefresh { [weak self] in await self?.model.contacts.requestAccessAndLoad() }
+        buildSearch()
+        enableRefresh { [weak self] in await self?.send(.refreshPulled).finish() }
     }
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        Task { await model.contacts.loadIfAuthorized() }
+        send(.appeared)
     }
-    func updateSearchResults(for searchController: UISearchController) {
-        let text = searchController.searchBar.text ?? ""
-        model.store.send(onSelect == nil ? .contactSearchChanged(text) : .contactPickerSearchChanged(text))
-    }
+
+    // MARK: Rendering
+
     override func render() {
-        title = onSelect == nil ? "Contacts" : "Choose Contact"
-        navigationItem.title = onSelect == nil ? "Contacts · \(model.contacts.contacts.count)" : "Choose Contact"
+        title = store.title
+        navigationItem.title = store.navigationTitle
         tabBarItem.title = "Contacts"
-        guard model.contacts.isAuthorized else {
-            let denied = model.contacts.authorizationState == .denied
-            var configuration = UIContentUnavailableConfiguration.empty()
-            configuration.image = UIImage(systemName: "person.crop.circle.badge.questionmark")
-            configuration.text = denied ? "Contacts access is disabled" : "Allow Contacts Access"
-            configuration.secondaryText = "Connect or grant access to get started."
-            configuration.button = .filled(); configuration.button.title = denied ? "Open Settings" : "Allow Contacts Access"
-            configuration.button.cornerStyle = .capsule
-            configureContactEmptyStyle(&configuration)
-            var buttonTitle = AttributeContainer(); buttonTitle.font = UIFont.systemFont(ofSize: 15, weight: .medium)
-            configuration.button.attributedTitle = AttributedString(denied ? "Open Settings" : "Allow Contacts Access", attributes: buttonTitle)
-            configuration.button.contentInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12)
-            configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in
-                guard let self else { return }; if denied { if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) } } else { Task { await self.model.contacts.requestAccessAndLoad() } }
-            }
-            setSections([]); table.isHidden = true; contentUnavailableConfiguration = configuration
-            return
+        if let prompt = store.accessPrompt {
+            renderAccessPrompt(prompt)
+        } else {
+            renderContacts()
         }
-        table.isHidden = false; contentUnavailableConfiguration = nil
-        let searchText = onSelect == nil ? model.store.contactSearch : model.store.contactPickerSearch
-        if search.searchBar.text != searchText { search.searchBar.text = searchText }
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        let contacts = model.contacts.contacts.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.phones.contains { $0.localizedCaseInsensitiveContains(query) } }
-        var rows: [PhoneRow] = []
-        for contact in contacts {
-            if let onSelect {
-                for phone in ContactPhoneListPolicy.displayPhones(for: contact.phones) { rows.append(PhoneRow(id: contact.id + phone, title: contact.name, detail: phone, action: { onSelect(phone) }, photo: contact.photoData, avatarName: contact.name, bodyViewProvider: { PhoneListContentView(name: contact.name, subtitle: phone, photo: contact.photoData, avatarName: contact.name) }, insets: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16))) }
-            } else {
-                rows.append(PhoneRow(id: contact.id, title: contact.name, detail: contact.phones.first ?? "", disclosure: true, action: { [weak self] in guard let self else { return }; self.navigationController?.pushViewController(ContactDetailViewController(contact: contact, onCall: self.onCall, onMessage: self.onMessage), animated: true) }, photo: contact.photoData, avatarName: contact.name, bodyViewProvider: { PhoneListContentView(name: contact.name, subtitle: contact.phones.first ?? "", photo: contact.photoData, avatarName: contact.name) }, insets: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)))
-            }
+    }
+
+    private func renderAccessPrompt(_ prompt: ContactsFeature.AccessPrompt) {
+        let configuration = accessConfiguration(prompt)
+        setSections([])
+        table.isHidden = true
+        contentUnavailableConfiguration = configuration
+    }
+
+    private func renderContacts() {
+        table.isHidden = false
+        contentUnavailableConfiguration = nil
+        if search.searchBar.text != store.search {
+            search.searchBar.text = store.search
         }
+        let rows = store.rows
         table.separatorStyle = rows.isEmpty ? .none : .singleLine
         table.backgroundView = PhoneBackdropView()
         if rows.isEmpty {
-            var configuration = UIContentUnavailableConfiguration.empty(); configuration.image = UIImage(systemName: "person.2"); configuration.text = "No contacts"; configuration.secondaryText = "Contacts sync from your device address book."
-            configureContactEmptyStyle(&configuration)
-            contentUnavailableConfiguration = configuration
+            contentUnavailableConfiguration = emptyConfiguration()
         }
-        setSections(rows.isEmpty ? [] : [PhoneSection(rows: rows)])
+        setSections(rows.isEmpty ? [] : [PhoneSection(rows: rows.map(contactRow))])
     }
-    private func configureContactEmptyStyle(_ configuration: inout UIContentUnavailableConfiguration) {
-        configuration.textProperties.font = UIFontMetrics(forTextStyle: .title3).scaledFont(for: .systemFont(ofSize: 20, weight: .bold))
-        configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 20))
+
+    private func accessConfiguration(_ prompt: ContactsFeature.AccessPrompt) -> UIContentUnavailableConfiguration {
+        let text: String
+        let buttonTitle: String
+        switch prompt {
+        case .allowAccess:
+            text = "Allow Contacts Access"
+            buttonTitle = "Allow Contacts Access"
+        case .openSettings:
+            text = "Contacts access is disabled"
+            buttonTitle = "Open Settings"
+        }
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.image = UIImage(systemName: "person.crop.circle.badge.questionmark")
+        configuration.text = text
+        configuration.secondaryText = "Connect or grant access to get started."
+        configuration.button = .filled()
+        configuration.button.title = buttonTitle
+        configuration.button.cornerStyle = .capsule
+        applyEmptyStyle(to: &configuration)
+        var buttonFont = AttributeContainer()
+        buttonFont.font = UIFont.systemFont(ofSize: 15, weight: .medium)
+        configuration.button.attributedTitle = AttributedString(buttonTitle, attributes: buttonFont)
+        configuration.button.contentInsets = Metrics.accessButtonInsets
+        configuration.buttonProperties.primaryAction = UIAction { [weak self] _ in self?.accessButtonTapped(prompt) }
+        return configuration
+    }
+
+    private func emptyConfiguration() -> UIContentUnavailableConfiguration {
+        var configuration = UIContentUnavailableConfiguration.empty()
+        configuration.image = UIImage(systemName: "person.2")
+        configuration.text = "No contacts"
+        configuration.secondaryText = "Contacts sync from your device address book."
+        applyEmptyStyle(to: &configuration)
+        return configuration
+    }
+
+    /// The access prompt and the empty list share one style, with the text in a centered column.
+    private func applyEmptyStyle(to configuration: inout UIContentUnavailableConfiguration) {
+        configuration.textProperties.font = UIFontMetrics(forTextStyle: .title3)
+            .scaledFont(for: .systemFont(ofSize: 20, weight: .bold))
+        configuration.secondaryTextProperties.font = UIFontMetrics(forTextStyle: .body)
+            .scaledFont(for: .systemFont(ofSize: 20))
         configuration.secondaryTextProperties.numberOfLines = 0
         configuration.secondaryTextProperties.lineBreakMode = .byWordWrapping
         configuration.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44)
         configuration.imageProperties.maximumSize = CGSize(width: 44, height: 44)
-        configuration.imageToTextPadding = 24; configuration.textToSecondaryTextPadding = 2; configuration.textToButtonPadding = 28
-        let width = traitCollection.horizontalSizeClass == .compact ? CGFloat(240) : CGFloat(360)
-        let margin = max(16, (view.bounds.width - width) / 2)
+        configuration.imageToTextPadding = 24
+        configuration.textToSecondaryTextPadding = 2
+        configuration.textToButtonPadding = 28
+        let width = traitCollection.horizontalSizeClass == .compact
+            ? Metrics.compactTextWidth
+            : Metrics.regularTextWidth
+        let margin = max(Metrics.minimumTextMargin, (view.bounds.width - width) / 2)
         configuration.axesPreservingSuperviewLayoutMargins = []
-        configuration.directionalLayoutMargins.leading = margin; configuration.directionalLayoutMargins.trailing = margin
+        configuration.directionalLayoutMargins.leading = margin
+        configuration.directionalLayoutMargins.trailing = margin
     }
+
+    // MARK: Rows
+
+    private func contactRow(_ row: ContactRow) -> PhoneRow {
+        PhoneRow(
+            id: row.id,
+            title: row.name,
+            detail: row.phone,
+            disclosure: store.mode == .browse,
+            action: { [weak self] in self?.rowTapped(row) },
+            photo: row.photo,
+            avatarName: row.name,
+            bodyViewProvider: {
+                PhoneListContentView(
+                    name: row.name,
+                    subtitle: row.phone,
+                    photo: row.photo,
+                    avatarName: row.name
+                )
+            },
+            insets: Metrics.rowInsets
+        )
+    }
+
+    // MARK: Layout
+
+    private func buildSearch() {
+        search.searchBar.text = store.search
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = "Search name or number"
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+    }
+
+    // MARK: Navigation
+
+    private func showDetails(_ row: ContactRow) {
+        let details = ContactDetailViewController(row: row, store: store)
+        navigationController?.pushViewController(details, animated: true)
+    }
+
+    // MARK: Actions
+
+    private func rowTapped(_ row: ContactRow) {
+        switch store.mode {
+        case .browse:
+            showDetails(row)
+        case .pick:
+            send(.phoneChosen(row.phone))
+        }
+    }
+
+    private func accessButtonTapped(_ prompt: ContactsFeature.AccessPrompt) {
+        switch prompt {
+        case .allowAccess:
+            send(.allowAccessTapped)
+        case .openSettings:
+            guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+            UIApplication.shared.open(url)
+        }
+    }
+
+    // MARK: UISearchResultsUpdating
+
+    func updateSearchResults(for searchController: UISearchController) {
+        send(.searchChanged(searchController.searchBar.text ?? ""))
+    }
+}
+
+private enum Metrics {
+    static let rowInsets = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
+    static let accessButtonInsets = NSDirectionalEdgeInsets(top: 5, leading: 12, bottom: 5, trailing: 12)
+    static let compactTextWidth: CGFloat = 240
+    static let regularTextWidth: CGFloat = 360
+    static let minimumTextMargin: CGFloat = 16
 }
 
 #if DEBUG
 #Preview("Contacts · People") {
-    AirSIMPreviewFixtures.navigation(ContactsViewController(model: AirSIMPreviewFixtures.presentation(tab: .contacts), onCall: { _ in }, onMessage: { _ in }))
+    let store = AirSIMPreviewFixtures.presentation(tab: .contacts).store
+    return AirSIMPreviewFixtures.navigation(
+        ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts))
+    )
 }
 
 #Preview("Contacts · Empty") {
-    AirSIMPreviewFixtures.navigation(ContactsViewController(model: AirSIMPreviewFixtures.presentation(tab: .contacts, empty: true), onCall: { _ in }, onMessage: { _ in }))
+    let store = AirSIMPreviewFixtures.presentation(tab: .contacts, empty: true).store
+    return AirSIMPreviewFixtures.navigation(
+        ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts))
+    )
 }
 #endif

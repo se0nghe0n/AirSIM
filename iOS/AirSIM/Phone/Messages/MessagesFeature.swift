@@ -4,6 +4,7 @@ import Foundation
 @Reducer
 struct MessagesFeature {
     @ObservableState struct State: Equatable {
+        @SharedReader fileprivate var snapshot: AirSIMSnapshot
         var conversation: String?
         var reply = ""
         var sending = false
@@ -11,9 +12,14 @@ struct MessagesFeature {
         /// Belongs to the open conversation; it closes with it.
         @Presents var alert: AlertState<Action.Alert>?
         @Presents var composer: ComposerFeature.State?
+
+        init(snapshot: SharedReader<AirSIMSnapshot>) {
+            _snapshot = snapshot
+        }
+
         /// An open composer keeps its draft and is only readdressed.
         mutating func compose(to recipient: String) {
-            guard composer != nil else { composer = ComposerFeature.State(recipient: recipient); return }
+            guard composer != nil else { composer = ComposerFeature.State(recipient: recipient, snapshot: $snapshot); return }
             // A send to the old recipient no longer belongs to this composer; a failure goes to the root alert.
             if composer?.recipient != recipient { composer?.sendID = nil }
             composer?.recipient = recipient

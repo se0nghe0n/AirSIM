@@ -22,7 +22,7 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Send", primaryAction: UIAction { [weak self] _ in self?.store.send(.sendButtonTapped) })
         recipient.placeholder = "Enter number or name"; recipient.keyboardType = .phonePad; recipient.textContentType = .telephoneNumber; recipient.font = .preferredFont(forTextStyle: .body)
         recipient.addAction(UIAction { [weak self] _ in guard let self else { return }; self.store.send(.recipientChanged(self.recipient.text ?? "")) }, for: .editingChanged)
-        let choose = phoneButton("Choose from Contacts", image: "plus.circle.fill", color: .label) { [weak self] in self?.chooseContact() }; choose.configuration?.title = nil; choose.configuration?.background.backgroundColor = .clear
+        let choose = phoneButton("Choose from Contacts", image: "plus.circle.fill", color: .label) { [weak self] in self?.store.send(.chooseContactTapped) }; choose.configuration?.title = nil; choose.configuration?.background.backgroundColor = .clear
         let to = phoneLabel("To:", color: .secondaryLabel)
         let recipientBar = UIStackView(arrangedSubviews: [choose, to, recipient, recognized]); recipientBar.axis = .horizontal; recipientBar.spacing = 9; recipientBar.alignment = .center
         choose.widthAnchor.constraint(equalToConstant: 26).isActive = true; to.setContentHuggingPriority(.required, for: .horizontal); recognized.setContentHuggingPriority(.required, for: .horizontal)
@@ -46,6 +46,7 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         navigationItem.rightBarButtonItem?.setTitleTextAttributes([.foregroundColor: UIColor { $0.userInterfaceStyle == .dark ? .secondaryLabel : UIColor(white: 176.0 / 255.0, alpha: 1) }], for: .disabled)
         NSLayoutConstraint.activate([recipientBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), recipientBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16), recipientBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor), recipientBar.heightAnchor.constraint(equalToConstant: 52), suggestionScroll.topAnchor.constraint(equalTo: recipientBar.bottomAnchor), suggestionScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor), suggestionScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor), suggestionScroll.heightAnchor.constraint(equalToConstant: 60), bottom.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16), bottom.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16), bottom.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor, constant: -10)])
         present(item: $store.scope(\.$alert, action: \.alert)) { UIAlertController(store: $0) }
+        present(item: $store.scope(\.$contactPicker, action: \.contactPicker)) { phoneSheet(ContactsViewController(store: $0)) }
         Task { await model.contacts.loadIfAuthorized() }
     }
     func textViewDidChange(_ textView: UITextView) { store.send(.bodyChanged(content.text ?? "")) }
@@ -70,11 +71,6 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
                 button.configuration?.subtitle = contact.phones.first; suggestions.addArrangedSubview(button)
             }
         }
-    }
-    private func chooseContact() {
-        let picker = ContactsViewController(model: model, onCall: { _ in }, onMessage: { _ in })
-        picker.onSelect = { [weak self] phone in self?.store.send(.recipientChanged(phone)); self?.dismiss(animated: true) }
-        showPhoneSheet(picker)
     }
 }
 

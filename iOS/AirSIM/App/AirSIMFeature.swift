@@ -14,13 +14,12 @@ struct AirSIMFeature {
         var hasDialDraft = false
         var selectedTab = PhoneTab.dial
         var firstConnectionComplete = false
-        var messages = MessagesFeature.State()
+        var messages: MessagesFeature.State
         var settings = SettingsFeature.State()
         var pairing = PairingFeature.State()
         var recents: RecentsFeature.State
+        var contacts: ContactsFeature.State
         var trace = TraceFeature.State()
-        var contactSearch = ""
-        var contactPickerSearch = ""
         @Presents var keypad: KeypadFeature.State?
         @Presents var alert: AlertState<Action.Alert>?
         /// The backend error last seen in a snapshot, so each new one raises a single alert.
@@ -32,6 +31,8 @@ struct AirSIMFeature {
             let shared = Shared(value: snapshot)
             _snapshot = shared
             recents = RecentsFeature.State(snapshot: SharedReader(shared))
+            messages = MessagesFeature.State(snapshot: SharedReader(shared))
+            contacts = ContactsFeature.State(mode: .browse, snapshot: SharedReader(shared))
         }
 
         mutating func composeMessage(to recipient: String) {
@@ -64,14 +65,13 @@ struct AirSIMFeature {
         case openURL(URL)
         case openSMS(String)
         case composeMessage(String)
-        case contactSearchChanged(String)
-        case contactPickerSearchChanged(String)
         case keypadButtonTapped
         case keypad(PresentationAction<KeypadFeature.Action>)
         case messages(MessagesFeature.Action)
         case settings(SettingsFeature.Action)
         case pairing(PairingFeature.Action)
         case recents(RecentsFeature.Action)
+        case contacts(ContactsFeature.Action)
         case trace(TraceFeature.Action)
         case alert(PresentationAction<Alert>)
 
@@ -91,6 +91,7 @@ struct AirSIMFeature {
         Scope(state: \.settings, action: \.settings) { SettingsFeature() }
         Scope(state: \.pairing, action: \.pairing) { PairingFeature() }
         Scope(state: \.recents, action: \.recents) { RecentsFeature() }
+        Scope(state: \.contacts, action: \.contacts) { ContactsFeature() }
         Scope(state: \.trace, action: \.trace) { TraceFeature() }
         Reduce { state, action in
             switch action {
@@ -142,14 +143,6 @@ struct AirSIMFeature {
             case .openURL(let url):
                 return open(url, state: &state)
 
-            case .contactSearchChanged(let value):
-                state.contactSearch = value
-                return .none
-
-            case .contactPickerSearchChanged(let value):
-                state.contactPickerSearch = value
-                return .none
-
             case .keypadButtonTapped:
                 // A repeated tap while the sheet is presenting keeps the digits already sent.
                 if state.snapshot.inAppPresentedCall != nil, state.keypad == nil {
@@ -157,10 +150,12 @@ struct AirSIMFeature {
                 }
                 return .none
 
-            case .recents(.delegate(.call(let number))):
+            case .recents(.delegate(.call(let number))),
+                 .contacts(.delegate(.call(let number))):
                 return dial(number, state: &state)
 
-            case .recents(.delegate(.message(let recipient))):
+            case .recents(.delegate(.message(let recipient))),
+                 .contacts(.delegate(.message(let recipient))):
                 state.composeMessage(to: recipient)
                 return perform(.persistTab(.messages))
 
@@ -178,7 +173,7 @@ struct AirSIMFeature {
                 }
                 return .none
 
-            case .messages, .settings, .pairing, .recents, .trace, .keypad, .alert:
+            case .messages, .settings, .pairing, .recents, .contacts, .trace, .keypad, .alert:
                 return .none
             }
         }

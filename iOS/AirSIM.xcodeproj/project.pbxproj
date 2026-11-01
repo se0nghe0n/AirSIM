@@ -104,6 +104,8 @@
 		A1F000000000000000000002 /* UIKit+Layout.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000002 /* UIKit+Layout.swift */; };
 		A1F000000000000000000003 /* RecentCallRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000003 /* RecentCallRow.swift */; };
 		A1F000000000000000000004 /* RecentsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000004 /* RecentsFeature.swift */; };
+		A1F000000000000000000005 /* ContactsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000005 /* ContactsFeature.swift */; };
+		A1F000000000000000000006 /* ContactRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000006 /* ContactRow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -253,6 +255,8 @@
 		B1F000000000000000000002 /* UIKit+Layout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UIKit+Layout.swift"; sourceTree = "<group>"; };
 		B1F000000000000000000003 /* RecentCallRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentCallRow.swift; sourceTree = "<group>"; };
 		B1F000000000000000000004 /* RecentsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentsFeature.swift; sourceTree = "<group>"; };
+		B1F000000000000000000005 /* ContactsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsFeature.swift; sourceTree = "<group>"; };
+		B1F000000000000000000006 /* ContactRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactRow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -584,6 +588,8 @@
 			children = (
 				B1D000000000000000000022 /* ContactsViewController.swift */,
 				B1D000000000000000000023 /* ContactDetailViewController.swift */,
+				B1F000000000000000000005 /* ContactsFeature.swift */,
+				B1F000000000000000000006 /* ContactRow.swift */,
 			);
 			path = Contacts;
 			sourceTree = "<group>";
@@ -846,6 +852,8 @@
 				A1F000000000000000000002 /* UIKit+Layout.swift in Sources */,
 				A1F000000000000000000003 /* RecentCallRow.swift in Sources */,
 				A1F000000000000000000004 /* RecentsFeature.swift in Sources */,
+				A1F000000000000000000005 /* ContactsFeature.swift in Sources */,
+				A1F000000000000000000006 /* ContactRow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -24,4 +24,15 @@ struct ContactDirectory: Equatable, Sendable {
         guard let number, !number.isEmpty else { return "Unknown Number" }
         return contact(for: number)?.name ?? number
     }
+
+    /// Every contact for a blank query, else those whose name or any number contains the trimmed query,
+    /// ignoring case.
+    func contacts(matching query: String) -> [ContactStore.Contact] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return all }
+        return all.filter { contact in
+            contact.name.localizedCaseInsensitiveContains(query)
+                || contact.phones.contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
 }

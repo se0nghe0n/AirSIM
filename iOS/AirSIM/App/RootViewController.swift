@@ -36,9 +36,13 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
         messages = MessagesViewController(model: model)
-        let callAction: (String) -> Void = { [weak self] in self?.dial($0) }
-        let messageAction: (String) -> Void = { [weak self] in self?.composeMessage($0) }
-        let controllers: [UIViewController] = [DialPadViewController(model: model), RecentsViewController(store: store.scope(state: \.recents, action: \.recents)), messages, ContactsViewController(model: model, onCall: callAction, onMessage: messageAction), AirSIMSettingsViewController(model: model, settings: settings)]
+        let controllers: [UIViewController] = [
+            DialPadViewController(model: model),
+            RecentsViewController(store: store.scope(state: \.recents, action: \.recents)),
+            messages,
+            ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts)),
+            AirSIMSettingsViewController(model: model, settings: settings),
+        ]
         tabs.viewControllers = zip(PhoneTab.allCases, controllers).map { tab, controller in
             let nav = UINavigationController(rootViewController: controller)
             nav.navigationBar.prefersLargeTitles = true
@@ -179,7 +183,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         model.store.send(.selectTab(PhoneTab.allCases[tabs.selectedIndex]))
         UISelectionFeedbackGenerator().selectionChanged()
     }
-    func dial(_ number: String) { model.numberInput = number; select(.dial); Task { await model.dial() } }
     func composeMessage(_ number: String) {
         loadViewIfNeeded()
         model.store.send(.composeMessage(number))
