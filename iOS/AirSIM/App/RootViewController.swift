@@ -145,44 +145,64 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         alertController = controller
         host.present(controller, animated: true)
     }
+
+    /// Shows the call window while a call is presented in app and removes it once the call leaves.
     private func renderCall() {
-        var call = model.inAppPresentedCall
+        guard store.activeCall.call != nil else {
+            closeCallWindow()
+            return
+        }
 #if DEBUG
-        let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "--airsim-layout-call"), args.indices.contains(i + 1), ["incoming", "active"].contains(args[i + 1]) {
-            call = CallRecord(id: "layout-preview", index: 0, direction: "incoming", state: args[i + 1], number: "+1 202 555 0100", startedAt: Date().addingTimeInterval(-65), updatedAt: Date(), endedAt: nil, missed: false)
+        if store.activeCall.isLayoutPreview {
+            UIDevice.current.isProximityMonitoringEnabled = false
         }
 #endif
-        if let call {
-            if call.id == "layout-preview" { UIDevice.current.isProximityMonitoringEnabled = false }
-            if let activeCall = activeCallController { activeCall.update(call: call) }
-            // The call window joins the main window's scene; viewDidAppear retries once root is in a window.
-            // Full-screen onboarding takes root's view out of the window, but its own view stays there.
-            else if let host = view.window ?? presentedViewController?.viewIfLoaded?.window {
-                let controller = ActiveCallViewController(model: model, call: call)
-                controller.isPresentationPreview = call.id == "layout-preview"
-#if DEBUG
-                controller.isPresentationPreview = controller.isPresentationPreview || isPreview
-#endif
-                let window = host.windowScene.map(UIWindow.init(windowScene:)) ?? UIWindow(frame: host.frame)
-                window.windowLevel = .normal + 1; window.overrideUserInterfaceStyle = host.overrideUserInterfaceStyle
-                window.rootViewController = ActiveCallContainerViewController(call: controller)
-                // A keyboard from a root sheet would otherwise stay above the call window.
-                host.endEditing(true); callWindow = window; window.makeKeyAndVisible()
-                // VoiceOver reads every visible window; the call view's modality only hides its siblings in the call window.
-                host.accessibilityElementsHidden = true; callHostWindow = host
-                UIAccessibility.post(notification: .screenChanged, argument: controller.view)
-            }
-        } else if let window = callWindow {
-            // The keypad's state is already closed, but its presenter leaves with this window; close what it presents now.
-            // A root alert shown there moves to the main window in the same render.
-            if alertController?.hostWindow === window { alertController = nil }
-            window.rootViewController?.dismiss(animated: false); window.isHidden = true; callWindow = nil
-            let host = callHostWindow ?? view.window; callHostWindow = nil
-            host?.accessibilityElementsHidden = false; host?.makeKey(); UIAccessibility.post(notification: .screenChanged, argument: nil)
-            UIDevice.current.isProximityMonitoringEnabled = false; setNeedsStatusBarAppearanceUpdate()
+        if callWindow == nil {
+            openCallWindow()
         }
     }
+
+    /// The call window joins the main window's scene; viewDidAppear retries once root is in a window.
+    /// Full-screen onboarding takes root's view out of the window, but its own view stays there.
+    private func openCallWindow() {
+        guard let host = view.window ?? presentedViewController?.viewIfLoaded?.window else { return }
+        let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+#if DEBUG
+        controller.isPresentationPreview = store.activeCall.isLayoutPreview || isPreview
+#endif
+        let window = host.windowScene.map(UIWindow.init(windowScene:)) ?? UIWindow(frame: host.frame)
+        window.windowLevel = .normal + 1
+        window.overrideUserInterfaceStyle = host.overrideUserInterfaceStyle
+        window.rootViewController = ActiveCallContainerViewController(call: controller)
+        // A keyboard from a root sheet would otherwise stay above the call window.
+        host.endEditing(true)
+        callWindow = window
+        window.makeKeyAndVisible()
+        // VoiceOver reads every visible window; the call view's modality only hides its siblings in the call window.
+        host.accessibilityElementsHidden = true
+        callHostWindow = host
+        UIAccessibility.post(notification: .screenChanged, argument: controller.view)
+    }
+
+    private func closeCallWindow() {
+        guard let window = callWindow else { return }
+        // The keypad's state is already closed, but its presenter leaves with this window; close what it presents now.
+        // A root alert shown there moves to the main window in the same render.
+        if alertController?.hostWindow === window {
+            alertController = nil
+        }
+        window.rootViewController?.dismiss(animated: false)
+        window.isHidden = true
+        callWindow = nil
+        let host = callHostWindow ?? view.window
+        callHostWindow = nil
+        host?.accessibilityElementsHidden = false
+        host?.makeKey()
+        UIAccessibility.post(notification: .screenChanged, argument: nil)
+        UIDevice.current.isProximityMonitoringEnabled = false
+        setNeedsStatusBarAppearanceUpdate()
+    }
+
     func select(_ tab: PhoneTab) {
         tabs.selectedIndex = PhoneTab.allCases.firstIndex(of: tab) ?? 0
         model.store.send(.selectTab(tab))

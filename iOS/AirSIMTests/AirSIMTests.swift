@@ -2424,32 +2424,271 @@ struct TCACallKeypadTests {
     private var inCall: AirSIMFeature.State { var snapshot = AirSIMSnapshot(); snapshot.inAppPresentedCall = AirSIMPreviewFixtures.call("active"); return AirSIMFeature.State(snapshot: snapshot) }
     @Test func `Keypad button opens an empty keypad only during an in-app call`() async {
         let idle = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
-        await idle.send(.keypadButtonTapped)
+        await idle.send(.activeCall(.view(.keypadButtonTapped)))
         let store = TestStore(initialState: inCall) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
-        await store.send(.keypadButtonTapped) { $0.keypad = KeypadFeature.State() }
-        await store.send(.keypad(.presented(.digitTapped("5")))) { $0.keypad?.digits = "5" }
+        await store.send(.activeCall(.view(.keypadButtonTapped))) { $0.activeCall.keypad = KeypadFeature.State() }
+        await store.send(.activeCall(.keypad(.presented(.view(.digitTapped("5")))))) { $0.activeCall.keypad?.digits = "5" }
         // A repeated tap while the sheet is still presenting keeps the digits already sent.
-        await store.send(.keypadButtonTapped)
-        await store.send(.keypad(.dismiss)) { $0.keypad = nil }
-        await store.send(.keypadButtonTapped) { $0.keypad = KeypadFeature.State() }
+        await store.send(.activeCall(.view(.keypadButtonTapped)))
+        await store.send(.activeCall(.keypad(.dismiss))) { $0.activeCall.keypad = nil }
+        await store.send(.activeCall(.view(.keypadButtonTapped))) { $0.activeCall.keypad = KeypadFeature.State() }
         await store.finish()
     }
     @Test func `Keypad shows the last 18 digits and sends each tap as DTMF`() async {
         let dtmf = LockIsolated<[String]>([])
-        var state = inCall; state.keypad = KeypadFeature.State(digits: String(repeating: "1", count: 18))
+        var state = inCall; state.activeCall.keypad = KeypadFeature.State(digits: String(repeating: "1", count: 18))
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client(dtmf: dtmf) }
-        await store.send(.keypad(.presented(.digitTapped("#")))) { $0.keypad?.digits = String(repeating: "1", count: 17) + "#" }
-        await store.send(.keypad(.presented(.digitTapped("0")))) { $0.keypad?.digits = String(repeating: "1", count: 16) + "#0" }
+        await store.send(.activeCall(.keypad(.presented(.view(.digitTapped("#")))))) {
+            $0.activeCall.keypad?.digits = String(repeating: "1", count: 17) + "#"
+        }
+        await store.send(.activeCall(.keypad(.presented(.view(.digitTapped("0")))))) {
+            $0.activeCall.keypad?.digits = String(repeating: "1", count: 16) + "#0"
+        }
         await store.finish()
         #expect(dtmf.value == ["#", "0"])
     }
     @Test func `Keypad stays through call updates and closes when the call leaves the app`() async {
-        var state = inCall; state.keypad = KeypadFeature.State(digits: "12")
+        var state = inCall; state.activeCall.keypad = KeypadFeature.State(digits: "12")
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client() }
         var muted = state.snapshot; muted.isMuted = true
         await store.send(.snapshot(muted)) { $0.$snapshot.withLock { $0 = muted } }
         var ended = muted; ended.inAppPresentedCall = nil
-        await store.send(.snapshot(ended)) { $0.$snapshot.withLock { $0 = ended }; $0.keypad = nil }
+        await store.send(.snapshot(ended)) { $0.$snapshot.withLock { $0 = ended }; $0.activeCall.keypad = nil }
+    }
+}
+
+@MainActor
+struct ActiveCallFeatureTests {
+    private let start = AirSIMPreviewFixtures.date
+
+    private func call(_ state: String, number: String? = AirSIMPreviewFixtures.phone) -> CallRecord {
+        CallRecord(id: "call", index: 0, direction: "incoming", state: state, number: number,
+                   startedAt: start, updatedAt: start, endedAt: nil, missed: false)
+    }
+
+    private func content(
+        _ state: String,
+        number: String? = AirSIMPreviewFixtures.phone,
+        _ configure: (inout AirSIMSnapshot) -> Void = { _ in }
+    ) -> ActiveCallContent {
+        var snapshot = AirSIMSnapshot()
+        snapshot.contacts = ContactDirectory(all: AirSIMPreviewFixtures.contacts, isAuthorized: true, authorization: .authorized)
+        configure(&snapshot)
+        return ActiveCallContent(call: call(state, number: number), snapshot: snapshot)
+    }
+
+    private func client(commands: LockIsolated<[String]>) -> AirSIMClient {
+        AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } },
+            command: { command in commands.withValue { $0.append(String(describing: command)) } },
+            sendSMS: { _, _ in .init(success: false) },
+            selfTest: { AsyncStream { $0.finish() } },
+            pairing: { AsyncStream { $0.finish() } },
+            pair: { _, _, _ in "" }
+        )
+    }
+
+    private func button(_ label: String, in view: UIView) -> UIButton? {
+        if let button = view as? UIButton, button.accessibilityLabel == label { return button }
+        return view.subviews.lazy.compactMap { self.button(label, in: $0) }.first
+    }
+
+    private func texts(in view: UIView) -> [String] {
+        ((view as? UILabel)?.text.map { [$0] } ?? []) + view.subviews.flatMap { texts(in: $0) }
+    }
+
+    @Test func `Incoming and waiting calls ring with Waiting; every other state is connected with a running duration`() {
+        for state in ["incoming", "waiting"] {
+            let ringing = content(state)
+            #expect(ringing.phase == .incoming && ringing.header == "AirSIM Incoming Call")
+            #expect(!ringing.showsDuration && ringing.duration(at: start.addingTimeInterval(65)) == "Waiting")
+        }
+        for state in ["dialing", "alerting", "active", "held", "ending"] {
+            let connected = content(state)
+            #expect(connected.phase == .connected && connected.header == "AirSIM Call")
+            #expect(connected.showsDuration && connected.duration(at: start.addingTimeInterval(65)) == "01:05")
+        }
+        #expect(content("active").duration(at: start.addingTimeInterval(-5)) == "00:00")
+    }
+
+    @Test func `A ringing call's status names the module and its signal`() throws {
+        let modem = try JSONDecoder().decode(ModemStatus.self, from: Data(#"{"signal_dbm": -71}"#.utf8))
+        let cloud = try JSONDecoder().decode(CloudAgentStatus.self, from: Data(#"{"cloud_online": true, "signal_dbm": -80}"#.utf8))
+        let offline = content("incoming")
+        #expect(offline.status == "Connecting to Module" && offline.badgeTone == .orange && offline.dotTone == .orange)
+        let online = content("incoming") {
+            $0.isOnline = true
+            $0.modemStatus = modem
+        }
+        #expect(online.status == "Module Online · Signal -71 dBm" && online.badgeTone == .green && online.dotTone == .green)
+        let cloudOnline = content("incoming") { $0.cloudAgentStatus = cloud }
+        #expect(cloudOnline.status == "Module Online · Signal -80 dBm" && cloudOnline.badgeTone == .green)
+        let both = content("incoming") {
+            $0.cloudAgentStatus = cloud
+            $0.modemStatus = modem
+        }
+        #expect(both.status == "Module Online · Signal -71 dBm")
+    }
+
+    @Test func `A connected call's status shows the audio state, the active route and the audio error`() {
+        let routed = content("active") {
+            $0.callAudioStatusText = "Audio Connected"
+            $0.audioActive = true
+            $0.audioRoute = "iPhone"
+        }
+        #expect(routed.status == "Audio Connected · iPhone")
+        let inactive = content("active") {
+            $0.callAudioStatusText = "Connecting Audio"
+            $0.audioRoute = "iPhone"
+        }
+        #expect(inactive.status == "Connecting Audio")
+        let failed = content("active") {
+            $0.callAudioStatusText = "Audio Failed"
+            $0.audioError = "Microphone unavailable"
+        }
+        #expect(failed.status == "Audio Failed\nMicrophone unavailable")
+    }
+
+    @Test func `A connected call's badge follows the call audio and its dot turns green once audio is active`() {
+        let tones = { (configure: (inout AirSIMSnapshot) -> Void) -> [ActiveCallContent.Tone] in
+            let value = content("active", configure)
+            return [value.badgeTone, value.dotTone]
+        }
+        #expect(tones { $0.cloudCallAudioState = .failed("timeout") } == [.red, .red])
+        #expect(tones {
+            $0.cloudCallAudioState = .failed("timeout")
+            $0.callAudioIsActive = true
+        } == [.red, .green])
+        #expect(tones { $0.cloudCallAudioState = .connected } == [.green, .green])
+        #expect(tones { $0.cloudCallAudioState = .starting } == [.orange, .orange])
+        #expect(tones { $0.cloudCallAudioState = .connecting(attempt: 1, maximumAttempts: 3) } == [.orange, .orange])
+        #expect(tones { _ in } == [.orange, .orange])
+        #expect(tones { $0.audioActive = true } == [.green, .green])
+    }
+
+    @Test func `The number shows under a contact's name and hides when the name is the number`() {
+        let contact = content("active")
+        #expect(contact.name == "Mina Kim" && contact.number == AirSIMPreviewFixtures.phone && contact.showsNumber)
+        let unknown = content("active", number: "+1 202 555 0199")
+        #expect(unknown.name == "+1 202 555 0199" && !unknown.showsNumber)
+        let hidden = content("active", number: nil)
+        #expect(hidden.name == "Unknown Number" && !hidden.showsNumber)
+    }
+
+    @Test func `Record shows the recording state and is enabled only while recording can toggle and is not busy`() {
+        let ready = content("active") { $0.canToggleRecording = true }
+        #expect(ready.canToggleRecording && !ready.isRecording)
+        let recording = content("active") {
+            $0.canToggleRecording = true
+            $0.isRecording = true
+        }
+        #expect(recording.canToggleRecording && recording.isRecording)
+        let busy = content("active") {
+            $0.canToggleRecording = true
+            $0.isRecordingBusy = true
+        }
+        #expect(!busy.canToggleRecording)
+        #expect(!content("active").canToggleRecording)
+    }
+
+    @Test func `The proximity sensor is used for placed and live calls while the speaker is off`() {
+        for state in ["dialing", "alerting", "connecting", "active", "held", "ending"] {
+            #expect(content(state).monitorsProximity)
+            #expect(!content(state) { $0.speakerEnabled = true }.monitorsProximity)
+        }
+        for state in ["incoming", "waiting", "ended"] {
+            #expect(!content(state).monitorsProximity)
+        }
+    }
+
+    @Test func `Call buttons send answer, reject, hangup, mute, speaker and recording`() async {
+        let commands = LockIsolated<[String]>([])
+        var snapshot = AirSIMSnapshot()
+        snapshot.inAppPresentedCall = call("active")
+        let store = TestStore(initialState: ActiveCallFeature.State(snapshot: SharedReader(value: snapshot))) {
+            ActiveCallFeature()
+        } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        await store.send(.view(.answerButtonTapped))
+        await store.send(.view(.declineButtonTapped))
+        await store.send(.view(.endButtonTapped))
+        await store.send(.view(.muteButtonTapped))
+        await store.send(.view(.speakerButtonTapped))
+        await store.send(.view(.recordButtonTapped))
+        await store.finish()
+        #expect(commands.value.sorted() == ["answer", "hangup", "mute", "recording", "reject", "speaker"])
+    }
+
+    @Test func `The layout argument shows a fabricated incoming or active call in place of the backend's`() {
+        #expect(CallRecord.layoutPreview(arguments: ["AirSIM"]) == nil)
+        #expect(CallRecord.layoutPreview(arguments: ["AirSIM", "--airsim-layout-call"]) == nil)
+        #expect(CallRecord.layoutPreview(arguments: ["AirSIM", "--airsim-layout-call", "ringing"]) == nil)
+        let preview = CallRecord.layoutPreview(arguments: ["AirSIM", "--airsim-layout-call", "incoming"])
+        #expect(preview?.id == "layout-preview" && preview?.state == "incoming" && preview?.number == "+1 202 555 0100")
+        #expect(CallRecord.layoutPreview(arguments: ["AirSIM", "--airsim-layout-call", "active"])?.state == "active")
+        var snapshot = AirSIMSnapshot()
+        snapshot.inAppPresentedCall = call("active")
+        var state = ActiveCallFeature.State(snapshot: SharedReader(value: snapshot))
+        #expect(state.call?.id == "call" && !state.isLayoutPreview)
+        state.layoutPreviewCall = preview
+        #expect(state.call?.id == "layout-preview" && state.isLayoutPreview && state.content?.phase == .incoming)
+    }
+
+    @Test func `The call screen draws its store's call and sends each button's action`() async throws {
+        let commands = LockIsolated<[String]>([])
+        var snapshot = AirSIMSnapshot()
+        snapshot.contacts = ContactDirectory(all: AirSIMPreviewFixtures.contacts, isAuthorized: true, authorization: .authorized)
+        snapshot.inAppPresentedCall = call("incoming")
+        snapshot.canToggleRecording = true
+        let shared = Shared(value: snapshot)
+        let store = Store(initialState: ActiveCallFeature.State(snapshot: SharedReader(shared))) {
+            ActiveCallFeature()
+        } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        let screen = ActiveCallViewController(store: store)
+        screen.isPresentationPreview = true
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = screen
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        #expect(texts(in: screen.view).contains("AirSIM Incoming Call") && texts(in: screen.view).contains("Mina Kim"))
+        #expect(button("End", in: screen.view) == nil)
+        for label in ["Decline", "Accept"] {
+            try #require(button(label, in: screen.view)).sendActions(for: .touchUpInside)
+        }
+        shared.withLock { $0.inAppPresentedCall = call("active") }
+        _ = try #require(await eventually { button("End", in: screen.view) })
+        #expect(texts(in: screen.view).contains("AirSIM Call") && button("Accept", in: screen.view) == nil)
+        for label in ["Mute", "Speaker", "Record", "End"] {
+            try #require(button(label, in: screen.view)).sendActions(for: .touchUpInside)
+        }
+        #expect(try await eventually { commands.value.count == 6 ? true : nil } == true)
+        #expect(commands.value.sorted() == ["answer", "hangup", "mute", "recording", "reject", "speaker"])
+        try #require(button("Keypad", in: screen.view)).sendActions(for: .touchUpInside)
+        #expect(store.keypad == KeypadFeature.State())
+    }
+
+    @Test func `A layout preview call opens the call window while the backend presents no call`() throws {
+        var state = AirSIMFeature.State()
+        state.firstConnectionComplete = true
+        state.activeCall.layoutPreviewCall = CallRecord.layoutPreview(arguments: ["AirSIM", "--airsim-layout-call", "active"])
+        let store = Store(initialState: state) { AirSIMFeature() } withDependencies: {
+            $0.airSIM = client(commands: LockIsolated([]))
+        }
+        let root = RootViewController(previewPresentation: AirSIMPresentation(store: store))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        defer {
+            root.dismiss(animated: false)
+            window.isHidden = true
+        }
+        root.render()
+        let callWindow = try #require(root.callWindow)
+        #expect(store.snapshot.inAppPresentedCall == nil)
+        #expect(root.activeCallController?.call?.id == "layout-preview" && root.activeCallController?.view.window === callWindow)
     }
 }
 
@@ -2684,7 +2923,7 @@ struct UIKitAdversarialRegressionTests {
         #expect(window.accessibilityElementsHidden && !callWindow.accessibilityElementsHidden)
         var answered = incoming; answered.inAppPresentedCall = AirSIMPreviewFixtures.call("active")
         model.store.send(.snapshot(answered)); root.render()
-        #expect(root.callWindow === callWindow && root.activeCallController === call && call.call.state == "active")
+        #expect(root.callWindow === callWindow && root.activeCallController === call && call.call?.state == "active")
         var ended = answered; ended.inAppPresentedCall = nil
         model.store.send(.snapshot(ended)); root.render()
         #expect(root.callWindow == nil && callWindow.isHidden && !window.accessibilityElementsHidden)
@@ -2743,10 +2982,10 @@ struct UIKitAdversarialRegressionTests {
         #expect(root.presentedViewController == nil)
         root.render()
         try await Task.sleep(for: .milliseconds(50))
-        #expect(!keypad.isBeingDismissed && keypad.presentingViewController != nil && model.store.keypad != nil)
+        #expect(!keypad.isBeingDismissed && keypad.presentingViewController != nil && model.store.activeCall.keypad != nil)
         var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
         model.store.send(.snapshot(ended)); root.render()
-        #expect(model.store.keypad == nil)
+        #expect(model.store.activeCall.keypad == nil)
         #expect(try await eventually { keypad.presentingViewController == nil ? true : nil } == true)
     }
 
@@ -2759,16 +2998,16 @@ struct UIKitAdversarialRegressionTests {
         let callWindow = try #require(root.callWindow)
         let keypad = try #require(await presentKeypad(model, in: callWindow))
         let pad = try #require(keypad.topViewController as? DTMFKeypadViewController)
-        pad.store.send(.digitTapped("7"))
-        #expect(model.store.keypad?.digits == "7")
+        pad.store.send(.view(.digitTapped("7")))
+        #expect(model.store.activeCall.keypad?.digits == "7")
         // Done and swipe-down are UIKit dismissals; the presentation binding writes the closed state back.
         keypad.dismiss(animated: false)
-        #expect(try await eventually { model.store.keypad == nil ? true : nil } == true)
+        #expect(try await eventually { model.store.activeCall.keypad == nil ? true : nil } == true)
         // present(item:) applies the closed state on a later main-actor turn; a reopen before then reuses the
         // cached child store and is skipped. A person cannot tap within that turn.
         try await Task.sleep(for: .milliseconds(50))
         let reopened = try #require(await presentKeypad(model, in: callWindow))
-        #expect(reopened !== keypad && model.store.keypad?.digits == "")
+        #expect(reopened !== keypad && model.store.activeCall.keypad?.digits == "")
     }
 
     @Test func `Composing while root shows another sheet replaces it with the composer`() async throws {
@@ -2915,7 +3154,7 @@ struct UIKitAdversarialRegressionTests {
 
     private func presentKeypad(_ model: AirSIMPresentation, in callWindow: UIWindow) async throws -> UINavigationController? {
         let previous = callWindow.rootViewController?.presentedViewController
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.keypadButtonTapped) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.activeCall(.view(.keypadButtonTapped))) }
         return try await eventually {
             guard let nav = callWindow.rootViewController?.presentedViewController as? UINavigationController, nav !== previous, !nav.isBeingPresented else { return nil }
             return nav

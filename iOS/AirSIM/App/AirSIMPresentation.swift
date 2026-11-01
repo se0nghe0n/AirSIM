@@ -19,57 +19,28 @@ final class AirSIMPresentation {
         state.settings.lastObservedAppearance = state.settings.appearance
         state.settings.lastObservedRelayURL = state.settings.relayURL
         state.settings.lastObservedLiveActivity = state.settings.liveActivityEnabled
+#if DEBUG
+        state.activeCall.layoutPreviewCall = .layoutPreview(arguments: ProcessInfo.processInfo.arguments)
+#endif
         store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = .live(model: model, settings: settings, playback: playback) }
         store.send(.start)
     }
     init(store: StoreOf<AirSIMFeature>) { self.store = store }
     var snapshot: AirSIMSnapshot { store.snapshot }
-    var contacts: ContactsPresentation { ContactsPresentation(owner: self) }
-    var audio: AudioPresentation { AudioPresentation(owner: self) }
     var vowlan: VoWLANPresentation { VoWLANPresentation(owner: self) }
     var settings: SettingsPresentation { SettingsPresentation(owner: self) }
-    var isOnline: Bool { snapshot.isOnline }
     var connectionMessage: String? { snapshot.connectionMessage }
-    var isMuted: Bool { snapshot.isMuted }
-    var isRecording: Bool { snapshot.isRecording }
-    var isRecordingBusy: Bool { snapshot.isRecordingBusy }
-    var modemStatus: ModemStatus? { snapshot.modemStatus }
     var cloudAgentStatus: CloudAgentStatus? { snapshot.cloudAgentStatus }
-    var cloudCallAudioState: CloudCallAudioState { snapshot.cloudCallAudioState }
     var callLifecycleSnapshot: CallLifecycleSnapshot { snapshot.callLifecycleSnapshot }
-    var inAppPresentedCall: CallRecord? { snapshot.inAppPresentedCall }
-    var callAudioIsActive: Bool { snapshot.callAudioIsActive }
-    var callAudioStatusText: String { snapshot.callAudioStatusText }
-    var canToggleRecording: Bool { snapshot.canToggleRecording }
     var connectionModePresentation: ConnectionModePresentation { snapshot.connectionModePresentation }
     var pairedDeviceHistory: [AndroidAgentPresentation] { snapshot.pairedDeviceHistory }
     func perform(_ command: AirSIMCommand) async { await store.send(.command(command)).finish() }
-    func answer() async { await perform(.answer) }
-    func reject() async { await perform(.reject) }
-    func hangup() async { await perform(.hangup) }
-    func toggleMute() async { await perform(.mute) }
-    func toggleSpeaker() { store.send(.command(.speaker)) }
-    func toggleRecording() async { await perform(.recording) }
     func reloadMessagesFromLocalStore() { store.send(.command(.reloadLocalMessages)) }
     func refreshPairedDeviceInformation() async { await perform(.refreshDevices) }
     func setLiveActivityEnabled(_ enabled: Bool) { store.send(.settings(.liveActivityChanged(enabled))) }
     func presentCurrentCallInApp() { store.send(.command(.presentCall)) }
 }
 
-@MainActor
-struct ContactsPresentation {
-    let owner: AirSIMPresentation
-    func contact(for number: String) -> ContactStore.Contact? { owner.snapshot.contacts.contact(for: number) }
-    func displayName(for number: String?) -> String { owner.snapshot.contacts.displayName(for: number) }
-}
-@MainActor
-struct AudioPresentation {
-    let owner: AirSIMPresentation
-    var active: Bool { owner.snapshot.audioActive }
-    var speakerEnabled: Bool { owner.snapshot.speakerEnabled }
-    var routeDescription: String { owner.snapshot.audioRoute }
-    var errorMessage: String? { owner.snapshot.audioError }
-}
 @MainActor
 struct VoWLANPresentation {
     let owner: AirSIMPresentation
