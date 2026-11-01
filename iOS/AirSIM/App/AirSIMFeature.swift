@@ -9,9 +9,7 @@ struct AirSIMFeature {
     struct State: Equatable {
         /// The backend projection. `receive(_:into:)` is its only writer.
         @Shared var snapshot: AirSIMSnapshot
-        var dialNumber = ""
-        var lastBackendNumber = ""
-        var hasDialDraft = false
+        var dial: DialFeature.State
         var selectedTab = PhoneTab.dial
         var firstConnectionComplete = false
         var messages: MessagesFeature.State
@@ -30,6 +28,7 @@ struct AirSIMFeature {
         init(snapshot: AirSIMSnapshot = AirSIMSnapshot()) {
             let shared = Shared(value: snapshot)
             _snapshot = shared
+            dial = DialFeature.State(snapshot: SharedReader(shared))
             recents = RecentsFeature.State(snapshot: SharedReader(shared))
             messages = MessagesFeature.State(snapshot: SharedReader(shared))
             contacts = ContactsFeature.State(mode: .browse, snapshot: SharedReader(shared))
@@ -59,7 +58,6 @@ struct AirSIMFeature {
         case snapshot(AirSIMSnapshot)
         case selectTab(PhoneTab)
         case completeOnboarding
-        case numberChanged(String)
         case command(AirSIMCommand)
         case commandFailed(String)
         case openURL(URL)
@@ -67,6 +65,7 @@ struct AirSIMFeature {
         case composeMessage(String)
         case keypadButtonTapped
         case keypad(PresentationAction<KeypadFeature.Action>)
+        case dial(DialFeature.Action)
         case messages(MessagesFeature.Action)
         case settings(SettingsFeature.Action)
         case pairing(PairingFeature.Action)
@@ -87,6 +86,7 @@ struct AirSIMFeature {
     @Dependency(\.airSIM) var client
 
     var body: some ReducerOf<Self> {
+        Scope(state: \.dial, action: \.dial) { DialFeature() }
         Scope(state: \.messages, action: \.messages) { MessagesFeature() }
         Scope(state: \.settings, action: \.settings) { SettingsFeature() }
         Scope(state: \.pairing, action: \.pairing) { PairingFeature() }
@@ -116,11 +116,6 @@ struct AirSIMFeature {
             case .completeOnboarding:
                 state.finishOnboarding()
                 return perform(.completeOnboarding)
-
-            case .numberChanged(let value):
-                state.dialNumber = value
-                state.hasDialDraft = value != state.lastBackendNumber
-                return .none
 
             case .command(let command):
                 return perform(command)
@@ -174,7 +169,7 @@ struct AirSIMFeature {
                 }
                 return .none
 
-            case .messages, .settings, .pairing, .recents, .contacts, .trace, .keypad, .alert:
+            case .dial, .messages, .settings, .pairing, .recents, .contacts, .trace, .keypad, .alert:
                 return .none
             }
         }
@@ -192,15 +187,7 @@ struct AirSIMFeature {
         if value.preferenceOnboardingComplete {
             state.finishOnboarding()
         }
-        if value.numberInput != state.lastBackendNumber {
-            state.lastBackendNumber = value.numberInput
-            if !state.hasDialDraft {
-                state.dialNumber = value.numberInput
-            }
-        }
-        if value.numberInput == state.dialNumber {
-            state.hasDialDraft = false
-        }
+        state.dial.reconcile(backendNumber: value.numberInput)
         if value.inAppPresentedCall == nil {
             state.keypad = nil
         }
@@ -244,8 +231,7 @@ struct AirSIMFeature {
 
     /// A call back from another tab: show the number on Dial, persist that tab, and dial.
     private func dial(_ number: String, state: inout State) -> Effect<Action> {
-        state.dialNumber = number
-        state.hasDialDraft = number != state.lastBackendNumber
+        state.dial.edit(number)
         state.selectedTab = .dial
         return .merge(
             perform(.persistTab(.dial)),
@@ -261,8 +247,8 @@ struct AirSIMFeature {
 
         case .call(let number):
             state.selectedTab = .dial
-            state.dialNumber = number
-            state.hasDialDraft = true
+            state.dial.number = number
+            state.dial.hasDraft = true
             return .run { [client] _ in try await client.command(.dialNumber(number)) }
 
         case let .liveActivity(action, callID):

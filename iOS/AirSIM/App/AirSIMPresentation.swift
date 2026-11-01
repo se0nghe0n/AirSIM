@@ -9,8 +9,6 @@ final class AirSIMPresentation {
     init(model: AppModel, settings: AppSettings) {
         let playback = CallRecordingPlayback()
         var state = AirSIMFeature.State(snapshot: AirSIMSnapshot(model: model, settings: settings, playback: playback))
-        state.dialNumber = model.numberInput
-        state.lastBackendNumber = model.numberInput
         state.settings.mode = ConnectionModePreference.selected()
         state.firstConnectionComplete = UserDefaults.standard.bool(forKey: "airsim.first-connection-complete")
         state.selectedTab = PhoneTab(rawValue: UserDefaults.standard.string(forKey: "airsim.selected-tab") ?? "") ?? .dial
@@ -26,14 +24,12 @@ final class AirSIMPresentation {
     }
     init(store: StoreOf<AirSIMFeature>) { self.store = store }
     var snapshot: AirSIMSnapshot { store.snapshot }
-    var numberInput: String { get { store.dialNumber } set { store.send(.numberChanged(newValue)) } }
     var contacts: ContactsPresentation { ContactsPresentation(owner: self) }
     var audio: AudioPresentation { AudioPresentation(owner: self) }
     var vowlan: VoWLANPresentation { VoWLANPresentation(owner: self) }
     var settings: SettingsPresentation { SettingsPresentation(owner: self) }
     var isOnline: Bool { snapshot.isOnline }
     var connectionMessage: String? { snapshot.connectionMessage }
-    var isBusy: Bool { snapshot.isBusy }
     var isMuted: Bool { snapshot.isMuted }
     var isRecording: Bool { snapshot.isRecording }
     var isRecordingBusy: Bool { snapshot.isRecordingBusy }
@@ -44,21 +40,16 @@ final class AirSIMPresentation {
     var inAppPresentedCall: CallRecord? { snapshot.inAppPresentedCall }
     var callAudioIsActive: Bool { snapshot.callAudioIsActive }
     var callAudioStatusText: String { snapshot.callAudioStatusText }
-    var canStartOutgoingCommand: Bool { snapshot.canStartOutgoingCommand }
     var canToggleRecording: Bool { snapshot.canToggleRecording }
     var connectionModePresentation: ConnectionModePresentation { snapshot.connectionModePresentation }
-    var pairedAndroidAgents: [AndroidAgentPresentation] { snapshot.pairedAndroidAgents }
-    var currentAndroidAgent: AndroidAgentPresentation? { snapshot.currentAndroidAgent }
     var pairedDeviceHistory: [AndroidAgentPresentation] { snapshot.pairedDeviceHistory }
     func perform(_ command: AirSIMCommand) async { await store.send(.command(command)).finish() }
-    func dial() async { await perform(.dialNumber(store.dialNumber)) }
     func answer() async { await perform(.answer) }
     func reject() async { await perform(.reject) }
     func hangup() async { await perform(.hangup) }
     func toggleMute() async { await perform(.mute) }
     func toggleSpeaker() { store.send(.command(.speaker)) }
     func toggleRecording() async { await perform(.recording) }
-    func bindAndroidAgent(_ id: String) { store.send(.command(.bindAgent(id))) }
     func reloadMessagesFromLocalStore() { store.send(.command(.reloadLocalMessages)) }
     func refreshPairedDeviceInformation() async { await perform(.refreshDevices) }
     func setLiveActivityEnabled(_ enabled: Bool) { store.send(.settings(.liveActivityChanged(enabled))) }

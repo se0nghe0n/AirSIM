@@ -1241,8 +1241,8 @@ struct RecentsFeatureTests {
         let store = TestStore(initialState: AirSIMFeature.State(snapshot: snapshot())) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
         await store.send(.recents(.view(.callTapped("preview-recent-2"))))
         await store.receive(\.recents.delegate.call) {
-            $0.dialNumber = "+1 202 555 0102"
-            $0.hasDialDraft = true
+            $0.dial.number = "+1 202 555 0102"
+            $0.dial.hasDraft = true
             $0.selectedTab = .dial
         }
         await store.finish()
@@ -1251,6 +1251,227 @@ struct RecentsFeatureTests {
     }
 }
 
+
+@MainActor
+struct DialFeatureTests {
+    private func state(_ configure: (inout AirSIMSnapshot) -> Void = { _ in }) -> DialFeature.State {
+        var snapshot = AirSIMSnapshot()
+        configure(&snapshot)
+        return DialFeature.State(snapshot: SharedReader(value: snapshot))
+    }
+
+    private func client(commands: LockIsolated<[AirSIMCommand]> = .init([])) -> AirSIMClient {
+        AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } },
+            command: { command in commands.withValue { $0.append(command) } },
+            sendSMS: { _, _ in .init(success: false) },
+            selfTest: { AsyncStream { $0.finish() } },
+            pairing: { AsyncStream { $0.finish() } },
+            pair: { _, _, _ in "" }
+        )
+    }
+
+    private func button(_ label: String, in view: UIView) -> UIButton? {
+        if let button = view as? UIButton, button.accessibilityLabel == label { return button }
+        return view.subviews.lazy.compactMap { self.button(label, in: $0) }.first
+    }
+
+    @Test func `Dial opens on the backend's number, and an edit is a draft only while it differs from it`() async {
+        let store = TestStore(initialState: state { $0.numberInput = "12" }) { DialFeature() } withDependencies: {
+            $0.airSIM = client()
+        }
+        #expect(store.state.number == "12" && store.state.lastBackendNumber == "12" && !store.state.hasDraft)
+        await store.send(.view(.digitTapped("3"))) {
+            $0.number = "123"
+            $0.hasDraft = true
+        }
+        await store.send(.view(.digitTapped("+"))) { $0.number = "123+" }
+        await store.send(.view(.deleteActivated)) { $0.number = "123" }
+        await store.send(.view(.deleteActivated)) {
+            $0.number = "12"
+            $0.hasDraft = false
+        }
+    }
+
+    @Test func `A backend number replaces the field only without a draft, and one equal to the field ends the draft`() {
+        var dial = state()
+        dial.reconcile(backendNumber: "100")
+        #expect(dial.number == "100" && dial.lastBackendNumber == "100" && !dial.hasDraft)
+        dial.edit("1001")
+        #expect(dial.hasDraft)
+        dial.reconcile(backendNumber: "200")
+        #expect(dial.number == "1001" && dial.lastBackendNumber == "200" && dial.hasDraft)
+        dial.reconcile(backendNumber: "1001")
+        #expect(dial.number == "1001" && dial.lastBackendNumber == "1001" && !dial.hasDraft)
+        // A tel: link marks its number a draft even when the backend already reports it.
+        dial.hasDraft = true
+        dial.reconcile(backendNumber: "1001")
+        #expect(!dial.hasDraft)
+    }
+
+    @Test func `Holding Delete removes a digit at once, the next after 350 ms, then one every 90 ms until released`() async {
+        let clock = TestClock()
+        let store = TestStore(initialState: state { $0.numberInput = "123456" }) { DialFeature() } withDependencies: {
+            $0.airSIM = client()
+            $0.continuousClock = clock
+        }
+        await store.send(.view(.deletePressed)) {
+            $0.number = "12345"
+            $0.hasDraft = true
+        }
+        await clock.advance(by: .milliseconds(349))
+        await clock.advance(by: .milliseconds(1))
+        await store.receive(\.deleteRepeated) { $0.number = "1234" }
+        await clock.advance(by: .milliseconds(89))
+        await clock.advance(by: .milliseconds(1))
+        await store.receive(\.deleteRepeated) { $0.number = "123" }
+        await clock.advance(by: .milliseconds(90))
+        await store.receive(\.deleteRepeated) { $0.number = "12" }
+        await store.send(.view(.deleteReleased))
+        await clock.advance(by: .seconds(1))
+        await store.finish()
+    }
+
+    @Test func `Holding Delete stops once the number is empty`() async {
+        let clock = TestClock()
+        let store = TestStore(initialState: state { $0.numberInput = "12" }) { DialFeature() } withDependencies: {
+            $0.airSIM = client()
+            $0.continuousClock = clock
+        }
+        await store.send(.view(.deletePressed)) {
+            $0.number = "1"
+            $0.hasDraft = true
+        }
+        await clock.advance(by: .milliseconds(350))
+        await store.receive(\.deleteRepeated) { $0.number = "" }
+        await clock.advance(by: .milliseconds(90))
+        await store.receive(\.deleteRepeated)
+        await clock.advance(by: .seconds(1))
+        await store.finish()
+    }
+
+    @Test func `Leaving the screen stops a held Delete, and VoiceOver's Delete removes exactly one digit`() async {
+        let clock = TestClock()
+        let store = TestStore(initialState: state { $0.numberInput = "123" }) { DialFeature() } withDependencies: {
+            $0.airSIM = client()
+            $0.continuousClock = clock
+        }
+        await store.send(.view(.deletePressed)) {
+            $0.number = "12"
+            $0.hasDraft = true
+        }
+        await store.send(.view(.disappeared))
+        await clock.advance(by: .seconds(1))
+        await store.send(.view(.deleteActivated)) { $0.number = "1" }
+        await clock.advance(by: .seconds(1))
+        await store.finish()
+    }
+
+    @Test func `Call dials the number shown when tapped, and choosing an agent binds it`() async {
+        let commands = LockIsolated<[AirSIMCommand]>([])
+        let store = TestStore(initialState: state { $0.numberInput = "12" }) { DialFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        await store.send(.view(.digitTapped("3"))) {
+            $0.number = "123"
+            $0.hasDraft = true
+        }
+        await store.send(.view(.callTapped))
+        await store.send(.view(.agentChosen("preview-pixel")))
+        await store.finish()
+        #expect(commands.value.count == 2)
+        #expect(commands.value.contains { if case .dialNumber("123") = $0 { true } else { false } })
+        #expect(commands.value.contains { if case .bindAgent("preview-pixel") = $0 { true } else { false } })
+    }
+
+    @Test func `The number shows with its contact, and Call and Delete follow the number and the call route`() {
+        let contacts = ContactDirectory(all: AirSIMPreviewFixtures.contacts, isAuthorized: true, authorization: .authorized)
+        let empty = state {
+            $0.contacts = contacts
+            $0.canStartOutgoingCommand = true
+        }
+        #expect(empty.displayText == "Enter number" && empty.showsPlaceholder && empty.contactName == nil)
+        #expect(!empty.canCall && empty.callIsDimmed && !empty.canDelete)
+        let ready = state {
+            $0.contacts = contacts
+            $0.canStartOutgoingCommand = true
+            $0.numberInput = "+1 202 555 0102"
+        }
+        #expect(ready.displayText == "+1 202 555 0102" && !ready.showsPlaceholder && ready.contactName == "Alex Rivera")
+        #expect(ready.canCall && !ready.callIsDimmed && ready.canDelete && ready.playsInputClick)
+        let busy = state {
+            $0.canStartOutgoingCommand = true
+            $0.isBusy = true
+            $0.numberInput = "123"
+        }
+        #expect(!busy.canCall && !busy.callIsDimmed)
+        let noRoute = state { $0.numberInput = "123" }
+        #expect(!noRoute.canCall && noRoute.callIsDimmed)
+        #expect(!state { $0.isMuted = true }.playsInputClick)
+    }
+
+    @Test func `The agent card and sheet show each agent's routes, with Cloud Off while cloud mode is disabled`() {
+        let agents = AirSIMPreviewFixtures.agents
+        let enabled = state {
+            $0.pairedAndroidAgents = agents
+            $0.currentAndroidAgent = agents[0]
+            $0.cloudModeEnabled = true
+        }
+        #expect(enabled.showsAgentCard && enabled.currentAgent == agents[0] && enabled.agentCount == 2)
+        #expect(enabled.cloudModeEnabled)
+        #expect(enabled.agentRows.map(\.detail) == [
+            "+1 202 555 0100\nVoWLAN Online · Cloud Online · Standalone",
+            "Number unavailable\nVoWLAN Offline · Cloud Offline · Standalone",
+        ])
+        #expect(enabled.agentRows.map(\.title) == ["Samsung Galaxy", "Pixel 8 Pro"])
+        #expect(enabled.agentRows.map(\.isCurrent) == [true, false])
+        let disabled = state {
+            $0.pairedAndroidAgents = agents
+            $0.currentAndroidAgent = agents[0]
+        }
+        #expect(!disabled.cloudModeEnabled)
+        #expect(disabled.agentRows.map(\.detail) == [
+            "+1 202 555 0100\nVoWLAN Online · Cloud Off · Standalone",
+            "Number unavailable\nVoWLAN Offline · Cloud Off · Standalone",
+        ])
+        #expect(!state().showsAgentCard)
+        #expect(state { $0.currentAndroidAgent = agents[0] }.showsAgentCard)
+    }
+
+    @Test func `Dial's keys, Delete and Call send their actions from the screen`() async throws {
+        let commands = LockIsolated<[AirSIMCommand]>([])
+        let store = Store(initialState: state { $0.canStartOutgoingCommand = true }) { DialFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+            $0.continuousClock = TestClock()
+        }
+        let dial = DialPadViewController(store: store)
+        dial.loadViewIfNeeded()
+        for label in ["1", "2 ABC", "3 DEF"] {
+            try #require(button(label, in: dial.view)).sendActions(for: .touchUpInside)
+        }
+        let delete = try #require(button("Delete", in: dial.view))
+        delete.sendActions(for: .touchDown)
+        delete.sendActions(for: .touchUpInside)
+        #expect(store.number == "12")
+        try #require(button("Dial", in: dial.view)).sendActions(for: .touchUpInside)
+        #expect(try await eventually { commands.value.isEmpty ? nil : true } == true)
+        #expect(commands.value.contains { if case .dialNumber("12") = $0 { true } else { false } })
+    }
+
+    @Test func `Choosing a row in the Paired Android Agents sheet binds that agent`() async throws {
+        let commands = LockIsolated<[AirSIMCommand]>([])
+        let agents = AirSIMPreviewFixtures.agents
+        let store = Store(initialState: state { $0.pairedAndroidAgents = agents }) { DialFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        let sheet = PairedAndroidAgentsViewController(store: store)
+        sheet.loadViewIfNeeded()
+        sheet.render()
+        sheet.tableView(sheet.table, didSelectRowAt: IndexPath(row: 1, section: 0))
+        #expect(try await eventually { commands.value.isEmpty ? nil : true } == true)
+        #expect(commands.value.contains { if case .bindAgent("preview-pixel") = $0 { true } else { false } })
+    }
+}
 
 @MainActor
 struct ContactsFeatureTests {
@@ -1355,8 +1576,8 @@ struct ContactsFeatureTests {
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
         await store.send(.contacts(.view(.callTapped("+12025550102"))))
         await store.receive(\.contacts.delegate.call) {
-            $0.dialNumber = "+12025550102"
-            $0.hasDialDraft = true
+            $0.dial.number = "+12025550102"
+            $0.dial.hasDraft = true
             $0.selectedTab = .dial
         }
         await store.send(.contacts(.view(.messageTapped("+12025550101"))))
@@ -2162,10 +2383,12 @@ struct TCARootNavigationTests {
     }
     @Test func `Service snapshot cannot overwrite newer dial input`() async {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
-        await store.send(.numberChanged("123")) { $0.dialNumber = "123"; $0.hasDialDraft = true }
+        await store.send(.dial(.view(.digitTapped("1")))) { $0.dial.number = "1"; $0.dial.hasDraft = true }
+        await store.send(.dial(.view(.digitTapped("2")))) { $0.dial.number = "12" }
+        await store.send(.dial(.view(.digitTapped("3")))) { $0.dial.number = "123" }
         var old = AirSIMSnapshot(); old.numberInput = "12"
-        await store.send(.snapshot(old)) { $0.$snapshot.withLock { $0 = old }; $0.lastBackendNumber = "12" }
-        #expect(store.state.dialNumber == "123")
+        await store.send(.snapshot(old)) { $0.$snapshot.withLock { $0 = old }; $0.dial.lastBackendNumber = "12" }
+        #expect(store.state.dial.number == "123")
     }
     @Test func `Each pairing screen starts from the current mode without the last code`() async {
         var state = AirSIMFeature.State()

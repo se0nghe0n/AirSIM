@@ -95,6 +95,7 @@ enum AirSIMPreviewFixtures {
         snapshot.preferenceAppearance = appearance
         snapshot.preferenceRelayURL = relayURL
         snapshot.preferenceOnboardingComplete = true
+        snapshot.cloudModeEnabled = true
         if let callState {
             let record = call(callState)
             snapshot.inAppPresentedCall = record
@@ -118,8 +119,6 @@ enum AirSIMPreviewFixtures {
         var state = AirSIMFeature.State(snapshot: snapshot)
         state.selectedTab = tab
         state.firstConnectionComplete = true
-        state.dialNumber = phone
-        state.lastBackendNumber = phone
         state.settings.mode = .automatic
         state.settings.lastObservedMode = .automatic
         state.settings.appearance = appearance

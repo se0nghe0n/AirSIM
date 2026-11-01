@@ -51,6 +51,7 @@ struct AirSIMSnapshot: Equatable, Sendable {
     var preferenceLiveActivity = true
     var preferenceRelayURL = ""
     var preferenceOnboardingComplete = false
+    var cloudModeEnabled = false
     var playingRecordingID: UUID?
 
     init() {}
@@ -67,6 +68,7 @@ struct AirSIMSnapshot: Equatable, Sendable {
             buildSetting: Bundle.main.object(forInfoDictionaryKey: "AirSIMPushRelayURL") as? String,
             bundleID: Bundle.main.bundleIdentifier
         )
+        cloudModeEnabled = CloudModePreference.isEnabled()
 
         callHistory = model.callHistory
         isRefreshingCallHistory = model.isRefreshingCallHistory

@@ -107,6 +107,8 @@
 		A1F000000000000000000005 /* ContactsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000005 /* ContactsFeature.swift */; };
 		A1F000000000000000000006 /* ContactRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000006 /* ContactRow.swift */; };
 		A1F000000000000000000007 /* ConversationRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000007 /* ConversationRow.swift */; };
+		A1F000000000000000000008 /* DialFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000008 /* DialFeature.swift */; };
+		A1F000000000000000000009 /* PairedAgentRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000009 /* PairedAgentRow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -259,6 +261,8 @@
 		B1F000000000000000000005 /* ContactsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsFeature.swift; sourceTree = "<group>"; };
 		B1F000000000000000000006 /* ContactRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactRow.swift; sourceTree = "<group>"; };
 		B1F000000000000000000007 /* ConversationRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRow.swift; sourceTree = "<group>"; };
+		B1F000000000000000000008 /* DialFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialFeature.swift; sourceTree = "<group>"; };
+		B1F000000000000000000009 /* PairedAgentRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedAgentRow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -557,6 +561,8 @@
 				B1D000000000000000000012 /* DialPadViewController.swift */,
 				B1D000000000000000000013 /* AndroidAgentCardView.swift */,
 				B1D000000000000000000014 /* PairedAndroidAgentsViewController.swift */,
+				B1F000000000000000000008 /* DialFeature.swift */,
+				B1F000000000000000000009 /* PairedAgentRow.swift */,
 			);
 			path = Dial;
 			sourceTree = "<group>";
@@ -858,6 +864,8 @@
 				A1F000000000000000000005 /* ContactsFeature.swift in Sources */,
 				A1F000000000000000000006 /* ContactRow.swift in Sources */,
 				A1F000000000000000000007 /* ConversationRow.swift in Sources */,
+				A1F000000000000000000008 /* DialFeature.swift in Sources */,
+				A1F000000000000000000009 /* PairedAgentRow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

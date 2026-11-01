@@ -37,7 +37,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         view.backgroundColor = .systemBackground
         messages = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
         let controllers: [UIViewController] = [
-            DialPadViewController(model: model),
+            DialPadViewController(store: store.scope(state: \.dial, action: \.dial)),
             RecentsViewController(store: store.scope(state: \.recents, action: \.recents)),
             messages,
             ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts)),
