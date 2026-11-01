@@ -38,7 +38,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         messages = MessagesViewController(model: model)
         let callAction: (String) -> Void = { [weak self] in self?.dial($0) }
         let messageAction: (String) -> Void = { [weak self] in self?.composeMessage($0) }
-        let controllers: [UIViewController] = [DialPadViewController(model: model), RecentsViewController(model: model, onCall: callAction, onMessage: messageAction), messages, ContactsViewController(model: model, onCall: callAction, onMessage: messageAction), AirSIMSettingsViewController(model: model, settings: settings)]
+        let controllers: [UIViewController] = [DialPadViewController(model: model), RecentsViewController(store: store.scope(state: \.recents, action: \.recents)), messages, ContactsViewController(model: model, onCall: callAction, onMessage: messageAction), AirSIMSettingsViewController(model: model, settings: settings)]
         tabs.viewControllers = zip(PhoneTab.allCases, controllers).map { tab, controller in
             let nav = UINavigationController(rootViewController: controller)
             nav.navigationBar.prefersLargeTitles = true

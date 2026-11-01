@@ -1209,6 +1209,48 @@ struct RecentCallTimeFormatterTests {
     }
 }
 
+@MainActor
+struct RecentsFeatureTests {
+    private func snapshot() -> AirSIMSnapshot {
+        var snapshot = AirSIMSnapshot()
+        snapshot.contacts = ContactDirectory(all: AirSIMPreviewFixtures.contacts, isAuthorized: true, authorization: .authorized)
+        snapshot.callHistory = AirSIMPreviewFixtures.history
+        return snapshot
+    }
+
+    @Test func `A contact's call shows the contact name, a stranger's call shows the number`() {
+        let state = RecentsFeature.State(snapshot: SharedReader(value: snapshot()))
+        let mina = state.row(id: "preview-recent-1")
+        #expect(mina?.name == "Mina Kim" && mina?.avatarName == "Mina Kim" && mina?.subtitle == "↙ AirSIM Audio")
+        let stranger = state.row(id: "preview-recent-3")
+        #expect(stranger?.name == "+1 202 555 0199" && stranger?.avatarName == "" && stranger?.subtitle == "↙ Missed")
+    }
+
+    @Test func `Calling back or messaging a recent asks the app shell, with the call's number`() async {
+        let store = TestStore(initialState: RecentsFeature.State(snapshot: SharedReader(value: snapshot()))) { RecentsFeature() }
+        await store.send(.view(.callTapped("preview-recent-2")))
+        await store.receive(\.delegate.call, "+1 202 555 0102")
+        await store.send(.view(.messageTapped("preview-recent-2")))
+        await store.receive(\.delegate.message, "+1 202 555 0102")
+    }
+
+    @Test func `A call back from Recents switches to Dial, keeps the number as a draft and dials it`() async {
+        let dialed = LockIsolated<[AirSIMCommand]>([])
+        var client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in .init(success: true) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
+        client.command = { command in dialed.withValue { $0.append(command) } }
+        let store = TestStore(initialState: AirSIMFeature.State(snapshot: snapshot())) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        await store.send(.recents(.view(.callTapped("preview-recent-2"))))
+        await store.receive(\.recents.delegate.call) {
+            $0.dialNumber = "+1 202 555 0102"
+            $0.hasDialDraft = true
+            $0.selectedTab = .dial
+        }
+        await store.finish()
+        #expect(dialed.value.contains { if case .dialNumber("+1 202 555 0102") = $0 { true } else { false } })
+        #expect(dialed.value.contains { if case .persistTab(.dial) = $0 { true } else { false } })
+    }
+}
+
 
 @Suite(.serialized)
 struct LiveActivityCallActionTests {
@@ -1646,8 +1688,8 @@ struct TCAUIKitFeatureTests {
     @Test func `Recording failure alerts once and OK closes it`() async {
         var dependency = client()
         dependency.command = { _ in throw CocoaError(.fileReadCorruptFile) }
-        let store = TestStore(initialState: RecordingsFeature.State()) { RecordingsFeature() } withDependencies: { $0.airSIM = dependency }
-        await store.send(.reload)
+        let store = TestStore(initialState: RecordingsFeature.State(snapshot: SharedReader(value: AirSIMSnapshot()))) { RecordingsFeature() } withDependencies: { $0.airSIM = dependency }
+        await store.send(.view(.refreshPulled))
         await store.receive(\.failed) { $0.alert = .error(CocoaError(.fileReadCorruptFile).localizedDescription, title: "Recording Error", ok: .ok) }
         await store.send(.alert(.presented(.ok))) { $0.alert = nil }
     }
@@ -2324,10 +2366,10 @@ struct UIKitAdversarialRegressionTests {
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         let recents = try #require(root.tabs.selectedViewController as? UINavigationController)
-        let recordings = CallRecordingsViewController(model: model)
+        let recordings = CallRecordingsViewController(store: model.store.scope(state: \.recents.recordings, action: \.recents.recordings))
         recents.pushViewController(recordings, animated: false); window.layoutIfNeeded()
         #expect(recordings.viewIfLoaded?.window === window)
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recordings(.failed("First failure"))) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recents(.recordings(.failed("First failure")))) }
         let first = try #require(await eventually { () -> UIAlertController? in
             guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert
@@ -2336,10 +2378,10 @@ struct UIKitAdversarialRegressionTests {
         // Opening the composer, e.g. from an im: link, dismisses whatever root presents, this alert included.
         withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage(AirSIMPreviewFixtures.phone) }
         _ = try #require(await presentedSheet(root))
-        #expect(try await eventually { model.store.recordings.alert == nil ? true : nil } == true)
+        #expect(try await eventually { model.store.recents.recordings.alert == nil ? true : nil } == true)
         withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.composer(.dismiss))) }
         #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recordings(.failed("Second failure"))) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recents(.recordings(.failed("Second failure")))) }
         let second = try #require(await eventually { () -> UIAlertController? in
             guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert

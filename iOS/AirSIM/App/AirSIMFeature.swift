@@ -17,7 +17,7 @@ struct AirSIMFeature {
         var messages = MessagesFeature.State()
         var settings = SettingsFeature.State()
         var pairing = PairingFeature.State()
-        var recordings = RecordingsFeature.State()
+        var recents: RecentsFeature.State
         var trace = TraceFeature.State()
         var contactSearch = ""
         var contactPickerSearch = ""
@@ -29,7 +29,9 @@ struct AirSIMFeature {
         var pendingComposeRecipient: String?
 
         init(snapshot: AirSIMSnapshot = AirSIMSnapshot()) {
-            _snapshot = Shared(value: snapshot)
+            let shared = Shared(value: snapshot)
+            _snapshot = shared
+            recents = RecentsFeature.State(snapshot: SharedReader(shared))
         }
 
         mutating func composeMessage(to recipient: String) {
@@ -69,7 +71,7 @@ struct AirSIMFeature {
         case messages(MessagesFeature.Action)
         case settings(SettingsFeature.Action)
         case pairing(PairingFeature.Action)
-        case recordings(RecordingsFeature.Action)
+        case recents(RecentsFeature.Action)
         case trace(TraceFeature.Action)
         case alert(PresentationAction<Alert>)
 
@@ -88,7 +90,7 @@ struct AirSIMFeature {
         Scope(state: \.messages, action: \.messages) { MessagesFeature() }
         Scope(state: \.settings, action: \.settings) { SettingsFeature() }
         Scope(state: \.pairing, action: \.pairing) { PairingFeature() }
-        Scope(state: \.recordings, action: \.recordings) { RecordingsFeature() }
+        Scope(state: \.recents, action: \.recents) { RecentsFeature() }
         Scope(state: \.trace, action: \.trace) { TraceFeature() }
         Reduce { state, action in
             switch action {
@@ -155,6 +157,13 @@ struct AirSIMFeature {
                 }
                 return .none
 
+            case .recents(.delegate(.call(let number))):
+                return dial(number, state: &state)
+
+            case .recents(.delegate(.message(let recipient))):
+                state.composeMessage(to: recipient)
+                return perform(.persistTab(.messages))
+
             case .messages(.delegate(.unreportedSendFailure(let error))):
                 state.alert = .error(error)
                 return .none
@@ -169,7 +178,7 @@ struct AirSIMFeature {
                 }
                 return .none
 
-            case .messages, .settings, .pairing, .recordings, .trace, .keypad, .alert:
+            case .messages, .settings, .pairing, .recents, .trace, .keypad, .alert:
                 return .none
             }
         }
@@ -182,7 +191,6 @@ struct AirSIMFeature {
         if state.snapshot != value {
             state.$snapshot.withLock { $0 = value }
         }
-        state.recordings.playingID = value.playingRecordingID
         reconcileSettings(&state.settings, with: value)
         // Onboarding finished in another scene also releases a waiting composer.
         if value.preferenceOnboardingComplete {
@@ -208,7 +216,7 @@ struct AirSIMFeature {
             }
         }
         if value.callLifecycleSnapshot.state.representsCall, value.playingRecordingID != nil {
-            return .send(.recordings(.stop(false)))
+            return .send(.recents(.recordings(.stopPlayback(deactivateSession: false))))
         }
         return .none
     }
@@ -236,6 +244,17 @@ struct AirSIMFeature {
         if value.preferenceRelayURL == settings.relayURL {
             settings.relayHasDraft = false
         }
+    }
+
+    /// A call back from another tab: show the number on Dial, persist that tab, and dial.
+    private func dial(_ number: String, state: inout State) -> Effect<Action> {
+        state.dialNumber = number
+        state.hasDialDraft = number != state.lastBackendNumber
+        state.selectedTab = .dial
+        return .merge(
+            perform(.persistTab(.dial)),
+            perform(.dialNumber(number))
+        )
     }
 
     private func open(_ url: URL, state: inout State) -> Effect<Action> {

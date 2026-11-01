@@ -23,6 +23,20 @@ extension UIViewController {
     /// Shows a screen's alert above whatever is already presented, even from a hidden tab: present(item:) would
     /// first dismiss an unrelated sheet. Button actions are sent as `.presented`; an alert closed from beneath,
     /// e.g. with its sheet, sends `.dismiss`, so state cannot hold an alert nobody sees and later errors still show.
+    func presentAlert<State: ObservableState, Action, AlertAction>(
+        from store: Store<State, Action>,
+        state alert: KeyPath<State, AlertState<AlertAction>?>,
+        action: CaseKeyPath<Action, PresentationAction<AlertAction>>
+    ) {
+        let presenter = StateAlertPresenter(
+            owner: self,
+            alert: { store.state[keyPath: alert] },
+            send: { store.send(action($0)) }
+        )
+        observe { transaction in presenter.render(animated: !transaction.uiKit.disablesAnimations) }
+    }
+
+    /// The closure form, for screens still bound to the presentation facade.
     func presentAlert<Action>(_ alert: @escaping () -> AlertState<Action>?, send: @escaping (PresentationAction<Action>) -> Void) {
         let presenter = StateAlertPresenter(owner: self, alert: alert, send: send)
         observe { transaction in presenter.render(animated: !transaction.uiKit.disablesAnimations) }

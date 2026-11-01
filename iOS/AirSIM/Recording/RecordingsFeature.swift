@@ -1,30 +1,91 @@
 import ComposableArchitecture
 import Foundation
 
+/// Saved call recordings: playback, sharing and deletion, with one alert for failures.
 @Reducer
 struct RecordingsFeature {
-    @ObservableState struct State: Equatable {
-        var playingID: UUID?
+    @ObservableState
+    struct State: Equatable {
+        @SharedReader fileprivate var snapshot: AirSIMSnapshot
         @Presents var alert: AlertState<Action.Alert>?
+
+        init(snapshot: SharedReader<AirSIMSnapshot>) {
+            _snapshot = snapshot
+        }
+
+        var recordings: [CallRecordingFile] { snapshot.recordings }
+        var isSaving: Bool { snapshot.recordingsBusy }
+        var playingID: UUID? { snapshot.playingRecordingID }
+        /// Playback waits for the call to end.
+        var isCallActive: Bool { snapshot.callLifecycleSnapshot.state.representsCall }
+
+        func recording(id: String) -> CallRecordingFile? {
+            recordings.first { $0.id.uuidString == id }
+        }
+
+        func shareURL(for recording: CallRecordingFile) -> URL? {
+            snapshot.recordingURLs[recording.id]
+        }
     }
-    enum Action {
-        case play(CallRecordingFile), stop(Bool), delete(CallRecordingFile), reload, failed(String), alert(PresentationAction<Alert>)
-        enum Alert: Equatable { case ok }
+
+    enum Action: ViewAction {
+        case view(View)
+        /// Sent by the app shell when a call starts during playback.
+        case stopPlayback(deactivateSession: Bool)
+        case failed(String)
+        case alert(PresentationAction<Alert>)
+
+        enum View {
+            case appeared
+            case disappeared
+            case refreshPulled
+            case playTapped(CallRecordingFile)
+            case deleteTapped(CallRecordingFile)
+        }
+
+        enum Alert: Equatable {
+            case ok
+        }
     }
+
     @Dependency(\.airSIM) var client
+
     var body: some ReducerOf<Self> {
         Reduce { state, action in
-            let command: AirSIMCommand
             switch action {
-            case .play(let file): command = .play(file)
-            case .stop(let deactivate): command = .stopPlayback(deactivate)
-            case .delete(let file): command = .deleteRecording(file)
-            case .reload: command = .reloadRecordings
-            case .failed(let error): state.alert = .error(error, title: "Recording Error", ok: .ok); return .none
-            case .alert: return .none
+            case .view(.appeared), .view(.refreshPulled):
+                return run(.reloadRecordings)
+
+            case .view(.disappeared):
+                return run(.stopPlayback(!state.isCallActive))
+
+            case .view(.playTapped(let recording)):
+                return run(.play(recording))
+
+            case .view(.deleteTapped(let recording)):
+                return run(.deleteRecording(recording))
+
+            case .stopPlayback(let deactivateSession):
+                return run(.stopPlayback(deactivateSession))
+
+            case .failed(let error):
+                state.alert = .error(error, title: "Recording Error", ok: .ok)
+                return .none
+
+            case .alert:
+                return .none
             }
-            return .run { [client] send in do { try await client.command(command) } catch { await send(.failed(error.localizedDescription)) } }
         }
         .ifLet(\.$alert, action: \.alert)
+    }
+
+    private func run(_ command: AirSIMCommand) -> Effect<Action> {
+        .run { [client] send in
+            do {
+                try await client.command(command)
+            } catch {
+                await send(.failed(error.localizedDescription))
+            }
+        }
     }
 }

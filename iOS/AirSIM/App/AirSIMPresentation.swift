@@ -30,11 +30,7 @@ final class AirSIMPresentation {
     var contacts: ContactsPresentation { ContactsPresentation(owner: self) }
     var audio: AudioPresentation { AudioPresentation(owner: self) }
     var vowlan: VoWLANPresentation { VoWLANPresentation(owner: self) }
-    var recordings: RecordingsPresentation { RecordingsPresentation(owner: self) }
     var settings: SettingsPresentation { SettingsPresentation(owner: self) }
-    var callHistory: [CallRecord] { snapshot.callHistory }
-    var isRefreshingCallHistory: Bool { snapshot.isRefreshingCallHistory }
-    var callHistoryMessage: String? { snapshot.callHistoryMessage }
     var messages: [SMSMessage] { snapshot.messages }
     var conversations: [(sender: String, messages: [SMSMessage])] { snapshot.conversations.map { ($0.sender, $0.messages) } }
     var isOnline: Bool { snapshot.isOnline }
@@ -65,8 +61,6 @@ final class AirSIMPresentation {
     func toggleSpeaker() { store.send(.command(.speaker)) }
     func toggleRecording() async { await perform(.recording) }
     func bindAndroidAgent(_ id: String) { store.send(.command(.bindAgent(id))) }
-    func refreshCallHistory() async { await perform(.refreshHistory) }
-    func deleteCallHistory(ids: [String]) { store.send(.command(.deleteHistory(ids))) }
     func refreshMessages() async { await perform(.refreshMessages) }
     func loadMessagesFromAgent() async { await perform(.loadMessages) }
     func reloadMessagesFromLocalStore() { store.send(.command(.reloadLocalMessages)) }
@@ -98,13 +92,6 @@ struct AudioPresentation {
 struct VoWLANPresentation {
     let owner: AirSIMPresentation
     var availability: VoWLANAvailability { owner.snapshot.vowlan }
-}
-@MainActor
-struct RecordingsPresentation {
-    let owner: AirSIMPresentation
-    var recordings: [CallRecordingFile] { owner.snapshot.recordings }
-    var isBusy: Bool { owner.snapshot.recordingsBusy }
-    func reload() async { await owner.perform(.reloadRecordings) }
 }
 @MainActor
 struct SettingsPresentation {
