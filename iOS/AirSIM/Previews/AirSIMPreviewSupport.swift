@@ -122,10 +122,10 @@ enum AirSIMPreviewFixtures {
         state.settings.lastObservedRelayURL = relayURL
         state.settings.report = selfTestReport
         state.settings.selfTestCompleted = true
-        state.pairing.services = empty ? [] : pairingServices
-        state.pairing.status = empty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair"
+        state.settings.pairing.services = empty ? [] : pairingServices
+        state.settings.pairing.status = empty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair"
 
-        let services = state.pairing.services
+        let services = state.settings.pairing.services
         let report = selfTestReport
         let client = AirSIMClient(
             snapshots: { [snapshot] in AsyncStream { $0.yield(snapshot); $0.finish() } },

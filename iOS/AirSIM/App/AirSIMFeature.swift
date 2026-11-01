@@ -13,8 +13,7 @@ struct AirSIMFeature {
         var selectedTab = PhoneTab.dial
         var firstConnectionComplete = false
         var messages: MessagesFeature.State
-        var settings = SettingsFeature.State()
-        var pairing = PairingFeature.State()
+        var settings: SettingsFeature.State
         var recents: RecentsFeature.State
         var contacts: ContactsFeature.State
         var activeCall: ActiveCallFeature.State
@@ -31,6 +30,7 @@ struct AirSIMFeature {
             recents = RecentsFeature.State(snapshot: SharedReader(shared))
             messages = MessagesFeature.State(snapshot: SharedReader(shared))
             contacts = ContactsFeature.State(mode: .browse, snapshot: SharedReader(shared))
+            settings = SettingsFeature.State(snapshot: SharedReader(shared))
             activeCall = ActiveCallFeature.State(snapshot: SharedReader(shared))
         }
 
@@ -57,7 +57,6 @@ struct AirSIMFeature {
         case stop
         case snapshot(AirSIMSnapshot)
         case selectTab(PhoneTab)
-        case completeOnboarding
         case command(AirSIMCommand)
         case commandFailed(String)
         case openURL(URL)
@@ -66,7 +65,6 @@ struct AirSIMFeature {
         case dial(DialFeature.Action)
         case messages(MessagesFeature.Action)
         case settings(SettingsFeature.Action)
-        case pairing(PairingFeature.Action)
         case recents(RecentsFeature.Action)
         case contacts(ContactsFeature.Action)
         case activeCall(ActiveCallFeature.Action)
@@ -87,7 +85,6 @@ struct AirSIMFeature {
         Scope(state: \.dial, action: \.dial) { DialFeature() }
         Scope(state: \.messages, action: \.messages) { MessagesFeature() }
         Scope(state: \.settings, action: \.settings) { SettingsFeature() }
-        Scope(state: \.pairing, action: \.pairing) { PairingFeature() }
         Scope(state: \.recents, action: \.recents) { RecentsFeature() }
         Scope(state: \.contacts, action: \.contacts) { ContactsFeature() }
         Scope(state: \.activeCall, action: \.activeCall) { ActiveCallFeature() }
@@ -110,10 +107,6 @@ struct AirSIMFeature {
             case .selectTab(let tab):
                 state.selectedTab = tab
                 return .run { [client] _ in try await client.command(.persistTab(tab)) }
-
-            case .completeOnboarding:
-                state.finishOnboarding()
-                return perform(.completeOnboarding)
 
             case .command(let command):
                 return perform(command)
@@ -150,17 +143,14 @@ struct AirSIMFeature {
                 state.alert = .error(error)
                 return .none
 
+            case .settings(.delegate(.onboardingCompleted)):
+                state.finishOnboarding()
+                return perform(.completeOnboarding)
+
             case .alert(.presented(.clearBackendError(let error))):
                 return perform(.clearError(error))
 
-            case .pairing(.opened):
-                // Local-only pairing defaults to the current mode, as it did for each presentation before TCA.
-                if state.pairing.pairingID == nil {
-                    state.pairing.localOnly = state.settings.mode == .vowlan
-                }
-                return .none
-
-            case .dial, .messages, .settings, .pairing, .recents, .contacts, .activeCall, .alert:
+            case .dial, .messages, .settings, .recents, .contacts, .activeCall, .alert:
                 return .none
             }
         }
@@ -172,7 +162,7 @@ struct AirSIMFeature {
         if state.snapshot != value {
             state.$snapshot.withLock { $0 = value }
         }
-        reconcileSettings(&state.settings, with: value)
+        state.settings.reconcile(with: value)
         // Onboarding finished in another scene also releases a waiting composer.
         if value.preferenceOnboardingComplete {
             state.finishOnboarding()
@@ -192,31 +182,6 @@ struct AirSIMFeature {
             return .send(.recents(.recordings(.stopPlayback(deactivateSession: false))))
         }
         return .none
-    }
-
-    /// Another scene's preference change reaches this one, except over a relay URL being edited here.
-    private func reconcileSettings(_ settings: inout SettingsFeature.State, with value: AirSIMSnapshot) {
-        if value.preferenceMode != settings.lastObservedMode {
-            settings.mode = value.preferenceMode
-            settings.lastObservedMode = value.preferenceMode
-        }
-        if value.preferenceAppearance != settings.lastObservedAppearance {
-            settings.appearance = value.preferenceAppearance
-            settings.lastObservedAppearance = value.preferenceAppearance
-        }
-        if value.preferenceLiveActivity != settings.lastObservedLiveActivity {
-            settings.liveActivityEnabled = value.preferenceLiveActivity
-            settings.lastObservedLiveActivity = value.preferenceLiveActivity
-        }
-        if value.preferenceRelayURL != settings.lastObservedRelayURL {
-            if !settings.relayHasDraft {
-                settings.relayURL = value.preferenceRelayURL
-            }
-            settings.lastObservedRelayURL = value.preferenceRelayURL
-        }
-        if value.preferenceRelayURL == settings.relayURL {
-            settings.relayHasDraft = false
-        }
     }
 
     /// A call back from another tab: show the number on Dial, persist that tab, and dial.

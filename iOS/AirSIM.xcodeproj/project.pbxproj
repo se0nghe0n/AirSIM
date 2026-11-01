@@ -107,6 +107,7 @@
 		A1F000000000000000000009 /* PairedAgentRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000009 /* PairedAgentRow.swift */; };
 		A1F00000000000000000000A /* ActiveCallFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000A /* ActiveCallFeature.swift */; };
 		A1F00000000000000000000B /* ActiveCallContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000B /* ActiveCallContent.swift */; };
+		A1F00000000000000000000C /* SettingsContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000C /* SettingsContent.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -259,6 +260,7 @@
 		B1F000000000000000000009 /* PairedAgentRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedAgentRow.swift; sourceTree = "<group>"; };
 		B1F00000000000000000000A /* ActiveCallFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveCallFeature.swift; sourceTree = "<group>"; };
 		B1F00000000000000000000B /* ActiveCallContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveCallContent.swift; sourceTree = "<group>"; };
+		B1F00000000000000000000C /* SettingsContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsContent.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -435,6 +437,7 @@
 				B1D000000000000000000029 /* SettingsFeature.swift */,
 				B1000000000000000000000A /* AirSIMSettingsViewController.swift */,
 				B1D000000000000000000030 /* AirSIMFirstConnectionViewController.swift */,
+				B1F00000000000000000000C /* SettingsContent.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -858,6 +861,7 @@
 				A1F000000000000000000009 /* PairedAgentRow.swift in Sources */,
 				A1F00000000000000000000A /* ActiveCallFeature.swift in Sources */,
 				A1F00000000000000000000B /* ActiveCallContent.swift in Sources */,
+				A1F00000000000000000000C /* SettingsContent.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

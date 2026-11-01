@@ -6,7 +6,6 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     override var observesWhileHidden: Bool { true }
     let model: AirSIMPresentation
     @UIBindable private var store: StoreOf<AirSIMFeature>
-    let settings: SettingsPresentation
     let tabs = UITabBarController()
     override var childForStatusBarStyle: UIViewController? { tabs }
     private var messages: MessagesViewController!
@@ -25,12 +24,11 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     init(previewPresentation: AirSIMPresentation) {
         model = previewPresentation
         store = previewPresentation.store
-        settings = previewPresentation.settings
         isPreview = true
         super.init(nibName: nil, bundle: nil)
     }
 #endif
-    init(model: AppModel, settings: AppSettings) { let presentation = AirSIMPresentation(model: model, settings: settings); self.model = presentation; store = presentation.store; self.settings = presentation.settings; super.init(nibName: nil, bundle: nil) }
+    init(model: AppModel, settings: AppSettings) { let presentation = AirSIMPresentation(model: model, settings: settings); self.model = presentation; store = presentation.store; super.init(nibName: nil, bundle: nil) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -41,7 +39,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
             RecentsViewController(store: store.scope(state: \.recents, action: \.recents)),
             messages,
             ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts)),
-            AirSIMSettingsViewController(model: model, settings: settings),
+            AirSIMSettingsViewController(store: store.scope(state: \.settings, action: \.settings)),
         ]
         tabs.viewControllers = zip(PhoneTab.allCases, controllers).map { tab, controller in
             let nav = UINavigationController(rootViewController: controller)
@@ -75,22 +73,17 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         consumePendingSMS()
         renderCall()
         if !model.store.firstConnectionComplete, firstConnection == nil, presentedViewController == nil {
-            let setup = AirSIMFirstConnectionViewController(model: model)
-            let nav = UINavigationController(rootViewController: setup); nav.modalPresentationStyle = .fullScreen
+            let setup = AirSIMFirstConnectionViewController(store: store.scope(state: \.settings, action: \.settings))
+            let nav = UINavigationController(rootViewController: setup)
+            nav.modalPresentationStyle = .fullScreen
+            // render() dismisses it once onboarding completes, here or in another scene.
             firstConnection = nav
-            setup.onComplete = { [weak self, weak nav] in
-                nav?.dismiss(animated: true) {
-                    guard let self else { return }
-                    self.firstConnection = nil
-                    self.observeChanges()
-                }
-            }
             present(nav, animated: true)
         }
         renderAlert()
     }
     override func render() {
-        let style = settings.appearance.interfaceStyle
+        let style = store.settings.appearance.interfaceStyle
         view.window?.overrideUserInterfaceStyle = style; callWindow?.overrideUserInterfaceStyle = style
         if model.store.firstConnectionComplete, let setup = firstConnection, !setup.isBeingDismissed {
             firstConnection = nil; setup.dismiss(animated: true)

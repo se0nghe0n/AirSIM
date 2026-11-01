@@ -2213,9 +2213,9 @@ struct TCAUIKitFeatureTests {
     }
 
     @Test func `Changing mode cancels streaming self test without completing it`() async {
-        let store = TestStore(initialState: SettingsFeature.State()) { SettingsFeature() } withDependencies: { $0.airSIM = client() }
-        await store.send(.runSelfTest) { $0.selfTestRunning = true; $0.report = .initial }
-        await store.send(.modeChanged(.vowlan)) { $0.mode = .vowlan; $0.selfTestRunning = false; $0.report = nil }
+        let store = TestStore(initialState: SettingsFeature.State(snapshot: snapshot)) { SettingsFeature() } withDependencies: { $0.airSIM = client() }
+        await store.send(.view(.runSelfTestTapped)) { $0.selfTestRunning = true; $0.report = .initial }
+        await store.send(.view(.modeChanged(.vowlan))) { $0.mode = .vowlan; $0.selfTestRunning = false; $0.report = nil }
         await store.finish()
         #expect(!store.state.selfTestCompleted)
     }
@@ -2247,7 +2247,8 @@ struct TCARootNavigationTests {
         // The onboarding screen covers the tabs; presenting the composer now would dismiss it.
         await store.send(.composeMessage("+12025550100")) { $0.selectedTab = .messages; $0.pendingComposeRecipient = "+12025550100" }
         await store.send(.openURL(URL(string: "im:+12025550101")!)) { $0.pendingComposeRecipient = "+12025550101" }
-        await store.send(.completeOnboarding) {
+        await store.send(.settings(.view(.pairLaterTapped)))
+        await store.receive(\.settings.delegate.onboardingCompleted) {
             $0.firstConnectionComplete = true; $0.pendingComposeRecipient = nil
             $0.messages.composer = ComposerFeature.State(recipient: "+12025550101", snapshot: snapshot)
         }
@@ -2341,20 +2342,24 @@ struct TCARootNavigationTests {
     @Test func `Each pairing screen starts from the current mode without the last code`() async {
         var state = AirSIMFeature.State()
         state.settings.mode = .vowlan
-        state.pairing.code = "123456"; state.pairing.message = "Pairing failed: code expired"
+        state.settings.pairing.code = "123456"; state.settings.pairing.message = "Pairing failed: code expired"
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
         // A result that finished after the last screen closed is still shown once.
-        await store.send(.pairing(.opened)) { $0.pairing.code = ""; $0.pairing.localOnly = true }
-        await store.send(.pairing(.disappeared)) { $0.pairing.message = "" }
-        await store.send(.settings(.modeChanged(.automatic))) { $0.settings.mode = .automatic }
-        await store.send(.pairing(.opened)) { $0.pairing.localOnly = false }
+        await store.send(.settings(.pairing(.view(.opened)))) { $0.settings.pairing.code = "" }
+        await store.receive(\.settings.pairing.delegate.opened) { $0.settings.pairing.localOnly = true }
+        await store.send(.settings(.pairing(.view(.disappeared)))) { $0.settings.pairing.message = "" }
+        await store.receive(\.settings.pairing.delegate.closed)
+        await store.send(.settings(.view(.modeChanged(.automatic)))) { $0.settings.mode = .automatic }
+        await store.send(.settings(.pairing(.view(.opened)))) { $0.settings.pairing.localOnly = false }
+        await store.receive(\.settings.pairing.delegate.opened)
         await store.finish()
     }
     @Test func `Reopening pairing during a pairing keeps its code and mode`() async {
         var state = AirSIMFeature.State()
-        state.pairing.code = "123456"; state.pairing.pairingID = "service"; state.pairing.localOnly = true
+        state.settings.pairing.code = "123456"; state.settings.pairing.pairingID = "service"; state.settings.pairing.localOnly = true
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
-        await store.send(.pairing(.opened))
+        await store.send(.settings(.pairing(.view(.opened))))
+        await store.receive(\.settings.pairing.delegate.opened)
     }
     @Test func `Scene teardown cancels service observation`() async {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
@@ -2757,6 +2762,203 @@ struct TCASharedPreferenceTests {
 }
 
 @MainActor
+struct SettingsFeatureTests {
+    private func state(mode: AirSIMConnectionMode = .automatic, _ change: (inout AirSIMSnapshot) -> Void = { _ in }) -> SettingsFeature.State {
+        var snapshot = AirSIMSnapshot()
+        change(&snapshot)
+        var state = SettingsFeature.State(snapshot: SharedReader(value: snapshot))
+        state.mode = mode
+        return state
+    }
+
+    private func client(commands: LockIsolated<[String]>) -> AirSIMClient {
+        AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } },
+            command: { command in commands.withValue { $0.append(String(describing: command)) } },
+            sendSMS: { _, _ in .init(success: false) },
+            selfTest: { AsyncStream { $0.finish() } },
+            pairing: { AsyncStream { $0.finish() } },
+            pair: { _, _, _ in "" }
+        )
+    }
+
+    private func onlineSnapshot() throws -> AirSIMSnapshot {
+        var snapshot = AirSIMSnapshot()
+        snapshot.vowlan = .verified(try VoWLANEndpoint(host: "192.168.43.1", controlPort: 7575), at: AirSIMPreviewFixtures.date)
+        return snapshot
+    }
+
+    @Test func `Footers, cloud rows and the mode icon follow the connection mode`() throws {
+        let vowlan = state(mode: .vowlan)
+        #expect(vowlan.modeIcon == "wifi" && vowlan.modeDetail == "Uses only the same Wi-Fi or phone hotspot, without Relay")
+        #expect(vowlan.cloudRelayStatus == "Disabled in current mode" && vowlan.remoteCallsStatus == "Disabled")
+        #expect(vowlan.selfTestFooter == "Cloud self-test is unavailable in the current connection mode.")
+        #expect(!vowlan.modeUsesCloud && !vowlan.canRunSelfTest)
+        let cloud = state(mode: .cloud)
+        #expect(cloud.modeIcon == "cloud" && cloud.modeDetail == "Uses only Relay, PushKit, and CallKit")
+        #expect(cloud.cloudRelayStatus == "Unreachable" && cloud.remoteCallsStatus == "Enabled")
+        #expect(cloud.selfTestFooter.hasPrefix("Checks local push credentials, AirSIM Relay identity"))
+        #expect(cloud.modeUsesCloud && cloud.canRunSelfTest)
+        let status = try JSONDecoder().decode(CloudAgentStatus.self, from: Data(#"{"cloud_online": true}"#.utf8))
+        let automatic = state(mode: .automatic) { $0.cloudAgentStatus = status }
+        #expect(automatic.modeIcon == "arrow.triangle.branch" && automatic.cloudRelayStatus == "Agent Online")
+        var running = automatic
+        running.selfTestRunning = true
+        #expect(!running.canRunSelfTest && running.selfTestTitle == "Run Cloud Self-Test · Running…")
+        #expect(automatic.selfTestTitle == "Run Cloud Self-Test")
+        #expect(state { $0.connectionMessage = "" }.connectionMessage == nil)
+        #expect(state { $0.connectionMessage = "Reconnecting" }.connectionMessage == "Reconnecting")
+        #expect(state { $0.vowlan = .unavailable("VoWLAN disconnected") }.vowlanStatus == "LAN Disconnected · Cloud for Next Call")
+        #expect(state().vowlanStatus == "Not Paired")
+    }
+
+    @Test func `Self-test steps show an icon and tone for their state, and the result once the test finishes`() {
+        var report = CloudSelfTestReport.initial
+        report.steps[1].state = .running
+        report.steps[2].state = .passed
+        report.steps[3].state = .failed
+        var settings = state()
+        settings.report = report
+        #expect(settings.selfTestSteps.map(\.id) == ["configuration", "relayIdentity", "deviceRegistration", "agentHeartbeat"])
+        #expect(settings.selfTestSteps.map(\.icon) == ["circle", "arrow.triangle.2.circlepath", "checkmark.circle.fill", "xmark.circle.fill"])
+        #expect(settings.selfTestSteps.map(\.tone) == [.secondary, .blue, .green, .red])
+        #expect(settings.selfTestResult == nil)
+        settings.selfTestCompleted = true
+        #expect(settings.selfTestResult?.text == "Self-test failed. Resolve the failed steps and try again.")
+        #expect(settings.selfTestResult?.tone == .orange)
+        settings.report = AirSIMPreviewFixtures.selfTestReport
+        #expect(settings.selfTestResult?.text == "Cloud self-test passed" && settings.selfTestResult?.tone == .green)
+        settings.report = nil
+        #expect(settings.selfTestSteps.isEmpty && settings.selfTestResult == nil)
+    }
+
+    @Test func `Paired device rows show the number over the online routes or the offline note`() {
+        func row(number: String?, vowlan: Bool, cloud: Bool) -> PairedDeviceRow {
+            PairedDeviceRow(device: AndroidAgentPresentation(
+                id: "agent", deviceName: "Galaxy", phoneNumber: number, agentKind: nil,
+                cloudOnline: cloud, vowlanOnline: vowlan, isCurrent: false
+            ))
+        }
+        #expect(row(number: "+1 202 555 0100", vowlan: true, cloud: true).detail == "+1 202 555 0100\nVoWLAN Online · Cloud Online")
+        #expect(row(number: "+1 202 555 0100", vowlan: true, cloud: false).route == "VoWLAN Online")
+        #expect(row(number: "+1 202 555 0100", vowlan: false, cloud: true).route == "Cloud Online")
+        #expect(row(number: nil, vowlan: false, cloud: false).detail == "Number unavailable\nOffline · Refreshes on reconnection")
+    }
+
+    @Test func `Settings shows connection values, device rows and self-test tones`() throws {
+        let store = AirSIMPreviewFixtures.presentation(tab: .settings).store
+        var report = AirSIMPreviewFixtures.selfTestReport
+        report.steps[0].state = .failed
+        report.steps[1].state = .running
+        report.steps[2].state = .pending
+        store.send(.settings(.selfTestUpdated(report)))
+        let controller = AirSIMSettingsViewController(store: store.scope(state: \.settings, action: \.settings))
+        controller.loadViewIfNeeded()
+        controller.render()
+        let rows = controller.sections.flatMap(\.rows)
+        let values = rows.filter(\.isValue).map { "\($0.id)=\($0.detail)" }
+        #expect(values == [
+            "currentMode=VoWLAN", "connectionStatus=Connected", "vowlan=VoWLAN Ready", "cloud=Unreachable",
+            "vowlan=VoWLAN Ready", "enabled=Enabled", "project=AirSIM · Samsung",
+        ])
+        let device = try #require(rows.first { $0.id == "preview-samsung" })
+        #expect(device.detail == "\(AirSIMPreviewFixtures.phone)\nVoWLAN Online · Cloud Online" && !device.isValue)
+        #expect(device.accessibilityHint == "Delete Samsung Galaxy pairing record" && device.enabled)
+        let steps = ["configuration", "relayIdentity", "deviceRegistration", "agentHeartbeat"].compactMap { id in rows.first { $0.id == id } }
+        #expect(steps.map(\.image) == ["xmark.circle.fill", "arrow.triangle.2.circlepath", "circle", "checkmark.circle.fill"])
+        #expect(steps.map(\.color) == [.systemRed, .systemBlue, .secondaryLabel, .systemGreen])
+        #expect(rows.first { $0.id == "result" }?.color == .systemOrange)
+        #expect(controller.sections.map(\.footer)[0] == "Automatically chooses VoWLAN, then cloud based on availability")
+    }
+
+    @Test func `Settings refreshes devices on appear and sends Discover Again, Live Activity and Save Relay URL`() async throws {
+        let commands = LockIsolated<[String]>([])
+        let store = Store(initialState: SettingsFeature.State(snapshot: SharedReader(value: AirSIMSnapshot()))) {
+            SettingsFeature()
+        } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        let controller = AirSIMSettingsViewController(store: store)
+        controller.loadViewIfNeeded()
+        controller.viewWillAppear(false)
+        controller.sections.flatMap(\.rows).first { $0.id == "discover" }?.action?()
+        controller.sections.flatMap(\.rows).first { $0.id == "save" }?.action?()
+        let activity = try #require(controller.sections.flatMap(\.rows).first { $0.id == "activity" }?.accessory as? UISwitch)
+        activity.isOn = false
+        activity.sendActions(for: .valueChanged)
+        let sent = try await eventually { commands.value.count == 4 ? commands.value : nil }
+        #expect(sent?.sorted() == ["discover", "liveActivity(false)", "refreshDevices", "saveRelay(\"\")"])
+        #expect(!store.liveActivityEnabled && store.message == "URL saved. Registration will complete automatically after pairing.")
+    }
+
+    @Test func `Pair Later finishes onboarding and saves it`() async {
+        let commands = LockIsolated<[String]>([])
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        await store.send(.settings(.view(.pairLaterTapped)))
+        await store.receive(\.settings.delegate.onboardingCompleted) { $0.firstConnectionComplete = true }
+        await store.finish()
+        #expect(commands.value == ["completeOnboarding"])
+    }
+
+    @Test func `Closing the first-connection pairing finishes onboarding only while VoWLAN is online`() async throws {
+        let commands = LockIsolated<[String]>([])
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        await store.send(.settings(.view(.startPairingTapped))) { $0.settings.pairingFromOnboarding = true }
+        await store.send(.settings(.pairing(.view(.disappeared))))
+        await store.receive(\.settings.pairing.delegate.closed) { $0.settings.pairingFromOnboarding = false }
+        let online = try onlineSnapshot()
+        await store.send(.snapshot(online)) { $0.$snapshot.withLock { $0 = online } }
+        await store.send(.settings(.view(.startPairingTapped))) { $0.settings.pairingFromOnboarding = true }
+        await store.send(.settings(.pairing(.view(.disappeared))))
+        await store.receive(\.settings.pairing.delegate.closed) { $0.settings.pairingFromOnboarding = false }
+        await store.receive(\.settings.delegate.onboardingCompleted) { $0.firstConnectionComplete = true }
+        await store.finish()
+        #expect(commands.value == ["completeOnboarding"])
+    }
+
+    @Test func `Closing pairing opened from Settings leaves onboarding alone`() async throws {
+        let commands = LockIsolated<[String]>([])
+        let online = try onlineSnapshot()
+        let store = TestStore(initialState: AirSIMFeature.State(snapshot: online)) { AirSIMFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        await store.send(.settings(.pairing(.view(.disappeared))))
+        await store.receive(\.settings.pairing.delegate.closed)
+        await store.finish()
+        #expect(commands.value.isEmpty && !store.state.firstConnectionComplete)
+    }
+
+    @Test func `The first-connection screen's Pair Later and mode control reach the store`() throws {
+        let commands = LockIsolated<[String]>([])
+        let store = Store(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: {
+            $0.airSIM = client(commands: commands)
+        }
+        let controller = AirSIMFirstConnectionViewController(store: store.scope(state: \.settings, action: \.settings))
+        controller.loadViewIfNeeded()
+        controller.render()
+        func find<T: UIView>(_ type: T.Type, in view: UIView, where match: (T) -> Bool = { _ in true }) -> T? {
+            if let view = view as? T, match(view) { return view }
+            for subview in view.subviews {
+                if let found = find(type, in: subview, where: match) { return found }
+            }
+            return nil
+        }
+        let mode = try #require(find(UISegmentedControl.self, in: controller.view))
+        #expect(mode.selectedSegmentIndex == AirSIMConnectionMode.allCases.firstIndex(of: .automatic))
+        mode.selectedSegmentIndex = AirSIMConnectionMode.allCases.firstIndex(of: .vowlan)!
+        mode.sendActions(for: .valueChanged)
+        #expect(store.settings.mode == .vowlan)
+        let later = try #require(find(UIButton.self, in: controller.view) { $0.accessibilityLabel == "Pair Later in Settings" })
+        later.sendActions(for: .touchUpInside)
+        #expect(store.firstConnectionComplete)
+    }
+}
+
+@MainActor
 struct UIKitConversationReplacementTests {
     @Test func `Finishing Back for A cannot clear a newly requested B`() {
         let model = AirSIMPreviewFixtures.presentation(tab: .messages)
@@ -2876,6 +3078,39 @@ struct UIKitAdversarialRegressionTests {
         model.store.send(.snapshot(ended)); root.render()
         #expect(root.callWindow == nil && callWindow.isHidden && !window.accessibilityElementsHidden)
         #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed)
+    }
+
+    @Test func `Pair Later saves onboarding and the root closes the first-connection screen`() async throws {
+        let commands = LockIsolated<[String]>([])
+        let client = AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } },
+            command: { command in commands.withValue { $0.append(String(describing: command)) } },
+            sendSMS: { _, _ in .init(success: false) },
+            selfTest: { AsyncStream { $0.finish() } },
+            pairing: { AsyncStream { $0.finish() } },
+            pair: { _, _, _ in "" }
+        )
+        let store = Store(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        let root = RootViewController(previewPresentation: AirSIMPresentation(store: store))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        defer { root.dismiss(animated: false); window.isHidden = true }
+        let onboarding = try #require(try await eventually {
+            (root.presentedViewController as? UINavigationController).flatMap { $0.isBeingPresented ? nil : $0 }
+        })
+        let setup = try #require(onboarding.topViewController as? AirSIMFirstConnectionViewController)
+        func button(_ label: String, in view: UIView) -> UIButton? {
+            if let button = view as? UIButton, button.accessibilityLabel == label { return button }
+            for subview in view.subviews {
+                if let found = button(label, in: subview) { return found }
+            }
+            return nil
+        }
+        try #require(button("Pair Later in Settings", in: setup.view)).sendActions(for: .touchUpInside)
+        #expect(store.firstConnectionComplete)
+        #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
+        #expect(commands.value == ["completeOnboarding"])
     }
 
     @Test func `Incoming call shows above full-screen onboarding`() async throws {

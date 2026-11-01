@@ -27,27 +27,6 @@ final class AirSIMPresentation {
     }
     init(store: StoreOf<AirSIMFeature>) { self.store = store }
     var snapshot: AirSIMSnapshot { store.snapshot }
-    var vowlan: VoWLANPresentation { VoWLANPresentation(owner: self) }
-    var settings: SettingsPresentation { SettingsPresentation(owner: self) }
-    var connectionMessage: String? { snapshot.connectionMessage }
-    var cloudAgentStatus: CloudAgentStatus? { snapshot.cloudAgentStatus }
-    var callLifecycleSnapshot: CallLifecycleSnapshot { snapshot.callLifecycleSnapshot }
-    var connectionModePresentation: ConnectionModePresentation { snapshot.connectionModePresentation }
-    var pairedDeviceHistory: [AndroidAgentPresentation] { snapshot.pairedDeviceHistory }
-    func perform(_ command: AirSIMCommand) async { await store.send(.command(command)).finish() }
     func reloadMessagesFromLocalStore() { store.send(.command(.reloadLocalMessages)) }
-    func refreshPairedDeviceInformation() async { await perform(.refreshDevices) }
-    func setLiveActivityEnabled(_ enabled: Bool) { store.send(.settings(.liveActivityChanged(enabled))) }
     func presentCurrentCallInApp() { store.send(.command(.presentCall)) }
-}
-
-@MainActor
-struct VoWLANPresentation {
-    let owner: AirSIMPresentation
-    var availability: VoWLANAvailability { owner.snapshot.vowlan }
-}
-@MainActor
-struct SettingsPresentation {
-    let owner: AirSIMPresentation
-    var appearance: AppAppearance { get { owner.store.settings.appearance } nonmutating set { owner.store.send(.settings(.appearanceChanged(newValue))) } }
 }
