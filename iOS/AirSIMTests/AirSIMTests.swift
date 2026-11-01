@@ -2228,58 +2228,6 @@ struct TCAUIKitFeatureTests {
 }
 
 @MainActor
-struct TCATraceCommandTests {
-    private func client(clears: LockIsolated<[Bool]>, toggles: LockIsolated<[Bool]>) -> AirSIMClient {
-        AirSIMClient(
-            snapshots: { AsyncStream { $0.finish() } }, command: { _ in },
-            sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } },
-            pairing: { AsyncStream { $0.finish() } },
-            traceRefresh: { data, clear in clears.withValue { $0.append(clear) }; return data },
-            traceEnabled: { enabled in toggles.withValue { $0.append(enabled) } },
-            pair: { _, _, _ in "" }
-        )
-    }
-
-    @Test func `Clear requested during a poll runs after the poll`() async {
-        let clears = LockIsolated<[Bool]>([])
-        var state = TraceFeature.State(); state.refreshing = true; state.refreshID = 1
-        let store = TestStore(initialState: state) { TraceFeature() } withDependencies: {
-            $0.airSIM = client(clears: clears, toggles: LockIsolated([]))
-        }
-        await store.send(.clear) { $0.pendingClear = true }
-        await store.send(.refreshed(id: 1, AgentVerboseTraceData())) { $0.refreshing = false }
-        await store.receive(\.refresh) { $0.refreshing = true; $0.refreshID = 2; $0.pendingClear = false }
-        await store.receive(\.refreshed) { $0.refreshing = false }
-        #expect(clears.value == [true])
-    }
-
-    @Test func `An old poll cannot overwrite a pending verbose preference`() async {
-        let toggles = LockIsolated<[Bool]>([])
-        var state = TraceFeature.State(); state.refreshing = true; state.refreshID = 1
-        let store = TestStore(initialState: state) { TraceFeature() } withDependencies: {
-            $0.airSIM = client(clears: LockIsolated([]), toggles: toggles)
-        }
-        await store.send(.enabledChanged(true)) { $0.data.enabled = true; $0.pendingEnabled = true }
-        await store.send(.refreshed(id: 1, AgentVerboseTraceData())) { $0.refreshing = false }
-        await store.receive(\.refresh) { $0.refreshing = true; $0.refreshID = 2; $0.pendingEnabled = nil }
-        await store.receive(\.refreshed) { $0.refreshing = false }
-        #expect(store.state.data.enabled)
-        #expect(toggles.value == [true])
-    }
-
-    @Test func `Trace completion from a disappeared screen is ignored`() async {
-        var state = TraceFeature.State(); state.refreshing = true; state.refreshID = 1
-        let store = TestStore(initialState: state) { TraceFeature() } withDependencies: {
-            $0.airSIM = client(clears: LockIsolated([]), toggles: LockIsolated([]))
-        }
-        await store.send(.disappeared) { $0.refreshing = false; $0.refreshID = 2 }
-        var stale = AgentVerboseTraceData(); stale.enabled = true
-        await store.send(.refreshed(id: 1, stale))
-        #expect(!store.state.data.enabled)
-    }
-}
-
-@MainActor
 struct TCARootNavigationTests {
     /// Shared readers compare by value, so states built with this equal the ones reducers build from an empty snapshot.
     private let snapshot = SharedReader(value: AirSIMSnapshot())

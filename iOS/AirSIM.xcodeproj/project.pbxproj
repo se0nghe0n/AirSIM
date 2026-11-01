@@ -41,9 +41,6 @@
 		A1D000000000000000000029 /* SettingsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000029 /* SettingsFeature.swift */; };
 		A1D000000000000000000030 /* AirSIMFirstConnectionViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000030 /* AirSIMFirstConnectionViewController.swift */; };
 		A1D000000000000000000031 /* PairingFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000031 /* PairingFeature.swift */; };
-		A1D000000000000000000032 /* AgentVerboseTraceData.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000032 /* AgentVerboseTraceData.swift */; };
-		A1D000000000000000000033 /* TraceFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000033 /* TraceFeature.swift */; };
-		A1D000000000000000000034 /* AgentVerboseTraceDetailViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000034 /* AgentVerboseTraceDetailViewController.swift */; };
         AABC00000000000000000004 /* AirSIMPreviewSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000004; };
         AABC00000000000000000003 /* ThirdPartyNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000003; };
         AABC00000000000000000001 /* AirSIMFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = BABC00000000000000000001; };
@@ -81,7 +78,6 @@
 		A10000000000000000000024 /* IPhoneCloudCallSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* IPhoneCloudCallSession.swift */; };
 		A10000000000000000000025 /* VirtualCallTTSController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* VirtualCallTTSController.swift */; };
 		A10000000000000000000029 /* AgentVerboseTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* AgentVerboseTrace.swift */; };
-		A1000000000000000000002A /* AgentVerboseTraceViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002A /* AgentVerboseTraceViewController.swift */; };
 		A1000000000000000000002B /* CallLifecycleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* CallLifecycleStore.swift */; };
 		A1000000000000000000002C /* SamsungPairingCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002C /* SamsungPairingCrypto.swift */; };
 		A1000000000000000000002D /* SamsungPairingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002D /* SamsungPairingClient.swift */; };
@@ -197,9 +193,6 @@
 		B1D000000000000000000029 /* SettingsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsFeature.swift; sourceTree = "<group>"; };
 		B1D000000000000000000030 /* AirSIMFirstConnectionViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMFirstConnectionViewController.swift; sourceTree = "<group>"; };
 		B1D000000000000000000031 /* PairingFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingFeature.swift; sourceTree = "<group>"; };
-		B1D000000000000000000032 /* AgentVerboseTraceData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTraceData.swift; sourceTree = "<group>"; };
-		B1D000000000000000000033 /* TraceFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TraceFeature.swift; sourceTree = "<group>"; };
-		B1D000000000000000000034 /* AgentVerboseTraceDetailViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTraceDetailViewController.swift; sourceTree = "<group>"; };
         BABC00000000000000000004 /* AirSIMPreviewSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMPreviewSupport.swift; sourceTree = "<group>"; };
         BABC00000000000000000003 /* ThirdPartyNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ThirdPartyNotices.txt; sourceTree = SOURCE_ROOT; };
         BABC00000000000000000001 /* AirSIMFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMFeature.swift; sourceTree = "<group>"; };
@@ -237,7 +230,6 @@
 		B10000000000000000000024 /* IPhoneCloudCallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPhoneCloudCallSession.swift; sourceTree = "<group>"; };
 		B10000000000000000000025 /* VirtualCallTTSController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCallTTSController.swift; sourceTree = "<group>"; };
 		B10000000000000000000029 /* AgentVerboseTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTrace.swift; sourceTree = "<group>"; };
-		B1000000000000000000002A /* AgentVerboseTraceViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTraceViewController.swift; sourceTree = "<group>"; };
 		B1000000000000000000002B /* CallLifecycleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallLifecycleStore.swift; sourceTree = "<group>"; };
 		B1000000000000000000002C /* SamsungPairingCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungPairingCrypto.swift; sourceTree = "<group>"; };
 		B1000000000000000000002D /* SamsungPairingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungPairingClient.swift; sourceTree = "<group>"; };
@@ -451,10 +443,6 @@
 			isa = PBXGroup;
 			children = (
 				B10000000000000000000029 /* AgentVerboseTrace.swift */,
-				B1D000000000000000000032 /* AgentVerboseTraceData.swift */,
-				B1D000000000000000000033 /* TraceFeature.swift */,
-				B1000000000000000000002A /* AgentVerboseTraceViewController.swift */,
-				B1D000000000000000000034 /* AgentVerboseTraceDetailViewController.swift */,
 			);
 			path = Diagnostics;
 			sourceTree = "<group>";
@@ -816,7 +804,6 @@
 				A1000000000000000000002B /* CallLifecycleStore.swift in Sources */,
 				A10000000000000000000025 /* VirtualCallTTSController.swift in Sources */,
 				A10000000000000000000029 /* AgentVerboseTrace.swift in Sources */,
-				A1000000000000000000002A /* AgentVerboseTraceViewController.swift in Sources */,
 				A1000000000000000000002C /* SamsungPairingCrypto.swift in Sources */,
 				A1000000000000000000002D /* SamsungPairingClient.swift in Sources */,
 				A1000000000000000000002E /* SamsungPairingViewController.swift in Sources */,
@@ -860,9 +847,6 @@
 				A1D000000000000000000029 /* SettingsFeature.swift in Sources */,
 				A1D000000000000000000030 /* AirSIMFirstConnectionViewController.swift in Sources */,
 				A1D000000000000000000031 /* PairingFeature.swift in Sources */,
-				A1D000000000000000000032 /* AgentVerboseTraceData.swift in Sources */,
-				A1D000000000000000000033 /* TraceFeature.swift in Sources */,
-				A1D000000000000000000034 /* AgentVerboseTraceDetailViewController.swift in Sources */,
 				A1F000000000000000000001 /* ContactDirectory.swift in Sources */,
 				A1F000000000000000000002 /* UIKit+Layout.swift in Sources */,
 				A1F000000000000000000003 /* RecentCallRow.swift in Sources */,

@@ -17,7 +17,6 @@ struct AirSIMFeature {
         var pairing = PairingFeature.State()
         var recents: RecentsFeature.State
         var contacts: ContactsFeature.State
-        var trace = TraceFeature.State()
         var activeCall: ActiveCallFeature.State
         @Presents var alert: AlertState<Action.Alert>?
         /// The backend error last seen in a snapshot, so each new one raises a single alert.
@@ -70,7 +69,6 @@ struct AirSIMFeature {
         case pairing(PairingFeature.Action)
         case recents(RecentsFeature.Action)
         case contacts(ContactsFeature.Action)
-        case trace(TraceFeature.Action)
         case activeCall(ActiveCallFeature.Action)
         case alert(PresentationAction<Alert>)
 
@@ -92,7 +90,6 @@ struct AirSIMFeature {
         Scope(state: \.pairing, action: \.pairing) { PairingFeature() }
         Scope(state: \.recents, action: \.recents) { RecentsFeature() }
         Scope(state: \.contacts, action: \.contacts) { ContactsFeature() }
-        Scope(state: \.trace, action: \.trace) { TraceFeature() }
         Scope(state: \.activeCall, action: \.activeCall) { ActiveCallFeature() }
         Reduce { state, action in
             switch action {
@@ -163,7 +160,7 @@ struct AirSIMFeature {
                 }
                 return .none
 
-            case .dial, .messages, .settings, .pairing, .recents, .contacts, .trace, .activeCall, .alert:
+            case .dial, .messages, .settings, .pairing, .recents, .contacts, .activeCall, .alert:
                 return .none
             }
         }

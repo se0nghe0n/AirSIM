@@ -23,8 +23,6 @@ struct AirSIMClient: Sendable {
     var sendSMS: @Sendable (String, String) async -> AirSIMMessageResult
     var selfTest: @Sendable () async -> AsyncStream<CloudSelfTestReport>
     var pairing: @Sendable () async -> AsyncStream<PairingFeature.Discovery>
-    var traceRefresh: @Sendable (AgentVerboseTraceData, Bool) async -> AgentVerboseTraceData = { data, _ in data }
-    var traceEnabled: @Sendable (Bool) async -> Void = { _ in }
     var pair: @Sendable (SamsungPairingService, String, Bool) async throws -> String
 }
 private enum AirSIMClientKey: DependencyKey {
@@ -93,12 +91,7 @@ extension AirSIMClient {
                     continuation.onTermination = { @Sendable _ in Task { @MainActor in observer.cancel() } }
                 }
             }
-        }, traceRefresh: { data, clear in
-            var next = data
-            next.enabled = await AgentVerboseTraceRecorder.shared.isEnabled()
-            if clear { await next.clear(api: model.api) } else { await next.refresh(api: model.api) }
-            return next
-        }, traceEnabled: { enabled in await AgentVerboseTraceRecorder.shared.setEnabled(enabled) }, pair: { service, code, localOnly in
+        }, pair: { service, code, localOnly in
             try await VoIPPushController.shared.performAndroidPairing(localOnly: localOnly) { registration in
                 try await SamsungPairingCompletionCoordinator.complete(performPairing: { try await SamsungPairingClient.pair(service: service, code: code, registration: registration) }, refreshVoWLAN: { await model.vowlan.refreshAfterPairing() })
             }

@@ -48,11 +48,6 @@ enum AirSIMPreviewFixtures {
         sessionID: "preview-pairing", serverPublicKey: Data(repeating: 0, count: 32),
         expiresAt: date.addingTimeInterval(600)
     )]
-    static let traceEntries = [
-        AgentVerboseTraceEntry(id: UUID(uuidString: "00000000-0000-0000-0000-000000000201")!, traceID: "PREVIEW1", timestamp: date, stage: .request, method: "POST", path: "/api/calls", detail: "Preview outgoing call request", elapsedMilliseconds: nil, source: "APP", category: "voice", fields: ["transport": "VoWLAN"]),
-        AgentVerboseTraceEntry(id: UUID(uuidString: "00000000-0000-0000-0000-000000000202")!, traceID: "PREVIEW1", timestamp: date.addingTimeInterval(0.05), stage: .response, method: "POST", path: "/api/calls", detail: "Agent acknowledged the request", elapsedMilliseconds: 50, source: "APP", category: "http", fields: ["status": "200"]),
-        AgentVerboseTraceEntry(id: UUID(uuidString: "00000000-0000-0000-0000-000000000203")!, traceID: "PREVIEW2", timestamp: date.addingTimeInterval(2), stage: .failure, method: "GET", path: "/api/debug", detail: "Sample reconnect event for preview only", elapsedMilliseconds: 120, source: "APP", category: "usb", fields: ["status": "503"]),
-    ]
     static var selfTestReport: CloudSelfTestReport {
         var report = CloudSelfTestReport.initial
         for index in report.steps.indices {
@@ -129,10 +124,8 @@ enum AirSIMPreviewFixtures {
         state.settings.selfTestCompleted = true
         state.pairing.services = empty ? [] : pairingServices
         state.pairing.status = empty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair"
-        state.trace.data = .previewData()
 
         let services = state.pairing.services
-        let trace = state.trace.data
         let report = selfTestReport
         let client = AirSIMClient(
             snapshots: { [snapshot] in AsyncStream { $0.yield(snapshot); $0.finish() } },
@@ -140,8 +133,6 @@ enum AirSIMPreviewFixtures {
             sendSMS: { _, _ in .init(success: true) },
             selfTest: { AsyncStream { $0.yield(report); $0.finish() } },
             pairing: { AsyncStream { $0.yield(.init(services: services, status: services.isEmpty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair")); $0.finish() } },
-            traceRefresh: { _, _ in trace },
-            traceEnabled: { _ in },
             pair: { _, _, _ in "Preview pairing complete. No device was contacted." }
         )
         return AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: {

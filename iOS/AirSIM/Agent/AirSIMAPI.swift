@@ -184,18 +184,6 @@ struct AirSIMAPI: Sendable {
     // MARK: Status, Network, Location & Debug
 
     func modemStatus() async throws -> ModemStatus { try await get("api/status") }
-    func moduleDebug(after sequence: UInt64 = 0, limit: Int = 400) async throws -> ModuleDebugSnapshot {
-        var components = URLComponents(url: try endpoint("api/debug"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "after", value: String(sequence)),
-            URLQueryItem(name: "limit", value: String(min(2_000, max(1, limit))))
-        ]
-        var request = URLRequest(url: components.url!)
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 6
-        return try await decoded(request, recordVerboseTrace: false)
-    }
-    func clearModuleDebug() async throws { try await post("api/debug/clear", EmptyBody()) }
 
     // MARK: Shared HTTP Implementation
 
@@ -235,19 +223,15 @@ struct AirSIMAPI: Sendable {
         return response.body
     }
 
-    private func decoded<Response: Decodable>(
-        _ request: URLRequest,
-        recordVerboseTrace: Bool = true
-    ) async throws -> Response {
-        let response = try await tracedResponse(for: request, recordVerboseTrace: recordVerboseTrace)
+    private func decoded<Response: Decodable>(_ request: URLRequest) async throws -> Response {
+        let response = try await tracedResponse(for: request)
         try Self.requireSuccess(response)
         return try Self.decode(Response.self, from: response.body)
     }
 
     private func tracedResponse(
         for originalRequest: URLRequest,
-        uploadFileURL: URL? = nil,
-        recordVerboseTrace: Bool = true
+        uploadFileURL: URL? = nil
     ) async throws -> WiredHTTPResponse {
         guard AirSIMRoutePolicy.permits(route) else {
             throw APIError.localConnectionUnavailable
@@ -264,13 +248,11 @@ struct AirSIMAPI: Sendable {
                   let size = attributes[.size] as? NSNumber else { return 0 }
             return size.intValue
         }()
-        let trace = recordVerboseTrace
-            ? await AgentVerboseTraceRecorder.shared.begin(
-                method: method,
-                path: path,
-                bodyBytes: uploadFileURL == nil ? (request.httpBody?.count ?? 0) : uploadBytes
-            )
-            : nil
+        let trace = await AgentVerboseTraceRecorder.shared.begin(
+            method: method,
+            path: path,
+            bodyBytes: uploadFileURL == nil ? (request.httpBody?.count ?? 0) : uploadBytes
+        )
         if let trace {
             request.setValue(trace.id, forHTTPHeaderField: "X-AirSIM-Trace-ID")
             await AgentVerboseTraceRecorder.shared.recordRoute(
