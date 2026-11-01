@@ -55,7 +55,7 @@ final class PairedAndroidAgentsViewController: PhoneTableController {
 
 #if DEBUG
 #Preview("Paired Android Agents") {
-    let store = AirSIMPreviewFixtures.presentation().store
+    let store = AirSIMPreviewFixtures.store()
     return AirSIMPreviewFixtures.navigation(
         PairedAndroidAgentsViewController(store: store.scope(state: \.dial, action: \.dial))
     )

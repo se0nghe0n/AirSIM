@@ -342,7 +342,7 @@ private extension SettingsTone {
 
 #if DEBUG
 #Preview("Settings · Connected and Self-Test") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .settings).store
+    let store = AirSIMPreviewFixtures.store(tab: .settings)
     return AirSIMPreviewFixtures.navigation(
         AirSIMSettingsViewController(store: store.scope(state: \.settings, action: \.settings))
     )

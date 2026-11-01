@@ -9,15 +9,15 @@ struct SettingsFeature {
     struct State: Equatable {
         @SharedReader fileprivate var snapshot: AirSIMSnapshot
         var pairing = PairingFeature.State()
-        var mode = AirSIMConnectionMode.automatic
-        var appearance = AppAppearance.system
-        var relayURL = ""
-        var lastObservedMode = AirSIMConnectionMode.automatic
-        var lastObservedAppearance = AppAppearance.system
-        var lastObservedRelayURL = ""
-        var lastObservedLiveActivity = true
+        var mode: AirSIMConnectionMode
+        var appearance: AppAppearance
+        var relayURL: String
+        var lastObservedMode: AirSIMConnectionMode
+        var lastObservedAppearance: AppAppearance
+        var lastObservedRelayURL: String
+        var lastObservedLiveActivity: Bool
         var relayHasDraft = false
-        var liveActivityEnabled = true
+        var liveActivityEnabled: Bool
         var report: CloudSelfTestReport?
         var selfTestRunning = false
         var selfTestCompleted = false
@@ -27,8 +27,18 @@ struct SettingsFeature {
         /// onboarding.
         var pairingFromOnboarding = false
 
+        /// Starts from the saved preferences in the snapshot; `reconcile(with:)` applies later changes.
         init(snapshot: SharedReader<AirSIMSnapshot>) {
             _snapshot = snapshot
+            let saved = snapshot.wrappedValue
+            mode = saved.preferenceMode
+            appearance = saved.preferenceAppearance
+            relayURL = saved.preferenceRelayURL
+            liveActivityEnabled = saved.preferenceLiveActivity
+            lastObservedMode = saved.preferenceMode
+            lastObservedAppearance = saved.preferenceAppearance
+            lastObservedRelayURL = saved.preferenceRelayURL
+            lastObservedLiveActivity = saved.preferenceLiveActivity
         }
 
         /// Another scene's preference change reaches this one, except over a relay URL being edited here.

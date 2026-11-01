@@ -206,14 +206,14 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Contacts · People") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .contacts).store
+    let store = AirSIMPreviewFixtures.store(tab: .contacts)
     return AirSIMPreviewFixtures.navigation(
         ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts))
     )
 }
 
 #Preview("Contacts · Empty") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .contacts, empty: true).store
+    let store = AirSIMPreviewFixtures.store(tab: .contacts, empty: true)
     return AirSIMPreviewFixtures.navigation(
         ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts))
     )

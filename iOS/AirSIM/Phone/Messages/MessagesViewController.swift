@@ -168,7 +168,7 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Messages · Conversations") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .messages).store
+    let store = AirSIMPreviewFixtures.store(tab: .messages)
     return AirSIMPreviewFixtures.navigation(
         MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
     )

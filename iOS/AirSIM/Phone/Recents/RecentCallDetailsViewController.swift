@@ -123,7 +123,7 @@ final class RecentCallDetailsViewController: UIViewController {
 
 #if DEBUG
 #Preview("Recent Call · Details Card") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .recents).store.scope(state: \.recents, action: \.recents)
+    let store = AirSIMPreviewFixtures.store(tab: .recents).scope(state: \.recents, action: \.recents)
     return RecentCallDetailsViewController(row: store.rows[0], store: store)
 }
 #endif

@@ -78,7 +78,7 @@ final class ContactDetailViewController: PhoneTableController {
 
 #if DEBUG
 #Preview("Contact · Details") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .contacts).store.scope(state: \.contacts, action: \.contacts)
+    let store = AirSIMPreviewFixtures.store(tab: .contacts).scope(state: \.contacts, action: \.contacts)
     return AirSIMPreviewFixtures.navigation(ContactDetailViewController(row: store.rows[0], store: store))
 }
 #endif

@@ -284,7 +284,7 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Messages · Composer") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .messages).store
+    let store = AirSIMPreviewFixtures.store(tab: .messages)
     store.send(.composeMessage(AirSIMPreviewFixtures.phone))
     let composer = store.scope(\.messages.composer, action: \.messages.composer.presented)!
     composer.send(.view(.bodyChanged("I will be there in five minutes.")))

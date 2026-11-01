@@ -25,7 +25,8 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
 #endif
         guard root == nil, let window else { return }
         let model = AirSIMUIModel.shared
-        let controller = RootViewController(model: model, settings: AirSIMUIModel.settings)
+        let store = AirSIMFeature.liveStore(model: model, settings: AirSIMUIModel.settings)
+        let controller = RootViewController(store: store)
         root = controller
         window.rootViewController = controller
         window.makeKeyAndVisible()
@@ -53,7 +54,11 @@ final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
     func sceneDidEnterBackground(_ scene: UIScene) {
         if !UIApplication.shared.connectedScenes.contains(where: { $0 !== scene && ($0.activationState == .foregroundActive || $0.activationState == .foregroundInactive) }) { if root != nil { AirSIMUIModel.shared.didEnterBackground() } }
     }
-    func sceneDidDisconnect(_ scene: UIScene) { root?.model.store.send(.stop); root = nil; window = nil }
+    func sceneDidDisconnect(_ scene: UIScene) {
+        root?.store.send(.stop)
+        root = nil
+        window = nil
+    }
     func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
         if let root { contexts.forEach { root.handleSystemCommunicationURL($0.url) } }
         else { pendingURLs.append(contentsOf: contexts.map(\.url)) }

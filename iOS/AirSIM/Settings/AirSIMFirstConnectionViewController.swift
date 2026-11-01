@@ -197,7 +197,7 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("First Connection · Setup") {
-    let store = AirSIMPreviewFixtures.presentation().store
+    let store = AirSIMPreviewFixtures.store()
     return AirSIMPreviewFixtures.navigation(
         AirSIMFirstConnectionViewController(store: store.scope(state: \.settings, action: \.settings))
     )

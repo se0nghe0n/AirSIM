@@ -2294,12 +2294,10 @@ struct TCARootNavigationTests {
         var dependency = client
         dependency.command = { command in
             if case .clearError = command { cleared.withValue { $0 += 1 } }
-            if case .forgetDevice = command { throw CocoaError(.featureUnsupported) }
         }
         var snapshot = AirSIMSnapshot(); snapshot.errorMessage = "Backend failure"; var state = AirSIMFeature.State(snapshot: snapshot); state.lastBackendError = "Backend failure"
         let store = TestStore(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = dependency }
-        await store.send(.command(.forgetDevice("agent")))
-        await store.receive(\.commandFailed) { $0.alert = .error(CocoaError(.featureUnsupported).localizedDescription) }
+        await store.send(.messages(.delegate(.unreportedSendFailure("Send failed")))) { $0.alert = .error("Send failed") }
         // Its OK carries no action; the root controller reports the close as a dismissal.
         await store.send(.alert(.dismiss)) { $0.alert = nil }
         await store.finish()
@@ -2329,6 +2327,46 @@ struct TCARootNavigationTests {
         await store.send(.openURL(url))
         await store.finish()
         #expect(performed.value == ["answer:call-A"])
+    }
+    @Test func `New SMS, an opened incoming call and an opened conversation reach the backend`() async {
+        let commands = LockIsolated<[String]>([])
+        var dependency = client
+        dependency.command = { command in
+            commands.withValue { $0.append(String(describing: command)) }
+        }
+        let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: {
+            $0.airSIM = dependency
+        }
+        await store.send(.remoteSMSReceived)
+        await store.finish()
+        await store.send(.openIncomingCall)
+        await store.finish()
+        await store.send(.openSMS("+12025550100")) {
+            $0.selectedTab = .messages
+        }
+        await store.receive(\.messages.openConversation) {
+            $0.messages.conversation = "+12025550100"
+        }
+        await store.finish()
+        #expect(commands.value == ["reloadLocalMessages", "presentCall", "reloadLocalMessages"])
+    }
+    @Test func `The live store starts from the saved tab, onboarding flag and preferences`() {
+        let defaults = UserDefaults.standard
+        let settings = AppSettings()
+        let store = AirSIMFeature.liveStore(model: AppModel(), settings: settings)
+        defer { store.send(.stop) }
+        let savedTab = PhoneTab(rawValue: defaults.string(forKey: "airsim.selected-tab") ?? "") ?? .dial
+        let relayURL = RelayConfiguration.effectiveURL(
+            stored: defaults.string(forKey: "airsim.push-relay-url"),
+            buildSetting: Bundle.main.object(forInfoDictionaryKey: "AirSIMPushRelayURL") as? String,
+            bundleID: Bundle.main.bundleIdentifier
+        )
+        #expect(store.selectedTab == savedTab)
+        #expect(store.firstConnectionComplete == defaults.bool(forKey: "airsim.first-connection-complete"))
+        #expect(store.settings.mode == ConnectionModePreference.selected())
+        #expect(store.settings.appearance == settings.appearance)
+        #expect(store.settings.relayURL == relayURL)
+        #expect(store.settings.liveActivityEnabled == LiveActivityVisibilityPreference.isEnabled())
     }
     @Test func `Service snapshot cannot overwrite newer dial input`() async {
         let store = TestStore(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
@@ -2630,7 +2668,7 @@ struct ActiveCallFeatureTests {
         let store = Store(initialState: state) { AirSIMFeature() } withDependencies: {
             $0.airSIM = client(commands: LockIsolated([]))
         }
-        let root = RootViewController(previewPresentation: AirSIMPresentation(store: store))
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root
         window.makeKeyAndVisible()
@@ -2705,28 +2743,55 @@ struct TCANavigationDismissalTests {
 
 @MainActor
 struct UIKitNavigationBridgeTests {
-    private func presentation() -> AirSIMPresentation {
+    private func rootStore() -> StoreOf<AirSIMFeature> {
         var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
         let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
         let store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
-        return AirSIMPresentation(store: store)
+        return store
+    }
+    @Test func `SMS and incoming call notifications reach the backend through the root`() async throws {
+        let commands = LockIsolated<[String]>([])
+        var state = AirSIMFeature.State()
+        state.firstConnectionComplete = true
+        let client = AirSIMClient(
+            snapshots: { AsyncStream { $0.finish() } },
+            command: { command in commands.withValue { $0.append(String(describing: command)) } },
+            sendSMS: { _, _ in .init(success: false) },
+            selfTest: { AsyncStream { $0.finish() } },
+            pairing: { AsyncStream { $0.finish() } },
+            pair: { _, _, _ in "" }
+        )
+        let store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        let root = RootViewController(previewStore: store)
+        root.loadViewIfNeeded()
+        let center = NotificationCenter.default
+        center.post(name: .airsimRemoteSMSReceived, object: nil)
+        #expect(try await eventually { commands.value == ["reloadLocalMessages"] ? true : nil } == true)
+        center.post(name: .airsimOpenIncomingCall, object: nil)
+        #expect(try await eventually { commands.value.last == "presentCall" ? true : nil } == true)
+        center.post(name: .airsimOpenSMSConversation, object: nil, userInfo: ["sender": "+12025550100"])
+        #expect(try await eventually { store.messages.conversation == "+12025550100" ? true : nil } == true)
+        #expect(try await eventually { commands.value.count == 3 ? true : nil } == true)
+        #expect(store.selectedTab == .messages)
+        #expect(commands.value == ["reloadLocalMessages", "presentCall", "reloadLocalMessages"])
+        withExtendedLifetime(root) {}
     }
     @Test func `Native Back reconciles Store before another render can reopen thread`() {
-        let model = presentation()
-        let controller = MessagesViewController(store: model.store.scope(state: \.messages, action: \.messages))
+        let store = rootStore()
+        let controller = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
         let nav = UINavigationController(rootViewController: controller)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = nav; window.makeKeyAndVisible()
         controller.openConversation("+12025550100")
         #expect(nav.topViewController is MessageThreadViewController)
         nav.popViewController(animated: false)
-        #expect(model.store.messages.conversation == nil)
+        #expect(store.messages.conversation == nil)
         controller.render()
         #expect(nav.topViewController === controller)
         window.isHidden = true
     }
     @Test func `Composer can present while conversation controller is visible`() async throws {
-        let model = presentation()
-        let root = RootViewController(previewPresentation: model)
+        let store = rootStore()
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = root; window.makeKeyAndVisible()
         defer { root.dismiss(animated: false); window.isHidden = true }
         root.openSMSConversation("+12025550100")
@@ -2735,7 +2800,7 @@ struct UIKitNavigationBridgeTests {
         withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage("+12025550101") }
         let composer = try #require(await presentedSheet(root)?.topViewController as? MessageComposerViewController)
         #expect(composer.store.recipient == "+12025550101" && composer.recipient.text == "+12025550101")
-        #expect(model.store.messages.conversation == "+12025550100" && tab.topViewController is MessageThreadViewController)
+        #expect(store.messages.conversation == "+12025550100" && tab.topViewController is MessageThreadViewController)
     }
 }
 
@@ -2780,6 +2845,23 @@ struct SettingsFeatureTests {
             pairing: { AsyncStream { $0.finish() } },
             pair: { _, _, _ in "" }
         )
+    }
+
+    @Test func `Settings starts from the saved preferences in the snapshot`() {
+        var snapshot = AirSIMSnapshot()
+        snapshot.preferenceMode = .cloud
+        snapshot.preferenceAppearance = .dark
+        snapshot.preferenceRelayURL = "https://relay.example"
+        snapshot.preferenceLiveActivity = false
+        var state = SettingsFeature.State(snapshot: SharedReader(value: snapshot))
+        #expect(state.mode == .cloud)
+        #expect(state.appearance == .dark)
+        #expect(state.relayURL == "https://relay.example")
+        #expect(!state.liveActivityEnabled)
+        let seeded = state
+        // The first snapshot carries the same preferences and must not count as a change from another scene.
+        state.reconcile(with: snapshot)
+        #expect(state == seeded)
     }
 
     private func onlineSnapshot() throws -> AirSIMSnapshot {
@@ -2846,7 +2928,7 @@ struct SettingsFeatureTests {
     }
 
     @Test func `Settings shows connection values, device rows and self-test tones`() throws {
-        let store = AirSIMPreviewFixtures.presentation(tab: .settings).store
+        let store = AirSIMPreviewFixtures.store(tab: .settings)
         var report = AirSIMPreviewFixtures.selfTestReport
         report.steps[0].state = .failed
         report.steps[1].state = .running
@@ -2961,13 +3043,13 @@ struct SettingsFeatureTests {
 @MainActor
 struct UIKitConversationReplacementTests {
     @Test func `Finishing Back for A cannot clear a newly requested B`() {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
-        let list = MessagesViewController(store: model.store.scope(state: \.messages, action: \.messages))
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let list = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
         let nav = UINavigationController(rootViewController: list)
         list.loadViewIfNeeded(); list.openConversation("A")
-        model.store.send(.messages(.openConversation("B")))
+        store.send(.messages(.openConversation("B")))
         list.navigationController(nav, didShow: list, animated: true)
-        #expect(model.store.messages.conversation == "B")
+        #expect(store.messages.conversation == "B")
         list.showConversationIfNeeded("B")
         #expect((nav.topViewController as? MessageThreadViewController)?.sender == "B")
     }
@@ -2975,13 +3057,13 @@ struct UIKitConversationReplacementTests {
     @Test func `Replacing conversation A with B does not clear B when A is removed`() {
         var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
         let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in .init(success: false) }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
-        let model = AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client })
-        let controller = MessagesViewController(store: model.store.scope(state: \.messages, action: \.messages))
+        let store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
+        let controller = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
         let nav = UINavigationController(rootViewController: controller)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844)); window.rootViewController = nav; window.makeKeyAndVisible()
         controller.openConversation("A")
         controller.openConversation("B")
-        #expect(model.store.messages.conversation == "B")
+        #expect(store.messages.conversation == "B")
         #expect((nav.topViewController as? MessageThreadViewController)?.sender == "B")
         window.isHidden = true
     }
@@ -3016,8 +3098,8 @@ private final class SpeculativeNavigationController: UINavigationController {
 @Suite(.serialized)
 struct UIKitAdversarialRegressionTests {
     @Test func `Reapplying a conversation preserves unrelated presented sheets`() throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible()
         defer { root.dismiss(animated: false); window.isHidden = true }
@@ -3035,16 +3117,16 @@ struct UIKitAdversarialRegressionTests {
     }
 
     @Test func `Call teardown leaves an unrelated root sheet intact`() throws {
-        let model = AirSIMPreviewFixtures.presentation(callState: "active")
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(callState: "active")
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         let callWindow = try #require(root.callWindow)
         #expect(root.activeCallController?.view.window === callWindow)
         let sheet = UIViewController(); root.present(sheet, animated: false)
-        var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
-        model.store.send(.snapshot(ended)); root.render()
+        var ended = store.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
+        store.send(.snapshot(ended)); root.render()
         #expect(root.callWindow == nil && root.activeCallController == nil)
         #expect(callWindow.isHidden)
         #expect(root.presentedViewController === sheet)
@@ -3052,15 +3134,15 @@ struct UIKitAdversarialRegressionTests {
     }
 
     @Test func `Incoming call shows above a root sheet without dismissing it`() throws {
-        let model = AirSIMPreviewFixtures.presentation()
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store()
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         let sheet = UINavigationController(rootViewController: UIViewController()); root.present(sheet, animated: false)
         #expect(root.callWindow == nil)
-        var incoming = model.snapshot; incoming.inAppPresentedCall = AirSIMPreviewFixtures.call("incoming")
-        model.store.send(.snapshot(incoming)); root.render()
+        var incoming = store.snapshot; incoming.inAppPresentedCall = AirSIMPreviewFixtures.call("incoming")
+        store.send(.snapshot(incoming)); root.render()
         // VoWLAN calls have no CallKit screen, so Accept and Decline must sit above every root sheet.
         let callWindow = try #require(root.callWindow)
         let call = try #require(root.activeCallController)
@@ -3072,10 +3154,10 @@ struct UIKitAdversarialRegressionTests {
         // The call view's modality only hides siblings in its own window; VoiceOver must not reach the covered sheet.
         #expect(window.accessibilityElementsHidden && !callWindow.accessibilityElementsHidden)
         var answered = incoming; answered.inAppPresentedCall = AirSIMPreviewFixtures.call("active")
-        model.store.send(.snapshot(answered)); root.render()
+        store.send(.snapshot(answered)); root.render()
         #expect(root.callWindow === callWindow && root.activeCallController === call && call.call?.state == "active")
         var ended = answered; ended.inAppPresentedCall = nil
-        model.store.send(.snapshot(ended)); root.render()
+        store.send(.snapshot(ended)); root.render()
         #expect(root.callWindow == nil && callWindow.isHidden && !window.accessibilityElementsHidden)
         #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed)
     }
@@ -3091,7 +3173,7 @@ struct UIKitAdversarialRegressionTests {
             pair: { _, _, _ in "" }
         )
         let store = Store(initialState: AirSIMFeature.State()) { AirSIMFeature() } withDependencies: { $0.airSIM = client }
-        let root = RootViewController(previewPresentation: AirSIMPresentation(store: store))
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root
         window.makeKeyAndVisible()
@@ -3114,8 +3196,8 @@ struct UIKitAdversarialRegressionTests {
     }
 
     @Test func `Incoming call shows above full-screen onboarding`() async throws {
-        let model = AirSIMPreviewFixtures.presentation()
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store()
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
@@ -3123,79 +3205,79 @@ struct UIKitAdversarialRegressionTests {
         root.present(onboarding, animated: false)
         // A completed full-screen presentation takes root's view out of the window; only the onboarding is in it.
         #expect(try await eventually { root.viewIfLoaded?.window == nil && onboarding.viewIfLoaded?.window === window ? true : nil } == true)
-        var incoming = model.snapshot; incoming.inAppPresentedCall = AirSIMPreviewFixtures.call("incoming")
-        model.store.send(.snapshot(incoming)); root.render()
+        var incoming = store.snapshot; incoming.inAppPresentedCall = AirSIMPreviewFixtures.call("incoming")
+        store.send(.snapshot(incoming)); root.render()
         let callWindow = try #require(root.callWindow)
         #expect(!callWindow.isHidden && callWindow.windowLevel > window.windowLevel && callWindow.windowScene === window.windowScene)
         #expect(root.activeCallController?.view.window === callWindow && window.accessibilityElementsHidden)
         #expect(root.presentedViewController === onboarding && !onboarding.isBeingDismissed)
         var ended = incoming; ended.inAppPresentedCall = nil
-        model.store.send(.snapshot(ended)); root.render()
+        store.send(.snapshot(ended)); root.render()
         #expect(root.callWindow == nil && callWindow.isHidden && !window.accessibilityElementsHidden)
         #expect(root.presentedViewController === onboarding && !onboarding.isBeingDismissed)
     }
 
     @Test func `Error during a call is shown above the call and moves to root when it ends`() throws {
-        let model = AirSIMPreviewFixtures.presentation(callState: "active")
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(callState: "active")
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         let callWindow = try #require(root.callWindow)
-        model.store.send(.commandFailed("Unable to reach the module")); root.render()
+        store.send(.messages(.delegate(.unreportedSendFailure("Unable to reach the module")))); root.render()
         #expect(callWindow.rootViewController?.presentedViewController is UIAlertController)
         #expect(root.presentedViewController == nil)
-        var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
-        model.store.send(.snapshot(ended)); root.render()
+        var ended = store.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
+        store.send(.snapshot(ended)); root.render()
         #expect(root.callWindow == nil)
         #expect((root.presentedViewController as? UIAlertController)?.message == "Unable to reach the module")
     }
 
     @Test func `Call keypad survives thread renders and closes with its call`() async throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages, callState: "active")
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(tab: .messages, callState: "active")
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible()
         defer { root.dismiss(animated: false); window.isHidden = true }
         root.openSMSConversation(AirSIMPreviewFixtures.phone); root.render()
         let callWindow = try #require(root.callWindow)
-        let keypad = try #require(await presentKeypad(model, in: callWindow))
+        let keypad = try #require(await presentKeypad(store, in: callWindow))
         #expect(keypad.topViewController is DTMFKeypadViewController)
         #expect(keypad.sheetPresentationController?.prefersGrabberVisible == true && keypad.topViewController?.navigationItem.rightBarButtonItem != nil)
         #expect(root.presentedViewController == nil)
         root.render()
         try await Task.sleep(for: .milliseconds(50))
-        #expect(!keypad.isBeingDismissed && keypad.presentingViewController != nil && model.store.activeCall.keypad != nil)
-        var ended = model.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
-        model.store.send(.snapshot(ended)); root.render()
-        #expect(model.store.activeCall.keypad == nil)
+        #expect(!keypad.isBeingDismissed && keypad.presentingViewController != nil && store.activeCall.keypad != nil)
+        var ended = store.snapshot; ended.inAppPresentedCall = nil; ended.callLifecycleSnapshot = .idle
+        store.send(.snapshot(ended)); root.render()
+        #expect(store.activeCall.keypad == nil)
         #expect(try await eventually { keypad.presentingViewController == nil ? true : nil } == true)
     }
 
     @Test func `Closing the call keypad clears its state so the next one starts empty`() async throws {
-        let model = AirSIMPreviewFixtures.presentation(callState: "active")
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(callState: "active")
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         let callWindow = try #require(root.callWindow)
-        let keypad = try #require(await presentKeypad(model, in: callWindow))
+        let keypad = try #require(await presentKeypad(store, in: callWindow))
         let pad = try #require(keypad.topViewController as? DTMFKeypadViewController)
         pad.store.send(.view(.digitTapped("7")))
-        #expect(model.store.activeCall.keypad?.digits == "7")
+        #expect(store.activeCall.keypad?.digits == "7")
         // Done and swipe-down are UIKit dismissals; the presentation binding writes the closed state back.
         keypad.dismiss(animated: false)
-        #expect(try await eventually { model.store.activeCall.keypad == nil ? true : nil } == true)
+        #expect(try await eventually { store.activeCall.keypad == nil ? true : nil } == true)
         // present(item:) applies the closed state on a later main-actor turn; a reopen before then reuses the
         // cached child store and is skipped. A person cannot tap within that turn.
         try await Task.sleep(for: .milliseconds(50))
-        let reopened = try #require(await presentKeypad(model, in: callWindow))
-        #expect(reopened !== keypad && model.store.activeCall.keypad?.digits == "")
+        let reopened = try #require(await presentKeypad(store, in: callWindow))
+        #expect(reopened !== keypad && store.activeCall.keypad?.digits == "")
     }
 
     @Test func `Composing while root shows another sheet replaces it with the composer`() async throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .contacts)
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(tab: .contacts)
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
@@ -3204,19 +3286,19 @@ struct UIKitAdversarialRegressionTests {
         let sheet = try #require(await presentedSheet(root, other: other))
         let composer = try #require(sheet.topViewController as? MessageComposerViewController)
         #expect(other.presentingViewController == nil)
-        #expect(model.store.selectedTab == .messages && composer.store.recipient == AirSIMPreviewFixtures.phone)
+        #expect(store.selectedTab == .messages && composer.store.recipient == AirSIMPreviewFixtures.phone)
         #expect(sheet.sheetPresentationController?.prefersGrabberVisible == true && composer.navigationItem.leftBarButtonItem?.title == "Cancel")
         // Swipe-down is a UIKit dismissal; the presentation binding writes the closed state back.
         sheet.dismiss(animated: false)
-        #expect(try await eventually { model.store.messages.composer == nil ? true : nil } == true)
+        #expect(try await eventually { store.messages.composer == nil ? true : nil } == true)
     }
 
     @Test func `Failed composer send alerts above the open composer and a later success closes it`() async throws {
         let result = LockIsolated(AirSIMMessageResult(success: false, error: "Cloud mode is disabled"))
         var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
         let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in result.value }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
-        let model = AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client; $0.uuid = .incrementing })
-        let root = RootViewController(previewPresentation: model)
+        let store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client; $0.uuid = .incrementing }
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
@@ -3237,36 +3319,36 @@ struct UIKitAdversarialRegressionTests {
         result.setValue(.init(success: true))
         composer.store.send(.view(.sendButtonTapped))
         #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
-        #expect(model.store.messages.composer == nil)
+        #expect(store.messages.composer == nil)
     }
 
     @Test func `Backend error during an open composer alerts above it and outlives the composer`() async throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage(AirSIMPreviewFixtures.phone) }
         let sheet = try #require(await presentedSheet(root))
-        model.store.send(.messages(.composer(.presented(.view(.bodyChanged("Keep me"))))))
+        store.send(.messages(.composer(.presented(.view(.bodyChanged("Keep me"))))))
         let error = "Message sent, but could not be saved locally. Refresh later to confirm."
-        var failed = model.snapshot; failed.errorMessage = error
-        model.store.send(.snapshot(failed)); root.render()
+        var failed = store.snapshot; failed.errorMessage = error
+        store.send(.snapshot(failed)); root.render()
         let alert = try #require(await eventually { () -> UIAlertController? in
             guard let alert = sheet.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert
         })
         #expect(alert.title == "Error" && alert.message == error && alert.actions.map(\.title) == ["OK"])
-        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed && model.store.messages.composer?.body == "Keep me")
+        #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed && store.messages.composer?.body == "Keep me")
         // Closing the composer takes the alert above it along; the unacknowledged alert returns above the tabs.
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.composer(.dismiss))) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.messages(.composer(.dismiss))) }
         let returned = try #require(await eventually { () -> UIAlertController? in
             guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert
         })
-        #expect(returned.message == error && model.store.messages.composer == nil && model.store.alert != nil)
+        #expect(returned.message == error && store.messages.composer == nil && store.alert != nil)
         // OK clears the alert in state, and state closes it.
-        model.store.send(.alert(.presented(.clearBackendError(error)))); root.render()
+        store.send(.alert(.presented(.clearBackendError(error)))); root.render()
         #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
         root.render()
         #expect(root.presentedViewController == nil)
@@ -3276,8 +3358,8 @@ struct UIKitAdversarialRegressionTests {
         let release = AsyncStream<Void>.makeStream()
         var state = AirSIMFeature.State(); state.firstConnectionComplete = true; state.selectedTab = .messages
         let client = AirSIMClient(snapshots: { AsyncStream { $0.finish() } }, command: { _ in }, sendSMS: { _, _ in for await _ in release.stream { break }; return .init(success: false, error: "Offline") }, selfTest: { AsyncStream { $0.finish() } }, pairing: { AsyncStream { $0.finish() } }, pair: { _, _, _ in "" })
-        let model = AirSIMPresentation(store: Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client; $0.uuid = .incrementing })
-        let root = RootViewController(previewPresentation: model)
+        let store = Store(initialState: state) { AirSIMFeature() } withDependencies: { $0.airSIM = client; $0.uuid = .incrementing }
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
@@ -3287,35 +3369,35 @@ struct UIKitAdversarialRegressionTests {
             guard let thread = (root.tabs.selectedViewController as? UINavigationController)?.topViewController as? MessageThreadViewController, thread.viewIfLoaded?.window != nil else { return nil }
             return thread
         })
-        model.store.send(.messages(.view(.replyChanged("On my way"))))
-        model.store.send(.messages(.view(.sendTapped(to: "123"))))
+        store.send(.messages(.view(.replyChanged("On my way"))))
+        store.send(.messages(.view(.sendTapped(to: "123"))))
         // The reply is still sending when the user opens a sheet on another tab.
         root.select(.dial)
         let sheet = UINavigationController(rootViewController: UIViewController()); root.present(sheet, animated: false)
-        #expect(thread.viewIfLoaded?.window == nil && model.store.messages.conversation == "123")
+        #expect(thread.viewIfLoaded?.window == nil && store.messages.conversation == "123")
         release.continuation.yield()
         let alert = try #require(await eventually { () -> UIAlertController? in
             guard let alert = sheet.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert
         })
         #expect(alert.message == "Offline" && root.presentedViewController === sheet && !sheet.isBeingDismissed)
-        #expect(model.store.messages.reply == "On my way" && model.store.selectedTab == .dial)
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.alert(.presented(.ok)))) }
+        #expect(store.messages.reply == "On my way" && store.selectedTab == .dial)
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.messages(.alert(.presented(.ok)))) }
         #expect(try await eventually { sheet.presentedViewController == nil ? true : nil } == true)
         #expect(root.presentedViewController === sheet && !sheet.isBeingDismissed)
     }
 
     @Test func `Screen alert closed from beneath clears its state so the next error shows`() async throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .recents)
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(tab: .recents)
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
         let recents = try #require(root.tabs.selectedViewController as? UINavigationController)
-        let recordings = CallRecordingsViewController(store: model.store.scope(state: \.recents.recordings, action: \.recents.recordings))
+        let recordings = CallRecordingsViewController(store: store.scope(state: \.recents.recordings, action: \.recents.recordings))
         recents.pushViewController(recordings, animated: false); window.layoutIfNeeded()
         #expect(recordings.viewIfLoaded?.window === window)
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recents(.recordings(.failed("First failure")))) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.recents(.recordings(.failed("First failure")))) }
         let first = try #require(await eventually { () -> UIAlertController? in
             guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert
@@ -3324,10 +3406,10 @@ struct UIKitAdversarialRegressionTests {
         // Opening the composer, e.g. from an im: link, dismisses whatever root presents, this alert included.
         withUITransaction(\.uiKit.disablesAnimations, true) { root.composeMessage(AirSIMPreviewFixtures.phone) }
         _ = try #require(await presentedSheet(root))
-        #expect(try await eventually { model.store.recents.recordings.alert == nil ? true : nil } == true)
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.messages(.composer(.dismiss))) }
+        #expect(try await eventually { store.recents.recordings.alert == nil ? true : nil } == true)
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.messages(.composer(.dismiss))) }
         #expect(try await eventually { root.presentedViewController == nil ? true : nil } == true)
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.recents(.recordings(.failed("Second failure")))) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.recents(.recordings(.failed("Second failure")))) }
         let second = try #require(await eventually { () -> UIAlertController? in
             guard let alert = root.presentedViewController as? UIAlertController, !alert.isBeingPresented else { return nil }
             return alert
@@ -3335,9 +3417,9 @@ struct UIKitAdversarialRegressionTests {
         #expect(second !== first && second.message == "Second failure")
     }
 
-    private func presentKeypad(_ model: AirSIMPresentation, in callWindow: UIWindow) async throws -> UINavigationController? {
+    private func presentKeypad(_ store: StoreOf<AirSIMFeature>, in callWindow: UIWindow) async throws -> UINavigationController? {
         let previous = callWindow.rootViewController?.presentedViewController
-        withUITransaction(\.uiKit.disablesAnimations, true) { _ = model.store.send(.activeCall(.view(.keypadButtonTapped))) }
+        withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.activeCall(.view(.keypadButtonTapped))) }
         return try await eventually {
             guard let nav = callWindow.rootViewController?.presentedViewController as? UINavigationController, nav !== previous, !nav.isBeingPresented else { return nil }
             return nav
@@ -3345,14 +3427,14 @@ struct UIKitAdversarialRegressionTests {
     }
 
     @Test func `Speculative Back appearance does not discard a live reply destination`() async {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
-        let list = MessagesViewController(store: model.store.scope(state: \.messages, action: \.messages))
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let list = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
         let nav = SpeculativeNavigationController(rootViewController: list)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = nav; window.makeKeyAndVisible()
         defer { window.isHidden = true }
         list.openConversation("123")
-        model.store.send(.messages(.view(.replyChanged("Reply after cancelled Back"))))
+        store.send(.messages(.view(.replyChanged("Reply after cancelled Back"))))
         // During an interactive pop UIKit exposes the proposed stack before didShow.
         let departingThread = nav.topViewController
         nav.pendingStack = [list]; list.viewWillAppear(true)
@@ -3360,21 +3442,21 @@ struct UIKitAdversarialRegressionTests {
         list.showConversationIfNeeded("123")
         nav.pendingStack = nil
         #expect(nav.topViewController === departingThread)
-        #expect(model.store.messages.conversation == "123")
+        #expect(store.messages.conversation == "123")
         #expect(nav.topViewController is MessageThreadViewController)
-        await model.store.send(.messages(.view(.sendTapped(to: "123")))).finish()
-        #expect(model.store.messages.reply.isEmpty)
+        await store.send(.messages(.view(.sendTapped(to: "123")))).finish()
+        #expect(store.messages.reply.isEmpty)
     }
 
     @Test func `Contact picker search cannot filter the Contacts tab`() throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .contacts)
-        model.store.send(.contacts(.view(.searchChanged("Mina"))))
-        let tab = ContactsViewController(store: model.store.scope(state: \.contacts, action: \.contacts))
+        let store = AirSIMPreviewFixtures.store(tab: .contacts)
+        store.send(.contacts(.view(.searchChanged("Mina"))))
+        let tab = ContactsViewController(store: store.scope(state: \.contacts, action: \.contacts))
         tab.loadViewIfNeeded(); tab.render()
-        model.store.send(.composeMessage(AirSIMPreviewFixtures.phone))
-        model.store.send(.messages(.composer(.presented(.view(.chooseContactTapped)))))
+        store.send(.composeMessage(AirSIMPreviewFixtures.phone))
+        store.send(.messages(.composer(.presented(.view(.chooseContactTapped)))))
         let composer: StoreOf<ComposerFeature> = try #require(
-            model.store.scope(\.messages.composer, action: \.messages.composer.presented)
+            store.scope(\.messages.composer, action: \.messages.composer.presented)
         )
         let pickerStore: StoreOf<ContactsFeature> = try #require(composer.scope(\.contactPicker, action: \.contactPicker.presented))
         let picker = ContactsViewController(store: pickerStore)
@@ -3383,15 +3465,15 @@ struct UIKitAdversarialRegressionTests {
         picker.navigationItem.searchController?.searchBar.text = "Alex"
         picker.updateSearchResults(for: picker.navigationItem.searchController!)
         picker.render(); tab.render()
-        #expect(model.store.contacts.search == "Mina")
+        #expect(store.contacts.search == "Mina")
         #expect(tab.navigationItem.searchController?.searchBar.text == "Mina")
         #expect(tab.sections.first?.rows.map(\.title) == ["Mina Kim"])
         #expect(picker.sections.first?.rows.map(\.title) == ["Alex Rivera"])
     }
 
     @Test func `The composer's contact picker is a phone sheet whose choice addresses the composer and closes it`() async throws {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
-        let root = RootViewController(previewPresentation: model)
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let root = RootViewController(previewStore: store)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = root; window.makeKeyAndVisible(); root.render()
         defer { root.dismiss(animated: false); window.isHidden = true }
@@ -3411,16 +3493,16 @@ struct UIKitAdversarialRegressionTests {
     }
 
     @Test func `Multiline reply grows and contracts without replacing its text view`() {
-        let model = AirSIMPreviewFixtures.presentation(tab: .messages)
-        let thread = MessageThreadViewController(store: model.store.scope(state: \.messages, action: \.messages), sender: "123")
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let thread = MessageThreadViewController(store: store.scope(state: \.messages, action: \.messages), sender: "123")
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = UINavigationController(rootViewController: thread); window.makeKeyAndVisible()
         defer { window.isHidden = true }
         thread.loadViewIfNeeded(); thread.view.layoutIfNeeded()
-        model.store.send(.messages(.view(.replyChanged("First line\nSecond line\nThird line"))))
+        store.send(.messages(.view(.replyChanged("First line\nSecond line\nThird line"))))
         thread.render(); thread.view.layoutIfNeeded()
         #expect(thread.reply.bounds.height > 60)
-        model.store.send(.messages(.view(.replyChanged(""))))
+        store.send(.messages(.view(.replyChanged(""))))
         thread.render(); thread.view.layoutIfNeeded()
         #expect(thread.reply.bounds.height == 32)
     }

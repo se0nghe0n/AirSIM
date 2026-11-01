@@ -57,11 +57,11 @@ struct AirSIMFeature {
         case stop
         case snapshot(AirSIMSnapshot)
         case selectTab(PhoneTab)
-        case command(AirSIMCommand)
-        case commandFailed(String)
         case openURL(URL)
         case openSMS(String)
         case composeMessage(String)
+        case remoteSMSReceived
+        case openIncomingCall
         case dial(DialFeature.Action)
         case messages(MessagesFeature.Action)
         case settings(SettingsFeature.Action)
@@ -106,38 +106,33 @@ struct AirSIMFeature {
 
             case .selectTab(let tab):
                 state.selectedTab = tab
-                return .run { [client] _ in try await client.command(.persistTab(tab)) }
+                return command(.persistTab(tab))
 
-            case .command(let command):
-                return perform(command)
-
-            case .commandFailed(let error):
-                state.alert = .error(error)
-                return .none
+            case .openURL(let url):
+                return open(url, state: &state)
 
             case .openSMS(let sender):
                 state.selectedTab = .messages
                 return .merge(
                     .send(.messages(.openConversation(sender))),
-                    .send(.command(.reloadLocalMessages))
+                    command(.reloadLocalMessages)
                 )
 
-            case .composeMessage(let recipient):
-                state.composeMessage(to: recipient)
-                return perform(.persistTab(.messages))
+            case .remoteSMSReceived:
+                return command(.reloadLocalMessages)
 
-            case .openURL(let url):
-                return open(url, state: &state)
+            case .openIncomingCall:
+                return command(.presentCall)
 
             case .recents(.delegate(.call(let number))),
                  .contacts(.delegate(.call(let number))):
                 return dial(number, state: &state)
 
-            case .recents(.delegate(.message(let recipient))),
+            case .composeMessage(let recipient),
+                 .recents(.delegate(.message(let recipient))),
                  .contacts(.delegate(.message(let recipient))),
                  .messages(.delegate(.compose(let recipient))):
-                state.composeMessage(to: recipient)
-                return perform(.persistTab(.messages))
+                return compose(to: recipient, state: &state)
 
             case .messages(.delegate(.unreportedSendFailure(let error))):
                 state.alert = .error(error)
@@ -145,10 +140,10 @@ struct AirSIMFeature {
 
             case .settings(.delegate(.onboardingCompleted)):
                 state.finishOnboarding()
-                return perform(.completeOnboarding)
+                return command(.completeOnboarding)
 
             case .alert(.presented(.clearBackendError(let error))):
-                return perform(.clearError(error))
+                return command(.clearError(error))
 
             case .dial, .messages, .settings, .recents, .contacts, .activeCall, .alert:
                 return .none
@@ -189,41 +184,41 @@ struct AirSIMFeature {
         state.dial.edit(number)
         state.selectedTab = .dial
         return .merge(
-            perform(.persistTab(.dial)),
-            perform(.dialNumber(number))
+            command(.persistTab(.dial)),
+            command(.dialNumber(number))
         )
+    }
+
+    /// A message from any tab or link: show Messages, persist that tab, and compose once onboarding allows it.
+    private func compose(to recipient: String, state: inout State) -> Effect<Action> {
+        state.composeMessage(to: recipient)
+        return command(.persistTab(.messages))
     }
 
     private func open(_ url: URL, state: inout State) -> Effect<Action> {
         switch SystemCommunicationURL.destination(for: url) {
         case .message(let recipient):
-            state.composeMessage(to: recipient)
-            return perform(.persistTab(.messages))
+            return compose(to: recipient, state: &state)
 
         case .call(let number):
+            // Unlike a call back from Recents or Contacts, a tel: link does not persist the Dial tab.
             state.selectedTab = .dial
             state.dial.number = number
             state.dial.hasDraft = true
-            return .run { [client] _ in try await client.command(.dialNumber(number)) }
+            return command(.dialNumber(number))
 
         case let .liveActivity(action, callID):
             // The backend gate runs immediately before execution. The UI
             // projection can lag cold-launch adoption or a new call.
-            return perform(.liveActivityAction(action, callID: callID))
+            return command(.liveActivityAction(action, callID: callID))
 
         case nil:
             return .none
         }
     }
 
-    private func perform(_ command: AirSIMCommand) -> Effect<Action> {
-        .run { [client] send in
-            do {
-                try await client.command(command)
-            } catch {
-                await send(.commandFailed(error.localizedDescription))
-            }
-        }
+    private func command(_ command: AirSIMCommand) -> Effect<Action> {
+        .run { [client] _ in try await client.command(command) }
     }
 }
 

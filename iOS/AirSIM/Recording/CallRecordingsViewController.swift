@@ -182,14 +182,14 @@ final class CallRecordingsViewController: PhoneTableController {
 
 #if DEBUG
 #Preview("Recordings · Saved Calls") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .recents).store
+    let store = AirSIMPreviewFixtures.store(tab: .recents)
     return AirSIMPreviewFixtures.navigation(
         CallRecordingsViewController(store: store.scope(state: \.recents.recordings, action: \.recents.recordings))
     )
 }
 
 #Preview("Recordings · Empty") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .recents, empty: true).store
+    let store = AirSIMPreviewFixtures.store(tab: .recents, empty: true)
     return AirSIMPreviewFixtures.navigation(
         CallRecordingsViewController(store: store.scope(state: \.recents.recordings, action: \.recents.recordings))
     )

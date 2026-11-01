@@ -94,7 +94,7 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Call · DTMF Keypad") {
-    let store = AirSIMPreviewFixtures.presentation(callState: "active").store
+    let store = AirSIMPreviewFixtures.store(callState: "active")
     store.send(.activeCall(.view(.keypadButtonTapped)))
     let keypad = store.scope(state: \.activeCall.keypad, action: \.activeCall.keypad.presented)!
     return AirSIMPreviewFixtures.navigation(DTMFKeypadViewController(store: keypad))

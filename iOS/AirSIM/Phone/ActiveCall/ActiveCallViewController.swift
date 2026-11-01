@@ -448,14 +448,14 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Call · Incoming") {
-    let store = AirSIMPreviewFixtures.presentation(callState: "incoming").store
+    let store = AirSIMPreviewFixtures.store(callState: "incoming")
     let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
     controller.isPresentationPreview = true
     return controller
 }
 
 #Preview("Call · Connected") {
-    let store = AirSIMPreviewFixtures.presentation(callState: "active").store
+    let store = AirSIMPreviewFixtures.store(callState: "active")
     let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
     controller.isPresentationPreview = true
     return controller

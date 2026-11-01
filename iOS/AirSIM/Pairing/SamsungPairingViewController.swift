@@ -182,7 +182,7 @@ final class SamsungPairingViewController: PhoneTableController {
 
 #if DEBUG
 #Preview("Pair Android Phone · Discovered") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .settings).store
+    let store = AirSIMPreviewFixtures.store(tab: .settings)
     let pairing = store.scope(state: \.settings.pairing, action: \.settings.pairing)
     let controller = SamsungPairingViewController(store: pairing)
     controller.loadViewIfNeeded()
@@ -191,7 +191,7 @@ final class SamsungPairingViewController: PhoneTableController {
 }
 
 #Preview("Pair Android Phone · Searching") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .settings, empty: true).store
+    let store = AirSIMPreviewFixtures.store(tab: .settings, empty: true)
     return AirSIMPreviewFixtures.navigation(
         SamsungPairingViewController(store: store.scope(state: \.settings.pairing, action: \.settings.pairing))
     )

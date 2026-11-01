@@ -423,7 +423,7 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Dial · Connected Agent") {
-    let store = AirSIMPreviewFixtures.presentation().store
+    let store = AirSIMPreviewFixtures.store()
     return AirSIMPreviewFixtures.navigation(
         DialPadViewController(store: store.scope(state: \.dial, action: \.dial))
     )

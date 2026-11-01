@@ -186,7 +186,7 @@ private enum Metrics {
 
 #if DEBUG
 #Preview("Recents · Calls") {
-    let store = AirSIMPreviewFixtures.presentation(tab: .recents).store
+    let store = AirSIMPreviewFixtures.store(tab: .recents)
     return AirSIMPreviewFixtures.navigation(
         RecentsViewController(store: store.scope(state: \.recents, action: \.recents))
     )

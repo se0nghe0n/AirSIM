@@ -10,7 +10,6 @@
 		A1D000000000000000000001 /* AppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000001 /* AppNavigation.swift */; };
 		A1D000000000000000000002 /* AirSIMSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000002 /* AirSIMSnapshot.swift */; };
 		A1D000000000000000000003 /* AirSIMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000003 /* AirSIMClient.swift */; };
-		A1D000000000000000000004 /* AirSIMPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000004 /* AirSIMPresentation.swift */; };
 		A1D000000000000000000005 /* ObservingViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000005 /* ObservingViewController.swift */; };
 		A1D000000000000000000006 /* PhoneTableController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000006 /* PhoneTableController.swift */; };
 		A1D000000000000000000007 /* PhoneComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000007 /* PhoneComponents.swift */; };
@@ -108,6 +107,7 @@
 		A1F00000000000000000000A /* ActiveCallFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000A /* ActiveCallFeature.swift */; };
 		A1F00000000000000000000B /* ActiveCallContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000B /* ActiveCallContent.swift */; };
 		A1F00000000000000000000C /* SettingsContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000C /* SettingsContent.swift */; };
+		A1F00000000000000000000D /* AirSIMFeature+Live.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000D /* AirSIMFeature+Live.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -163,7 +163,6 @@
 		B1D000000000000000000001 /* AppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigation.swift; sourceTree = "<group>"; };
 		B1D000000000000000000002 /* AirSIMSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMSnapshot.swift; sourceTree = "<group>"; };
 		B1D000000000000000000003 /* AirSIMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMClient.swift; sourceTree = "<group>"; };
-		B1D000000000000000000004 /* AirSIMPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMPresentation.swift; sourceTree = "<group>"; };
 		B1D000000000000000000005 /* ObservingViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservingViewController.swift; sourceTree = "<group>"; };
 		B1D000000000000000000006 /* PhoneTableController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTableController.swift; sourceTree = "<group>"; };
 		B1D000000000000000000007 /* PhoneComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneComponents.swift; sourceTree = "<group>"; };
@@ -261,6 +260,7 @@
 		B1F00000000000000000000A /* ActiveCallFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveCallFeature.swift; sourceTree = "<group>"; };
 		B1F00000000000000000000B /* ActiveCallContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveCallContent.swift; sourceTree = "<group>"; };
 		B1F00000000000000000000C /* SettingsContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsContent.swift; sourceTree = "<group>"; };
+		B1F00000000000000000000D /* AirSIMFeature+Live.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AirSIMFeature+Live.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -345,8 +345,8 @@
 				BABC00000000000000000001 /* AirSIMFeature.swift */,
 				B1D000000000000000000003 /* AirSIMClient.swift */,
 				B1D000000000000000000002 /* AirSIMSnapshot.swift */,
-				B1D000000000000000000004 /* AirSIMPresentation.swift */,
 				B10000000000000000000008 /* RootViewController.swift */,
+				B1F00000000000000000000D /* AirSIMFeature+Live.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -819,7 +819,6 @@
 				A1D000000000000000000001 /* AppNavigation.swift in Sources */,
 				A1D000000000000000000002 /* AirSIMSnapshot.swift in Sources */,
 				A1D000000000000000000003 /* AirSIMClient.swift in Sources */,
-				A1D000000000000000000004 /* AirSIMPresentation.swift in Sources */,
 				A1D000000000000000000005 /* ObservingViewController.swift in Sources */,
 				A1D000000000000000000006 /* PhoneTableController.swift in Sources */,
 				A1D000000000000000000007 /* PhoneComponents.swift in Sources */,
@@ -862,6 +861,7 @@
 				A1F00000000000000000000A /* ActiveCallFeature.swift in Sources */,
 				A1F00000000000000000000B /* ActiveCallContent.swift in Sources */,
 				A1F00000000000000000000C /* SettingsContent.swift in Sources */,
+				A1F00000000000000000000D /* AirSIMFeature+Live.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
