@@ -3,7 +3,7 @@ import UIKit
 
 /// Centrally provides the mobile device name to avoid hardcoded iPad copy on iPhone.
 enum DeviceContext {
-    static var displayName: String {
+    @MainActor static var displayName: String {
         UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : "iPad"
     }
 }

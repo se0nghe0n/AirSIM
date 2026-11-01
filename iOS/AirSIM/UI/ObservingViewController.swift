@@ -8,21 +8,30 @@ class ObservingViewController: UIViewController {
     var observesWhileHidden: Bool { false }
     private var observing = false
     private var generation = 0
+
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         observing = true
         observeChanges()
     }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
-        if !observesWhileHidden { observing = false; generation += 1 }
+        if !observesWhileHidden {
+            observing = false
+            generation += 1
+        }
     }
+
     func render() {}
-    func observeChanges() {
+
+    private func observeChanges() {
         guard observing, isViewLoaded else { return }
         generation += 1
         let token = generation
-        withObservationTracking { render() } onChange: { [weak self] in
+        withObservationTracking {
+            render()
+        } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.observing, self.generation == token else { return }
                 self.observeChanges()

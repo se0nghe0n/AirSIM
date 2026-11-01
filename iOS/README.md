@@ -19,20 +19,28 @@ Main targets:
 - `AirSIMLiveActivityExtension`: Lock Screen and Dynamic Island Live Activities
 - `AirSIMTests`: transport selection and protocol-boundary tests
 
-The `AirSIM` target is organized into feature groups backed by matching folders under `iOS/AirSIM/`. Add new files to the group that owns the feature. Each feature keeps its TCA reducer (`*Feature.swift`) next to its view controllers, with one screen per file:
+The `AirSIM` target is organized into feature groups backed by matching folders under `iOS/AirSIM/`. Add new files to the group that owns the feature. Each screen family has one TCA feature (`*Feature.swift`) in its folder, next to its view controllers (one screen per file) and the small value types that prepare its rows:
 
-- `App`: application/scene delegates, `AppModel`, app settings, the root `AirSIMFeature` reducer, its `AirSIMClient` dependency and `AirSIMSnapshot` projection, the `AirSIMPresentation` store facade, URL and tab routing, and `RootViewController`
-- `UI`: shared UIKit building blocks (`ObservingViewController`, `PhoneTableController`, buttons, labels, backdrops, empty states and sheet helpers)
+- `App`: application/scene delegates, `AppModel`, app settings, the root `AirSIMFeature` reducer and its live store, its `AirSIMClient` dependency and `AirSIMSnapshot` projection, URL and tab routing, and `RootViewController`
+- `UI`: shared UIKit building blocks (`ObservingViewController`, `PhoneTableController` and `PhoneRow`, buttons, labels, avatars, backdrops, empty states, alert and sheet helpers, and the `UIStackView` and `addPinnedSubview` layout helpers)
 - `Agent`: Android Agent API client, wire models, connection mode and paired-device preferences
 - `Pairing`: Samsung one-time encrypted pairing
 - `VoWLAN`: local discovery, HMAC request signing, Wi-Fi-pinned HTTP transport
 - `Cloud`: PushKit/Relay registration and commands, cloud call session, WebRTC peer
 - `Call`: CallKit, call lifecycle, audio session, virtual-call TTS, background standby and call notifications
-- `Phone`: one subgroup per screen family (`Dial`, `Recents`, `Messages`, `Contacts`, `ActiveCall`) plus the local history and contact stores
-- `Recording`, `Settings`, `Diagnostics`, `LiveActivity`, `Watch`: call recording, setup/settings, Agent trace, Live Activity and Watch coordination on iPhone
+- `Phone`: one subgroup per screen family (`Dial`, `Recents`, `Messages`, `Contacts`, `ActiveCall`) plus `ContactDirectory` and the local history and contact stores
+- `Recording`, `Settings`, `Diagnostics`, `LiveActivity`, `Watch`: call recording, setup/settings, Agent trace recording, Live Activity and Watch coordination on iPhone
 - `Previews`: DEBUG preview fixtures
 
 `Info.plist`, `AirSIM.entitlements` and `AppIcon.icon` stay at the `AirSIM/` root because build settings reference those paths.
+
+### Features and screens
+
+The root `AirSIMFeature` holds the backend projection as `@Shared var snapshot: AirSIMSnapshot` and is its only writer. It scopes one child feature per tab and one for the call screen (`DialFeature`, `RecentsFeature`, `MessagesFeature`, `ContactsFeature`, `SettingsFeature`, `ActiveCallFeature`). Children own their own children, such as `RecordingsFeature` under Recents, `ComposerFeature` under Messages and `PairingFeature` under Settings. A feature that shows backend data receives the snapshot as a `SharedReader<AirSIMSnapshot>` in `init(snapshot:)`, keeps it `fileprivate` and exposes presentation-ready members derived from it. Features run their own `AirSIMClient` effects. A request that belongs to another feature, such as calling back or messaging from Recents, is a `delegate` action that the root or the owning parent handles.
+
+Each screen is a view controller marked `@ViewAction(for:)` with its feature and given a scoped `StoreOf<Feature>`. It reads `store` members in `render()`, which `ObservingViewController` runs again whenever state it read changes while the screen is visible. It writes only view actions through `send(_:)`, including lifecycle actions such as `.appeared`. A screen with no state of its own, such as contact details or the recent-call card, uses its parent's store. Pushes and sheets of persistent child state stay UIKit-owned with a scoped store; state drives only the composer, contact picker, call keypad, alerts, the call window, the selected tab and the open conversation. UIKit-only effects such as haptics, the pasteboard, share sheets and confirmation dialogs stay in the controller.
+
+A view controller file reads top to bottom in `// MARK:` sections: Store, Views, Lifecycle, Rendering, Rows, Layout, Navigation, Actions and UIKit delegates. Layout numbers it reuses go in a `private enum Metrics`, and its `#Preview`s close the file under `#if DEBUG`.
 
 ## Client capabilities
 
@@ -205,20 +213,20 @@ embeds SwiftUI. The official `swift-composable-architecture` package is pinned t
 1.26.2; the included `Package.resolved` also locks transitive dependencies, and
 `ThirdPartyNotices.txt` is bundled with the app.
 
-`AirSIMFeature` owns tab/deep-link/onboarding navigation and dial input, and
+`AirSIMFeature` owns tab, deep-link and onboarding navigation. `ActiveCallFeature`
 presents the call keypad as a `KeypadFeature` through `@Presents`. `MessagesFeature`
 presents the SMS composer as a `ComposerFeature` the same way and runs its send
 itself, so closing the composer never cancels an SMS in flight. Alerts are
 `AlertState` in Store state. The composer presents its own with `present(item:)`.
 The thread and recordings screens present theirs above whatever is on top, so a
 late failure never replaces another sheet, and an alert closed from beneath clears
-its state. The root alert covers backend errors, failed commands and failed sends
-whose screen has closed. Root presents it above whatever is on top, including the
-call, so it never replaces an open sheet; its OK clears only the backend error it
-showed. The Messages, Settings, Pairing, Recordings and Trace reducers own their
-draft, progress, selection and operation states. UIKit controls read scoped Store
-state and send actions through `AirSIMPresentation`. Network, pairing, playback
-and persistence operations run through an injected `AirSIMClient`. `AppModel`
+its state. The root alert covers backend errors and failed sends whose screen has
+closed. Root presents it above whatever is on top, including the call, so it never
+replaces an open sheet; its OK clears only the backend error it showed. The
+Messages, Settings, Pairing and Recordings reducers own their draft, progress,
+selection and operation states. UIKit controls read scoped Store state and send
+view actions. Network, pairing, playback and persistence operations run through
+an injected `AirSIMClient`. `AppModel`
 remains the existing communications service. Its immutable value snapshots enter
 the Store through a cancellable Observation stream, without a polling bridge or a
 reference model inside reducer State. Dial commands carry the number atomically;

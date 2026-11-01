@@ -1906,6 +1906,39 @@ struct UIKitPresentationTests {
         #expect(controller.table.numberOfRows(inSection: 0) == 1)
     }
 
+    @Test func `Row updates insert and delete only the identities that changed`() {
+        #expect(PhoneRowUpdate(from: [["a", "b"]], to: [["a", "b"]]) == .unchanged)
+        let update = PhoneRowUpdate(from: [["a", "b"], ["c", "d"]], to: [["a", "new", "b"], ["d"]])
+        #expect(update == .batch(deleted: [IndexPath(row: 0, section: 1)], inserted: [IndexPath(row: 1, section: 0)]))
+    }
+
+    @Test func `Row updates reload for moved rows, a section count change or duplicate identities`() {
+        #expect(PhoneRowUpdate(from: [["a", "b", "c"]], to: [["b", "a", "c"]]) == .reload)
+        #expect(PhoneRowUpdate(from: [["a"]], to: [["a"], ["b"]]) == .reload)
+        #expect(PhoneRowUpdate(from: [["a", "a"]], to: [["a", "a"]]) == .reload)
+        #expect(PhoneRowUpdate(from: [["a"]], to: [["a", "a"]]) == .reload)
+    }
+
+    @Test func `Backdrop colors follow a light and dark appearance change`() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.overrideUserInterfaceStyle = .light
+        let backdrop = PhoneBackdropView(frame: window.bounds)
+        window.addSubview(backdrop)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let darkBase = UIColor(red: 0.008, green: 0.016, blue: 0.035, alpha: 1)
+        window.layoutIfNeeded()
+        #expect(backdrop.traitCollection.userInterfaceStyle == .light)
+        #expect(backdrop.backgroundColor == .white)
+        window.overrideUserInterfaceStyle = .dark
+        window.layoutIfNeeded()
+        #expect(backdrop.traitCollection.userInterfaceStyle == .dark)
+        #expect(backdrop.backgroundColor == darkBase)
+        window.overrideUserInterfaceStyle = .light
+        window.layoutIfNeeded()
+        #expect(backdrop.backgroundColor == .white)
+    }
+
     @Test func `Section copy updates without replacing the focused field`() throws {
         let controller = PhoneTableController()
         let field = UITextField()
@@ -2289,7 +2322,7 @@ struct TCARootNavigationTests {
         var cleaned = new; cleaned.errorMessage = nil
         await store.send(.snapshot(cleaned)) { $0.$snapshot.withLock { $0 = cleaned }; $0.lastBackendError = nil }
     }
-    @Test func `Command failure alerts without clearing the backend error`() async {
+    @Test func `Dismissing a send failure alert keeps the backend error`() async {
         let cleared = LockIsolated(0)
         var dependency = client
         dependency.command = { command in

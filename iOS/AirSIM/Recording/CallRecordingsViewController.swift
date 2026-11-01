@@ -96,13 +96,7 @@ final class CallRecordingsViewController: PhoneTableController {
             bodyView: phoneEmptyState(
                 "No recordings yet",
                 image: "waveform",
-                detail: "Tap Record during a connected call. Saved recordings appear here.",
-                minimumHeight: 0,
-                iconSize: 34,
-                detailSize: 15,
-                spacing: 12,
-                verticalPadding: 40,
-                headingSize: 17
+                detail: "Tap Record during a connected call. Saved recordings appear here."
             ),
             transparent: true
         )
