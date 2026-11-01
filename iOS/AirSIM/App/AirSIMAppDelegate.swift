@@ -25,6 +25,7 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotific
     private let coldLaunchCallHandler = ColdLaunchCallKitHandler()
     private let historyStore = LocalHistoryStore()
     #endif
+    private var sceneConnectionObserver: (any NSObjectProtocol)?
 
     // MARK: - Application lifecycle
 
@@ -35,6 +36,16 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotific
         #if DEBUG
         guard !AirSIMPreviewEnvironment.isActive else { return true }
         #endif
+        // Registered before any scene connects so a session restored from a SwiftUI-lifecycle build gets this app's
+        // scene delegate.
+        sceneConnectionObserver = NotificationCenter.default.addObserver(
+            forName: UIScene.willConnectNotification,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let scene = notification.object as? UIWindowScene else { return }
+            MainActor.assumeIsolated { AirSIMSceneDelegate.adoptRestoredScene(scene) }
+        }
         LiveActivityCallActionDispatcher.shared.handler = { action, callID in
             if CallKitController.shared.managesCurrentCall {
                 try await CallKitController.shared.performLiveActivityAction(action, callID: callID)

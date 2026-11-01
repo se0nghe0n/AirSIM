@@ -4,17 +4,39 @@ import UIKit
 /// without building UI; RootViewController and AppModel start on the first foreground transition.
 ///
 /// The class name is referenced by `UISceneDelegateClassName` in Info.plist and by persisted scene
-/// sessions, so keep it stable.
+/// sessions, so keep it stable. Sessions saved by the SwiftUI app lifecycle of earlier builds are
+/// restored with SwiftUI's scene delegate, which builds no window; `adoptRestoredScene(_:)` replaces it.
 @MainActor
 final class AirSIMSceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
     private var root: RootViewController?
     private var pendingURLs: [URL] = []
 
+    /// iOS keeps a scene session across app updates and restores it with the configuration it was created with. A
+    /// session from a build that used the SwiftUI `App` lifecycle comes back with SwiftUI's scene delegate and no
+    /// configuration name, so `scene(_:willConnectTo:options:)` here never runs and the screen stays black. Called for
+    /// every scene connection; a scene that already has this delegate is left alone.
+    static func adoptRestoredScene(_ scene: UIWindowScene) {
+        guard !(scene.delegate is AirSIMSceneDelegate) else { return }
+        let delegate = AirSIMSceneDelegate()
+        // UIScene holds its delegate strongly.
+        scene.delegate = delegate
+        delegate.attach(to: scene, urls: [])
+    }
+
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
         guard let scene = scene as? UIWindowScene else { return }
-        window = UIWindow(windowScene: scene)
-        pendingURLs = options.urlContexts.map(\.url)
+        attach(to: scene, urls: options.urlContexts.map(\.url))
+    }
+
+    /// Idempotent: an adopted scene may still receive `scene(_:willConnectTo:options:)` afterwards.
+    private func attach(to scene: UIWindowScene, urls: [URL]) {
+        if window == nil { window = UIWindow(windowScene: scene) }
+        if let root {
+            urls.forEach(root.handleSystemCommunicationURL)
+            return
+        }
+        pendingURLs.append(contentsOf: urls)
         // A background-only PushKit launch must not construct contact caches or audio sessions.
         if UIApplication.shared.applicationState != .background { connectUI() }
     }
