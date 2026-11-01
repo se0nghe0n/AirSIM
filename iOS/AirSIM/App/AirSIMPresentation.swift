@@ -31,8 +31,6 @@ final class AirSIMPresentation {
     var audio: AudioPresentation { AudioPresentation(owner: self) }
     var vowlan: VoWLANPresentation { VoWLANPresentation(owner: self) }
     var settings: SettingsPresentation { SettingsPresentation(owner: self) }
-    var messages: [SMSMessage] { snapshot.messages }
-    var conversations: [(sender: String, messages: [SMSMessage])] { snapshot.conversations.map { ($0.sender, $0.messages) } }
     var isOnline: Bool { snapshot.isOnline }
     var connectionMessage: String? { snapshot.connectionMessage }
     var isBusy: Bool { snapshot.isBusy }
@@ -61,8 +59,6 @@ final class AirSIMPresentation {
     func toggleSpeaker() { store.send(.command(.speaker)) }
     func toggleRecording() async { await perform(.recording) }
     func bindAndroidAgent(_ id: String) { store.send(.command(.bindAgent(id))) }
-    func refreshMessages() async { await perform(.refreshMessages) }
-    func loadMessagesFromAgent() async { await perform(.loadMessages) }
     func reloadMessagesFromLocalStore() { store.send(.command(.reloadLocalMessages)) }
     func refreshPairedDeviceInformation() async { await perform(.refreshDevices) }
     func setLiveActivityEnabled(_ enabled: Bool) { store.send(.settings(.liveActivityChanged(enabled))) }
@@ -72,10 +68,8 @@ final class AirSIMPresentation {
 @MainActor
 struct ContactsPresentation {
     let owner: AirSIMPresentation
-    var contacts: [ContactStore.Contact] { owner.snapshot.contacts.all }
     func contact(for number: String) -> ContactStore.Contact? { owner.snapshot.contacts.contact(for: number) }
     func displayName(for number: String?) -> String { owner.snapshot.contacts.displayName(for: number) }
-    func loadIfAuthorized() async { await owner.perform(.contacts(false)) }
 }
 @MainActor
 struct AudioPresentation {

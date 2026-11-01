@@ -35,7 +35,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
-        messages = MessagesViewController(model: model)
+        messages = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
         let controllers: [UIViewController] = [
             DialPadViewController(model: model),
             RecentsViewController(store: store.scope(state: \.recents, action: \.recents)),
@@ -51,7 +51,9 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         }
         tabs.delegate = self
         // Replaces any other root sheet; requests made during onboarding wait in state until it completes.
-        present(item: $store.scope(\.messages.$composer, action: \.messages.composer)) { [model] in phoneSheet(MessageComposerViewController(model: model, store: $0)) }
+        present(item: $store.scope(\.messages.$composer, action: \.messages.composer)) {
+            phoneSheet(MessageComposerViewController(store: $0))
+        }
         if #available(iOS 26.0, *) { tabs.tabBarMinimizeBehavior = .onScrollDown }
         tabs.selectedIndex = PhoneTab.allCases.firstIndex(of: model.store.selectedTab) ?? 0
         addChild(tabs); tabs.view.frame = view.bounds; tabs.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]; view.addSubview(tabs.view); tabs.didMove(toParent: self)
@@ -95,13 +97,19 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         }
         let selection = PhoneTab.allCases.firstIndex(of: model.store.selectedTab) ?? 0
         if tabs.selectedIndex != selection { tabs.selectedIndex = selection }
-        if model.store.messages.conversation == nil { appliedConversation = nil }
-        if let sender = model.store.messages.conversation, sender != appliedConversation, selection == PhoneTab.allCases.firstIndex(of: .messages) {
-            appliedConversation = sender
-            messages.showConversationIfNeeded(sender)
-        }
+        renderConversation(onMessagesTab: selection == PhoneTab.allCases.firstIndex(of: .messages))
         renderCall()
         renderAlert()
+    }
+    /// Shows each newly opened conversation once, while Messages is the selected tab.
+    private func renderConversation(onMessagesTab: Bool) {
+        guard let sender = model.store.messages.conversation else {
+            appliedConversation = nil
+            return
+        }
+        guard onMessagesTab, sender != appliedConversation else { return }
+        appliedConversation = sender
+        messages.showConversationIfNeeded(sender)
     }
     /// Presented imperatively from the top-most controller: present(item:) would first dismiss an open composer
     /// or sheet. The call window covers the main window, so errors raised during a call are shown above the call.
@@ -188,7 +196,8 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         model.store.send(.composeMessage(number))
     }
     func openSMSConversation(_ sender: String) {
-        loadViewIfNeeded(); model.store.send(.openSMS(sender))
+        loadViewIfNeeded()
+        model.store.send(.openSMS(sender))
         appliedConversation = sender
         messages.showConversationIfNeeded(sender)
     }

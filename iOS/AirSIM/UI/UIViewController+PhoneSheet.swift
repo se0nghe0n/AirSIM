@@ -36,11 +36,6 @@ extension UIViewController {
         observe { transaction in presenter.render(animated: !transaction.uiKit.disablesAnimations) }
     }
 
-    /// The closure form, for screens still bound to the presentation facade.
-    func presentAlert<Action>(_ alert: @escaping () -> AlertState<Action>?, send: @escaping (PresentationAction<Action>) -> Void) {
-        let presenter = StateAlertPresenter(owner: self, alert: alert, send: send)
-        observe { transaction in presenter.render(animated: !transaction.uiKit.disablesAnimations) }
-    }
     func confirmPhoneAction(_ title: String, message: String? = nil, actionTitle: String = "Delete", action: @escaping () -> Void) {
         let alert = UIAlertController(title: title, message: message, preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: actionTitle, style: .destructive) { _ in action() })

@@ -155,7 +155,8 @@ struct AirSIMFeature {
                 return dial(number, state: &state)
 
             case .recents(.delegate(.message(let recipient))),
-                 .contacts(.delegate(.message(let recipient))):
+                 .contacts(.delegate(.message(let recipient))),
+                 .messages(.delegate(.compose(let recipient))):
                 state.composeMessage(to: recipient)
                 return perform(.persistTab(.messages))
 

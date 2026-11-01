@@ -106,6 +106,7 @@
 		A1F000000000000000000004 /* RecentsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000004 /* RecentsFeature.swift */; };
 		A1F000000000000000000005 /* ContactsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000005 /* ContactsFeature.swift */; };
 		A1F000000000000000000006 /* ContactRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000006 /* ContactRow.swift */; };
+		A1F000000000000000000007 /* ConversationRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F000000000000000000007 /* ConversationRow.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -257,6 +258,7 @@
 		B1F000000000000000000004 /* RecentsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentsFeature.swift; sourceTree = "<group>"; };
 		B1F000000000000000000005 /* ContactsFeature.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsFeature.swift; sourceTree = "<group>"; };
 		B1F000000000000000000006 /* ContactRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactRow.swift; sourceTree = "<group>"; };
+		B1F000000000000000000007 /* ConversationRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationRow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -579,6 +581,7 @@
 				B1D000000000000000000019 /* MessageThreadViewController.swift */,
 				B1D000000000000000000020 /* MessageComposerViewController.swift */,
 				B1D000000000000000000021 /* PhoneMessageBubble.swift */,
+				B1F000000000000000000007 /* ConversationRow.swift */,
 			);
 			path = Messages;
 			sourceTree = "<group>";
@@ -854,6 +857,7 @@
 				A1F000000000000000000004 /* RecentsFeature.swift in Sources */,
 				A1F000000000000000000005 /* ContactsFeature.swift in Sources */,
 				A1F000000000000000000006 /* ContactRow.swift in Sources */,
+				A1F000000000000000000007 /* ConversationRow.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

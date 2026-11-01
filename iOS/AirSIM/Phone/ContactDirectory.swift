@@ -35,4 +35,17 @@ struct ContactDirectory: Equatable, Sendable {
                 || contact.phones.contains { $0.localizedCaseInsensitiveContains(query) }
         }
     }
+
+    /// The first five contacts that could complete a typed recipient: those whose name or any number contains the
+    /// trimmed text, ignoring case, or whose number ends with it. None while the recipient is blank or already
+    /// names a contact.
+    func suggestions(for recipient: String) -> [ContactStore.Contact] {
+        let query = recipient.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty, contact(for: recipient) == nil else { return [] }
+        let matches = all.filter { contact in
+            contact.name.localizedCaseInsensitiveContains(query)
+                || contact.phones.contains { $0.localizedCaseInsensitiveContains(query) || $0.hasSuffix(query) }
+        }
+        return Array(matches.prefix(5))
+    }
 }
