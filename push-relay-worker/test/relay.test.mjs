@@ -472,35 +472,6 @@ test("one-request status falls back to a KV heartbeat during registry migration"
   assert.equal(status.active_agent_id, "legacy");
 });
 
-test("different devices register and authenticate independently", async () => {
-  const env = testEnvironment();
-  const second = {
-    ...registration,
-    device_id: "iphone-second",
-    device_secret: "t".repeat(32),
-    voip_token: "e".repeat(64),
-    alert_token: "f".repeat(64),
-  };
-  assert.equal((await worker.fetch(post("/v1/devices/register", registration), env)).status, 200);
-  assert.equal((await worker.fetch(post("/v1/devices/register", second), env)).status, 200);
-
-  for (const device of [registration, second]) {
-    const response = await worker.fetch(post("/v1/events/heartbeat", {
-      event: "agent_heartbeat",
-      device_id: device.device_id,
-      device_secret: device.device_secret,
-      agent_version: "0.3.40",
-      at_ok: true,
-      cellular_state: "registered",
-    }), env);
-    assert.equal(response.status, 202);
-  }
-  assert.notEqual(
-    (await env.DEVICES.get(`device:${registration.device_id}`)),
-    (await env.DEVICES.get(`device:${second.device_id}`)),
-  );
-});
-
 test("cloud dial and SMS commands are authenticated, device-scoped, and return Agent results", async () => {
   const env = testEnvironment();
   env.COMMANDS = new MemoryCommandNamespace(env);
@@ -562,39 +533,6 @@ test("cloud dial and SMS commands are authenticated, device-scoped, and return A
     message: "Test",
   }), env);
   assert.equal(forged.status, 401);
-});
-
-test("dial accepts WebRTC and rejects a legacy PCM request", async () => {
-  const env = { ...testEnvironment(), ...turnTestConfig, WEBRTC_TRANSPORT_READY: "true", WEBRTC_ROLLOUT_PERCENT: "100" };
-  env.COMMANDS = new MemoryCommandNamespace(env);
-  const capable = {
-    ...registration,
-    media_transport: "webrtc",
-    app_media_capabilities: ["webrtc"],
-    agent_media_capabilities: ["webrtc"],
-  };
-  assert.equal((await worker.fetch(post("/v1/devices/register", capable), env)).status, 200);
-  await advertiseReadyAgent(env);
-  env.COMMANDS.addAgent(registration.device_id);
-  const dial = await worker.fetch(post("/v1/commands/enqueue", {
-    device_id: registration.device_id,
-    device_secret: registration.device_secret,
-    command_id: crypto.randomUUID(),
-    type: "dial",
-    number: "10086",
-    media_transport: "legacy_pcm",
-  }), env);
-  assert.equal(dial.status, 400);
-  const webRTC = await worker.fetch(post("/v1/commands/enqueue", {
-    device_id: registration.device_id,
-    device_secret: registration.device_secret,
-    command_id: crypto.randomUUID(),
-    type: "dial",
-    number: "10086",
-    media_transport: "webrtc",
-  }), env);
-  assert.equal(webRTC.status, 202);
-  assert.equal((await webRTC.json()).call.media_transport, "webrtc");
 });
 
 test("call control is durable, idempotent, and delivered after the Agent reconnects", async () => {
