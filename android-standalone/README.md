@@ -147,7 +147,9 @@ passes those, never the account secret, to the privileged peer.
 
 Android keeps pinned WebRTC SDK `144.7559.15`. Native WebRTC and the 8 kHz carrier
 audio device share the Shizuku process. Local samples remain in bounded 10 ms
-buffers; no TCP bridge or audio IPC is used. Opus/NetEq owns jitter and loss
+buffers; no TCP bridge or audio IPC is used. The carrier's own capture and
+playback clocks pace WebRTC once it is attached, so the loopback does not drift
+into dropped or inserted frames. Opus/NetEq owns jitter and loss
 concealment. Current route verification requires a visible telephony sink, so
 hidden Samsung VOICE_TX routes need a separately verified capability adapter.
 Neither Q25 nor Pixel 8 Pro has yet accepted this new architecture on hardware.

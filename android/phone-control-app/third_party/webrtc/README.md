@@ -10,9 +10,12 @@ The build downloads, verifies and extracts the AAR. Binaries are not committed.
 `org/webrtc/audio/WebRtcAudioTrack.java` replaces that one upstream class and its
 nested classes in the compile/dex jar. It retains all JNI-referenced signatures
 from the pinned source. The native JNI registration still resolves the same class.
-No Android AudioTrack is created: a paced 10 ms loop sends decoded PCM to the
-external loopback queue. Capture uses the SDK's `setAudioRecordEnabled(false)`
-and `setAudioBufferCallback`, with a 10 ms callback clock and no AudioRecord.
+No Android AudioTrack is created: a 10 ms loop sends decoded PCM to the
+external loopback queue. When the playback callback also implements the
+AirSIM-only `org.webrtc.audio.ExternalPlayoutClock`, that sink's device clock
+paces the loop; otherwise a 10 ms timer does. Capture uses the SDK's
+`setAudioRecordEnabled(false)` and `setAudioBufferCallback`, with no SDK
+AudioRecord; the callback follows the carrier's capture clock once attached.
 Do not update the AAR without revalidating this ABI and running native loopback.
 
 The AAR contains ARMv7, ARM64, x86 and x86_64 libraries, all packaged in the APK.

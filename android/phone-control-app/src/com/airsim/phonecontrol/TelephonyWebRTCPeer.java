@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.LockSupport;
+import org.webrtc.audio.ExternalPlayoutClock;
 
 /** Native peer and carrier audio share the privileged process. No audio crosses IPC. */
 final class TelephonyWebRTCPeer implements Closeable {
@@ -37,8 +37,12 @@ final class TelephonyWebRTCPeer implements Closeable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CompletableFuture<Void> disposal = new CompletableFuture<>();
     private final WebRTCPcmBuffer capture = new WebRTCPcmBuffer();
-    private final WebRTCPcmBuffer playback = new WebRTCPcmBuffer();
+    // Carrier backpressure bounds playback delay; see WebRTCPcmBuffer.NO_AGE_LIMIT.
+    private final WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
     private volatile boolean deviceReady;
+    // Each direction follows the carrier's device clock once it is attached.
+    private final WebRTCCaptureClock captureClock = new WebRTCCaptureClock(capture);
+    private final WebRTCPlayoutClock playoutClock = new WebRTCPlayoutClock(playback, () -> deviceReady && !closed.get());
     private TelephonyAudioDevice device;
     private PeerConnectionFactory factory;
     private JavaAudioDeviceModule adm;
@@ -51,7 +55,6 @@ final class TelephonyWebRTCPeer implements Closeable {
     private final WebRTCReadiness readiness = new WebRTCReadiness();
     private boolean remoteSet;
     private List<PeerConnection.IceServer> iceServers;
-    private long captureDeadline;
     private final boolean hostOnly;
     private boolean hostAnswerReady;
     private boolean hostGatheringComplete;
@@ -85,16 +88,10 @@ final class TelephonyWebRTCPeer implements Closeable {
                     })
                     .setAudioBufferCallback((buffer, format, channels, rate, count, time) -> {
                         // With AudioRecord disabled this callback, not the SDK, owns the clock.
-                        long now = System.nanoTime();
-                        if (captureDeadline == 0) captureDeadline = now;
-                        while (now < captureDeadline) {
-                            LockSupport.parkNanos(captureDeadline - now);
-                            now = System.nanoTime();
-                        }
-                        captureDeadline += 10_000_000L;
-                        if (captureDeadline < now) captureDeadline = now + 10_000_000L;
+                        byte[] bytes;
+                        try { bytes = captureClock.next(deviceReady && !closed.get()); }
+                        catch (InterruptedException ignored) { bytes = new byte[WebRTCPcmBuffer.FRAME_BYTES]; }
                         buffer.clear();
-                        byte[] bytes = capture.poll();
                         if (buffer.remaining() == bytes.length && channels == 1 && rate == 8000) {
                             buffer.put(bytes);
                         } else {
@@ -103,10 +100,7 @@ final class TelephonyWebRTCPeer implements Closeable {
                         buffer.position(0);
                         return 0; // External capture has no sample-accurate monotonic timestamp.
                     })
-                    .setPlaybackSamplesReadyCallback(samples -> {
-                        byte[] bytes = samples.getData();
-                        if (deviceReady && !closed.get()) playback.offer(bytes, 0, bytes.length);
-                    }).createAudioDeviceModule();
+                    .setPlaybackSamplesReadyCallback(new CarrierPlayout()).createAudioDeviceModule();
             adm.setAudioRecordEnabled(false);
             PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
             // UserService is not an Application. Avoid context-dependent Android network callbacks;
@@ -127,6 +121,14 @@ final class TelephonyWebRTCPeer implements Closeable {
 
     /** Keep ICE/DTLS alive during ringback; attach the carrier route only on answer. */
     void activateCarrierAudio() { submit(this::startCarrierAudio); }
+
+    /** The playout adapter pulls NetEq when the carrier AudioTrack has room. */
+    private final class CarrierPlayout implements JavaAudioDeviceModule.PlaybackSamplesReadyCallback, ExternalPlayoutClock {
+        @Override public boolean awaitPlayoutSlot() throws InterruptedException { return playoutClock.awaitPlayoutSlot(); }
+        @Override public void onWebRtcAudioTrackSamplesReady(JavaAudioDeviceModule.AudioSamples samples) {
+            playoutClock.accept(samples.getData());
+        }
+    }
 
     private void startCarrierAudio() {
         if (closed.get() || device != null) return;
@@ -294,13 +296,15 @@ final class TelephonyWebRTCPeer implements Closeable {
                             for (RTCStats stat : report.getStatsMap().values()) {
                                 entries.put(stat.getId(), new WebRTCStatistics.Entry(stat.getId(), stat.getType(), stat.getMembers()));
                             }
-                            long pcmDrops = capture.drops() + playback.drops();
-                            long pcmUnderruns = capture.underruns();
+                            Map<String, Object> pcm = new LinkedHashMap<>();
+                            // Frames the carrier loopback discarded or concealed, outside the RTP loss count.
+                            pcm.put("pcm_capture_drop_total", capture.drops());
+                            pcm.put("pcm_capture_conceal_total", capture.underruns());
+                            pcm.put("pcm_playback_drop_total", playback.drops());
+                            int carrierUnderruns = device == null ? -1 : device.playbackUnderruns();
+                            if (carrierUnderruns >= 0) pcm.put("carrier_underrun_total", carrierUnderruns);
                             for (Map<String, Object> fields : statistics.sample(entries)) {
-                                if ("inbound".equals(fields.get("direction"))) {
-                                    fields.put("pcm_drop_total", pcmDrops);
-                                    fields.put("pcm_underrun_total", pcmUnderruns);
-                                }
+                                if ("inbound".equals(fields.get("direction"))) fields.putAll(pcm);
                                 BridgeLog.info("standalone_webrtc_stats session_id=" + id + " " + fields);
                             }
                         } catch (Exception | LinkageError ignored) { /* Optional telemetry only. */ }

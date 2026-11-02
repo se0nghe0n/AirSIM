@@ -33,6 +33,9 @@ TEST="$ROOT/test/peer-disposal/com/airsim/phonecontrol"
   "$TEST/BridgeLog.java" \
   "$SOURCE/PrivilegedBridgeProtocol.java" \
   "$SOURCE/WebRTCPcmBuffer.java" \
+  "$SOURCE/WebRTCCaptureClock.java" \
+  "$SOURCE/WebRTCPlayoutClock.java" \
+  "$ROOT/src/org/webrtc/audio/ExternalPlayoutClock.java" \
   "$SOURCE/WebRTCPlayout.java" \
   "$SOURCE/WebRTCOpusSDP.java" \
   "$SOURCE/WebRTCReadiness.java" \

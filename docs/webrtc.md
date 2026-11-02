@@ -86,7 +86,8 @@ log. See [Cloud audio startup diagnostics](cloud-audio-startup.md#diagnostics).
 | `rx_buffer_ms` | Mean receive jitter-buffer residence during the latest sample interval |
 | `rx_lost_packets` | Change in the receive loss estimate; may be negative when late packets correct earlier loss |
 | `rx_concealed_samples`, `rx_concealment_pct` | Concealed audio samples and their share of received samples during the interval |
-| `pcm_drop_total`, `pcm_underrun_total` | Android only. Cumulative telephony frames discarded by the 60 ms/80 ms loopback cap, and silent 10 ms pulls. These are outside the RTP loss count |
+| `pcm_capture_drop_total`, `pcm_capture_conceal_total` | Android only. Cumulative carrier-capture frames discarded by the 60 ms/80 ms loopback cap, and 10 ms frames concealed because the attached carrier stalled. Either one is heard on the iPhone as a short gap. Outside the RTP loss count |
+| `pcm_playback_drop_total`, `carrier_underrun_total` | Android only. Cumulative decoded frames the carrier loopback discarded at its 60 ms cap, and the platform's underrun count for the carrier AudioTrack. Either one is heard by the far end. Outside the RTP loss count |
 
 The buffer mean uses the change in `jitterBufferDelay` divided by the change in
 `jitterBufferEmittedCount`, following the [WebRTC statistics specification](https://www.w3.org/TR/webrtc-stats/).
@@ -100,10 +101,19 @@ residence points to local playout accumulation. Until the iPhone trace is
 readable again, only the Android side of that comparison is available. These
 are diagnostic clues, not proof of the precise
 source of delay. The telephony loopback is outside that receive-buffer
-measurement. Its app queue holds at most 60 ms and drops audio older than
-80 ms. The device buffer keeps an 80 ms floor when that is above the platform
-minimum, and both socket ends hint a 4 KB send and receive buffer so a stall
-cannot leave seconds of PCM in the kernel. Acoustic output and a platform
+measurement. Once the carrier device is attached, its clock drives both
+loopback directions: WebRTC capture waits for each carrier frame, and NetEq
+decodes the next frame only when the carrier AudioTrack has room. A separate
+10 ms timer would drift against the modem clock and periodically insert or
+drop 10 ms of audio, which is heard as a pop. The timer runs only before the
+carrier attaches and after the carrier has made no progress for 100 ms.
+A frame the loopback must still discard or conceal is joined to its neighbors
+with a 5 ms ramp. Each app queue holds at most 60 ms. The capture queue also
+drops audio older than 80 ms; carrier backpressure bounds the playback queue
+instead. The carrier AudioTrack keeps an 80 ms floor when that is above the
+platform minimum. Because the carrier clock keeps that buffer full, it is a
+steady part of the iPhone-to-carrier delay rather than one that drifts until it
+starves or overflows. Acoustic output and a platform
 minimum larger than 80 ms remain outside this cap. This bound is not a
 listening-quality result.
 
