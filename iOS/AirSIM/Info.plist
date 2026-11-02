@@ -61,6 +61,8 @@
 		<string>_airsim-pair._tcp</string>
 		<string>_airsim-vowlan._tcp</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>AirSIM calls are audio-only and never turn on the camera. iOS asks for this description because the built-in WebRTC calling library includes camera code.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Show contact names in calls and messages, and call people from your contacts.</string>
 	<key>NSLocalNetworkUsageDescription</key>
