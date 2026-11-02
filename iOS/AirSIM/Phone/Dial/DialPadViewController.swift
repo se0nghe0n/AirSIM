@@ -124,16 +124,18 @@ final class DialPadViewController: ObservingViewController {
     private func buildStack() {
         stack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(stack)
+        // The safe area can be asymmetric, for example a vertical status and tab bar on one side of iPhone Duo, so
+        // the keypad centres and clamps against the safe area rather than the full view.
         let safeArea = view.safeAreaLayoutGuide
         NSLayoutConstraint.activate([
             contentWidth,
             stack.widthAnchor.constraint(lessThanOrEqualToConstant: Metrics.maximumContentWidth),
-            stack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            stack.centerXAnchor.constraint(equalTo: safeArea.centerXAnchor),
             stack.centerYAnchor.constraint(equalTo: safeArea.centerYAnchor),
         ])
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: Metrics.sideMargin),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -Metrics.sideMargin),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: safeArea.leadingAnchor, constant: Metrics.sideMargin),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: safeArea.trailingAnchor, constant: -Metrics.sideMargin),
             stack.topAnchor.constraint(greaterThanOrEqualTo: safeArea.topAnchor, constant: Metrics.verticalMargin),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: safeArea.bottomAnchor, constant: -Metrics.verticalMargin),
         ])
