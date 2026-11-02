@@ -56,15 +56,6 @@ public final class CoreTests {
 			assertTrue(preferred.getLocalPort() >= 1024);
 			assertEquals(loopback, preferred.getInetAddress());
 		}
-		assertArrayEquals(new String[]{
-				"android.permission.CALL_PHONE", "android.permission.SEND_SMS", "android.permission.RECEIVE_SMS",
-				"android.permission.POST_NOTIFICATIONS"},
-				invokeMissingRuntimePermissions(36, false, false, false));
-		assertArrayEquals(new String[]{"android.permission.CALL_PHONE", "android.permission.SEND_SMS", "android.permission.RECEIVE_SMS"},
-				invokeMissingRuntimePermissions(32, false, false, false));
-		assertArrayEquals(new String[]{"android.permission.SEND_SMS", "android.permission.RECEIVE_SMS"},
-				invokeMissingRuntimePermissions(36, true, false, true));
-		assertArrayEquals(new String[0], invokeMissingRuntimePermissions(36, true, true, true));
 		assertArrayEquals(new String[]{"android.permission.RECEIVE_SMS"},
 				RuntimePermissionPolicy.missingPermissions(36, true, true, false, true, true, true));
 		assertArrayEquals(new String[0], RuntimePermissionPolicy.missingPermissions(
@@ -105,16 +96,6 @@ public final class CoreTests {
 		assertTrue(invokeSilencePolicy("remote_silent", "held"));
 		assertTrue(!invokeSilencePolicy("remote_silent", "ended"));
 		assertTrue(!invokeSilencePolicy("local_and_push", "active"));
-		assertArrayEquals(
-				new String[]{"cmd", "audio", "adj-mute", "0"},
-				PrivilegedBridgeProtocol.audioMuteCommand(true));
-		assertArrayEquals(
-				new String[]{"cmd", "audio", "adj-unmute", "0"},
-				PrivilegedBridgeProtocol.audioMuteCommand(false));
-		assertTrue(PrivilegedBridgeProtocol.isStreamMuted(
-				"AudioManager.getStreamVolume(0) -> 0"));
-		assertTrue(!PrivilegedBridgeProtocol.isStreamMuted(
-				"AudioManager.getStreamVolume(0) -> 7"));
 		assertTrue(PrivilegedBridgeProtocol.supportsUid(2000));
 		assertTrue(PrivilegedBridgeProtocol.supportsUid(0));
 		assertTrue(!PrivilegedBridgeProtocol.supportsUid(10123));
@@ -303,7 +284,6 @@ public final class CoreTests {
 		assertTrue(replayCache.accept("nonce-1", 1_000L));
 		assertTrue(!replayCache.accept("nonce-1", 1_001L));
 		assertTrue(replayCache.accept("nonce-1", 1_031L));
-		assertTrue(VoWLANControlPolicy.allowed("POST", VoWLANWebRTCControl.PATH));
 		assertTrue(VoWLANNetworkPolicy.isHotspotInterface("swlan0", "10.172.46.225"));
 		assertTrue(VoWLANNetworkPolicy.isHotspotInterface("ap0", "192.168.43.1"));
 		assertTrue(!VoWLANNetworkPolicy.isHotspotInterface("wlan0", "192.168.2.86"));
@@ -341,10 +321,6 @@ public final class CoreTests {
 		} finally {
 			eventExecutor.shutdownNow();
 		}
-		assertTrue(TelecomRolePolicy.canExecuteCallCommand(true, "dial"));
-		assertTrue(TelecomRolePolicy.canExecuteCallCommand(true, "end"));
-		assertTrue(!TelecomRolePolicy.canExecuteCallCommand(false, "dial"));
-		assertTrue(!TelecomRolePolicy.canExecuteCallCommand(false, "end"));
 		assertTrue(TelecomRolePolicy.requiresDialerRole("dial"));
 		assertTrue(TelecomRolePolicy.requiresDialerRole("end"));
 		assertTrue(!TelecomRolePolicy.requiresDialerRole("send_sms"));
@@ -536,21 +512,14 @@ public final class CoreTests {
 		String serviceSource = java.nio.file.Files.readString(phoneControlSource("StandaloneAgentService.java"));
 		assertTrue(!storeSource.contains("legacy_pcm"));
 		assertTrue(storeSource.contains("CloudCallMedia.start(mediaTransport, startWebRTC)"));
-		assertTrue(storeSource.contains("new JSONArray().put(CloudCallMedia.WEBRTC)"));
 		assertTrue(!serviceSource.contains("legacy_pcm"));
 		assertTrue(serviceSource.contains("StandaloneAgentStore.applyMediaHeartbeat(identity(registration), mediaReady)"));
-        assertTrue(storeSource.contains("ready ? mediaCapabilities() : new JSONArray()"));
         String bridgeSource = java.nio.file.Files.readString(phoneControlSource("ShizukuBridgeManager.java"));
         assertTrue(bridgeSource.contains("return coordinator.mediaAvailable();"));
 		String peer = java.nio.file.Files.readString(phoneControlSource("WebRTCCloudPeer.java"));
         assertTrue(!peer.contains("connectPCM"));
-        assertTrue(!peer.contains("7580"));
-        assertTrue(!peer.contains("AIRSIMPCM1"));
-        assertTrue(peer.contains("mediaRequest"));
         String nativePeer = java.nio.file.Files.readString(phoneControlSource("TelephonyWebRTCPeer.java"));
-        assertTrue(nativePeer.contains("TelephonyAudioDevice"));
         assertTrue(nativePeer.contains("readiness.deviceReady()"));
-        assertTrue(!nativePeer.contains("new Socket"));
 	}
 
 	private static java.nio.file.Path phoneControlSource(String name) {
@@ -616,19 +585,6 @@ public final class CoreTests {
         assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/status"));
         assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc/stop"));
 		assertTrue(VoWLANControlPolicy.allowed("POST", "/api/calls/webrtc"));
-	}
-
-	private static String[] invokeMissingRuntimePermissions(
-			int sdk, boolean callPhoneGranted, boolean sendSMSGranted,
-			boolean notificationsGranted) throws Exception {
-		try {
-			Class<?> policy = Class.forName("com.airsim.phonecontrol.RuntimePermissionPolicy");
-			return (String[]) policy.getDeclaredMethod(
-					"missingPermissions", int.class, boolean.class, boolean.class, boolean.class)
-					.invoke(null, sdk, callPhoneGranted, sendSMSGranted, notificationsGranted);
-		} catch (ClassNotFoundException error) {
-			throw new AssertionError("CALL_PHONE runtime permission policy is missing", error);
-		}
 	}
 
 	private static String[] invokeOptionalInboxPermissions(

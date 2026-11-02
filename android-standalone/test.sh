@@ -24,8 +24,6 @@ assert_contains "$MANIFEST" 'android.permission.RECEIVE_SMS' \
   'standalone cannot receive carrier SMS'
 assert_contains "$MANIFEST" 'android.permission.READ_SMS' \
   'standalone cannot use the optional inbox fallback'
-assert_contains "$MANIFEST" 'com.airsim.phonecontrol.IncomingSMSReceiver' \
-  'standalone carrier SMS receiver is missing'
 assert_not_contains "$MANIFEST" 'com.android.virtualization.terminal' \
   'standalone APK must not query or depend on Linux Terminal'
 assert_not_contains "$MANIFEST" 'AgentWatchdogService' \

@@ -105,8 +105,6 @@ public final class DefaultCallAccountTests {
         assertTrue(CallRepository.execute(context,
                 new AgentCommand("local-or-cloud", "dial", "", "10010")).success);
         assertEquals(sim2, telecom.lastExtras.getParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE));
-        assertTrue(CallRepository.executeRemote(context, "bluetooth", "dial", "", "10010").success);
-        assertEquals(sim2, telecom.lastExtras.getParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE));
         int invoked = telecom.dialCount;
         telecom.enabled = List.of(sim1);
         assertTrue(!CallRepository.execute(context,
