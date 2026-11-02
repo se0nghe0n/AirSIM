@@ -4,6 +4,7 @@ import android.app.Instrumentation;
 import android.os.Bundle;
 import org.json.JSONObject;
 import org.webrtc.*;
+import org.webrtc.audio.ExternalPlayoutClock;
 import org.webrtc.audio.JavaAudioDeviceModule;
 import java.io.*;
 import java.util.*;
@@ -35,8 +36,9 @@ public final class WebRTCNativeTests extends Instrumentation {
                 ice.add(PeerConnection.IceServer.builder(config.getString("android_url"))
                         .setUsername(config.getString("username")).setPassword(config.getString("credential")).createIceServer());
             }
-            Endpoint a = new Endpoint(400, 1000, ice);
-            Endpoint b = new Endpoint(1000, 400, ice);
+            Endpoint a = new Endpoint(400, 1000, ice, false);
+            // B stands in for the carrier side: its capture and playout follow a skewed device clock.
+            Endpoint b = new Endpoint(1000, 400, ice, true);
             try {
                 a.other = b; b.other = a;
                 a.start(); b.start();
@@ -52,6 +54,17 @@ public final class WebRTCNativeTests extends Instrumentation {
                 require(failure.get() == null, "native callback failure");
                 require(a.goodFrames.get() >= 120 && b.goodFrames.get() >= 120,
                         "bidirectional tone timeout: A=" + a.goodFrames + " B=" + b.goodFrames);
+                // Over three further seconds the skewed carrier clock must not cost a single frame.
+                long[] before = b.carrierCounters();
+                int goodA = a.goodFrames.get(), goodB = b.goodFrames.get();
+                Thread.sleep(3000);
+                long[] after = b.carrierCounters();
+                require(after[0] == before[0] && after[1] == before[1] && after[2] == before[2] && after[3] == before[3],
+                        "carrier clock lost audio: before=" + Arrays.toString(before) + " after=" + Arrays.toString(after));
+                require(Math.abs((after[4] - before[4]) - (after[5] - before[5])) <= WebRTCPcmBuffer.MAX_FRAMES,
+                        "capture did not follow the carrier clock: before=" + Arrays.toString(before) + " after=" + Arrays.toString(after));
+                require(a.goodFrames.get() - goodA >= 250 && b.goodFrames.get() - goodB >= 250,
+                        "tone stopped under the carrier clock: A=" + (a.goodFrames.get() - goodA) + " B=" + (b.goodFrames.get() - goodB));
                 String astats = stats(a.peer), bstats = stats(b.peer);
                 a.requireNoPhysicalAudio(); b.requireNoPhysicalAudio();
                 require(a.inputFrames.get() < 3000 && b.inputFrames.get() < 3000, "capture busy loop");
@@ -61,6 +74,7 @@ public final class WebRTCNativeTests extends Instrumentation {
                 require(a.outputFrames.get() == stoppedA && b.outputFrames.get() == stoppedB, "playout survived disposal");
                 result.putString("stream", "PASS native JNI bidirectional Opus 400/1000Hz; A_good=" + a.goodFrames
                         + " B_good=" + b.goodFrames + " A_capture=" + a.inputFrames + " B_capture=" + b.inputFrames
+                        + " B_carrier_lost=0 B_carrier_skew=+-2%"
                         + " policy=" + (forceRelay ? "relay" : "all") + "\nA " + astats + "\nB " + bstats + "\nphysical_audio=absent cleanup=stopped\n");
             } finally { a.close(); b.close(); }
             candidateDelivery.shutdownNow();
@@ -74,7 +88,14 @@ public final class WebRTCNativeTests extends Instrumentation {
 
     private final class Endpoint implements AutoCloseable {
         final int tone, expected;
+        final boolean carrier;
         final List<PeerConnection.IceServer> ice;
+        final WebRTCPcmBuffer capture = new WebRTCPcmBuffer(), playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+        final WebRTCCaptureClock captureClock = new WebRTCCaptureClock(capture);
+        volatile boolean carrierRunning;
+        final WebRTCPlayoutClock playoutClock = new WebRTCPlayoutClock(playback, () -> carrierRunning);
+        final AtomicLong carrierProduced = new AtomicLong(), carrierMissed = new AtomicLong();
+        Thread carrierIn, carrierOut;
         final AtomicInteger inputFrames = new AtomicInteger(), outputFrames = new AtomicInteger(), goodFrames = new AtomicInteger();
         final List<IceCandidate> candidates = new ArrayList<>();
         JavaAudioDeviceModule adm;
@@ -85,10 +106,81 @@ public final class WebRTCNativeTests extends Instrumentation {
         volatile Endpoint other;
         boolean remote;
         long sample, next;
-        Endpoint(int tone, int expected, List<PeerConnection.IceServer> ice) { this.tone = tone; this.expected = expected; this.ice = ice; }
+        Endpoint(int tone, int expected, List<PeerConnection.IceServer> ice, boolean carrier) {
+            this.tone = tone; this.expected = expected; this.ice = ice; this.carrier = carrier;
+        }
+        byte[] toneFrame() {
+            byte[] frame = new byte[160];
+            for (int i = 0; i < 80; i++) {
+                short value = (short) (8000 * Math.sin(2 * Math.PI * tone * sample++ / 8000));
+                frame[i * 2] = (byte) value; frame[i * 2 + 1] = (byte) (value >> 8);
+            }
+            return frame;
+        }
+        void analyze(byte[] data) {
+            int crossings = 0, previous = 0; long square = 0;
+            for (int i = 0; i + 1 < data.length; i += 2) {
+                int value = (short) ((data[i] & 255) | (data[i + 1] << 8));
+                if (previous < 0 && value >= 0) crossings++;
+                square += (long)value * value; previous = value;
+            }
+            double hz = crossings * 8000.0 / (data.length / 2);
+            if (square / (data.length / 2) > 100000 && Math.abs(hz - expected) <= 150) goodFrames.incrementAndGet();
+        }
+        /** Capture drops, capture concealments, playback drops, carrier misses, carrier frames, WebRTC captures. */
+        long[] carrierCounters() {
+            return new long[]{capture.drops(), capture.underruns(), playback.drops(), carrierMissed.get(),
+                    carrierProduced.get(), inputFrames.get()};
+        }
+        /** Simulated modem: capture 2% slower and playout 2% faster than WebRTC's 10 ms timer, in 20 ms bursts. */
+        void startCarrier() {
+            carrierRunning = true;
+            carrierIn = new Thread(() -> {
+                long due = System.nanoTime();
+                while (carrierRunning) {
+                    due += 20_400_000L;
+                    for (long now = System.nanoTime(); now < due && carrierRunning; now = System.nanoTime()) LockSupport.parkNanos(due - now);
+                    for (int i = 0; i < 2; i++) { capture.offer(toneFrame(), 0, 160); carrierProduced.incrementAndGet(); }
+                }
+            }, "test-carrier-capture");
+            carrierOut = new Thread(() -> {
+                long due = System.nanoTime();
+                try {
+                    while (carrierRunning) {
+                        due += 19_600_000L;
+                        for (long now = System.nanoTime(); now < due && carrierRunning; now = System.nanoTime()) LockSupport.parkNanos(due - now);
+                        for (int i = 0; i < 2 && carrierRunning; i++) {
+                            byte[] frame = playback.take(19_600_000L);
+                            if (frame == null) { if (carrierRunning) carrierMissed.incrementAndGet(); } else analyze(frame);
+                        }
+                    }
+                } catch (InterruptedException ignored) {}
+            }, "test-carrier-playout");
+            carrierIn.start(); carrierOut.start();
+        }
+        void stopCarrier() throws InterruptedException {
+            carrierRunning = false; capture.close(); playback.close();
+            if (carrierIn != null) carrierIn.join(1000);
+            if (carrierOut != null) carrierOut.join(1000);
+        }
+        final class ClockedSink implements JavaAudioDeviceModule.PlaybackSamplesReadyCallback, ExternalPlayoutClock {
+            @Override public boolean awaitPlayoutSlot() throws InterruptedException { return playoutClock.awaitPlayoutSlot(); }
+            @Override public void onWebRtcAudioTrackSamplesReady(JavaAudioDeviceModule.AudioSamples samples) {
+                outputFrames.incrementAndGet(); playoutClock.accept(samples.getData());
+            }
+        }
         void start() {
-            adm = JavaAudioDeviceModule.builder(getTargetContext()).setSampleRate(8000)
-                    .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
+            JavaAudioDeviceModule.Builder builder = JavaAudioDeviceModule.builder(getTargetContext()).setSampleRate(8000)
+                    .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false);
+            if (carrier) {
+                builder.setAudioBufferCallback((buffer, format, channels, rate, length, timestamp) -> {
+                    byte[] bytes;
+                    try { bytes = captureClock.next(carrierRunning); } catch (InterruptedException ignored) { bytes = new byte[160]; }
+                    buffer.clear(); buffer.put(bytes); buffer.position(0);
+                    inputFrames.incrementAndGet(); return 0;
+                }).setPlaybackSamplesReadyCallback(new ClockedSink());
+            }
+            adm = (carrier ? builder : builder
                     .setAudioBufferCallback((buffer, format, channels, rate, length, timestamp) -> {
                         long now = System.nanoTime(); if (next == 0) next = now;
                         while (now < next) { LockSupport.parkNanos(next - now); now = System.nanoTime(); }
@@ -109,8 +201,9 @@ public final class WebRTCNativeTests extends Instrumentation {
                         }
                         double hz = crossings * 8000.0 / (data.length / 2);
                         if (square / (data.length / 2) > 100000 && Math.abs(hz - expected) <= 150) goodFrames.incrementAndGet();
-                    }).createAudioDeviceModule();
+                    })).createAudioDeviceModule();
             adm.setAudioRecordEnabled(false);
+            if (carrier) startCarrier();
             factory = PeerConnectionFactory.builder().setAudioDeviceModule(adm).createPeerConnectionFactory();
             MediaConstraints c = new MediaConstraints();
             for (String key : new String[]{"googEchoCancellation", "googAutoGainControl", "googNoiseSuppression", "googHighpassFilter"}) c.mandatory.add(new MediaConstraints.KeyValuePair(key,"false"));
@@ -150,6 +243,7 @@ public final class WebRTCNativeTests extends Instrumentation {
             }
         }
         public synchronized void close() {
+            try { stopCarrier(); } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
             if (peer != null) { peer.close(); peer.dispose(); peer = null; }
             if (track != null) { track.dispose(); track = null; }
             if (source != null) { source.dispose(); source = null; }

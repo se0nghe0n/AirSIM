@@ -188,6 +188,9 @@ assert_not_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java"
   'Native carrier audio must remain in process'
 compile_test "$OUT" "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCCaptureClock.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayoutClock.java \
+  "$ROOT"/src/org/webrtc/audio/ExternalPlayoutClock.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayout.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCOpusSDP.java \
   "$ROOT"/test/com/airsim/phonecontrol/WebRTCMediaTests.java

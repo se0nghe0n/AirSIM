@@ -38,6 +38,7 @@ final class TelephonyAudioDevice implements Closeable {
     }
 
     private void run() {
+        audioPriority();
         byte[] frame = new byte[WebRTCPcmBuffer.FRAME_BYTES];
         try {
             if (!PrivilegedBridgeProtocol.supportsUid(Process.myUid())) throw new SecurityException("privilege required");
@@ -84,6 +85,15 @@ final class TelephonyAudioDevice implements Closeable {
                 Thread.sleep(10);
             }
             if (closed.get()) return;
+            // Fill the carrier buffer with silence so the carrier clock paces NetEq from the first
+            // frame instead of decoding a burst faster than real time.
+            for (int i = 0; i < 64; i++) {
+                if (output.write(frame, 0, frame.length, AudioTrack.WRITE_NON_BLOCKING) < frame.length) break;
+            }
+            // Discard capture queued during route verification; only live audio starts the stream.
+            for (int i = 0; i < 64; i++) {
+                if (input.read(frame, 0, frame.length, AudioRecord.READ_NON_BLOCKING) < frame.length) break;
+            }
             int count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
             if (count <= 0 || input.getAudioSource() != SOURCE_VOICE_DOWNLINK) throw new IOException("carrier capture failed");
             capture.offer(frame, 0, count & ~1);
@@ -105,6 +115,7 @@ final class TelephonyAudioDevice implements Closeable {
     }
 
     private void play(AudioTrack output) {
+        audioPriority();
         try {
             while (!closed.get()) {
                 byte[] frame = playback.take();
@@ -117,8 +128,22 @@ final class TelephonyAudioDevice implements Closeable {
         } catch (Exception | LinkageError error) { if (!closed.get()) fail(error); }
     }
 
+    /** These threads clock WebRTC capture and playout, so they run at the SDK's audio priority. */
+    private static void audioPriority() {
+        try { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO); }
+        catch (RuntimeException ignored) { /* Best effort; the queues still absorb scheduling delay. */ }
+    }
+
     /** Stable, non-sensitive code for the most recent carrier failure. */
     String failureReason() { return failureReason; }
+
+    /** Underruns the platform counted on the carrier AudioTrack, or -1 when unavailable. */
+    int playbackUnderruns() {
+        AudioTrack output = track;
+        if (output == null) return -1;
+        try { return output.getUnderrunCount(); }
+        catch (RuntimeException | LinkageError error) { return -1; }
+    }
 
     private void fail(Throwable error) {
         failureReason = reason(error);

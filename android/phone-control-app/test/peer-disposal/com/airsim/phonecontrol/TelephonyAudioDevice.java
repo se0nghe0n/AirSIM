@@ -25,6 +25,8 @@ final class TelephonyAudioDevice implements Closeable {
 
     String failureReason() { return failureReason; }
 
+    int playbackUnderruns() { return -1; }
+
     @Override public void close() {
         closeCalls.incrementAndGet();
         duringClose.run();

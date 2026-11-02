@@ -17,6 +17,7 @@ import org.webrtc.CalledByNative;
 /** No AudioTrack or physical speaker is created. The callback owns external PCM routing. */
 class WebRtcAudioTrack {
     private final JavaAudioDeviceModule.PlaybackSamplesReadyCallback callback;
+    private final ExternalPlayoutClock clock;
     private final JavaAudioDeviceModule.AudioTrackStateCallback stateCallback;
     private final JavaAudioDeviceModule.AudioTrackErrorCallback errorCallback;
     private long nativeAudioTrack;
@@ -39,6 +40,7 @@ class WebRtcAudioTrack {
                     JavaAudioDeviceModule.PlaybackSamplesReadyCallback callback,
                     boolean useLowLatency, boolean enableVolumeLogger) {
         this.callback = callback;
+        this.clock = callback instanceof ExternalPlayoutClock ? (ExternalPlayoutClock) callback : null;
         this.stateCallback = stateCallback;
         this.errorCallback = errorCallback;
     }
@@ -63,11 +65,20 @@ class WebRtcAudioTrack {
             long next = System.nanoTime();
             try {
                 while (running) {
+                    // A device-clocked sink paces playout. Otherwise use the 10 ms timer.
+                    boolean clocked = false;
+                    try { clocked = clock != null && clock.awaitPlayoutSlot(); }
+                    catch (InterruptedException interrupted) { continue; }
+                    if (!running) break;
                     long now = System.nanoTime();
-                    if (now < next) { LockSupport.parkNanos(next - now); continue; }
-                    // Never replay a backlog in a burst after suspension.
-                    next += 10_000_000L;
-                    if (next < now) next = now + 10_000_000L;
+                    if (clocked) {
+                        next = now + 10_000_000L;
+                    } else {
+                        if (now < next) { LockSupport.parkNanos(next - now); continue; }
+                        // Never replay a backlog in a burst after suspension.
+                        next += 10_000_000L;
+                        if (next < now) next = now + 10_000_000L;
+                    }
                     if (!running) break;
                     nativeGetPlayoutData(nativeAudioTrack, buffer.capacity());
                     byte[] pcm = new byte[buffer.capacity()];
@@ -93,7 +104,8 @@ class WebRtcAudioTrack {
         if (stopping != null) {
             stopping.interrupt();
             boolean interrupted = false;
-            // Callback only enqueues; joining before disposal protects the native pointer.
+            // The callback only enqueues, and an ExternalPlayoutClock wait ends on interrupt or
+            // within its stall timeout. Joining before disposal protects the native pointer.
             for (;;) {
                 try { stopping.join(); break; }
                 catch (InterruptedException ignored) { interrupted = true; }
