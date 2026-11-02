@@ -188,7 +188,7 @@ struct CallKitPushKitReportingTests {
         )
     }
 
-    @Test func `Trimmed start ledger still recognises the latest dialed call`() {
+    @Test func `Trimmed start ledger still recognizes the latest dialed call`() {
         var ledger = OutgoingStartActionLedger()
         let firstCallUUID = UUID()
         var latestCallUUID = firstCallUUID
