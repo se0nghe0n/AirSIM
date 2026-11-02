@@ -106,6 +106,24 @@ xcodebuild -project iOS/AirSIM.xcodeproj \
   test
 ```
 
+## Versions and TestFlight
+
+`iOS/Config/Version.xcconfig` is the only source of the version for the iPhone app, Watch app and Live Activity extension. Do not set the version or build in Xcode's General tab; that writes target overrides, and `version.py` refuses to run while they exist.
+
+- `MARKETING_VERSION` is `{ISO week-year, two digits}.{ISO week}.{N}`, for example `26.45.1`. `N` counts uploads in that week from 1 and restarts each Monday (Asia/Seoul; override with `AIRSIM_VERSION_TIMEZONE`). Weeks have no leading zero.
+- `CURRENT_PROJECT_VERSION` is one integer that only increases, across all versions.
+
+Each upload reserves its numbers on the Git remote, so any Mac can upload without colliding:
+
+```sh
+iOS/scripts/version.py next      # what the next upload would get
+iOS/scripts/testflight.sh        # reserve, commit, push, archive and upload
+```
+
+`testflight.sh` runs `version.py bump`, which fetches, fast-forwards or rebases the current branch, commits the new `Version.xcconfig`, and pushes that commit atomically with an annotated tag `ios/v<version>-<build>`. These tags are the shared registry: the next build is one more than the highest tag on any branch. When two Macs race, the remote rejects the second push and that Mac recomputes. A failed upload leaves a gap in the build numbers; retry the same reserved build from its commit with `testflight.sh --skip-bump`.
+
+The script archives the `Release` configuration (APNs `production`) and uploads with `manageAppVersionAndBuildNumber` off, so Xcode keeps the reserved numbers. It signs with the Apple ID signed in to Xcode, or with an App Store Connect API key when `ASC_KEY_PATH`, `ASC_KEY_ID` and `ASC_ISSUER_ID` are set. Archives stay in the ignored `iOS/build/testflight/`. An upload needs an App Store Connect app record for the main Bundle ID, and App Store Connect must finish processing before testers see it.
+
 ## Signing and push
 
 When re-signing a diagnostic package from a `CODE_SIGNING_ALLOWED=NO` Debug build, sign every embedded dynamic library first, including the main app's and Live Activity extension's `*.debug.dylib` and `__preview.dylib`. Then sign extensions and the main app from the inside out. Running only `codesign --verify --deep --strict` on `.app` does not prove the Debug libraries at the bundle root are signed. Verify each `.dylib` separately and confirm the process stays alive after device launch. Missing signatures cause a DYLD `Library missing / missing code signature` crash before app code runs.

@@ -1,0 +1,7 @@
+// Shared version for the iPhone app, Watch app and Live Activity extension.
+// Do not edit by hand or in Xcode's General tab: run `iOS/scripts/version.py bump`,
+// which reserves the next build through Git so every Mac uploads a unique number.
+// MARKETING_VERSION: {ISO week-year, two digits}.{ISO week}.{upload in that week, from 1}
+// CURRENT_PROJECT_VERSION: one build number that only increases, across all versions.
+MARKETING_VERSION = 0.9.7
+CURRENT_PROJECT_VERSION = 81
