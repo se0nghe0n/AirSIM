@@ -30,9 +30,9 @@ root="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 cd "$root"
 
 if [[ $skip_bump -eq 0 ]]; then
-  python3 iOS/scripts/version.py bump --remote "$remote"
+  iOS/scripts/version.sh bump --remote "$remote"
 fi
-release="$(python3 iOS/scripts/version.py show)"
+release="$(iOS/scripts/version.sh show)"
 read -r version build <<<"$release"
 tag="ios/v$version-$build"
 
