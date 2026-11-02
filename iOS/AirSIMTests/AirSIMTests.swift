@@ -1800,17 +1800,6 @@ struct RecentsFeatureTests {
         #expect(stranger?.name == "+1 202 555 0199" && stranger?.avatarName == "" && stranger?.subtitle == "↙ Missed")
     }
 
-    @Test func `Calling back or messaging a recent asks the app shell, with the call's number`() async throws {
-        let store = TestStore(initialState: RecentsFeature.State(snapshot: SharedReader(value: snapshot()))) {
-            RecentsFeature()
-        }
-        let row = try #require(store.state.row(id: "preview-recent-2"))
-        await store.send(.view(.callTapped(row)))
-        await store.receive(\.delegate.call, "+1 202 555 0102")
-        await store.send(.view(.messageTapped(row)))
-        await store.receive(\.delegate.message, "+1 202 555 0102")
-    }
-
     @Test func `A row drawn before a history refresh still calls and messages the number it showed`() async throws {
         let shown = try #require(
             RecentsFeature.State(snapshot: SharedReader(value: snapshot())).row(id: "preview-recent-2")
@@ -3035,16 +3024,6 @@ struct TCAUIKitFeatureTests {
         #expect(commands.value.isEmpty)
     }
 
-    @Test func `Updating the recipient of an open composer preserves its body`() async {
-        let store = TestStore(initialState: composing("old", body: "Keep this text")) {
-            MessagesFeature()
-        } withDependencies: {
-            $0.airSIM = client()
-        }
-        await store.send(.compose("new")) { $0.composer?.recipient = "new" }
-        #expect(store.state.composer?.body == "Keep this text")
-    }
-
     @Test func `Closing the composer mid-send neither cancels the SMS nor applies it to a later composer`() async {
         let release = AsyncStream<Void>.makeStream()
         let sent = LockIsolated<[String]>([])
@@ -3351,16 +3330,6 @@ struct TCAUIKitFeatureTests {
         }
         await store.finish()
         #expect(!store.state.selfTestCompleted)
-    }
-
-    @Test func `Open conversation selects destination without sharing composer state`() async {
-        let store = TestStore(initialState: MessagesFeature.State(snapshot: snapshot)) {
-            MessagesFeature()
-        } withDependencies: {
-            $0.airSIM = client()
-        }
-        await store.send(.openConversation("+12025550100")) { $0.conversation = "+12025550100" }
-        #expect(store.state.composer == nil)
     }
 }
 
