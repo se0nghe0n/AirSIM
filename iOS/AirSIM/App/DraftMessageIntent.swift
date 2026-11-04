@@ -23,7 +23,7 @@ enum MessageDraftError: Error, CustomLocalizedStringResourceConvertible {
 struct DraftAirSIMMessageIntent: AppIntent {
     static let title: LocalizedStringResource = "Draft AirSIM SMS"
     static let description = IntentDescription(
-        "Opens AirSIM's SMS composer with a recipient and text filled in, to text from the SIM in the paired Android phone. This tool never sends. The person reviews the SMS and taps Send in AirSIM. It does not use the iPhone Messages app.",
+        "Opens AirSIM's SMS composer with a recipient and text filled in, to text from the SIM in the paired Android phone. This tool never sends. The person reviews the SMS and taps Send in AirSIM. It does not use the built-in Messages app.",
         searchKeywords: ["SMS", "text", "text message", "Android", "SIM"]
     )
 
