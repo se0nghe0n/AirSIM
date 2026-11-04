@@ -2,29 +2,10 @@ import AppIntents
 
 @available(iOS 27.0, *)
 @AppEntity(schema: .phone.phonePerson)
-struct AirSIMCallPerson {
-    static let defaultQuery = AirSIMCallPersonQuery()
-
-    let id: String
+struct AirSIMCallPerson: TransientAppEntity {
     var person: IntentPerson
 
     var displayRepresentation: DisplayRepresentation { person.displayRepresentation }
-
-    init(id: String) {
-        self.id = id
-        person = IntentPerson(handle: .init(phoneNumber: id))
-    }
-
-    struct AirSIMCallPersonQuery: EntityStringQuery {
-        func entities(for identifiers: [String]) async throws -> [AirSIMCallPerson] {
-            identifiers.map(AirSIMCallPerson.init(id:))
-        }
-
-        func entities(matching string: String) async throws -> [AirSIMCallPerson] {
-            let number = AppModel.validatedNumber(string)
-            return number.isEmpty ? [] : [AirSIMCallPerson(id: number)]
-        }
-    }
 }
 
 @available(iOS 27.0, *)
