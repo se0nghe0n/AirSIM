@@ -2604,56 +2604,22 @@ struct StartCallPolicyTests {
 }
 
 struct MessageDraftPolicyTests {
-    @available(iOS 27.0, *)
-    @Test func `Siri draft to one person uses the normalized phone handle and the spoken text`() throws {
+    @available(iOS 18.0, *)
+    @Test func `Siri draft to a person uses the normalized phone handle and the spoken text`() throws {
         let person = IntentPerson(handle: .init(phoneNumber: " +1 (202) 555-0100 "))
-        let draft = try MessageDraftPolicy.draft(
-            people: [person],
-            content: AttributedString("Running late"),
-            subject: nil,
-            hasNonTextContent: false
-        )
+        let draft = try MessageDraftPolicy.draft(person: person, text: "Running late")
         #expect(draft == MessageDraft(recipient: "+12025550100", body: "Running late"))
     }
 
-    @available(iOS 27.0, *)
-    @Test func `Siri draft without a destination opens an unaddressed composer`() throws {
-        let draft = try MessageDraftPolicy.draft(people: nil, content: nil, subject: nil, hasNonTextContent: false)
-        #expect(draft == MessageDraft(recipient: "", body: ""))
+    @Test func `Siri draft without a recipient opens an unaddressed composer`() throws {
+        #expect(try MessageDraftPolicy.draft(person: nil, text: nil) == MessageDraft(recipient: "", body: ""))
     }
 
-    @available(iOS 27.0, *)
-    @Test func `Siri draft to two people is rejected`() {
-        let people = [
-            IntentPerson(handle: .init(phoneNumber: "2025550100")),
-            IntentPerson(handle: .init(phoneNumber: "2025550101")),
-        ]
-        #expect(throws: MessageDraftError.multipleRecipients) {
-            try MessageDraftPolicy.draft(people: people, content: nil, subject: nil, hasNonTextContent: false)
-        }
-    }
-
-    @available(iOS 27.0, *)
+    @available(iOS 18.0, *)
     @Test func `Siri draft to an email-only person is rejected`() {
         let person = IntentPerson(handle: .init(emailAddress: "contact@example.com"))
         #expect(throws: MessageDraftError.noPhoneNumber) {
-            try MessageDraftPolicy.draft(people: [person], content: nil, subject: nil, hasNonTextContent: false)
-        }
-    }
-
-    @available(iOS 27.0, *)
-    @Test func `Siri draft with a subject or non-text content is rejected`() {
-        let person = IntentPerson(handle: .init(phoneNumber: "2025550100"))
-        #expect(throws: MessageDraftError.unsupportedContent) {
-            try MessageDraftPolicy.draft(people: [person], content: nil, subject: nil, hasNonTextContent: true)
-        }
-        #expect(throws: MessageDraftError.unsupportedContent) {
-            try MessageDraftPolicy.draft(
-                people: [person],
-                content: nil,
-                subject: AttributedString("Hello"),
-                hasNonTextContent: false
-            )
+            try MessageDraftPolicy.draft(person: person, text: nil)
         }
     }
 }
