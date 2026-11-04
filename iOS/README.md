@@ -227,6 +227,8 @@ Build both the app and Live Activity extension and verify their generated App In
 
 On iOS 27 and later, Siri and Shortcuts can start an audio AirSIM call through the App Intents `phone.startCall` schema. AirSIM rejects video requests and recipients without a dialable phone number. The intent opens the app and places the call through the same dial path as the keypad. Unit tests cover the number and mode policy; spoken Siri invocation on a physical phone remains a device acceptance check.
 
+Siri and Shortcuts can also draft an AirSIM SMS with the Draft AirSIM SMS intent, which is a Siri tool on iOS 27.3. AirSIM opens its composer with an optional recipient and plain text filled in and never sends without the user. It adopts no `messages` schema, because that domain must be adopted whole and `messages.sendMessage` would hand stored message bodies to the system. Spoken Siri drafting is also a device acceptance check.
+
 ## UIKit and TCA presentation
 
 The main app uses native tab, navigation, table, text-input, and sheet controllers.

@@ -29,13 +29,15 @@ enum AirSIMCallMode: String {
 enum StartCallPolicy {
     static func number(for person: IntentPerson, mode: AirSIMCallMode) throws -> String {
         guard mode == .audio else { throw StartCallError.videoUnsupported }
-        let number = AppModel.validatedNumber(firstPhoneNumber(of: person) ?? "")
+        let number = AppModel.validatedNumber(person.firstPhoneNumber ?? "")
         guard !number.isEmpty else { throw StartCallError.noPhoneNumber }
         return number
     }
+}
 
-    private static func firstPhoneNumber(of person: IntentPerson) -> String? {
-        for handle in [person.handle].compactMap({ $0 }) + person.aliases {
+extension IntentPerson {
+    var firstPhoneNumber: String? {
+        for handle in [handle].compactMap({ $0 }) + aliases {
             if case .phoneNumber(let value) = handle.value { return value }
         }
         return nil

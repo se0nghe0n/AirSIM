@@ -1,6 +1,12 @@
 import ComposableArchitecture
 import Foundation
 
+/// A message for the composer to open with; the user still sends it.
+struct MessageDraft: Equatable {
+    var recipient: String
+    var body = ""
+}
+
 /// SMS sends run here, so closing the screen that started one cannot cancel it.
 @Reducer
 struct MessagesFeature {
@@ -37,10 +43,10 @@ struct MessagesFeature {
                 .sorted { $0.timestamp < $1.timestamp }
         }
 
-        /// An open composer keeps its draft and is only readdressed.
-        mutating func compose(to recipient: String) {
+        /// An open composer is readdressed and keeps its draft unless the request carries text.
+        mutating func compose(to recipient: String, body: String = "") {
             guard composer != nil else {
-                composer = ComposerFeature.State(recipient: recipient, snapshot: $snapshot)
+                composer = ComposerFeature.State(recipient: recipient, body: body, snapshot: $snapshot)
                 return
             }
             // A send to the old recipient no longer belongs to this composer; a failure goes to the root alert.
@@ -48,6 +54,9 @@ struct MessagesFeature {
                 composer?.sendID = nil
             }
             composer?.recipient = recipient
+            if !body.isEmpty {
+                composer?.body = body
+            }
         }
 
         mutating func openConversation(_ sender: String) {

@@ -289,6 +289,11 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         store.send(.composeMessage(number))
     }
 
+    func draftMessage(_ draft: MessageDraft) {
+        loadViewIfNeeded()
+        store.send(.draftMessage(draft))
+    }
+
     func openSMSConversation(_ sender: String) {
         loadViewIfNeeded()
         store.send(.openSMS(sender))
