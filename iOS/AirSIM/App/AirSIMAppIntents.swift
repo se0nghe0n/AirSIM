@@ -149,7 +149,7 @@ private func throwIfFailed(_ model: AppModel, as error: AirSIMIntentError) throw
 struct AnswerCurrentAirSIMCallIntent: AppIntent {
     static let title: LocalizedStringResource = "Answer AirSIM Call"
     static let description = IntentDescription(
-        "Picks up the incoming AirSIM call that is ringing now and connects it to this iPhone. AirSIM carries calls for the SIM in the paired Android phone, separate from this iPhone's own phone line.",
+        "Picks up the incoming AirSIM call that is ringing now and connects it to this device. AirSIM carries calls for the SIM in the paired Android phone, separate from this device's own phone line.",
         searchKeywords: ["pick up", "accept call", "Android phone", "SIM"]
     )
 
@@ -200,7 +200,7 @@ struct EndCurrentAirSIMCallIntent: AppIntent {
 struct SetAirSIMMuteIntent: AppIntent {
     static let title: LocalizedStringResource = "Mute AirSIM Microphone"
     static let description = IntentDescription(
-        "Silences or restores this iPhone's microphone during an AirSIM call on the SIM in the paired Android phone. While muted, the other party cannot hear you.",
+        "Silences or restores this device's microphone during an AirSIM call on the SIM in the paired Android phone. While muted, the other party cannot hear you.",
         searchKeywords: ["mute", "unmute", "microphone", "mic"]
     )
 
@@ -229,7 +229,7 @@ struct SetAirSIMMuteIntent: AppIntent {
 struct SetAirSIMSpeakerIntent: AppIntent {
     static let title: LocalizedStringResource = "Set AirSIM Speaker"
     static let description = IntentDescription(
-        "Turns this iPhone's loudspeaker on or off for the current AirSIM call, which runs on the SIM in the paired Android phone. Off returns audio to the receiver or a connected headset.",
+        "Turns this device's loudspeaker on or off for the current AirSIM call, which runs on the SIM in the paired Android phone. Off returns audio to the receiver or a connected headset.",
         searchKeywords: ["speakerphone", "loudspeaker", "hands-free"]
     )
 
@@ -258,7 +258,7 @@ struct SetAirSIMSpeakerIntent: AppIntent {
 struct SetAirSIMCallRecordingIntent: AppIntent {
     static let title: LocalizedStringResource = "Record AirSIM Conversation"
     static let description = IntentDescription(
-        "Starts or stops saving an audio recording of an AirSIM call in progress on the SIM in the paired Android phone. Recordings are saved on this iPhone and listed in AirSIM's Recents.",
+        "Starts or stops saving an audio recording of an AirSIM call in progress on the SIM in the paired Android phone. Recordings are saved on this device and listed in AirSIM's Recents.",
         searchKeywords: ["record", "recording", "call recorder"]
     )
 
