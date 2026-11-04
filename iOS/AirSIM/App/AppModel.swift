@@ -339,7 +339,7 @@ final class AppModel {
     @ObservationIgnored private var eventRevision: UInt64 = AgentEventCursor.initial
     @ObservationIgnored private var eventStreamSupported: Bool?
     @ObservationIgnored private var pollingGeneration = 0
-    @ObservationIgnored private var hasStarted = false
+    @ObservationIgnored private(set) var hasStarted = false
     @ObservationIgnored private var consecutivePollFailures = 0
     @ObservationIgnored private var callTransitionProtectedUntil = Date.distantPast
     @ObservationIgnored private var nextAudioDiagnosticRefresh = Date.distantPast

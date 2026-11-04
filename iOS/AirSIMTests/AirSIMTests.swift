@@ -2624,6 +2624,94 @@ struct MessageDraftPolicyTests {
     }
 }
 
+struct AirSIMCallControlIntentTests {
+    private func snapshot(_ state: CallLifecycleState, callID: String?) -> CallLifecycleSnapshot {
+        CallLifecycleSnapshot(
+            callID: callID,
+            callUUID: nil,
+            generation: 1,
+            state: state,
+            source: nil,
+            timestamp: nil,
+            traceID: nil,
+            failure: nil
+        )
+    }
+
+    @Test func `Siri call actions target the live call before an unadopted CallKit push`() throws {
+        let live = snapshot(.active, callID: "live")
+        #expect(try AirSIMCallControl.currentCallID(snapshot: live, pushedCallID: "push") == "live")
+        #expect(try AirSIMCallControl.currentCallID(snapshot: .idle, pushedCallID: "push") == "push")
+    }
+
+    @Test(arguments: [CallLifecycleState.idle, .ending, .ended, .failed])
+    func `Siri call actions without a live call or push report that there is no call`(state: CallLifecycleState) {
+        #expect(throws: AirSIMIntentError.noCall) {
+            try AirSIMCallControl.currentCallID(snapshot: snapshot(state, callID: "old"), pushedCallID: nil)
+        }
+    }
+
+    @Test func `In-call switches run only while a call is connecting or connected`() throws {
+        try AirSIMCallControl.requireLiveCall(.connecting)
+        try AirSIMCallControl.requireLiveCall(.active)
+        for state in [CallLifecycleState.idle, .ringing, .ending, .ended, .failed] {
+            #expect(throws: AirSIMIntentError.noCall) { try AirSIMCallControl.requireLiveCall(state) }
+        }
+    }
+
+    @Test func `A switch already in the requested state is not toggled`() {
+        #expect(!AirSIMCallControl.needsToggle(current: true, requested: true))
+        #expect(!AirSIMCallControl.needsToggle(current: false, requested: false))
+        #expect(AirSIMCallControl.needsToggle(current: false, requested: true))
+        #expect(AirSIMCallControl.needsToggle(current: true, requested: false))
+    }
+
+    @Test func `Keypad digits are sent in spoken order without spaces`() throws {
+        #expect(try AirSIMCallControl.digits(" 12 3*0# ") == ["1", "2", "3", "*", "0", "#"])
+        #expect(try AirSIMCallControl.digits(String(repeating: "9", count: 32)).count == 32)
+    }
+
+    @Test(arguments: ["", "   ", "12a", "+1", "1-2", String(repeating: "1", count: 33)])
+    func `Keypad digits outside 0-9 * # or over 32 keys are rejected`(raw: String) {
+        #expect(throws: AirSIMIntentError.invalidDigits) { try AirSIMCallControl.digits(raw) }
+    }
+
+    @Test func `Connection status tells a stopped app to open AirSIM instead of reporting a stale state`() {
+        let summaries: [ModuleConnectionSummary] = [.localOnline, .localOnlineNoService, .cloudOnly, .offline]
+        let stopped = Set(summaries.map { AirSIMConnectionStatus.sentence(isRunning: false, summary: $0) })
+        #expect(stopped.count == 1)
+        #expect(stopped.first?.contains("Open AirSIM") == true)
+
+        let running = summaries.map { AirSIMConnectionStatus.sentence(isRunning: true, summary: $0) }
+        #expect(Set(running).count == summaries.count)
+        #expect(!running.contains(where: stopped.contains))
+        #expect(running[0].contains("has cellular service"))
+        #expect(running[1].contains("no cellular service"))
+        #expect(running[2].contains("cloud Relay"))
+        #expect(running[3].contains("cannot reach"))
+    }
+
+    @Test func `Every app tab has a Siri tab value with the same title`() {
+        #expect(AirSIMTabAppEnum.allCases.count == PhoneTab.allCases.count)
+        for tab in PhoneTab.allCases {
+            let value = AirSIMTabAppEnum(tab)
+            #expect(value.phoneTab == tab)
+            let title = AirSIMTabAppEnum.caseDisplayRepresentations[value]?.title
+            #expect(title.map { String(localized: $0) } == tab.rawValue)
+        }
+    }
+
+    @Test func `Every connection mode has a Siri value with the settings title`() {
+        #expect(AirSIMConnectionModeAppEnum.allCases.count == AirSIMConnectionMode.allCases.count)
+        for mode in AirSIMConnectionMode.allCases {
+            let value = AirSIMConnectionModeAppEnum(mode)
+            #expect(value.mode == mode)
+            let title = AirSIMConnectionModeAppEnum.caseDisplayRepresentations[value]?.title
+            #expect(title.map { String(localized: $0) } == String(localized: mode.title))
+        }
+    }
+}
+
 /// Loopback TCP peer standing in for the Android pairing endpoint. With a nil `response` it reads the
 /// claim and then stays silent without closing, like an Android whose pairing window stalled.
 private final class LoopbackPairingPeer: @unchecked Sendable {
