@@ -1430,11 +1430,12 @@ final class AppModel {
         return local + " · " + detail
     }
 
-    func dial() async {
+    @discardableResult
+    func dial() async -> Bool {
         let number = Self.validatedNumber(numberInput)
-        guard !number.isEmpty else { return }
+        guard !number.isEmpty else { return false }
         // perform() would drop this dial; do not present a provisional call screen for it.
-        guard !isBusy else { return }
+        guard !isBusy else { return false }
         callPresentationSurface = .app
         let now = Date()
         let pendingCall = CallRecord(
@@ -1471,8 +1472,9 @@ final class AppModel {
             }
         }
         // After a submitted dial, Agent status, lifecycle events or callKitDidFail retire the provisional record.
-        guard !submitted else { return }
+        guard !submitted else { return true }
         retireProvisionalOutgoingCall(pendingCall.id)
+        return false
     }
 
     /// Clears a provisional "dialing" record that no lifecycle event will retire, unless another dial or call event
