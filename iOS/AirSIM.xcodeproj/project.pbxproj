@@ -112,6 +112,7 @@
 		A1F00000000000000000000C /* SettingsContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000C /* SettingsContent.swift */; };
 		A1F00000000000000000000D /* AirSIMFeature+Live.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000D /* AirSIMFeature+Live.swift */; };
 		A1F00000000000000000000E /* NotificationObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F00000000000000000000E /* NotificationObservation.swift */; };
+		A40000000000000000000001 /* AirSIMSiriEvaluations.swift in Sources */ = {isa = PBXBuildFile; fileRef = B40000000000000000000001 /* AirSIMSiriEvaluations.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -130,6 +131,13 @@
 			remoteInfo = AirSIMWatchApp;
 		};
 		G30000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E10000000000000000000002 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E10000000000000000000001;
+			remoteInfo = AirSIM;
+		};
+		G40000000000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = E10000000000000000000002 /* Project object */;
 			proxyType = 1;
@@ -270,6 +278,9 @@
 		B1F00000000000000000000D /* AirSIMFeature+Live.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AirSIMFeature+Live.swift"; sourceTree = "<group>"; };
 		B1F00000000000000000000E /* NotificationObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationObservation.swift; sourceTree = "<group>"; };
 		E90000000000000000000001 /* Version.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Version.xcconfig; sourceTree = "<group>"; };
+		B40000000000000000000001 /* AirSIMSiriEvaluations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMSiriEvaluations.swift; sourceTree = "<group>"; };
+		B40000000000000000000002 /* AirSIMSiriEvaluations.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirSIMSiriEvaluations.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B40000000000000000000003 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -303,6 +314,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C40000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -314,6 +332,7 @@
 				D10000000000000000000005 /* AirSIMLiveActivityExtension */,
 				D10000000000000000000006 /* AirSIMWatchApp */,
 				D30000000000000000000001 /* AirSIMTests */,
+				D40000000000000000000001 /* AirSIMSiriEvaluations */,
 				D2000000000000000000000E /* Licenses */,
 				E90000000000000000000002 /* Config */,
 				D10000000000000000000003 /* Products */,
@@ -505,6 +524,7 @@
 				B1000000000000000000000C /* AirSIM.app */,
 				B10000000000000000000017 /* AirSIMLiveActivityExtension.appex */,
 				B30000000000000000000002 /* AirSIMTests.xctest */,
+				B40000000000000000000002 /* AirSIMSiriEvaluations.xctest */,
 				B10000000000000000000022 /* AirSIMWatchApp.app */,
 			);
 			name = Products;
@@ -634,6 +654,15 @@
 			path = Config;
 			sourceTree = "<group>";
 		};
+		D40000000000000000000001 /* AirSIMSiriEvaluations */ = {
+			isa = PBXGroup;
+			children = (
+				B40000000000000000000001 /* AirSIMSiriEvaluations.swift */,
+				B40000000000000000000003 /* README.md */,
+			);
+			path = AirSIMSiriEvaluations;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -714,6 +743,24 @@
 			productReference = B30000000000000000000002 /* AirSIMTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		E40000000000000000000001 /* AirSIMSiriEvaluations */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F40000000000000000000001 /* Build configuration list for PBXNativeTarget "AirSIMSiriEvaluations" */;
+			buildPhases = (
+				C40000000000000000000003 /* Sources */,
+				C40000000000000000000001 /* Frameworks */,
+				C40000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				H40000000000000000000001 /* PBXTargetDependency */,
+			);
+			name = AirSIMSiriEvaluations;
+			productName = AirSIMSiriEvaluations;
+			productReference = B40000000000000000000002 /* AirSIMSiriEvaluations.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -757,6 +804,7 @@
 				E10000000000000000000003 /* AirSIMLiveActivityExtension */,
 				E30000000000000000000001 /* AirSIMTests */,
 				E10000000000000000000004 /* AirSIMWatchApp */,
+				E40000000000000000000001 /* AirSIMSiriEvaluations */,
 			);
 		};
 /* End PBXProject section */
@@ -790,6 +838,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		C30000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C40000000000000000000002 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -922,6 +977,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C40000000000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A40000000000000000000001 /* AirSIMSiriEvaluations.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -939,6 +1002,11 @@
 			isa = PBXTargetDependency;
 			target = E10000000000000000000001 /* AirSIM */;
 			targetProxy = G30000000000000000000001 /* PBXContainerItemProxy */;
+		};
+		H40000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E10000000000000000000001 /* AirSIM */;
+			targetProxy = G40000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1189,6 +1257,40 @@
 			};
 			name = Release;
 		};
+		F40000000000000000000002 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 98882K9P37;
+				ENABLE_HARDWARE_CHECKED_POINTER_ARITHMETIC_SLICE = NO;
+				ENABLE_POINTER_AUTHENTICATION = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.sirievaluations;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F40000000000000000000003 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 98882K9P37;
+				ENABLE_HARDWARE_CHECKED_POINTER_ARITHMETIC_SLICE = NO;
+				ENABLE_POINTER_AUTHENTICATION = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.3;
+				PRODUCT_BUNDLE_IDENTIFIER = com.se0nghe0n.airsim.q25.sirievaluations;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1233,6 +1335,15 @@
 			buildConfigurations = (
 				F30000000000000000000002 /* Debug */,
 				F30000000000000000000003 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F40000000000000000000001 /* Build configuration list for PBXNativeTarget "AirSIMSiriEvaluations" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F40000000000000000000002 /* Debug */,
+				F40000000000000000000003 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
