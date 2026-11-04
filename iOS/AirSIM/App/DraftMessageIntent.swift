@@ -1,78 +1,52 @@
 import AppIntents
-import Foundation
-import GeoToolbox
 
-@available(iOS 27.0, *)
-@UnionValue
-enum AirSIMMessageDestination {
-    case people([IntentPerson])
-}
-
-@available(iOS 27.0, *)
 enum MessageDraftPolicy {
-    static func draft(
-        people: [IntentPerson]?,
-        content: AttributedString?,
-        subject: AttributedString?,
-        hasNonTextContent: Bool
-    ) throws -> MessageDraft {
-        guard !hasNonTextContent, subject.map({ $0.characters.isEmpty }) ?? true else {
-            throw MessageDraftError.unsupportedContent
-        }
-        let body = content.map { String($0.characters) } ?? ""
-        let people = people ?? []
-        guard people.count <= 1 else { throw MessageDraftError.multipleRecipients }
-        guard let person = people.first else { return MessageDraft(recipient: "", body: body) }
+    static func draft(person: IntentPerson?, text: String?) throws -> MessageDraft {
+        let body = text ?? ""
+        guard let person else { return MessageDraft(recipient: "", body: body) }
         let number = AppModel.validatedNumber(person.firstPhoneNumber ?? "")
         guard !number.isEmpty else { throw MessageDraftError.noPhoneNumber }
         return MessageDraft(recipient: number, body: body)
     }
 }
 
-@available(iOS 27.0, *)
 enum MessageDraftError: Error, CustomLocalizedStringResourceConvertible {
-    case noPhoneNumber, multipleRecipients, unsupportedContent
+    case noPhoneNumber
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
-        case .noPhoneNumber: "This contact has no phone number AirSIM can text"
-        case .multipleRecipients: "AirSIM sends SMS to one recipient at a time"
-        case .unsupportedContent: "AirSIM sends text-only SMS without a subject, attachments or a scheduled time"
+        case .noPhoneNumber: "This contact has no phone number AirSIM can text. Choose a contact with a phone number."
         }
     }
 }
 
-/// The build warns that the Message Sending use case lacks `messages.sendMessage`. AirSIM leaves it out on purpose:
-/// that schema returns stored message bodies to the system.
-@available(iOS 27.0, *)
-@AppIntent(schema: .messages.draftMessage)
-struct DraftAirSIMMessageIntent {
-    var destination: AirSIMMessageDestination?
-    var subject: AttributedString?
-    var content: AttributedString?
-    var attachments: [IntentFile]
-    var audioMessage: IntentFile?
-    var locations: [GeoToolbox.PlaceDescriptor]
-    var links: [URL]
-    var scheduledDate: Date?
+struct DraftAirSIMMessageIntent: AppIntent {
+    static let title: LocalizedStringResource = "Draft AirSIM SMS"
+    static let description = IntentDescription(
+        "Opens AirSIM's SMS composer with a recipient and text filled in, to text from the SIM in the paired Android phone. This tool never sends. The person reviews the SMS and taps Send in AirSIM. It does not use the iPhone Messages app.",
+        searchKeywords: ["SMS", "text", "text message", "Android", "SIM"]
+    )
 
+    static let openAppWhenRun = true
+
+    @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .foreground }
+
+    @Parameter(
+        title: "Recipient",
+        description: "The person to text. AirSIM uses their phone number. Leave empty to choose the recipient in AirSIM.",
+        mode: .phone
+    )
+    var recipient: IntentPerson?
+
+    @Parameter(title: "Text", description: "The plain-text SMS body to fill in. The person can edit it before sending.")
+    var text: String?
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        let people: [IntentPerson]?
-        switch destination {
-        case .people(let value): people = value
-        case nil: people = nil
-        }
-        let draft = try MessageDraftPolicy.draft(
-            people: people,
-            content: content,
-            subject: subject,
-            hasNonTextContent: !attachments.isEmpty || audioMessage != nil || !locations.isEmpty
-                || !links.isEmpty || scheduledDate != nil
-        )
-        AirSIMSceneDelegate.route(.draft(draft))
+        AirSIMSceneDelegate.route(.draft(try MessageDraftPolicy.draft(person: recipient, text: text)))
         return .result()
     }
 }
+
+@available(iOS 27.3, *) extension DraftAirSIMMessageIntent: ToolIntent {}
