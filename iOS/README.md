@@ -225,6 +225,8 @@ Local requests are HMAC-authenticated over Wi-Fi VoWLAN. An unavailable local AP
 
 Build both the app and Live Activity extension and verify their generated App Intents metadata contains all three actions with background execution. Unit tests exercise intent dispatch, invalid targets, repeated answers and surfaced failures. Locked-screen taps and cold-launch execution on a physical phone remain device acceptance checks.
 
+On iOS 27 and later, Siri and Shortcuts can start an audio AirSIM call through the App Intents `phone.startCall` schema. AirSIM rejects video requests and recipients without a dialable phone number. The intent opens the app and places the call through the same dial path as the keypad. Unit tests cover the number and mode policy; spoken Siri invocation on a physical phone remains a device acceptance check.
+
 ## UIKit and TCA presentation
 
 The main app uses native tab, navigation, table, text-input, and sheet controllers.

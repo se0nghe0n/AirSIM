@@ -2568,6 +2568,41 @@ struct LiveActivityCallActionTests {
     }
 }
 
+struct StartCallPolicyTests {
+    @available(iOS 27.0, *)
+    @Test func `Siri audio call dials the person's normalized phone handle`() throws {
+        let person = IntentPerson(handle: .init(phoneNumber: " +1 (202) 555-0100 "))
+        #expect(try StartCallPolicy.number(for: person, mode: .audio) == "+12025550100")
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri audio call falls back to the first phone alias`() throws {
+        let person = IntentPerson(
+            identifier: .unknown,
+            name: .displayName("Contact"),
+            handle: .init(emailAddress: "contact@example.com"),
+            aliases: [.init(emailAddress: "other@example.com"), .init(phoneNumber: "202.555.0101")]
+        )
+        #expect(try StartCallPolicy.number(for: person, mode: .audio) == "2025550101")
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri call to an email-only person is rejected`() {
+        let person = IntentPerson(handle: .init(emailAddress: "contact@example.com"))
+        #expect(throws: StartCallError.noPhoneNumber) {
+            try StartCallPolicy.number(for: person, mode: .audio)
+        }
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri video call is rejected`() {
+        let person = IntentPerson(handle: .init(phoneNumber: "2025550100"))
+        #expect(throws: StartCallError.videoUnsupported) {
+            try StartCallPolicy.number(for: person, mode: .video)
+        }
+    }
+}
+
 /// Loopback TCP peer standing in for the Android pairing endpoint. With a nil `response` it reads the
 /// claim and then stays silent without closing, like an Android whose pairing window stalled.
 private final class LoopbackPairingPeer: @unchecked Sendable {
