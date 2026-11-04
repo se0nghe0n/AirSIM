@@ -3,6 +3,7 @@ import UIKit
 enum SceneRoute {
     case url(URL)
     case draft(MessageDraft)
+    case tab(PhoneTab)
 }
 
 /// Owns the window for the app's single scene. A background-only PushKit launch connects the scene
@@ -136,6 +137,9 @@ private extension RootViewController {
         switch route {
         case .url(let url): handleSystemCommunicationURL(url)
         case .draft(let draft): draftMessage(draft)
+        case .tab(let tab):
+            loadViewIfNeeded()
+            select(tab)
         }
     }
 }
