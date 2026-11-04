@@ -7,7 +7,7 @@ enum AirSIMIntentError: Error, Equatable, CustomLocalizedStringResourceConvertib
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
-        case .noCall: "There is no AirSIM call"
+        case .noCall: "There is no AirSIM call right now. Start or answer an AirSIM call first."
         case .notRunning: "AirSIM is not running. Open AirSIM to connect to your Android phone."
         case .invalidDigits: "Send 1 to 32 keypad digits using only 0-9, * and #"
         case .recordingUnavailable: "Recording is available once the call is connected"
@@ -149,7 +149,8 @@ private func throwIfFailed(_ model: AppModel, as error: AirSIMIntentError) throw
 struct AnswerCurrentAirSIMCallIntent: AppIntent {
     static let title: LocalizedStringResource = "Answer AirSIM Call"
     static let description = IntentDescription(
-        "Answers the AirSIM call that is ringing now. AirSIM carries calls for the SIM in a paired Android phone."
+        "Picks up the incoming AirSIM call that is ringing now and connects it to this iPhone. AirSIM carries calls for the SIM in the paired Android phone, separate from this iPhone's own phone line.",
+        searchKeywords: ["pick up", "accept call", "Android phone", "SIM"]
     )
 
     @available(iOS 26.0, *)
@@ -164,7 +165,10 @@ struct AnswerCurrentAirSIMCallIntent: AppIntent {
 
 struct DeclineCurrentAirSIMCallIntent: AppIntent {
     static let title: LocalizedStringResource = "Decline AirSIM Call"
-    static let description = IntentDescription("Declines the incoming AirSIM call that is ringing now.")
+    static let description = IntentDescription(
+        "Rejects the incoming AirSIM call that is ringing now without picking it up, so the call to the SIM in the paired Android phone stops ringing.",
+        searchKeywords: ["reject call", "ignore call", "Android phone", "SIM"]
+    )
 
     @available(iOS 26.0, *)
     static var supportedModes: IntentModes { .background }
@@ -179,7 +183,8 @@ struct DeclineCurrentAirSIMCallIntent: AppIntent {
 struct EndCurrentAirSIMCallIntent: AppIntent {
     static let title: LocalizedStringResource = "End AirSIM Call"
     static let description = IntentDescription(
-        "Hangs up the current AirSIM call, whether it is ringing, dialing or connected."
+        "Hangs up the current AirSIM call on the SIM in the paired Android phone, whether it is ringing, dialing or connected.",
+        searchKeywords: ["hang up", "end call", "Android phone", "SIM"]
     )
 
     @available(iOS 26.0, *)
@@ -193,9 +198,10 @@ struct EndCurrentAirSIMCallIntent: AppIntent {
 }
 
 struct SetAirSIMMuteIntent: AppIntent {
-    static let title: LocalizedStringResource = "Mute AirSIM Call"
+    static let title: LocalizedStringResource = "Mute AirSIM Microphone"
     static let description = IntentDescription(
-        "Mutes or unmutes the iPhone microphone on the current AirSIM call. The other party cannot hear you while muted."
+        "Silences or restores this iPhone's microphone during an AirSIM call on the SIM in the paired Android phone. While muted, the other party cannot hear you.",
+        searchKeywords: ["mute", "unmute", "microphone", "mic"]
     )
 
     @available(iOS 26.0, *)
@@ -223,7 +229,8 @@ struct SetAirSIMMuteIntent: AppIntent {
 struct SetAirSIMSpeakerIntent: AppIntent {
     static let title: LocalizedStringResource = "Set AirSIM Speaker"
     static let description = IntentDescription(
-        "Turns the iPhone loudspeaker on or off for the current AirSIM call. Off returns audio to the receiver or a connected headset."
+        "Turns this iPhone's loudspeaker on or off for the current AirSIM call, which runs on the SIM in the paired Android phone. Off returns audio to the receiver or a connected headset.",
+        searchKeywords: ["speakerphone", "loudspeaker", "hands-free"]
     )
 
     @available(iOS 26.0, *)
@@ -249,9 +256,10 @@ struct SetAirSIMSpeakerIntent: AppIntent {
 }
 
 struct SetAirSIMCallRecordingIntent: AppIntent {
-    static let title: LocalizedStringResource = "Record AirSIM Call"
+    static let title: LocalizedStringResource = "Record AirSIM Conversation"
     static let description = IntentDescription(
-        "Starts or stops recording the connected AirSIM call. Recordings stay on this iPhone in AirSIM's Recents."
+        "Starts or stops saving an audio recording of an AirSIM call in progress on the SIM in the paired Android phone. Recordings are saved on this iPhone and listed in AirSIM's Recents.",
+        searchKeywords: ["record", "recording", "call recorder"]
     )
 
     @available(iOS 26.0, *)
@@ -280,9 +288,10 @@ struct SetAirSIMCallRecordingIntent: AppIntent {
 }
 
 struct SendAirSIMCallDigitsIntent: AppIntent {
-    static let title: LocalizedStringResource = "Send Keypad Digits"
+    static let title: LocalizedStringResource = "Send AirSIM Keypad Digits"
     static let description = IntentDescription(
-        "Sends keypad tones on the current AirSIM call, as when pressing keys for a phone menu or a conference PIN."
+        "Sends keypad tones on the current AirSIM call, which runs on the SIM in the paired Android phone, as when pressing keys for a phone menu or a conference PIN.",
+        searchKeywords: ["DTMF", "touch tones", "press", "extension", "PIN"]
     )
 
     @available(iOS 26.0, *)
@@ -314,7 +323,8 @@ struct SendAirSIMCallDigitsIntent: AppIntent {
 struct SetAirSIMConnectionModeIntent: AppIntent {
     static let title: LocalizedStringResource = "Set AirSIM Connection Mode"
     static let description = IntentDescription(
-        "Chooses how AirSIM reaches the paired Android phone. VoWLAN uses only the same Wi-Fi or hotspot, Cloud uses only the internet Relay, and Automatic tries VoWLAN first, then Cloud."
+        "Chooses how AirSIM reaches the paired Android phone. VoWLAN uses only the same Wi-Fi or hotspot, Cloud uses only the internet Relay, and Automatic tries VoWLAN first, then Cloud.",
+        searchKeywords: ["VoWLAN", "Wi-Fi", "hotspot", "cloud relay", "network"]
     )
 
     @available(iOS 26.0, *)
@@ -339,7 +349,8 @@ struct SetAirSIMConnectionModeIntent: AppIntent {
 struct CheckAirSIMConnectionIntent: AppIntent {
     static let title: LocalizedStringResource = "Check AirSIM Connection"
     static let description = IntentDescription(
-        "Tells whether AirSIM can reach the paired Android phone right now, over the local network or the cloud Relay, and whether the phone has cellular service."
+        "Tells whether AirSIM can reach the paired Android phone right now, over the local network or the cloud Relay, and whether the phone has cellular service.",
+        searchKeywords: ["status", "connected", "online", "Android phone", "cellular"]
     )
 
     @available(iOS 26.0, *)
@@ -356,7 +367,8 @@ struct CheckAirSIMConnectionIntent: AppIntent {
 struct SyncAirSIMMessagesIntent: AppIntent {
     static let title: LocalizedStringResource = "Sync AirSIM Messages"
     static let description = IntentDescription(
-        "Fetches new SMS from the paired Android phone into AirSIM. It does not read any message aloud."
+        "Fetches new SMS from the SIM in the paired Android phone into AirSIM. It does not read any message aloud.",
+        searchKeywords: ["refresh", "fetch", "SMS", "texts", "Android phone"]
     )
 
     @available(iOS 26.0, *)
@@ -374,9 +386,10 @@ struct SyncAirSIMMessagesIntent: AppIntent {
 }
 
 struct OpenAirSIMTabIntent: AppIntent {
-    static let title: LocalizedStringResource = "Open AirSIM Tab"
+    static let title: LocalizedStringResource = "Go to AirSIM Tab"
     static let description = IntentDescription(
-        "Opens AirSIM on one of its tabs: Dial, Recents, Messages, Contacts or Settings."
+        "Brings the AirSIM app forward on one of its tabs, such as the dial pad, Recents, Contacts or Settings.",
+        searchKeywords: ["show", "go to", "switch tab", "screen"]
     )
 
     static let openAppWhenRun = true
@@ -436,6 +449,12 @@ struct AirSIMShortcuts: AppShortcutsProvider {
             systemImageName: "arrow.triangle.2.circlepath"
         )
         AppShortcut(
+            intent: DraftAirSIMMessageIntent(),
+            phrases: ["Text with \(.applicationName)", "Draft \(.applicationName) SMS"],
+            shortTitle: "Draft SMS",
+            systemImageName: "square.and.pencil"
+        )
+        AppShortcut(
             intent: OpenAirSIMTabIntent(),
             phrases: ["Open \(\.$tab) in \(.applicationName)", "Show \(.applicationName) \(\.$tab)"],
             shortTitle: "Open Tab",
@@ -445,6 +464,7 @@ struct AirSIMShortcuts: AppShortcutsProvider {
 }
 
 // Siri may call these as tools. `@AppIntent(.tool)` is itself iOS 27.3-only and cannot mark an iOS 17 type.
+// Check Connection and Sync Messages stay out: they need AirSIM already running, and tools must work whenever called.
 @available(iOS 27.3, *) extension AnswerCurrentAirSIMCallIntent: ToolIntent {}
 @available(iOS 27.3, *) extension DeclineCurrentAirSIMCallIntent: ToolIntent {}
 @available(iOS 27.3, *) extension EndCurrentAirSIMCallIntent: ToolIntent {}
@@ -453,6 +473,4 @@ struct AirSIMShortcuts: AppShortcutsProvider {
 @available(iOS 27.3, *) extension SetAirSIMCallRecordingIntent: ToolIntent {}
 @available(iOS 27.3, *) extension SendAirSIMCallDigitsIntent: ToolIntent {}
 @available(iOS 27.3, *) extension SetAirSIMConnectionModeIntent: ToolIntent {}
-@available(iOS 27.3, *) extension CheckAirSIMConnectionIntent: ToolIntent {}
-@available(iOS 27.3, *) extension SyncAirSIMMessagesIntent: ToolIntent {}
 @available(iOS 27.3, *) extension OpenAirSIMTabIntent: ToolIntent {}
