@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A1D000000000000000000001 /* AppNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000001 /* AppNavigation.swift */; };
 		A1E700000000000000000001 /* StartCallIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E700000000000000000001 /* StartCallIntent.swift */; };
+		A1E700000000000000000002 /* DraftMessageIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E700000000000000000002 /* DraftMessageIntent.swift */; };
 		A1D000000000000000000002 /* AirSIMSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000002 /* AirSIMSnapshot.swift */; };
 		A1D000000000000000000003 /* AirSIMClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000003 /* AirSIMClient.swift */; };
 		A1D000000000000000000005 /* ObservingViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D000000000000000000005 /* ObservingViewController.swift */; };
@@ -164,6 +165,7 @@
 /* Begin PBXFileReference section */
 		B1D000000000000000000001 /* AppNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppNavigation.swift; sourceTree = "<group>"; };
 		B1E700000000000000000001 /* StartCallIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartCallIntent.swift; sourceTree = "<group>"; };
+		B1E700000000000000000002 /* DraftMessageIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftMessageIntent.swift; sourceTree = "<group>"; };
 		B1D000000000000000000002 /* AirSIMSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMSnapshot.swift; sourceTree = "<group>"; };
 		B1D000000000000000000003 /* AirSIMClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirSIMClient.swift; sourceTree = "<group>"; };
 		B1D000000000000000000005 /* ObservingViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservingViewController.swift; sourceTree = "<group>"; };
@@ -349,6 +351,7 @@
 				B10000000000000000000004 /* AppSettings.swift */,
 				B1D000000000000000000001 /* AppNavigation.swift */,
 				B1E700000000000000000001 /* StartCallIntent.swift */,
+				B1E700000000000000000002 /* DraftMessageIntent.swift */,
 				BABC00000000000000000001 /* AirSIMFeature.swift */,
 				B1D000000000000000000003 /* AirSIMClient.swift */,
 				B1D000000000000000000002 /* AirSIMSnapshot.swift */,
@@ -834,6 +837,7 @@
 				A10000000000000000000017 /* LocalHistoryStore.swift in Sources */,
 				A1D000000000000000000001 /* AppNavigation.swift in Sources */,
 				A1E700000000000000000001 /* StartCallIntent.swift in Sources */,
+				A1E700000000000000000002 /* DraftMessageIntent.swift in Sources */,
 				A1D000000000000000000002 /* AirSIMSnapshot.swift in Sources */,
 				A1D000000000000000000003 /* AirSIMClient.swift in Sources */,
 				A1D000000000000000000005 /* ObservingViewController.swift in Sources */,

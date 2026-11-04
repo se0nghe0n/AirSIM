@@ -2380,7 +2380,7 @@ struct MessagesFeatureTests {
         await onboarding.send(.messages(.view(.composeTapped)))
         await onboarding.receive(\.messages.delegate.compose, "") {
             $0.selectedTab = .messages
-            $0.pendingComposeRecipient = ""
+            $0.pendingDraft = MessageDraft(recipient: "")
         }
         await onboarding.finish()
     }
@@ -2599,6 +2599,61 @@ struct StartCallPolicyTests {
         let person = IntentPerson(handle: .init(phoneNumber: "2025550100"))
         #expect(throws: StartCallError.videoUnsupported) {
             try StartCallPolicy.number(for: person, mode: .video)
+        }
+    }
+}
+
+struct MessageDraftPolicyTests {
+    @available(iOS 27.0, *)
+    @Test func `Siri draft to one person uses the normalized phone handle and the spoken text`() throws {
+        let person = IntentPerson(handle: .init(phoneNumber: " +1 (202) 555-0100 "))
+        let draft = try MessageDraftPolicy.draft(
+            people: [person],
+            content: AttributedString("Running late"),
+            subject: nil,
+            hasNonTextContent: false
+        )
+        #expect(draft == MessageDraft(recipient: "+12025550100", body: "Running late"))
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri draft without a destination opens an unaddressed composer`() throws {
+        let draft = try MessageDraftPolicy.draft(people: nil, content: nil, subject: nil, hasNonTextContent: false)
+        #expect(draft == MessageDraft(recipient: "", body: ""))
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri draft to two people is rejected`() {
+        let people = [
+            IntentPerson(handle: .init(phoneNumber: "2025550100")),
+            IntentPerson(handle: .init(phoneNumber: "2025550101")),
+        ]
+        #expect(throws: MessageDraftError.multipleRecipients) {
+            try MessageDraftPolicy.draft(people: people, content: nil, subject: nil, hasNonTextContent: false)
+        }
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri draft to an email-only person is rejected`() {
+        let person = IntentPerson(handle: .init(emailAddress: "contact@example.com"))
+        #expect(throws: MessageDraftError.noPhoneNumber) {
+            try MessageDraftPolicy.draft(people: [person], content: nil, subject: nil, hasNonTextContent: false)
+        }
+    }
+
+    @available(iOS 27.0, *)
+    @Test func `Siri draft with a subject or non-text content is rejected`() {
+        let person = IntentPerson(handle: .init(phoneNumber: "2025550100"))
+        #expect(throws: MessageDraftError.unsupportedContent) {
+            try MessageDraftPolicy.draft(people: [person], content: nil, subject: nil, hasNonTextContent: true)
+        }
+        #expect(throws: MessageDraftError.unsupportedContent) {
+            try MessageDraftPolicy.draft(
+                people: [person],
+                content: nil,
+                subject: AttributedString("Hello"),
+                hasNonTextContent: false
+            )
         }
     }
 }
@@ -3408,13 +3463,15 @@ struct TCARootNavigationTests {
         // The onboarding screen covers the tabs; presenting the composer now would dismiss it.
         await store.send(.composeMessage("+12025550100")) {
             $0.selectedTab = .messages
-            $0.pendingComposeRecipient = "+12025550100"
+            $0.pendingDraft = MessageDraft(recipient: "+12025550100")
         }
-        await store.send(.openURL(URL(string: "im:+12025550101")!)) { $0.pendingComposeRecipient = "+12025550101" }
+        await store.send(.openURL(URL(string: "im:+12025550101")!)) {
+            $0.pendingDraft = MessageDraft(recipient: "+12025550101")
+        }
         await store.send(.settings(.view(.pairLaterTapped)))
         await store.receive(\.settings.delegate.onboardingCompleted) {
             $0.firstConnectionComplete = true
-            $0.pendingComposeRecipient = nil
+            $0.pendingDraft = nil
             $0.messages.composer = ComposerFeature.State(recipient: "+12025550101", snapshot: snapshot)
         }
         await store.finish()
@@ -3432,6 +3489,43 @@ struct TCARootNavigationTests {
         await store.send(.composeMessage("new")) {
             $0.selectedTab = .messages
             $0.messages.composer?.recipient = "new"
+        }
+        await store.finish()
+    }
+
+    @Test func `Siri draft during onboarding opens the composer with its text once onboarding completes`() async {
+        let store = TestStore(initialState: AirSIMFeature.State()) {
+            AirSIMFeature()
+        } withDependencies: {
+            $0.airSIM = client
+        }
+        let draft = MessageDraft(recipient: "+12025550100", body: "Running late")
+        await store.send(.draftMessage(draft)) {
+            $0.selectedTab = .messages
+            $0.pendingDraft = draft
+        }
+        await store.send(.settings(.view(.pairLaterTapped)))
+        await store.receive(\.settings.delegate.onboardingCompleted) {
+            $0.firstConnectionComplete = true
+            $0.pendingDraft = nil
+            $0.messages.composer = ComposerFeature.State(recipient: "+12025550100", body: "Running late", snapshot: snapshot)
+        }
+        await store.finish()
+    }
+
+    @Test func `Siri draft readdresses an open composer and replaces its text`() async {
+        var state = AirSIMFeature.State()
+        state.firstConnectionComplete = true
+        state.messages.composer = ComposerFeature.State(recipient: "old", body: "Old text", snapshot: snapshot)
+        let store = TestStore(initialState: state) {
+            AirSIMFeature()
+        } withDependencies: {
+            $0.airSIM = client
+        }
+        await store.send(.draftMessage(MessageDraft(recipient: "+12025550101", body: "Running late"))) {
+            $0.selectedTab = .messages
+            $0.messages.composer?.recipient = "+12025550101"
+            $0.messages.composer?.body = "Running late"
         }
         await store.finish()
     }

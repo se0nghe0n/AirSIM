@@ -18,7 +18,7 @@ struct AirSIMFeature {
         /// The backend error last seen in a snapshot, so each new one raises a single alert.
         var lastBackendError: String?
         /// Onboarding covers the tabs, so a composer requested before it finishes waits for it.
-        var pendingComposeRecipient: String?
+        var pendingDraft: MessageDraft?
 
         init(snapshot: AirSIMSnapshot = AirSIMSnapshot()) {
             let shared = Shared(value: snapshot)
@@ -31,20 +31,20 @@ struct AirSIMFeature {
             activeCall = ActiveCallFeature.State(snapshot: SharedReader(shared))
         }
 
-        mutating func composeMessage(to recipient: String) {
+        mutating func composeMessage(_ draft: MessageDraft) {
             selectedTab = .messages
             if firstConnectionComplete {
-                messages.compose(to: recipient)
+                messages.compose(to: draft.recipient, body: draft.body)
             } else {
-                pendingComposeRecipient = recipient
+                pendingDraft = draft
             }
         }
 
         mutating func finishOnboarding() {
             firstConnectionComplete = true
-            if let recipient = pendingComposeRecipient {
-                pendingComposeRecipient = nil
-                messages.compose(to: recipient)
+            if let draft = pendingDraft {
+                pendingDraft = nil
+                messages.compose(to: draft.recipient, body: draft.body)
             }
         }
     }
@@ -57,6 +57,7 @@ struct AirSIMFeature {
         case openURL(URL)
         case openSMS(String)
         case composeMessage(String)
+        case draftMessage(MessageDraft)
         case remoteSMSReceived
         case openIncomingCall
         case dial(DialFeature.Action)
@@ -129,7 +130,10 @@ struct AirSIMFeature {
                 .recents(.delegate(.message(let recipient))),
                 .contacts(.delegate(.message(let recipient))),
                 .messages(.delegate(.compose(let recipient))):
-                return compose(to: recipient, state: &state)
+                return compose(MessageDraft(recipient: recipient), state: &state)
+
+            case .draftMessage(let draft):
+                return compose(draft, state: &state)
 
             case .messages(.delegate(.unreportedSendFailure(let error))):
                 state.alert = .error(error)
@@ -190,15 +194,15 @@ struct AirSIMFeature {
         return command(.dialNumber(number))
     }
 
-    private func compose(to recipient: String, state: inout State) -> Effect<Action> {
-        state.composeMessage(to: recipient)
+    private func compose(_ draft: MessageDraft, state: inout State) -> Effect<Action> {
+        state.composeMessage(draft)
         return command(.persistTab(.messages))
     }
 
     private func open(_ url: URL, state: inout State) -> Effect<Action> {
         switch SystemCommunicationURL.destination(for: url) {
         case .message(let recipient):
-            return compose(to: recipient, state: &state)
+            return compose(MessageDraft(recipient: recipient), state: &state)
 
         case .call(let number):
             return dialWithoutRememberingTab(number, state: &state)
