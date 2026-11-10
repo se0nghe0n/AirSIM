@@ -32,6 +32,12 @@ final class StandaloneCloudMediaManager implements Closeable {
     private final ExecutorService sessions = Executors.newCachedThreadPool();
     private final Object lock = new Object();
     private final Map<String, Descriptor> owners = new LinkedHashMap<>();
+    /**
+     * Incoming calls whose announcement the Relay has not confirmed yet. A retry reuses the same
+     * identity: the Relay may already hold its ringing lifecycle (written before APNs), and a new
+     * identity would be refused as identity_mismatch and leave that lifecycle open for 5 h.
+     */
+    private final Map<String, Descriptor> unannounced = new LinkedHashMap<>();
     private CloudSession active;
     private String pendingOutgoingTelecomID;
 
@@ -103,12 +109,22 @@ final class StandaloneCloudMediaManager implements Closeable {
         Descriptor descriptor;
         synchronized (lock) {
             descriptor = owners.get(androidID);
+            // An incoming call that ended before the Relay confirmed it: still end that identity,
+            // in case the Relay recorded it before its push failed.
+            if (descriptor == null && "ended".equals(state)) descriptor = unannounced.remove(androidID);
             if (descriptor == null && active != null) descriptor = active.descriptor;
         }
         boolean sameTelecomCall = descriptor != null && androidID.equals(descriptor.androidID);
         if ("incoming".equals(direction) && "incoming".equals(state) && !sameTelecomCall
                 && (descriptor == null || !descriptor.androidID.isEmpty())) {
-            descriptor = Descriptor.incoming(registration, androidID);
+            synchronized (lock) {
+                descriptor = unannounced.get(androidID);
+                if (descriptor == null) {
+                    descriptor = Descriptor.incoming(registration, androidID);
+                    unannounced.put(androidID, descriptor);
+                    while (unannounced.size() > 8) unannounced.remove(unannounced.keySet().iterator().next());
+                }
+            }
             JSONObject payload = identity(registration).put("event", "incoming_call")
                     .put("call_id", descriptor.callID).put("call_uuid", descriptor.callUUID)
                     .put("generation", descriptor.generation).put("call_secret", descriptor.secret)
@@ -118,6 +134,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                     .put("media_transport", CloudCallMedia.WEBRTC)
                     .put("agent_media_capabilities", StandaloneAgentStore.mediaCapabilities());
             JSONObject accepted = relay.postJSON(registration, "/v1/events/call", payload, 15_000);
+            synchronized (lock) { unannounced.remove(androidID); }
             descriptor.mediaTransport = accepted.optString("media_transport", CloudCallMedia.WEBRTC);
             start(descriptor);
         } else if (descriptor != null && descriptor.androidID.isEmpty()
@@ -135,7 +152,18 @@ final class StandaloneCloudMediaManager implements Closeable {
                 }
             }
             String phase = phase(state);
-            if (!phase.isEmpty()) publishLifecycle(registration, relay, descriptor, phase);
+            RelayHTTPException rejectedEnd = null;
+            if (!phase.isEmpty()) {
+                try {
+                    publishLifecycle(registration, relay, descriptor, phase);
+                } catch (RelayHTTPException error) {
+                    // A transient failure keeps the call bound so the queued event can retry.
+                    // A permanent refusal of the end must still release the local session.
+                    if (!"ended".equals(state)
+                            || !CallLifecycleConflict.permanentRejection(error.statusCode())) throw error;
+                    rejectedEnd = error;
+                }
+            }
             if ("ended".equals(state)) {
                 synchronized (lock) {
                     owners.remove(androidID);
@@ -143,6 +171,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                 }
                 closeActive(descriptor);
             }
+            if (rejectedEnd != null) throw rejectedEnd;
         }
     }
 
@@ -153,6 +182,10 @@ final class StandaloneCloudMediaManager implements Closeable {
         try {
             relay.postJSON(registration, "/v1/events/call-state", lifecycle, 12_000);
         } catch (RelayHTTPException error) {
+            if (CallLifecycleConflict.obsoleteTerminal(phase, error.statusCode(), error.getMessage())) {
+                BridgeLog.info("cloud_lifecycle_terminal_obsolete phase=" + phase);
+                return;
+            }
             JSONObject stuck = mismatchSnapshot(error);
             CallLifecycleConflict.Action action = CallLifecycleConflict.decide(
                     stuck != null, phase, descriptor.callID, descriptor.callUUID,
