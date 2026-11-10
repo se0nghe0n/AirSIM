@@ -261,16 +261,16 @@ final class AirSIMAppDelegate: UIResponder, UIApplicationDelegate, UNUserNotific
     }
 
     private func persistRemoteSMS(_ pushed: IncomingRemoteSMS) -> Bool {
-        // Long messages carry only a preview in the APNs payload; wait for the next Agent sync to fetch the full body
-        // and avoid duplicate local entries.
-        guard !pushed.contentTruncated else { return false }
-        var messages = historyStore.loadMessages()
-        guard !messages.contains(where: { $0.deliveryID == pushed.deliveryID }) else { return false }
-        messages.append(pushed.message)
-        messages.sort { $0.timestamp > $1.timestamp }
-        if messages.count > 2_000 {
-            messages = Array(messages.prefix(2_000))
-        }
+        // A long message carries only a Relay preview ending in "…" (content_truncated). Save it anyway so it reaches
+        // Messages without a local Agent; the next local sync returns the same delivery id and replaces the preview
+        // with the full body. A delivery id that is already stored, as a full body or a preview, is left alone.
+        guard
+            let messages = SMSHistoryPolicy.insertingRemote(
+                pushed.message,
+                into: historyStore.loadMessages(),
+                limit: 2_000
+            )
+        else { return false }
         return historyStore.saveMessages(messages)
     }
 }
