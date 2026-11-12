@@ -815,6 +815,8 @@ final class VoIPPushController: NSObject {
     private var activityKitRegistrationStarted = false
     private var activityKitRegistrationTasks: [Task<Void, Never>] = []
     private var observedActivityIDs = Set<String>()
+    /// Relay requests share one connection; see `RelayHTTPClient`.
+    private let relayHTTP = RelayHTTPClient.shared
 
     func start() {
         guard !LocalModePreference.isEnabled() else { return }
@@ -968,8 +970,7 @@ final class VoIPPushController: NSObject {
                 updateToken: token
             )
         )
-        let configuration = URLSessionConfiguration.ephemeral
-        _ = try? await URLSession(configuration: configuration).data(for: request)
+        _ = try? await relayHTTP.data(for: request)
     }
 
     func storeAlertToken(_ token: Data) {
@@ -1264,8 +1265,8 @@ final class VoIPPushController: NSObject {
     }
 
     /// Checks whether the Agent is still online via the latest Relay heartbeat when local USB/ECM is unreachable.
-    /// Device secrets in the request body are encoded in memory only using an ephemeral URLSession that never writes to
-    /// disk.
+    /// Device secrets in the request body are encoded in memory only; the shared Relay session is ephemeral and never
+    /// writes to disk.
     func fetchCloudAgentStatus() async throws -> CloudAgentStatus {
         guard CloudModePreference.isEnabled() else {
             throw CloudAgentStatusError.unavailable
@@ -1307,10 +1308,7 @@ final class VoIPPushController: NSObject {
             )
         )
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 6
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 6)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw CloudAgentStatusError.invalidResponse
         }
@@ -1459,10 +1457,7 @@ final class VoIPPushController: NSObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 10
-        configuration.timeoutIntervalForResource = 12
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 12)
         guard let http = response as? HTTPURLResponse else { throw CloudCommandError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? JSONDecoder().decode(RelayErrorResponse.self, from: data).error)
@@ -1482,10 +1477,7 @@ final class VoIPPushController: NSObject {
         request.httpMethod = "GET"
         request.timeoutInterval = 5
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 6
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 6)
         guard let http = response as? HTTPURLResponse else {
             throw CloudAgentStatusError.invalidResponse
         }
@@ -1511,10 +1503,7 @@ final class VoIPPushController: NSObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(registration)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 8
-        configuration.timeoutIntervalForResource = 10
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 10)
         #if DEBUG
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             print("[AirSIM PushKit] Relay registration rejected; HTTP=\(http.statusCode)")
