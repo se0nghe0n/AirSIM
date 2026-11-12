@@ -146,6 +146,14 @@ sh "$ROOT/verify-io-api.sh" "$OUT"
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.AndroidAgentIdentityTests
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.ShizukuStartupPolicyTests
 
+# SMS relay lane: Relay outcomes, call-event queue drops and MMS text rules.
+compile_test "$OUT" "$OUT" \
+  "$ROOT"/src/com/airsim/phonecontrol/SMSRelayPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/SMSRelayStatus.java \
+  "$ROOT"/src/com/airsim/phonecontrol/MMSInboxPolicy.java \
+  "$ROOT"/test/com/airsim/phonecontrol/SMSRelayTests.java
+"$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.SMSRelayTests
+
 # Keep the real diagnostics class ahead of the unrelated suite's BridgeLog test double.
 DIAGNOSTICS_OUT="$OUT/diagnostics"
 mkdir -p "$DIAGNOSTICS_OUT"

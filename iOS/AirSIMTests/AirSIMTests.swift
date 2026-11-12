@@ -925,6 +925,94 @@ struct AirSIMTests {
         #expect(pushed.deliveryID == "sms-second-1")
     }
 
+    @Test func `Incoming SMS push saves a truncated body as a preview`() throws {
+        let preview = String(repeating: "a", count: 700) + "…"
+        let pushed = try IncomingRemoteSMS(userInfo: [
+            "event": "incoming_sms",
+            "delivery_id": "sms-long-1",
+            "sender": "10086",
+            "content": preview,
+            "content_truncated": true,
+            "timestamp": "2026-10-08T08:30:12Z",
+        ])
+        #expect(pushed.contentTruncated)
+        let older = SMSMessage(
+            sender: "10010",
+            content: "Earlier",
+            code: nil,
+            timestamp: pushed.timestamp.addingTimeInterval(-60),
+            deliveryID: "sms-older-1",
+            direction: .incoming
+        )
+
+        let inserted = try #require(SMSHistoryPolicy.insertingRemote(pushed.message, into: [older], limit: 2_000))
+
+        #expect(inserted.map(\.id) == ["delivery:sms-long-1", "delivery:sms-older-1"])
+        #expect(inserted.first?.content == preview)
+        #expect(inserted.first?.content.hasSuffix("…") == true)
+        // The Agent sync saves the full body under the same delivery id, and a reload lets that stored copy win.
+        let fullBody = SMSMessage(
+            sender: "10086",
+            content: String(repeating: "a", count: 900),
+            code: nil,
+            timestamp: pushed.timestamp,
+            deliveryID: "sms-long-1",
+            direction: nil
+        )
+        let reloaded = SMSHistoryPolicy.mergingStored([fullBody, older], into: inserted)
+        #expect(reloaded.count == 2)
+        #expect(reloaded.first(where: { $0.deliveryID == "sms-long-1" })?.content == fullBody.content)
+    }
+
+    @Test func `Incoming SMS push skips a delivery id that is already stored`() throws {
+        let pushed = try IncomingRemoteSMS(userInfo: [
+            "event": "incoming_sms",
+            "delivery_id": "sms-dup-1",
+            "sender": "10086",
+            "content": "Preview…",
+            "content_truncated": true,
+            "timestamp": "2026-10-08T08:30:12Z",
+        ])
+        let storedFullBody = SMSMessage(
+            sender: "10086",
+            content: "Preview and the rest of the full body",
+            code: nil,
+            timestamp: pushed.timestamp,
+            deliveryID: "sms-dup-1",
+            direction: nil
+        )
+
+        #expect(SMSHistoryPolicy.insertingRemote(pushed.message, into: [storedFullBody], limit: 2_000) == nil)
+        let storedPreview = try #require(SMSHistoryPolicy.insertingRemote(pushed.message, into: [], limit: 2_000))
+        #expect(SMSHistoryPolicy.insertingRemote(pushed.message, into: storedPreview, limit: 2_000) == nil)
+    }
+
+    @Test func `Incoming SMS push keeps the newest messages up to the limit`() throws {
+        let base = Date(timeIntervalSince1970: 1_791_448_212)
+        let stored = (0..<3).map { offset in
+            SMSMessage(
+                sender: "10086",
+                content: "Stored \(offset)",
+                code: nil,
+                timestamp: base.addingTimeInterval(TimeInterval(-offset * 60)),
+                deliveryID: "sms-stored-\(offset)",
+                direction: .incoming
+            )
+        }
+        let newest = SMSMessage(
+            sender: "10086",
+            content: "Newest",
+            code: nil,
+            timestamp: base.addingTimeInterval(30),
+            deliveryID: "sms-newest",
+            direction: .incoming
+        )
+
+        let inserted = try #require(SMSHistoryPolicy.insertingRemote(newest, into: Array(stored.reversed()), limit: 3))
+
+        #expect(inserted.map(\.deliveryID) == ["sms-newest", "sms-stored-0", "sms-stored-1"])
+    }
+
     @Test func `Cold launch SMS navigation request is consumed once`() {
         let suite = "airsim-tests-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!

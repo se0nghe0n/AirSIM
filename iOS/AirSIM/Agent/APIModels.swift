@@ -234,6 +234,22 @@ enum SMSHistoryPolicy {
         )
     }
 
+    /// Adds an SMS received by push, newest first and capped to `limit`, or returns nil when its id is already stored.
+    /// A pushed message's id is `delivery:<delivery_id>`, so a stored full body or truncated preview with the same
+    /// delivery id is kept as is. A later Agent sync with that delivery id replaces a preview with the full body.
+    static func insertingRemote(
+        _ message: SMSMessage,
+        into messages: [SMSMessage],
+        limit: Int
+    ) -> [SMSMessage]? {
+        guard !messages.contains(where: { $0.id == message.id }) else { return nil }
+        return Array(
+            (messages + [message])
+                .sorted { $0.timestamp > $1.timestamp }
+                .prefix(max(0, limit))
+        )
+    }
+
     /// Unordered union by id in which the stored copy wins; a local reload never removes in-memory messages.
     static func mergingStored(_ stored: [SMSMessage], into current: [SMSMessage]) -> [SMSMessage] {
         var messagesByID: [String: SMSMessage] = [:]

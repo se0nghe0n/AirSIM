@@ -89,7 +89,7 @@ final class StandaloneAgentGateway {
         JSONObject event = new JSONObject(json);
         if (smsStore.add(event, store.configured() && store.cloudEnabled())) {
             agentEvents.advance();
-            if (store.configured() && store.cloudEnabled()) StandaloneAgentService.start(context);
+            if (store.configured() && store.cloudEnabled()) StandaloneAgentService.requestSMSDelivery(context);
         }
     }
 
@@ -107,7 +107,9 @@ final class StandaloneAgentGateway {
                 case "/api/events" -> waitForAgentEvent(pathAndQuery);
                 case "/api/sms" -> ok(smsStore.localMessages().toString());
                 case "/api/sms/status" -> ok(new JSONObject().put("auto_cleanup_me", true)
-                        .put("count", smsStore.pendingCount()).put("last_poll_error", "").toString());
+                        .put("count", smsStore.pendingCount()).put("last_poll_error", "")
+                        .put("cloud_pending", smsStore.cloudPendingCount())
+                        .put("cloud_last_error", SMSRelayStatus.lastError()).toString());
                 case "/api/calls/audio/host/config" -> ok(new JSONObject()
                         .put("transport", "webrtc").put("media_capability_revision", 2)
                         .put("service_ready", ShizukuBridgeManager.get(context).mediaAvailable())

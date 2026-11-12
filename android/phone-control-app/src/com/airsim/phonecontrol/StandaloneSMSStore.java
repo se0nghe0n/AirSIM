@@ -72,20 +72,33 @@ final class StandaloneSMSStore {
         synchronized (LOCK) {
             Set<String> accepted = new HashSet<>();
             for (int i = 0; i < ids.length(); i++) accepted.add(ids.optString(i));
-            mutate(accepted, "local_ack");
+            mutate(accepted, "local_ack", null);
         }
     }
 
     void markCloudSent(String id) throws Exception {
         synchronized (LOCK) {
-            mutate(Set.of(id), "cloud_sent");
+            mutate(Set.of(id), "cloud_sent", null);
         }
     }
+
+    /**
+     * The Relay refused this message permanently (HTTP 400/413/422). It leaves the cloud queue so it
+     * cannot hold later messages back; local VoWLAN delivery is unaffected.
+     */
+    void markCloudRejected(String id) throws Exception {
+        synchronized (LOCK) {
+            mutate(Set.of(id), "cloud_sent", "cloud_rejected");
+        }
+    }
+
+    int cloudPendingCount() throws Exception { return cloudPending().length(); }
 
     int pendingCount() throws Exception { return localMessages().length(); }
     long revision() { synchronized (LOCK) { return preferences.getLong(REVISION, 0); } }
 
-    private void mutate(Set<String> ids, String flag) throws Exception {
+    /** Sets {@code flag} (and the optional diagnostic {@code marker}) on the matching records. */
+    private void mutate(Set<String> ids, String flag, String marker) throws Exception {
         JSONArray source = records();
         JSONArray updated = new JSONArray();
         SMSRecentDeliveryIDs recent = recentIDs();
@@ -94,6 +107,7 @@ final class StandaloneSMSStore {
             JSONObject record = source.getJSONObject(i);
             if (ids.contains(record.optString("delivery_id")) && !record.optBoolean(flag)) {
                 record.put(flag, true);
+                if (marker != null) record.put(marker, true);
                 changed = true;
             }
             if (!record.optBoolean("local_ack") || !record.optBoolean("cloud_sent")) updated.put(record);

@@ -21,10 +21,13 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Standalone foreground Agent: Relay registration, heartbeat and command execution. */
+/** Standalone foreground Agent: Relay registration, heartbeat, command execution and SMS delivery. */
 public final class StandaloneAgentService extends Service {
     private static final ConcurrentLinkedQueue<String> CALL_EVENTS = new ConcurrentLinkedQueue<>();
-    private final ExecutorService worker = Executors.newFixedThreadPool(2);
+    private static final Object SMS_SIGNAL = new Object();
+    private static boolean smsDeliveryRequested;
+    private static boolean smsScanRequested;
+    private final ExecutorService worker = Executors.newFixedThreadPool(3);
     private final Set<String> completedCommands = new LinkedHashSet<>();
     private final NotificationUpdateGate notificationGate = new NotificationUpdateGate();
     private volatile boolean running;
@@ -39,6 +42,9 @@ public final class StandaloneAgentService extends Service {
     private final Object commandLock = new Object();
     private final CommandRegistrationPolicy commandRegistration = new CommandRegistrationPolicy();
     private SharedPreferences preferences;
+    private volatile android.database.ContentObserver inboxObserver;
+    private String rejectedCallEvent;
+    private long rejectedCallEventSince;
     private final SharedPreferences.OnSharedPreferenceChangeListener registrationListener =
             (ignored, key) -> { if ("registration".equals(key)) refreshCommandRegistration(); };
 
@@ -52,6 +58,23 @@ public final class StandaloneAgentService extends Service {
     static void enqueueCallEvent(Context context, String json) {
         CALL_EVENTS.add(json);
         start(context);
+    }
+
+    /** A received SMS is durable in {@link StandaloneSMSStore}; wake the SMS lane to send it now. */
+    static void requestSMSDelivery(Context context) {
+        synchronized (SMS_SIGNAL) {
+            smsDeliveryRequested = true;
+            SMS_SIGNAL.notifyAll();
+        }
+        start(context);
+    }
+
+    /** The SMS/MMS provider changed; let the optional inbox fallback look before its 30 s cadence. */
+    static void requestInboxScan() {
+        synchronized (SMS_SIGNAL) {
+            smsScanRequested = true;
+            SMS_SIGNAL.notifyAll();
+        }
     }
 
     @Override public void onCreate() {
@@ -68,6 +91,7 @@ public final class StandaloneAgentService extends Service {
         VoWLANGatewayService.start(this);
         worker.execute(this::loop);
         worker.execute(this::commandLoop);
+        worker.execute(this::smsLoop);
         BridgeLog.info("standalone_agent_created");
     }
 
@@ -103,7 +127,6 @@ public final class StandaloneAgentService extends Service {
         int failures = 0;
         while (running) {
             try {
-                SMSInboxScanner.scanIfDue(this);
                 CommandRegistration current = refreshCommandRegistration();
                 JSONObject registration = current.value();
                 if (registration == null) {
@@ -114,7 +137,7 @@ public final class StandaloneAgentService extends Service {
                 syncRegistration(registration);
                 long now = System.currentTimeMillis();
                 if (now - lastHeartbeat >= 30_000 || heartbeatMediaRecovered()) sendHeartbeat(registration);
-                flushEvents(registration);
+                flushCallEvents(registration);
                 if (CommandPollingPolicy.shouldPoll(commandChannelConnected, lastCommandPoll, now)) {
                     lastCommandPoll = now;
                     pollCommands(registration, current.generation());
@@ -299,24 +322,168 @@ public final class StandaloneAgentService extends Service {
         }
     }
 
-    private void flushEvents(JSONObject registration) throws Exception {
+    /**
+     * Publishes queued Telecom events in order. A transient failure leaves the event at the head
+     * for the next cycle. An event the Relay keeps refusing permanently (4xx) is dropped after a
+     * short grace period: before, it was retried forever and blocked every later call event and,
+     * until the SMS lane, all incoming SMS behind it.
+     */
+    private void flushCallEvents(JSONObject registration) throws Exception {
         String encoded;
         while ((encoded = CALL_EVENTS.peek()) != null) {
-            JSONObject event = new JSONObject(encoded);
-            StandaloneCloudMediaManager.get(this).handleCallEvent(registration, event, relay);
+            JSONObject event;
+            try {
+                event = new JSONObject(encoded);
+            } catch (org.json.JSONException malformed) {
+                BridgeLog.info("cloud_call_event_dropped reason=malformed");
+                CALL_EVENTS.poll();
+                continue;
+            }
+            try {
+                StandaloneCloudMediaManager.get(this).handleCallEvent(registration, event, relay);
+            } catch (RelayHTTPException rejected) {
+                long now = System.currentTimeMillis();
+                if (!encoded.equals(rejectedCallEvent)) {
+                    rejectedCallEvent = encoded;
+                    rejectedCallEventSince = now;
+                }
+                if (!CallLifecycleConflict.dropRejectedEvent(rejected.statusCode(), rejectedCallEventSince, now)) {
+                    throw rejected;
+                }
+                BridgeLog.info("cloud_call_event_dropped status=" + rejected.statusCode()
+                        + " state=" + DebugRedactor.safeIdentifier(event.optString("state")));
+            }
             CALL_EVENTS.poll();
+            rejectedCallEvent = null;
         }
+    }
+
+    /**
+     * SMS lane. Runs independently of the Relay loop above, so heartbeats, call events and their
+     * back-off never delay or block received messages. It also drives the optional inbox fallback.
+     */
+    private void smsLoop() {
+        int failures = 0;
+        long retryAt = 0;
+        long lastPass = 0;
+        boolean scanPending = false;
+        while (running) {
+            try {
+                boolean requested;
+                synchronized (SMS_SIGNAL) {
+                    requested = smsDeliveryRequested;
+                    scanPending |= smsScanRequested;
+                    smsDeliveryRequested = false;
+                    smsScanRequested = false;
+                }
+                // Read SMS may be granted after the service started.
+                if (inboxObserver == null) {
+                    inboxObserver = SMSInboxScanner.observe(this, StandaloneAgentService::requestInboxScan);
+                    if (!running) SMSInboxScanner.unobserve(this, inboxObserver);
+                }
+                SMSInboxScanner.Result scan = SMSInboxScanner.scan(this, scanPending);
+                if (scan.scanned()) scanPending = false;
+                JSONObject registration = refreshCommandRegistration().value();
+                long now = System.currentTimeMillis();
+                long wait = Math.max(1, Math.min(SMSRelayPolicy.IDLE_WAIT_MILLIS, scan.nextScanMillis()));
+                // New messages request a pass; otherwise retry on back-off, or check every 30 s.
+                boolean due = retryAt != 0 ? now >= retryAt
+                        : now - lastPass >= SMSRelayPolicy.IDLE_WAIT_MILLIS || now < lastPass;
+                if (registration != null && (requested || due)) {
+                    lastPass = now;
+                    int status = deliverPendingSMS(registration);
+                    if (SMSRelayPolicy.outcome(status) == SMSRelayPolicy.Outcome.RETRY) {
+                        failures++;
+                        long delay = SMSRelayPolicy.retryDelayMillis(failures);
+                        retryAt = now + delay;
+                        wait = Math.min(wait, delay);
+                    } else {
+                        failures = 0;
+                        retryAt = 0;
+                    }
+                } else if (registration != null && retryAt > now) {
+                    wait = Math.min(wait, retryAt - now);
+                }
+                awaitSMSSignal(wait);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception error) {
+                failures++;
+                BridgeLog.error("cloud_sms_lane_failed failures=" + failures, error);
+                retryAt = System.currentTimeMillis() + SMSRelayPolicy.retryDelayMillis(failures);
+                try { awaitSMSSignal(SMSRelayPolicy.retryDelayMillis(failures)); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
+            }
+        }
+    }
+
+    private void awaitSMSSignal(long delayMillis) throws InterruptedException {
+        long deadline = System.nanoTime() + Math.max(1, delayMillis) * 1_000_000L;
+        synchronized (SMS_SIGNAL) {
+            while (running && !smsDeliveryRequested && !smsScanRequested) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) return;
+                SMS_SIGNAL.wait(Math.max(1, remaining / 1_000_000L));
+            }
+        }
+    }
+
+    /**
+     * Sends cloud-pending SMS oldest first. Delivered and permanently rejected messages leave the
+     * cloud queue; local VoWLAN delivery and acknowledgement remain independent. A device-wide
+     * failure (network, credentials, missing iPhone token, rate limit) ends the pass. A 5xx may be
+     * specific to one message, so the pass moves on and that message is retried on the next pass.
+     *
+     * @return 200 when every message was sent or rejected, otherwise a status to back off on.
+     */
+    private int deliverPendingSMS(JSONObject registration) throws Exception {
         StandaloneSMSStore smsStore = new StandaloneSMSStore(this);
-        JSONArray smsPending = smsStore.cloudPending();
-        for (int index = 0; index < smsPending.length(); index++) {
-            JSONObject source = smsPending.getJSONObject(index);
+        JSONArray pending = smsStore.cloudPending();
+        int retryStatus = 200;
+        int consecutiveMessageFailures = 0;
+        for (int index = 0; index < pending.length() && running; index++) {
+            JSONObject source = pending.getJSONObject(index);
+            String deliveryID = source.getString("delivery_id");
+            long now = System.currentTimeMillis();
             JSONObject event = identity(registration).put("event", "incoming_sms")
-                    .put("delivery_id", source.optString("delivery_id"))
-                    .put("sender", source.optString("sender")).put("content", source.optString("content"))
-                    .put("timestamp", source.optString("timestamp", Instant.now().toString()));
-            relay.postJSON(registration, "/v1/events/sms", event, 12_000);
-            smsStore.markCloudSent(source.getString("delivery_id"));
+                    .put("delivery_id", deliveryID)
+                    .put("sender", source.optString("sender"))
+                    .put("content", SMSRelayPolicy.cloudContent(source.optString("content")))
+                    .put("timestamp", SMSRelayPolicy.cloudTimestamp(source.optString("timestamp"), now));
+            int status;
+            try {
+                status = relay.post(registration, "/v1/events/sms", event, 12_000).status();
+            } catch (java.io.IOException network) {
+                status = 0;
+            }
+            String safeID = DebugRedactor.safeIdentifier(deliveryID);
+            switch (SMSRelayPolicy.outcome(status)) {
+                case DELIVERED -> {
+                    consecutiveMessageFailures = 0;
+                    smsStore.markCloudSent(deliveryID);
+                    SMSRelayStatus.delivered(System.currentTimeMillis());
+                    BridgeLog.info("cloud_sms_delivered delivery_id=" + safeID);
+                }
+                case REJECTED -> {
+                    consecutiveMessageFailures = 0;
+                    smsStore.markCloudRejected(deliveryID);
+                    SMSRelayStatus.rejected(status);
+                    BridgeLog.info("cloud_sms_rejected status=" + status + " delivery_id=" + safeID);
+                }
+                case RETRY -> {
+                    retryStatus = status;
+                    SMSRelayStatus.failed(status);
+                    BridgeLog.info("cloud_sms_retry status=" + status + " delivery_id=" + safeID
+                            + " pending=" + (pending.length() - index));
+                    if (SMSRelayPolicy.stopsPass(status)
+                            || ++consecutiveMessageFailures >= SMSRelayPolicy.MAX_MESSAGE_FAILURES_PER_PASS) {
+                        return status;
+                    }
+                }
+            }
         }
+        return retryStatus;
     }
 
     private static JSONObject identity(JSONObject registration) throws Exception {
@@ -342,6 +509,8 @@ public final class StandaloneAgentService extends Service {
     @Override public void onDestroy() {
         running = false;
         preferences.unregisterOnSharedPreferenceChangeListener(registrationListener);
+        SMSInboxScanner.unobserve(this, inboxObserver);
+        synchronized (SMS_SIGNAL) { SMS_SIGNAL.notifyAll(); }
         synchronized (commandLock) {
             StandaloneWebSocket socket = commandSocket;
             if (socket != null) socket.closeAsync();

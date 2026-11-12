@@ -8,6 +8,7 @@ import worker, {
   CallMediaSession,
   createProviderToken,
   DeviceCommandSession,
+  fitIncomingSMSPayload,
   selectMediaTransport,
   turnConfigured,
   validateRegistration,
@@ -1507,6 +1508,71 @@ test("incoming SMS without an originating address still reaches iPhone", async (
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("long Korean SMS is shortened to fit the APNs payload limit", async () => {
+  const env = testEnvironment();
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  const captured = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    captured.push(options.body);
+    return new Response("", { status: 200 });
+  };
+  try {
+    // 670 Hangul syllables: a 10-part UCS-2 SMS or a Korean LMS. Sent twice in the payload,
+    // this exceeded 4 KB and failed on every Agent retry before.
+    const longKorean = "가나다라마바사아자차".repeat(67);
+    const response = await worker.fetch(post("/v1/events/sms", {
+      event: "incoming_sms", device_id: registration.device_id,
+      device_secret: registration.device_secret,
+      delivery_id: `android-sms-${"a".repeat(64)}`,
+      sender: "15880000", content: longKorean, timestamp: new Date().toISOString(),
+    }), env);
+    assert.equal(response.status, 202);
+    assert.equal(captured.length, 1);
+    assert.ok(new TextEncoder().encode(captured[0]).length <= 4_096);
+    const payload = JSON.parse(captured[0]);
+    assert.equal(payload.content_truncated, true);
+    assert.ok(payload.content.endsWith("…"));
+    assert.ok(longKorean.startsWith(payload.content.slice(0, -1)));
+    assert.equal(payload.aps.alert.body, payload.content);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("an over-long MMS sender address is bounded in the SMS push", async () => {
+  const env = testEnvironment();
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  const captured = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    captured.push(JSON.parse(options.body));
+    return new Response("", { status: 200 });
+  };
+  try {
+    const response = await worker.fetch(post("/v1/events/sms", {
+      event: "incoming_sms", device_id: registration.device_id,
+      device_secret: registration.device_secret, delivery_id: "long-sender-1",
+      sender: `${"s".repeat(300)}@mms.example`, content: "Hello", timestamp: new Date().toISOString(),
+    }), env);
+    assert.equal(response.status, 202);
+    assert.equal([...captured[0].sender].length, 64);
+    assert.equal(captured[0].aps.alert.title, captured[0].sender);
+    assert.equal(captured[0].content, "Hello");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("short SMS payloads are not truncated", () => {
+  const build = (text, cut) => ({ content: text, aps: { alert: { body: text } }, content_truncated: cut });
+  assert.deepEqual(fitIncomingSMSPayload("인증번호 123456", build),
+    build("인증번호 123456", false));
+  const ascii = fitIncomingSMSPayload("x".repeat(900), build);
+  assert.equal(ascii.content_truncated, true);
+  assert.equal([...ascii.content].length, 701);
 });
 
 test("registration is pinned to the signed app bundle", async () => {

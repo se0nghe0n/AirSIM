@@ -24,6 +24,7 @@ The shell build pins `kotlinc` 2.4.21, which runs on a JDK 26 host, and has it e
 - Shizuku owns privileged native WebRTC and carrier audio. Read [the media migration gates](../../docs/webrtc-only-migration.md) before claiming device acceptance.
 - Default calling SIM selection uses Android Telecom and leaves the system default unchanged. An unavailable selected SIM is an explicit error.
 - SMS sending uses platform confirmation; local acknowledgement preserves pending cloud delivery. Optional inbox fallback reads only newly received messages and does not bulk-import historical SMS.
+- Received SMS reach the Relay on a dedicated SMS lane, separate from call events, heartbeats and their back-off. Each message is retried or rejected on its own Relay response, so one refused event cannot block the rest. With Read SMS, the lane also relays the text of downloaded MMS/LMS. See [SMS relay](../../docs/sms-relay.md).
 - VoWLAN requires the same LAN or hotspot, pairing credentials, HMAC authentication, replay protection and bounded requests. Emergency calls remain the responsibility of system telephony.
 
 See [Standalone migration](../../docs/standalone-migration.md) for existing AVF data and upgrade boundaries. Historical audio-bridge process matching is retained only to stop stale processes owned by this package; it is not an AVF startup path.
