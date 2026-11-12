@@ -50,7 +50,7 @@ struct MessagesFeature {
                 return
             }
             // A send in flight stays attached and keeps Send disabled, so the same text cannot go out twice; its
-            // completion checks whether the composer was readdressed meanwhile.
+            // completion checks whether the recipient or draft changed meanwhile.
             composer?.recipient = recipient
             if !body.isEmpty {
                 composer?.body = body
@@ -198,7 +198,7 @@ struct MessagesFeature {
                 guard state.composer?.sendID == id else { return result.success ? .none : unreported(result.error) }
                 state.composer?.sendID = nil
                 if result.success {
-                    if state.composer?.recipient == to {
+                    if state.composer?.recipient == to && state.composer?.body == body {
                         state.composer = nil
                     } else if state.composer?.body == body {
                         // Readdressed while sending: it stays open for the new recipient without the sent text.

@@ -72,14 +72,14 @@ struct ActiveCallContent: Equatable {
 
     var recordingMenuTitle: String {
         if isRecordingBusy {
-            return isRecording ? "Starting Recording…" : "Saving Recording…"
+            return "Updating Recording…"
         }
         return isRecording ? "Stop Recording" : "Call Recording"
     }
 
     var recordingMenuSubtitle: String {
         if isRecordingBusy {
-            return isRecording ? "Preparing local call audio…" : "Saving local stereo WAV…"
+            return "Please wait while local recording updates"
         }
         if isRecording {
             return "Recording locally · Tap to stop and save"
@@ -92,7 +92,7 @@ struct ActiveCallContent: Equatable {
 
     var recordingPillTitle: String {
         if isRecordingBusy {
-            return isRecording ? "Starting Recording…" : "Saving Recording…"
+            return "Updating Recording…"
         }
         return "Recording · Stop"
     }

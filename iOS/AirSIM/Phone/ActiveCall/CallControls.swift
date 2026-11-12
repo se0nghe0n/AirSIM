@@ -256,13 +256,17 @@ final class CallCircleControl: UIView {
         button.contextMenuInteraction?.dismissMenu()
     }
 
+    nonisolated static func captionedWidth(for size: CGFloat) -> CGFloat {
+        max(size + 6, 72)
+    }
+
     func setSize(_ size: CGFloat) {
         guard currentSize != size else { return }
         currentSize = size
         for constraint in sizeConstraints {
             constraint.constant = size
         }
-        minWidthConstraint?.constant = showsCaption ? max(size + 6, 72) : size
+        minWidthConstraint?.constant = showsCaption ? Self.captionedWidth(for: size) : size
         applyButtonConfiguration()
     }
 
@@ -321,7 +325,7 @@ final class CallCircleControl: UIView {
 
         let width = widthAnchor.constraint(
             greaterThanOrEqualToConstant: showsCaption
-                ? (isLarge ? Metrics.largeMinimumWidth : max(size + 6, 72)) : size
+                ? (isLarge ? Metrics.largeMinimumWidth : Self.captionedWidth(for: size)) : size
         )
         width.isActive = true
         minWidthConstraint = width

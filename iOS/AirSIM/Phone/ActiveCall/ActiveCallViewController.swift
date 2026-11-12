@@ -253,7 +253,7 @@ final class ActiveCallViewController: ObservingViewController {
         connectedGrid.spacing = layout.rowSpacing
         connectedRow1.spacing = layout.columnSpacing
         connectedRow2.spacing = layout.columnSpacing
-        gridWidthConstraint.constant = max(layout.controlSize + 6, 72) * 2 + layout.columnSpacing
+        gridWidthConstraint.constant = layout.controlWidth * 2 + layout.columnSpacing
         gridRow2WidthConstraint.constant = layout.gridWidth
         incomingDecisionsWidthConstraint.constant = layout.decisionsWidth
         bottomInsetConstraint.constant = -layout.bottomInset
@@ -431,7 +431,10 @@ final class ActiveCallViewController: ObservingViewController {
                 controller.didMove(toParent: self)
                 keypadController = controller
             }
-            keypadController?.updateControlLayout(size: layout.controlSize, spacing: layout.columnSpacing)
+            keypadController?.updateControlLayout(
+                size: layout.controlSize,
+                spacing: layout.columnSpacing + layout.controlWidth - layout.controlSize
+            )
         }
 
         guard shouldShow != lastKeypadVisible else { return }
@@ -738,6 +741,7 @@ private struct CallLayout {
     let nameFontSize: CGFloat
     let avatarSize: CGFloat
     let controlSize: CGFloat
+    let controlWidth: CGFloat
     let columnSpacing: CGFloat
     let rowSpacing: CGFloat
     let gridWidth: CGFloat
@@ -766,11 +770,12 @@ private struct CallLayout {
         let desiredControlSize: CGFloat = short ? 62 : (compact ? 76 : 80)
         let usableGridWidth = min(380, max(236, width - 48))
         let desiredColumnSpacing: CGFloat = short ? 24 : (compact ? 32 : 38)
-        let maxControlByWidth = (usableGridWidth - desiredColumnSpacing * 2) / 3
+        let maxControlByWidth = (usableGridWidth - desiredColumnSpacing * 2) / 3 - 6
         controlSize = min(desiredControlSize, max(56, floor(maxControlByWidth)))
-        columnSpacing = min(desiredColumnSpacing, max(16, floor((usableGridWidth - controlSize * 3) / 2)))
+        controlWidth = CallCircleControl.captionedWidth(for: controlSize)
+        columnSpacing = min(desiredColumnSpacing, max(16, floor((usableGridWidth - controlWidth * 3) / 2)))
         rowSpacing = short ? 12 : 18
-        gridWidth = controlSize * 3 + columnSpacing * 2
+        gridWidth = controlWidth * 3 + columnSpacing * 2
 
         let outerMargin: CGFloat = compact ? 24 : 40
         decisionsWidth = min(340, max(220, width - outerMargin * 2 - 16))

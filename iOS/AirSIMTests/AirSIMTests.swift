@@ -3347,6 +3347,34 @@ struct TCAUIKitFeatureTests {
         #expect(sent.value == ["A:On my way", "B:Running late", "C:Running late"])
     }
 
+    @Test func `A completed send preserves a changed draft after readdressing away and back`() async {
+        let release = AsyncStream<Void>.makeStream()
+        let sent = LockIsolated<[String]>([])
+        var dependency = client()
+        dependency.sendSMS = { to, body in
+            for await _ in release.stream { break }
+            sent.withValue { $0.append("\(to):\(body)") }
+            return .init(success: true)
+        }
+        let store = TestStore(initialState: composing("A", body: "Original message")) {
+            MessagesFeature()
+        } withDependencies: {
+            $0.airSIM = dependency
+            $0.uuid = .incrementing
+        }
+        await store.send(.composer(.presented(.view(.sendButtonTapped)))) { $0.composer?.sendID = UUID(0) }
+        await store.receive(\.composer.presented.delegate)
+        await store.send(.compose("B")) { $0.composer?.recipient = "B" }
+        await store.send(.composer(.presented(.view(.bodyChanged("New draft"))))) { $0.composer?.body = "New draft" }
+        await store.send(.compose("A")) { $0.composer?.recipient = "A" }
+        #expect(store.state.composer?.canSend == false)
+        release.continuation.yield()
+        await store.receive(\.composerSendFinished) { $0.composer?.sendID = nil }
+        #expect(sent.value == ["A:Original message"])
+        #expect(store.state.composer?.recipient == "A" && store.state.composer?.body == "New draft")
+        #expect(store.state.composer?.canSend == true && store.state.composer?.alert == nil)
+    }
+
     @Test func `Visible thread reply retains its recipient if route state was cleared`() async {
         let id = UUID()
         let recipients = LockIsolated<[String]>([])
@@ -4242,11 +4270,24 @@ struct ActiveCallFeatureTests {
             $0.isRecording = true
         }
         #expect(recording.canToggleRecording && recording.isRecording)
+        #expect(recording.recordingMenuTitle == "Stop Recording")
+        #expect(recording.recordingPillTitle == "Recording · Stop")
         let busy = content("active") {
             $0.canToggleRecording = true
             $0.isRecordingBusy = true
         }
         #expect(!busy.canToggleRecording && busy.isRecordingBusy && !ready.isRecordingBusy)
+        for isRecording in [false, true] {
+            let updating = content("active") {
+                $0.isRecordingBusy = true
+                $0.isRecording = isRecording
+            }
+            #expect(updating.recordingMenuTitle == "Updating Recording…")
+            #expect(updating.recordingPillTitle == "Updating Recording…")
+            #expect(updating.recordingMenuSubtitle == "Please wait while local recording updates")
+            #expect(updating.showsRecordingPill && !updating.canToggleRecording)
+        }
+        #expect(ready.recordingMenuTitle == "Call Recording")
         #expect(!content("active").canToggleRecording)
     }
 
@@ -5868,7 +5909,10 @@ struct InteractiveCallPreviewTests {
         #expect(!store.snapshot.isMuted && !store.snapshot.isRecording)
     }
 
-    @Test(arguments: [CGSize(width: 352, height: 512), CGSize(width: 390, height: 844), CGSize(width: 744, height: 900)])
+    @Test(arguments: [
+        CGSize(width: 320, height: 844), CGSize(width: 352, height: 512),
+        CGSize(width: 390, height: 844), CGSize(width: 744, height: 900),
+    ])
     func keypadMatchesCallControlsAndSurvivesReversal(size: CGSize) async throws {
         let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
         let screen = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
@@ -5881,6 +5925,27 @@ struct InteractiveCallPreviewTests {
         let more = try #require(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callMoreControl" })
         let end = try #require(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callEndControl" })
         let endFrame = end.convert(end.bounds, to: screen.view)
+        let row = try #require(end.superview?.superview?.superview as? UIStackView)
+        let grid = try #require(row.superview as? UIStackView)
+        for controlRow in grid.arrangedSubviews.compactMap({ $0 as? UIStackView }) {
+            let requiredWidth = try #require(controlRow.constraints.first {
+                $0.firstAttribute == .width && $0.secondItem == nil && $0.relation == .equal
+                    && $0.priority == .required
+            })
+            let minimumWidths = try controlRow.arrangedSubviews.map { control in
+                try #require(control.constraints.first {
+                    $0.firstAttribute == .width && $0.secondItem == nil && $0.relation == .greaterThanOrEqual
+                        && $0.priority == .required
+                }).constant
+            }
+            let minimumRowWidth = minimumWidths.reduce(0, +) + controlRow.spacing * CGFloat(minimumWidths.count - 1)
+            #expect(requiredWidth.constant >= minimumRowWidth)
+            #expect(abs(controlRow.bounds.width - requiredWidth.constant) < 1)
+            #expect(screen.view.bounds.contains(controlRow.convert(controlRow.bounds, to: screen.view)))
+            for (control, minimumWidth) in zip(controlRow.arrangedSubviews, minimumWidths) {
+                #expect(control.bounds.width >= minimumWidth - 0.5)
+            }
+        }
         #expect(more.showsMenuAsPrimaryAction && more.menu?.preferredElementSize == .large)
         store.send(.activeCall(.view(.keypadButtonTapped)))
         screen.render()
