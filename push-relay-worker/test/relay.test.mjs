@@ -2346,6 +2346,36 @@ test("old terminal retry after APNs failure drains without changing a newer call
   }]);
 });
 
+test("a Live Activity refusal that a retry cannot change never fails the call-state event", async (t) => {
+  for (const [status, reason, kept, expected] of [
+    [410, "Unregistered", false, 202], [400, "BadDeviceToken", false, 202],
+    [403, "ExpiredProviderToken", true, 202], [429, "TooManyRequests", true, 502],
+    [503, "ServiceUnavailable", true, 502],
+  ]) {
+    const { env, event } = await terminalEnvironment();
+    await worker.fetch(post("/v1/live-activities/register", {
+      device_id: registration.device_id, device_secret: registration.device_secret,
+      activity_id: "ended-activity", call_id: event.call_id, update_token: "f".repeat(64),
+    }), env);
+    const mock = t.mock.method(globalThis, "fetch",
+      async () => new Response(JSON.stringify({ reason }), { status }));
+    const active = { ...event, phase: "active", timestamp: "2026-10-17T11:59:00Z" };
+    const response = await worker.fetch(post("/v1/events/call-state", active), env);
+    assert.equal(response.status, expected, reason);
+    const activityKey = `liveactivity:current:${registration.device_id}`;
+    assert.equal(Boolean(await env.DEVICES.get(activityKey)), kept, reason);
+    if (expected === 202) {
+      const body = await response.json();
+      assert.equal(body.live_activity_unavailable, true);
+      assert.equal(body.lifecycle.phase, "active");
+      // The same event is not pushed again, and the next one is not held back.
+      assert.equal((await (await worker.fetch(post("/v1/events/call-state", active), env)).json()).duplicate, true);
+      assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 202);
+    }
+    mock.mock.restore();
+  }
+});
+
 test("terminal for an expired call record closes the matching lifecycle but not the media session", async () => {
   const { env, event, state } = await terminalEnvironment();
   const iphone = terminalSocket("iphone");

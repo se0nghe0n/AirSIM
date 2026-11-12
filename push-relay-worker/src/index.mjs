@@ -2029,7 +2029,20 @@ async function receiveCallState(request, env) {
     return jsonResponse(202, { pushed: true });
   } catch (error) {
     console.error("APNs call state delivery failed", safeError(error));
-    return jsonResponse(502, { error: "APNs delivery failed" });
+    // The call state is already recorded. The Live Activity is only its presentation, and the
+    // Agent sends call events in order, so a refusal that a retry cannot change must not hold
+    // back the events behind it (the next incoming call among them). Only failures that may
+    // pass on a retry (rate limit, APNs or network trouble) are reported as such.
+    const status = Number(/^APNs HTTP (\d{3})$/.exec(error?.message || "")?.[1] || 0);
+    if (status < 400 || status >= 500 || status === 429) {
+      return jsonResponse(502, { error: "APNs delivery failed" });
+    }
+    // 400 and 410 mean this activity token is invalid or its activity has ended.
+    if (status === 400 || status === 410) {
+      await deleteRelayState(env, `liveactivity:current:${authenticated.device.device_id}`);
+    }
+    await writeRelayState(env, dedupeKey, "1", 180);
+    return jsonResponse(202, { accepted: true, lifecycle: transition.snapshot, live_activity_unavailable: true });
   }
 }
 
