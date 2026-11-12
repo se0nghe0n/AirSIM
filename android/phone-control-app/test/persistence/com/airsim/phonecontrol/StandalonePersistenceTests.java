@@ -66,6 +66,23 @@ public final class StandalonePersistenceTests {
         check(new StandaloneSMSStore(reopened.reopen()).cloudPending().isEmpty());
         check(!sms.add(new JSONObject(pending), true));
         check(!sms.add(new JSONObject(pending).put("delivery_id", "already-delivered"), true));
+        // A Relay rejection leaves the cloud queue but keeps the message for local delivery,
+        // and later messages are still pending behind it.
+        check(sms.add(new JSONObject(pending).put("delivery_id", "relay-refused"), true));
+        check(sms.add(new JSONObject(pending).put("delivery_id", "after-refused"), true));
+        check(sms.cloudPendingCount() == 2);
+        sms.markCloudRejected("relay-refused");
+        sms = new StandaloneSMSStore(reopened.reopen());
+        check(sms.cloudPendingCount() == 1);
+        check(sms.cloudPending().getJSONObject(0).getString("delivery_id").equals("after-refused"));
+        check(sms.localMessages().length() == 2);
+        String stored = reopened.getSharedPreferences("standalone_sms", 0).getString("records", "");
+        check(stored.contains("\"cloud_rejected\":true"));
+        check(!sms.cloudPending().toString().contains("cloud_rejected"));
+        // Once the iPhone also acknowledges it locally, it becomes a tombstone and is not re-added.
+        sms.acknowledge(new JSONArray().put("relay-refused"));
+        check(!new StandaloneSMSStore(reopened.reopen()).add(
+                new JSONObject(pending).put("delivery_id", "relay-refused"), true));
         // Reading a pre-upgrade local-only pairing must not enable cloud mode.
         reopened.getSharedPreferences("standalone_agent", 0).edit()
                 .putString("registration", "{\"local_mode\":true,\"cloud_enabled\":false}").apply();

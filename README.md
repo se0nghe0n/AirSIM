@@ -184,6 +184,7 @@ Replacing only the certificate while retaining someone else's Bundle ID does not
 | [Android Standalone APK](android-standalone/README.md) | Recommended installation, builds, signing, HyperOS permissions, migration, and device acceptance |
 | [Shared Android application](android/phone-control-app/README.md) | Standalone source, default phone role, pairing, and OEM compatibility |
 | [Standalone migration](docs/standalone-migration.md) | Retirement scope, preserved data, and existing-installation boundaries |
+| [SMS relay](docs/sms-relay.md) | Incoming SMS/MMS path from Android through the Relay to iPhone, Android/Play constraints, and device acceptance |
 | [iOS and watchOS](iOS/README.md) | Xcode, Bundle IDs, Apple signing, CallKit, PushKit, and device tests |
 | [Cloudflare Relay](push-relay-worker/README.md) | Wrangler, KV, Durable Objects, APNs, Secrets, and custom domains |
 | [Native WebRTC cloud calls](docs/webrtc.md) | Q25/iPhone audio, TURN setup, compatibility, protocol, and validation |
