@@ -603,6 +603,8 @@ final class WatchCallCoordinator: NSObject, WCSessionDelegate {
             await IPhoneCloudCallSession.shared.end()
             return
         }
+        // The dial may have prewarmed signaling for a call the session never adopted.
+        IPhoneCloudCallSession.shared.discardOutgoingPrewarm(call)
         await endAbandonedWatchCall(call)
     }
 

@@ -1315,39 +1315,74 @@ final class VoIPPushController: NSObject {
         return try JSONDecoder().decode(CloudAgentStatus.self, from: data)
     }
 
+    /// The dial command names its call as soon as the Relay accepts it. Media preparation for that call overlaps
+    /// the wait for the Android phone to start dialing; no control message is sent before the dial completed.
     func startCloudOutgoingCall(
         number: String,
         mediaTransport: CloudMediaTransport? = nil,
-        timeout: TimeInterval = 25
+        timeout: TimeInterval = 25,
+        timeline: OutgoingCallSetupTimeline? = nil
     ) async throws -> IncomingVoIPCall {
         let commandID = UUID()
-        let enqueue = try await enqueueCloudCommand(
-            commandID: commandID,
-            type: "dial",
-            number: number,
-            message: nil,
-            mediaTransport: mediaTransport
-        )
-        guard enqueue.accepted,
-            let call = enqueue.call,
-            let uuid = UUID(uuidString: call.callUUID),
-            let mediaURL = URL(string: call.mediaURL)
-        else {
-            throw CloudCommandError.invalidResponse
+        let timeline = timeline ?? OutgoingCallSetupTimeline()
+        let makeCall: (CloudCommandEnqueueResponse.Call, UUID, URL) throws -> IncomingVoIPCall = { call, uuid, url in
+            try IncomingVoIPCall(
+                outgoingCallID: call.callID,
+                uuid: uuid,
+                number: number,
+                secret: call.callSecret,
+                mediaURL: url,
+                generation: call.generation ?? 1,
+                mediaTransport: call.mediaTransport ?? .webRTC
+            )
         }
-        let outcome = try await waitForCloudCommand(commandID: commandID, timeout: timeout)
-        guard outcome.status == "completed", outcome.result?.dialing == true else {
-            throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
-        }
-        return try IncomingVoIPCall(
-            outgoingCallID: call.callID,
-            uuid: uuid,
-            number: number,
-            secret: call.callSecret,
-            mediaURL: mediaURL,
-            generation: call.generation ?? 1,
-            mediaTransport: call.mediaTransport ?? .webRTC
+        let pending = try await CloudOutgoingDialCoordinator.run(
+            enqueue: {
+                let enqueue = try await self.enqueueCloudCommand(
+                    commandID: commandID,
+                    type: "dial",
+                    number: number,
+                    message: nil,
+                    mediaTransport: mediaTransport
+                )
+                guard enqueue.accepted,
+                    let call = enqueue.call,
+                    let uuid = UUID(uuidString: call.callUUID),
+                    let mediaURL = URL(string: call.mediaURL)
+                else {
+                    throw CloudCommandError.invalidResponse
+                }
+                timeline.bind(to: uuid)
+                timeline.mark(.enqueueAccepted)
+                // An identity the app cannot use still fails after the dial result, as before.
+                return (call: call, uuid: uuid, mediaURL: mediaURL, outgoing: try? makeCall(call, uuid, mediaURL))
+            },
+            prewarm: { pending in
+                guard let outgoing = pending.outgoing else { return }
+                IPhoneCloudCallSession.shared.prewarmOutgoing(outgoing, timeline: timeline)
+            },
+            awaitDialing: { _ in
+                do {
+                    let outcome = try await self.waitForCloudCommand(
+                        commandID: commandID,
+                        timeout: timeout,
+                        schedule: .dial
+                    )
+                    guard outcome.status == "completed", outcome.result?.dialing == true else {
+                        throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
+                    }
+                    timeline.mark(.dialCompleted, .routeCloud)
+                } catch {
+                    timeline.mark(.dialFailed, .routeCloud)
+                    throw error
+                }
+            },
+            discardPrewarm: { pending in
+                guard let outgoing = pending.outgoing else { return }
+                IPhoneCloudCallSession.shared.discardOutgoingPrewarm(outgoing)
+            }
         )
+        return try pending.outgoing ?? makeCall(pending.call, pending.uuid, pending.mediaURL)
     }
 
     func sendCloudSMS(to number: String, message: String) async throws -> SMSSendResult {
@@ -1422,14 +1457,18 @@ final class VoIPPushController: NSObject {
         return try await relayRequest(url: url, body: body, as: CloudCommandEnqueueResponse.self)
     }
 
-    private func waitForCloudCommand(commandID: UUID, timeout: TimeInterval) async throws -> CloudCommandResultResponse
-    {
+    private func waitForCloudCommand(
+        commandID: UUID,
+        timeout: TimeInterval,
+        schedule: CloudCommandPollSchedule = .steady
+    ) async throws -> CloudCommandResultResponse {
         guard let registration = currentRegistration(),
             let url = RelayEndpoint.url(base: registration.relayURL, path: "v1/commands/result")
         else {
             throw CloudCommandError.unavailable
         }
         let deadline = Date().addingTimeInterval(timeout)
+        var poll = 0
         while Date() < deadline {
             let response = try await relayRequest(
                 url: url,
@@ -1441,7 +1480,8 @@ final class VoIPPushController: NSObject {
                 as: CloudCommandResultResponse.self
             )
             if response.status == "completed" || response.status == "failed" { return response }
-            try await Task.sleep(for: .milliseconds(500))
+            try await Task.sleep(for: schedule.interval(afterPoll: poll))
+            poll += 1
         }
         throw CloudCommandError.timeout
     }

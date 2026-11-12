@@ -79,6 +79,8 @@
 		A10000000000000000000023 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* AppIcon.icon */; };
 		A10000000000000000000024 /* IPhoneCloudCallSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* IPhoneCloudCallSession.swift */; };
 		A100000000000000000000D1 /* RelayHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000D1 /* RelayHTTPClient.swift */; };
+		A100000000000000000000D2 /* CloudOutgoingCallSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000D2 /* CloudOutgoingCallSetup.swift */; };
+		A100000000000000000000D3 /* OutgoingCallSetupTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000D3 /* OutgoingCallSetupTimeline.swift */; };
 		A10000000000000000000025 /* VirtualCallTTSController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* VirtualCallTTSController.swift */; };
 		A10000000000000000000029 /* AgentVerboseTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* AgentVerboseTrace.swift */; };
 		A1000000000000000000002B /* CallLifecycleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* CallLifecycleStore.swift */; };
@@ -245,6 +247,8 @@
 		B10000000000000000000023 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10000000000000000000024 /* IPhoneCloudCallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPhoneCloudCallSession.swift; sourceTree = "<group>"; };
 		B100000000000000000000D1 /* RelayHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayHTTPClient.swift; sourceTree = "<group>"; };
+		B100000000000000000000D2 /* CloudOutgoingCallSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudOutgoingCallSetup.swift; sourceTree = "<group>"; };
+		B100000000000000000000D3 /* OutgoingCallSetupTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutgoingCallSetupTimeline.swift; sourceTree = "<group>"; };
 		B10000000000000000000025 /* VirtualCallTTSController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCallTTSController.swift; sourceTree = "<group>"; };
 		B10000000000000000000029 /* AgentVerboseTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTrace.swift; sourceTree = "<group>"; };
 		B1000000000000000000002B /* CallLifecycleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallLifecycleStore.swift; sourceTree = "<group>"; };
@@ -422,6 +426,7 @@
 			children = (
 				B1000000000000000000001B /* VoIPPushController.swift */,
 				B10000000000000000000024 /* IPhoneCloudCallSession.swift */,
+				B100000000000000000000D2 /* CloudOutgoingCallSetup.swift */,
 				B100000000000000000000D1 /* RelayHTTPClient.swift */,
 				BB0000000000000000000001 /* CloudWebRTC.swift */,
 			);
@@ -482,6 +487,7 @@
 			isa = PBXGroup;
 			children = (
 				B10000000000000000000029 /* AgentVerboseTrace.swift */,
+				B100000000000000000000D3 /* OutgoingCallSetupTimeline.swift */,
 			);
 			path = Diagnostics;
 			sourceTree = "<group>";
@@ -881,6 +887,8 @@
 				A1000000000000000000001A /* VoIPPushController.swift in Sources */,
 				A10000000000000000000024 /* IPhoneCloudCallSession.swift in Sources */,
 				A100000000000000000000D1 /* RelayHTTPClient.swift in Sources */,
+				A100000000000000000000D2 /* CloudOutgoingCallSetup.swift in Sources */,
+				A100000000000000000000D3 /* OutgoingCallSetupTimeline.swift in Sources */,
 				AA0000000000000000000001 /* CloudWebRTC.swift in Sources */,
 				AA0000000000000000000010 /* CallRecordingStore.swift in Sources */,
 				AA0000000000000000000011 /* CallRecordingWebRTCAudio.swift in Sources */,

@@ -2624,11 +2624,27 @@ extension AppModel: CallKitActionHandling {
         if callPresentationSurface == nil { callPresentationSurface = .system }
         audio.stopCallTone()
         backgroundStandby.suspendForCall()
+        let timeline = OutgoingCallSetupTimeline()
+        timeline.mark(.dialStarted)
         do {
             let selectedMode = ConnectionModePreference.selected()
             let runtimePolicy = ConnectionModeRuntimePolicy(mode: selectedMode)
-            let vowlanRoute = runtimePolicy.startsVoWLAN ? await readyVoWLANRoute() : nil
+            // The cloud status check overlaps the VoWLAN probe, so a cloud dial has not also waited for the probe.
+            // VoWLAN stays preferred: when it is ready, the status result is dropped unread.
+            let (vowlanRoute, overlappedCloudStatus) = await OutgoingRoutePreparation.run(
+                overlapsCloudStatus: OutgoingRoutePreparation.overlapsCloudStatus(
+                    probesVoWLAN: runtimePolicy.startsVoWLAN,
+                    cloudModeEnabled: CloudModePreference.isEnabled(),
+                    vowlanVerified: vowlan.availability.isOnlineForDisplay
+                ),
+                readyVoWLAN: { runtimePolicy.startsVoWLAN ? await self.readyVoWLANRoute() : nil },
+                fetchCloudStatus: { try await VoIPPushController.shared.fetchCloudAgentStatus() }
+            )
             guard outgoingAttemptID == attempt, !Task.isCancelled else { return }
+            timeline.mark(
+                .vowlanDecision,
+                vowlanRoute != nil ? .vowlanReady : runtimePolicy.startsVoWLAN ? .vowlanNotReady : .vowlanModeOff
+            )
             let cloudModeEnabled = CloudModePreference.isEnabled()
             let routeResult = try await OutgoingCallRouteCoordinator.start(
                 number: number,
@@ -2640,16 +2656,23 @@ extension AppModel: CallKitActionHandling {
                     IPhoneCloudCallSession.shared.endUnadoptedOutgoing(outgoing)
                 }
             ) {
-                // Dialing is an explicit event: check once immediately before cloud routing.
-                let status = try await VoIPPushController.shared.fetchCloudAgentStatus()
+                // Dialing is an explicit event: check once for this dial before cloud routing. The check either
+                // overlapped the VoWLAN probe above or, when VoWLAN was expected to carry the call, runs now.
+                let status: CloudAgentStatus
+                if let overlappedCloudStatus {
+                    status = try overlappedCloudStatus.get()
+                } else {
+                    status = try await VoIPPushController.shared.fetchCloudAgentStatus()
+                }
                 guard self.outgoingAttemptID == attempt, !Task.isCancelled else { throw CancellationError() }
+                timeline.mark(.cloudStatusDone, overlappedCloudStatus != nil ? .statusOverlapped : .statusSequential)
                 self.cloudAgentStatus = status
                 self.cloudAgentDirectory = status
                 self.lastCloudStatusRefresh = Date()
                 guard status.cloudOnline,
                     self.boundAgentID == nil || status.activeAgentID == self.boundAgentID
                 else { throw CloudCommandError.unavailable }
-                return try await VoIPPushController.shared.startCloudOutgoingCall(number: number)
+                return try await VoIPPushController.shared.startCloudOutgoingCall(number: number, timeline: timeline)
             }
 
             switch routeResult {
@@ -2657,6 +2680,7 @@ extension AppModel: CallKitActionHandling {
                 guard let (vowlanAPI, webRTCRoute) = vowlanRoute else {
                     throw CloudCommandError.unavailable
                 }
+                timeline.mark(.dialCompleted, .routeVoWLAN)
                 lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
             case let .cloud(outgoing):
                 guard
