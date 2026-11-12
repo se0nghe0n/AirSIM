@@ -94,6 +94,7 @@
 		AA0000000000000000000001 /* CloudWebRTC.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000001 /* CloudWebRTC.swift */; };
 		AA0000000000000000000002 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000001 /* WebRTC */; };
 		AA0000000000000000000003 /* CloudWebRTCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000003 /* CloudWebRTCTests.swift */; };
+		AA00000000000000000000D4 /* OutgoingCallSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000D4 /* OutgoingCallSetupTests.swift */; };
 		AA0000000000000000000004 /* WebRTC-LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000004 /* WebRTC-LICENSE */; };
 		AA0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */; };
 		AA0000000000000000000006 /* WebRTC-PATENTS in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000006 /* WebRTC-PATENTS */; };
@@ -262,6 +263,7 @@
 		B30000000000000000000002 /* AirSIMTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirSIMTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB0000000000000000000001 /* CloudWebRTC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTC.swift; sourceTree = "<group>"; };
 		BB0000000000000000000003 /* CloudWebRTCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTCTests.swift; sourceTree = "<group>"; };
+		BB00000000000000000000D4 /* OutgoingCallSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutgoingCallSetupTests.swift; sourceTree = "<group>"; };
 		BB0000000000000000000004 /* WebRTC-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-LICENSE"; path = WebRTCDependency/LICENSE; sourceTree = SOURCE_ROOT; };
 		BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-THIRD-PARTY-NOTICES"; path = WebRTCDependency/THIRD_PARTY_NOTICES.txt; sourceTree = SOURCE_ROOT; };
 		BB0000000000000000000006 /* WebRTC-PATENTS */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-PATENTS"; path = WebRTCDependency/PATENTS; sourceTree = SOURCE_ROOT; };
@@ -573,6 +575,7 @@
 			children = (
 				B30000000000000000000001 /* AirSIMTests.swift */,
 				BB0000000000000000000003 /* CloudWebRTCTests.swift */,
+				BB00000000000000000000D4 /* OutgoingCallSetupTests.swift */,
 				BB0000000000000000000013 /* CallRecordingTests.swift */,
 			);
 			path = AirSIMTests;
@@ -985,6 +988,7 @@
 			files = (
 				A30000000000000000000001 /* AirSIMTests.swift in Sources */,
 				AA0000000000000000000003 /* CloudWebRTCTests.swift in Sources */,
+				AA00000000000000000000D4 /* OutgoingCallSetupTests.swift in Sources */,
 				AA0000000000000000000013 /* CallRecordingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
