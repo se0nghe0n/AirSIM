@@ -1934,17 +1934,32 @@ async function receiveCallState(request, env) {
     return jsonResponse(400, { error: "invalid call state event" });
   }
   const terminal = ["ended", "failed"].includes(event.phase);
-  if (terminal) {
-    const call = await readRelayRecord(env, `call:${event.call_uuid.toLowerCase()}`);
-    if (!call || call.device_id !== authenticated.device.device_id ||
-        call.call_id !== event.call_id.trim() ||
-        call.call_uuid?.toLowerCase() !== event.call_uuid.toLowerCase() ||
-        Number(call.generation || 1) !== generation) {
-      return jsonResponse(409, { accepted: false, reason: "call_identity_mismatch" });
-    }
-  }
   const lifecycleKey = `call-lifecycle:${authenticated.device.device_id}`;
   const currentLifecycle = await readRelayRecord(env, lifecycleKey);
+  let callRecordMissing = false;
+  if (terminal) {
+    const call = await readRelayRecord(env, `call:${event.call_uuid.toLowerCase()}`);
+    if (call) {
+      if (call.device_id !== authenticated.device.device_id ||
+          call.call_id !== event.call_id.trim() ||
+          call.call_uuid?.toLowerCase() !== event.call_uuid.toLowerCase() ||
+          Number(call.generation || 1) !== generation) {
+        return jsonResponse(409, { accepted: false, reason: "call_identity_mismatch" });
+      }
+    } else {
+      // The lifecycle is rewritten for 5 h on every transition, so it can outlive the call
+      // record (5 h from the announcement), and an announcement without media never has one.
+      // Refusing this end would keep the device's lifecycle open and block its next calls.
+      // The device's own lifecycle is then the only proof of identity: it may close that
+      // lifecycle, but not a media session whose owner can no longer be verified.
+      if (!currentLifecycle || currentLifecycle.call_id !== event.call_id.trim() ||
+          currentLifecycle.call_uuid?.toLowerCase() !== event.call_uuid.toLowerCase() ||
+          Number(currentLifecycle.generation || 1) !== generation) {
+        return jsonResponse(409, { accepted: false, reason: "call_identity_mismatch" });
+      }
+      callRecordMissing = true;
+    }
+  }
   const transition = applyCallLifecycle(currentLifecycle, {
     call_id: event.call_id.trim(),
     call_uuid: event.call_uuid.toLowerCase(),
@@ -1961,7 +1976,7 @@ async function receiveCallState(request, env) {
   if (transition.accepted) {
     await writeRelayState(env, lifecycleKey, JSON.stringify(transition.snapshot), 5 * 60 * 60);
   }
-  if (terminal) {
+  if (terminal && !callRecordMissing) {
     if (!env.MEDIA) return jsonResponse(503, { error: "media relay unavailable" });
     try {
       const session = env.MEDIA.get(env.MEDIA.idFromName(event.call_uuid.toLowerCase()));
