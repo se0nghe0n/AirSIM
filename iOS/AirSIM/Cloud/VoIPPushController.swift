@@ -815,6 +815,8 @@ final class VoIPPushController: NSObject {
     private var activityKitRegistrationStarted = false
     private var activityKitRegistrationTasks: [Task<Void, Never>] = []
     private var observedActivityIDs = Set<String>()
+    /// Relay requests share one connection; see `RelayHTTPClient`.
+    private let relayHTTP = RelayHTTPClient.shared
 
     func start() {
         guard !LocalModePreference.isEnabled() else { return }
@@ -968,8 +970,7 @@ final class VoIPPushController: NSObject {
                 updateToken: token
             )
         )
-        let configuration = URLSessionConfiguration.ephemeral
-        _ = try? await URLSession(configuration: configuration).data(for: request)
+        _ = try? await relayHTTP.data(for: request)
     }
 
     func storeAlertToken(_ token: Data) {
@@ -1264,8 +1265,8 @@ final class VoIPPushController: NSObject {
     }
 
     /// Checks whether the Agent is still online via the latest Relay heartbeat when local USB/ECM is unreachable.
-    /// Device secrets in the request body are encoded in memory only using an ephemeral URLSession that never writes to
-    /// disk.
+    /// Device secrets in the request body are encoded in memory only; the shared Relay session is ephemeral and never
+    /// writes to disk.
     func fetchCloudAgentStatus() async throws -> CloudAgentStatus {
         guard CloudModePreference.isEnabled() else {
             throw CloudAgentStatusError.unavailable
@@ -1307,49 +1308,81 @@ final class VoIPPushController: NSObject {
             )
         )
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 6
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 6)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw CloudAgentStatusError.invalidResponse
         }
         return try JSONDecoder().decode(CloudAgentStatus.self, from: data)
     }
 
+    /// The dial command names its call as soon as the Relay accepts it. Media preparation for that call overlaps
+    /// the wait for the Android phone to start dialing; no control message is sent before the dial completed.
     func startCloudOutgoingCall(
         number: String,
         mediaTransport: CloudMediaTransport? = nil,
-        timeout: TimeInterval = 25
+        timeout: TimeInterval = 25,
+        timeline: OutgoingCallSetupTimeline? = nil
     ) async throws -> IncomingVoIPCall {
         let commandID = UUID()
-        let enqueue = try await enqueueCloudCommand(
-            commandID: commandID,
-            type: "dial",
-            number: number,
-            message: nil,
-            mediaTransport: mediaTransport
-        )
-        guard enqueue.accepted,
-            let call = enqueue.call,
-            let uuid = UUID(uuidString: call.callUUID),
-            let mediaURL = URL(string: call.mediaURL)
-        else {
-            throw CloudCommandError.invalidResponse
+        let timeline = timeline ?? OutgoingCallSetupTimeline()
+        let makeCall: (CloudCommandEnqueueResponse.Call, UUID, URL) throws -> IncomingVoIPCall = { call, uuid, url in
+            try IncomingVoIPCall(
+                outgoingCallID: call.callID,
+                uuid: uuid,
+                number: number,
+                secret: call.callSecret,
+                mediaURL: url,
+                generation: call.generation ?? 1,
+                mediaTransport: call.mediaTransport ?? .webRTC
+            )
         }
-        let outcome = try await waitForCloudCommand(commandID: commandID, timeout: timeout)
-        guard outcome.status == "completed", outcome.result?.dialing == true else {
-            throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
-        }
-        return try IncomingVoIPCall(
-            outgoingCallID: call.callID,
-            uuid: uuid,
-            number: number,
-            secret: call.callSecret,
-            mediaURL: mediaURL,
-            generation: call.generation ?? 1,
-            mediaTransport: call.mediaTransport ?? .webRTC
+        let pending = try await CloudOutgoingDialCoordinator.run(
+            enqueue: {
+                let enqueue = try await self.enqueueCloudCommand(
+                    commandID: commandID,
+                    type: "dial",
+                    number: number,
+                    message: nil,
+                    mediaTransport: mediaTransport
+                )
+                guard enqueue.accepted,
+                    let call = enqueue.call,
+                    let uuid = UUID(uuidString: call.callUUID),
+                    let mediaURL = URL(string: call.mediaURL)
+                else {
+                    throw CloudCommandError.invalidResponse
+                }
+                timeline.bind(to: uuid)
+                timeline.mark(.enqueueAccepted)
+                // An identity the app cannot use still fails after the dial result, as before.
+                return (call: call, uuid: uuid, mediaURL: mediaURL, outgoing: try? makeCall(call, uuid, mediaURL))
+            },
+            prewarm: { pending in
+                guard let outgoing = pending.outgoing else { return }
+                IPhoneCloudCallSession.shared.prewarmOutgoing(outgoing, timeline: timeline)
+            },
+            awaitDialing: { _ in
+                do {
+                    let outcome = try await self.waitForCloudCommand(
+                        commandID: commandID,
+                        timeout: timeout,
+                        schedule: .dial
+                    )
+                    guard outcome.status == "completed", outcome.result?.dialing == true else {
+                        throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
+                    }
+                    timeline.mark(.dialCompleted, .routeCloud)
+                } catch {
+                    timeline.mark(.dialFailed, .routeCloud)
+                    throw error
+                }
+            },
+            discardPrewarm: { pending in
+                guard let outgoing = pending.outgoing else { return }
+                IPhoneCloudCallSession.shared.discardOutgoingPrewarm(outgoing)
+            }
         )
+        return try pending.outgoing ?? makeCall(pending.call, pending.uuid, pending.mediaURL)
     }
 
     func sendCloudSMS(to number: String, message: String) async throws -> SMSSendResult {
@@ -1424,14 +1457,18 @@ final class VoIPPushController: NSObject {
         return try await relayRequest(url: url, body: body, as: CloudCommandEnqueueResponse.self)
     }
 
-    private func waitForCloudCommand(commandID: UUID, timeout: TimeInterval) async throws -> CloudCommandResultResponse
-    {
+    private func waitForCloudCommand(
+        commandID: UUID,
+        timeout: TimeInterval,
+        schedule: CloudCommandPollSchedule = .steady
+    ) async throws -> CloudCommandResultResponse {
         guard let registration = currentRegistration(),
             let url = RelayEndpoint.url(base: registration.relayURL, path: "v1/commands/result")
         else {
             throw CloudCommandError.unavailable
         }
         let deadline = Date().addingTimeInterval(timeout)
+        var poll = 0
         while Date() < deadline {
             let response = try await relayRequest(
                 url: url,
@@ -1443,7 +1480,8 @@ final class VoIPPushController: NSObject {
                 as: CloudCommandResultResponse.self
             )
             if response.status == "completed" || response.status == "failed" { return response }
-            try await Task.sleep(for: .milliseconds(500))
+            try await Task.sleep(for: schedule.interval(afterPoll: poll))
+            poll += 1
         }
         throw CloudCommandError.timeout
     }
@@ -1459,10 +1497,7 @@ final class VoIPPushController: NSObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(body)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 10
-        configuration.timeoutIntervalForResource = 12
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 12)
         guard let http = response as? HTTPURLResponse else { throw CloudCommandError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             let message = (try? JSONDecoder().decode(RelayErrorResponse.self, from: data).error)
@@ -1482,10 +1517,7 @@ final class VoIPPushController: NSObject {
         request.httpMethod = "GET"
         request.timeoutInterval = 5
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 5
-        configuration.timeoutIntervalForResource = 6
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 6)
         guard let http = response as? HTTPURLResponse else {
             throw CloudAgentStatusError.invalidResponse
         }
@@ -1511,10 +1543,7 @@ final class VoIPPushController: NSObject {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(registration)
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 8
-        configuration.timeoutIntervalForResource = 10
-        let (data, response) = try await URLSession(configuration: configuration).data(for: request)
+        let (data, response) = try await relayHTTP.data(for: request, resourceTimeout: 10)
         #if DEBUG
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             print("[AirSIM PushKit] Relay registration rejected; HTTP=\(http.statusCode)")

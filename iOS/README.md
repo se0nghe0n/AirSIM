@@ -56,7 +56,7 @@ Swift sources follow `iOS/.swift-format` (4-space indent, 120 columns, one argum
 - VoWLAN and cloud Relay transport selection. Automatic mode selects only actually available dialing routes, with fixed priority VoWLAN, then cloud.
 - Both cloud and local VoWLAN call audio use native WebRTC Opus. NetEq holds at most 50 packets (one second at 20 ms) and fast-accelerates when that buffer grows. Dormant PCM network engines, resampling, framing, and time-pitch helpers have been removed. See [WebRTC calls](../docs/webrtc.md). Old states are still prevented from reopening the call UI after hang-up.
 - Settings show current VoWLAN/cloud mode and Agent heartbeat status.
-- Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
+- Cloud mode queries Relay status once on foreground entry and again when cloud dialing is needed. In automatic mode that dial-time query starts together with the VoWLAN check unless VoWLAN is currently verified, and is cancelled unread when VoWLAN carries the call. Dynamic Island waits for one status query before displaying a call, including background incoming calls. Local mode does not query Relay; VoWLAN loss and background standby updates do not start periodic cloud queries, avoiding repeated quota consumption.
 - Four-stage Cloud Self-Test in Settings: local configuration (push credentials), Relay identity, device registration, and Agent heartbeat
 - Local call history, swipe-to-delete, and deletion from details
 
@@ -222,6 +222,33 @@ The optional TURN test requires `AIRSIM_WEBRTC_TURN_CONFIG` pointing to a privat
 JSON file with `ios_url`, `username`, and `credential`; it forces relay candidates.
 Never commit that file. Physical CallKit/headset routing and real carrier calls
 still require separately authorized device testing.
+
+## Outgoing cloud call setup
+
+Placing a cloud call does not change the wire contract; the iPhone only stops waiting where it does not have to.
+
+- Relay requests that follow each other within 30 seconds share one HTTPS connection (`RelayHTTPClient`): the status check, the dial command, its result polls and the call's TURN request. The session is ephemeral and keeps no cookies, cache or credentials. After a longer pause the next request opens a new connection, as every request did before. A request that fails because its connection was already closed is sent once more; Relay requests are reads, registrations, or commands deduplicated by `command_id`.
+- A signed VoWLAN health check fails at once when the iPhone has no interface that could reach a private address: nothing but loopback and cellular (`pdp_ip*`) holds an IPv4 address. The result is the same `unavailable` state its 3-second timeout produced. With Wi-Fi, an Android or iPhone hotspot, Ethernet or a VPN the check runs as before, and VoWLAN keeps its priority.
+- The dial result is polled after 100, 200 and 300 ms, then every 500 ms. SMS, DTMF and call-history commands keep 500 ms throughout.
+- When the Relay accepts the dial command it names the call. The iPhone then requests TURN credentials, initializes native WebRTC and opens the call's signaling socket while the Android phone starts dialing. Nothing is sent on that socket: `answer`, the owner join, still follows the completed dial. Until then the session has no call, is not answered and starts no peer. A dial that fails, times out, is cancelled or is superseded closes the socket and drops the credentials; so does a terminal status on that socket, a call answered in the meantime, or 45 seconds without a result.
+- For an outgoing call the first resend after `answer_pending` comes after 300 ms and the second completes the regular second, so the join is never confirmed later than with one-second resends. Incoming calls keep one second.
+
+### Measuring setup time
+
+Each outgoing dial writes its phases to the unified log, with milliseconds since the dial started:
+
+```sh
+log stream --predicate 'subsystem == "com.example.airsim.call-setup"'
+```
+
+```text
+dial=3 phase=dial_started elapsed_ms=0
+dial=3 phase=vowlan_decision elapsed_ms=2 vowlan=not_ready
+dial=3 phase=cloud_status_done elapsed_ms=180 status=overlapped
+dial=3 phase=enqueue_accepted elapsed_ms=260
+```
+
+The phases are `dial_started`, `vowlan_decision`, `cloud_status_done`, `enqueue_accepted`, `prewarm_signaling_connected`, `dial_completed` or `dial_failed`, `signaling_connected` (with `prewarmed=true` when the prewarmed socket was adopted), `answer_pending`, `media_prepared` or `answer_confirmed`, `ice_config_ready`, `peer_started`, `native_connected`, `active` and `audio_ready`. `dial` counts dials since the app launched. A line holds nothing else: no number, call identity, secret, URL, SDP or ICE candidate. Each phase is written once per dial, except `answer_pending`, so a later media rebuild does not rewrite the timeline. The numbers above only show the format; a comparison needs calls on a physical iPhone, before and after.
 
 ## Standalone-only local control
 

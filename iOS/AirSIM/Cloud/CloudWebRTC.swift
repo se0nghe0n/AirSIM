@@ -197,9 +197,9 @@ struct CloudICEConfiguration: Decodable, Sendable {
     }
 
     static func fetch(for call: IncomingVoIPCall) async throws -> CloudICEConfiguration {
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        let (data, response) = try await session.data(for: request(for: call))
+        // Same host as the dial command: the shared Relay session spares this request its own TLS handshake. That
+        // session keeps no cache, so credentials still live only in the returned configuration.
+        let (data, response) = try await RelayHTTPClient.shared.data(for: request(for: call))
         guard let response = response as? HTTPURLResponse, response.statusCode == 200 else {
             throw CloudWebRTCError.iceUnavailable
         }

@@ -37,7 +37,16 @@ The Android event `webrtc_ice_ready` reports `prefetched` and `wait_ms`. A ready
 
 Android attaches carrier audio as soon as `AirSIMInCallService` sees Telecom ACTIVE, instead of waiting for the 2-second agent loop and its Relay HTTP work. The loop still publishes the lifecycle; `active` is sent to the owner once per media socket.
 
-If the carrier device fails before its TELEPHONY route is first verified, the native peer releases that device and attaches a new one to the same peer: up to 4 attempts, 300 ms apart. ICE/DTLS and the call socket stay up, so the iPhone does not renegotiate. The route check is unchanged, and a loss after the route was verified still ends the peer. Each failure has a non-sensitive reason code (for example `carrier_route_unverified`, `ice_failed`, `sdp_set_failed`, `owner_lease_expired`). The app logs it as `privileged_webrtc_unavailable reason=…` and sends the owner a diagnostic `agent_media_failed` status before rebuilding its media socket. The iPhone keeps that status only in its trace.
+If the carrier device fails before its TELEPHONY route is first verified, the native peer releases that device and attaches a new one to the same peer: up to 4 attempts, 300 ms apart. ICE/DTLS and the call socket stay up, so the iPhone does not renegotiate. The first verification is unchanged: the routed device must be the TELEPHONY sink. Each failure has a non-sensitive reason code (for example `carrier_route_unverified`, `ice_failed`, `sdp_set_failed`, `owner_lease_expired`). The app logs it as `privileged_webrtc_unavailable reason=…` and sends the owner a diagnostic `agent_media_failed` status before rebuilding its media socket. The iPhone keeps that status only in its trace.
+
+After that verification, the uplink checks the routed device before every write, and a failure ends the peer:
+
+- `carrier_route_changed_type_N`: the platform reports a device that is not the TELEPHONY sink. `N` is the Android `AudioDeviceInfo` type, for example 1 for the earpiece and 2 for the speaker. This fails at once and nothing is written to that device.
+- `carrier_route_inactive`: the platform reports no routed device for 300 ms while audio is being written. Only a write restarts an AudioTrack that Android deactivated, and audio policy applies its route again a moment later, so a missing device is not fatal on first sight. During those 300 ms the uplink writes without waiting on the track. No other device is accepted and the preferred device stays the TELEPHONY sink.
+
+Both replace the earlier `carrier_route_lost`, which did not tell them apart and ended the peer on the first missing report.
+
+The carrier device can attach before WebRTC playout exists: the call is already active when the owner's `answer` arrives, or the media socket is rebuilt during an active call. Until the offer is answered there is no decoded audio, so the uplink writes silence to keep the carrier AudioTrack active and routed; see [Latency and stability diagnostics](webrtc.md#latency-and-stability-diagnostics). Each such gap is logged by the privileged process as `standalone_carrier_silence_started skipped=…` and `standalone_carrier_silence_stopped gap_ms=… frames=…`. At most one gap per second is logged; `skipped` counts the gaps left out since the previous line. A short gap at attach is normal. A `started` line with no `stopped` line before `standalone_webrtc_failed` means the peer ended during the gap.
 
 When an answer arrives while the previous native peer is still releasing resources, Android waits up to 3 seconds for the privileged service instead of replying `action_error`. A heartbeat that reported media unavailable is refreshed on the next 2-second agent cycle once the service is ready again, rather than up to 30 seconds later.
 
@@ -52,6 +61,6 @@ The iPhone trace recorder (`AgentVerboseTraceRecorder`) writes events only when 
 Android logs to logcat under the tag `AirSIMBridge`:
 
 - The app process logs `standalone_cloud_media_connected`, `webrtc_ice_ready prefetched=… wait_ms=…` and `privileged_webrtc_unavailable reason=…`. With **Enable debug mode** on, the app also keeps these lines in its own debug log, which **Copy logs** and **Export diagnostics** share.
-- The privileged Shizuku process logs `standalone_carrier_attach_retry attempt=… reason=…`, `standalone_webrtc_failed reason=…` and `standalone_webrtc_stats`. These appear only in logcat (`adb logcat -s AirSIMBridge`), not in the in-app debug log.
+- The privileged Shizuku process logs `standalone_carrier_attach_retry attempt=… reason=…`, `standalone_carrier_silence_started`, `standalone_carrier_silence_stopped gap_ms=… frames=…`, `standalone_webrtc_failed reason=…` and `standalone_webrtc_stats`. These appear only in logcat (`adb logcat -s AirSIMBridge`), not in the in-app debug log.
 
 Logcat and the debug log carry timestamps, but neither records the iPhone-side phases, so they cannot measure the full setup timeline on their own.

@@ -2412,6 +2412,100 @@ test("old terminal retry after APNs failure drains without changing a newer call
   }]);
 });
 
+test("a Live Activity refusal that a retry cannot change never fails the call-state event", async (t) => {
+  for (const [status, reason, kept, expected] of [
+    [410, "Unregistered", false, 202], [400, "BadDeviceToken", false, 202],
+    [403, "ExpiredProviderToken", true, 202], [429, "TooManyRequests", true, 502],
+    [503, "ServiceUnavailable", true, 502],
+  ]) {
+    const { env, event } = await terminalEnvironment();
+    await worker.fetch(post("/v1/live-activities/register", {
+      device_id: registration.device_id, device_secret: registration.device_secret,
+      activity_id: "ended-activity", call_id: event.call_id, update_token: "f".repeat(64),
+    }), env);
+    const mock = t.mock.method(globalThis, "fetch",
+      async () => new Response(JSON.stringify({ reason }), { status }));
+    const active = { ...event, phase: "active", timestamp: "2026-10-17T11:59:00Z" };
+    const response = await worker.fetch(post("/v1/events/call-state", active), env);
+    assert.equal(response.status, expected, reason);
+    const activityKey = `liveactivity:current:${registration.device_id}`;
+    assert.equal(Boolean(await env.DEVICES.get(activityKey)), kept, reason);
+    if (expected === 202) {
+      const body = await response.json();
+      assert.equal(body.live_activity_unavailable, true);
+      assert.equal(body.lifecycle.phase, "active");
+      // The same event is not pushed again, and the next one is not held back.
+      assert.equal((await (await worker.fetch(post("/v1/events/call-state", active), env)).json()).duplicate, true);
+      assert.equal((await worker.fetch(post("/v1/events/call-state", event), env)).status, 202);
+    }
+    mock.mock.restore();
+  }
+});
+
+test("terminal for an expired call record closes the matching lifecycle but not the media session", async () => {
+  const { env, event, state } = await terminalEnvironment();
+  const iphone = terminalSocket("iphone");
+  state.sockets.push(iphone);
+  await env.DEVICES.delete(`call:${webRTCCallUUID}`);
+  const lifecycleKey = `call-lifecycle:${registration.device_id}`;
+  await env.DEVICES.put(lifecycleKey, JSON.stringify({ ...event, source: "agent", phase: "active",
+    timestamp: "2026-10-17T11:00:00Z" }));
+  const response = await worker.fetch(post("/v1/events/call-state", event), env);
+  assert.equal(response.status, 202);
+  assert.equal((await response.json()).lifecycle.phase, "ended");
+  assert.equal(JSON.parse(await env.DEVICES.get(lifecycleKey)).phase, "ended");
+  // The media session's owner cannot be verified without the call record.
+  assert.deepEqual(iphone.sent, []);
+  assert.equal(await state.storage.get("terminal"), undefined);
+  // A retry stays acknowledged, and no media binding is needed to close the lifecycle.
+  delete env.MEDIA;
+  const retry = await worker.fetch(post("/v1/events/call-state", event), env);
+  assert.equal(retry.status, 202);
+  assert.equal((await retry.json()).duplicate, true);
+});
+
+test("terminal without a call record is refused unless it matches the device's lifecycle", async () => {
+  const lifecycleKey = `call-lifecycle:${registration.device_id}`;
+  for (const change of [null, { call_id: "other-call" }, { call_uuid: crypto.randomUUID() },
+    { generation: 2 }, { generation: 4 }]) {
+    const { env, event, state } = await terminalEnvironment();
+    await env.DEVICES.delete(`call:${webRTCCallUUID}`);
+    const before = change && JSON.stringify({ ...event, source: "agent", phase: "active",
+      timestamp: "2026-10-17T11:00:00Z", ...change });
+    if (before) await env.DEVICES.put(lifecycleKey, before);
+    const response = await worker.fetch(post("/v1/events/call-state", event), env);
+    assert.equal(response.status, 409, JSON.stringify(change));
+    assert.equal((await response.json()).reason, "call_identity_mismatch");
+    assert.equal(await env.DEVICES.get(lifecycleKey), before);
+    assert.equal(await state.storage.get("terminal"), undefined);
+  }
+});
+
+test("ending a call announced without media frees the device for its next incoming call", async (t) => {
+  const env = { ...testEnvironment(), MEDIA: new MemoryMediaNamespace() };
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  t.mock.method(globalThis, "fetch", async () => new Response("", { status: 200 }));
+  const announce = (callID, callUUID) => worker.fetch(post("/v1/events/call", {
+    event: "incoming_call", device_id: registration.device_id,
+    device_secret: registration.device_secret, call_id: callID, call_uuid: callUUID,
+    number: "10086", issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 45_000).toISOString(),
+  }), env);
+  const first = crypto.randomUUID();
+  assert.equal((await announce("call-without-media", first)).status, 202);
+  assert.equal(await env.DEVICES.get(`call:${first}`), null);
+  const blocked = await announce("next-call", crypto.randomUUID());
+  assert.equal(blocked.status, 409);
+  assert.equal((await blocked.json()).reason, "identity_mismatch");
+  const ended = await worker.fetch(post("/v1/events/call-state", {
+    event: "call_state", device_id: registration.device_id,
+    device_secret: registration.device_secret, call_id: "call-without-media", call_uuid: first,
+    phase: "ended",
+  }), env);
+  assert.equal(ended.status, 202);
+  assert.equal((await announce("next-call", crypto.randomUUID())).status, 202);
+});
+
 test("call history is authenticated, read-only, bounded, and device scoped", async () => {
   const env = testEnvironment();
   env.COMMANDS = new MemoryCommandNamespace(env);

@@ -78,6 +78,9 @@
 		A10000000000000000000021 /* AirSIMWatchApp.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* AirSIMWatchApp.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A10000000000000000000023 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* AppIcon.icon */; };
 		A10000000000000000000024 /* IPhoneCloudCallSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* IPhoneCloudCallSession.swift */; };
+		A100000000000000000000D1 /* RelayHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000D1 /* RelayHTTPClient.swift */; };
+		A100000000000000000000D2 /* CloudOutgoingCallSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000D2 /* CloudOutgoingCallSetup.swift */; };
+		A100000000000000000000D3 /* OutgoingCallSetupTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000D3 /* OutgoingCallSetupTimeline.swift */; };
 		A10000000000000000000025 /* VirtualCallTTSController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* VirtualCallTTSController.swift */; };
 		A10000000000000000000029 /* AgentVerboseTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* AgentVerboseTrace.swift */; };
 		A1000000000000000000002B /* CallLifecycleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000000000000000000002B /* CallLifecycleStore.swift */; };
@@ -91,6 +94,7 @@
 		AA0000000000000000000001 /* CloudWebRTC.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000001 /* CloudWebRTC.swift */; };
 		AA0000000000000000000002 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = EE0000000000000000000001 /* WebRTC */; };
 		AA0000000000000000000003 /* CloudWebRTCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000003 /* CloudWebRTCTests.swift */; };
+		AA00000000000000000000D4 /* OutgoingCallSetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB00000000000000000000D4 /* OutgoingCallSetupTests.swift */; };
 		AA0000000000000000000004 /* WebRTC-LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000004 /* WebRTC-LICENSE */; };
 		AA0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */; };
 		AA0000000000000000000006 /* WebRTC-PATENTS in Resources */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000006 /* WebRTC-PATENTS */; };
@@ -243,6 +247,9 @@
 		B10000000000000000000022 /* AirSIMWatchApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AirSIMWatchApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000023 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B10000000000000000000024 /* IPhoneCloudCallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPhoneCloudCallSession.swift; sourceTree = "<group>"; };
+		B100000000000000000000D1 /* RelayHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayHTTPClient.swift; sourceTree = "<group>"; };
+		B100000000000000000000D2 /* CloudOutgoingCallSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudOutgoingCallSetup.swift; sourceTree = "<group>"; };
+		B100000000000000000000D3 /* OutgoingCallSetupTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutgoingCallSetupTimeline.swift; sourceTree = "<group>"; };
 		B10000000000000000000025 /* VirtualCallTTSController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualCallTTSController.swift; sourceTree = "<group>"; };
 		B10000000000000000000029 /* AgentVerboseTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVerboseTrace.swift; sourceTree = "<group>"; };
 		B1000000000000000000002B /* CallLifecycleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallLifecycleStore.swift; sourceTree = "<group>"; };
@@ -256,6 +263,7 @@
 		B30000000000000000000002 /* AirSIMTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AirSIMTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB0000000000000000000001 /* CloudWebRTC.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTC.swift; sourceTree = "<group>"; };
 		BB0000000000000000000003 /* CloudWebRTCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudWebRTCTests.swift; sourceTree = "<group>"; };
+		BB00000000000000000000D4 /* OutgoingCallSetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutgoingCallSetupTests.swift; sourceTree = "<group>"; };
 		BB0000000000000000000004 /* WebRTC-LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-LICENSE"; path = WebRTCDependency/LICENSE; sourceTree = SOURCE_ROOT; };
 		BB0000000000000000000005 /* WebRTC-THIRD-PARTY-NOTICES */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-THIRD-PARTY-NOTICES"; path = WebRTCDependency/THIRD_PARTY_NOTICES.txt; sourceTree = SOURCE_ROOT; };
 		BB0000000000000000000006 /* WebRTC-PATENTS */ = {isa = PBXFileReference; lastKnownFileType = text; name = "WebRTC-PATENTS"; path = WebRTCDependency/PATENTS; sourceTree = SOURCE_ROOT; };
@@ -420,6 +428,8 @@
 			children = (
 				B1000000000000000000001B /* VoIPPushController.swift */,
 				B10000000000000000000024 /* IPhoneCloudCallSession.swift */,
+				B100000000000000000000D2 /* CloudOutgoingCallSetup.swift */,
+				B100000000000000000000D1 /* RelayHTTPClient.swift */,
 				BB0000000000000000000001 /* CloudWebRTC.swift */,
 			);
 			path = Cloud;
@@ -479,6 +489,7 @@
 			isa = PBXGroup;
 			children = (
 				B10000000000000000000029 /* AgentVerboseTrace.swift */,
+				B100000000000000000000D3 /* OutgoingCallSetupTimeline.swift */,
 			);
 			path = Diagnostics;
 			sourceTree = "<group>";
@@ -564,6 +575,7 @@
 			children = (
 				B30000000000000000000001 /* AirSIMTests.swift */,
 				BB0000000000000000000003 /* CloudWebRTCTests.swift */,
+				BB00000000000000000000D4 /* OutgoingCallSetupTests.swift */,
 				BB0000000000000000000013 /* CallRecordingTests.swift */,
 			);
 			path = AirSIMTests;
@@ -877,6 +889,9 @@
 				A1000000000000000000000E /* CallKitController.swift in Sources */,
 				A1000000000000000000001A /* VoIPPushController.swift in Sources */,
 				A10000000000000000000024 /* IPhoneCloudCallSession.swift in Sources */,
+				A100000000000000000000D1 /* RelayHTTPClient.swift in Sources */,
+				A100000000000000000000D2 /* CloudOutgoingCallSetup.swift in Sources */,
+				A100000000000000000000D3 /* OutgoingCallSetupTimeline.swift in Sources */,
 				AA0000000000000000000001 /* CloudWebRTC.swift in Sources */,
 				AA0000000000000000000010 /* CallRecordingStore.swift in Sources */,
 				AA0000000000000000000011 /* CallRecordingWebRTCAudio.swift in Sources */,
@@ -973,6 +988,7 @@
 			files = (
 				A30000000000000000000001 /* AirSIMTests.swift in Sources */,
 				AA0000000000000000000003 /* CloudWebRTCTests.swift in Sources */,
+				AA00000000000000000000D4 /* OutgoingCallSetupTests.swift in Sources */,
 				AA0000000000000000000013 /* CallRecordingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

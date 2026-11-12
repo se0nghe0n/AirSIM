@@ -111,6 +111,7 @@ enum VoWLANControllerError: LocalizedError {
     case notDiscovered
     case notPaired
     case authenticationFailed
+    case noLocalNetwork
 
     var errorDescription: String? {
         switch self {
@@ -118,7 +119,56 @@ enum VoWLANControllerError: LocalizedError {
         case .notDiscovered: return "Android VoWLAN has not been found"
         case .notPaired: return "VoWLAN is not paired"
         case .authenticationFailed: return "VoWLAN authentication failed"
+        case .noLocalNetwork: return "iPhone is not connected to Wi-Fi or another local network"
         }
+    }
+}
+
+/// One network interface that is up, reduced to what the probe decision needs.
+struct LocalNetworkInterface: Equatable, Sendable {
+    let name: String
+    let isLoopback: Bool
+    let hasIPv4Address: Bool
+}
+
+/// Decides whether a signed health probe can reach a VoWLAN endpoint at all.
+///
+/// An endpoint is always a private IPv4 address. The probe is an ordinary request that follows the routing table, so
+/// it can only succeed through an interface that holds an IPv4 address and is neither loopback nor cellular: Wi-Fi,
+/// a hotspot bridge, Ethernet or a VPN tunnel. When no such interface exists the probe would only wait for its
+/// timeout on the cellular route, so it fails immediately instead. Anything unknown counts as a possible local route.
+enum VoWLANLocalPathPolicy {
+    static func localRouteIsPossible(interfaces: [LocalNetworkInterface]?) -> Bool {
+        // Without a readable interface list, keep probing as before.
+        guard let interfaces else { return true }
+        return interfaces.contains { !$0.isLoopback && $0.hasIPv4Address && !isCellular($0.name) }
+    }
+
+    /// Cellular data interfaces on iOS, one per active packet data context.
+    static func isCellular(_ name: String) -> Bool {
+        name.hasPrefix("pdp_ip")
+    }
+
+    /// Interfaces that are up and running, each with whether it currently holds an IPv4 address.
+    static func currentInterfaces() -> [LocalNetworkInterface]? {
+        var first: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&first) == 0 else { return nil }
+        defer { freeifaddrs(first) }
+        var interfaces: [String: LocalNetworkInterface] = [:]
+        var cursor = first
+        while let current = cursor {
+            defer { cursor = current.pointee.ifa_next }
+            let flags = Int32(current.pointee.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_RUNNING != 0 else { continue }
+            let name = String(cString: current.pointee.ifa_name)
+            let isIPv4 = current.pointee.ifa_addr?.pointee.sa_family == sa_family_t(AF_INET)
+            interfaces[name] = LocalNetworkInterface(
+                name: name,
+                isLoopback: flags & IFF_LOOPBACK != 0,
+                hasIPv4Address: isIPv4 || interfaces[name]?.hasIPv4Address == true
+            )
+        }
+        return Array(interfaces.values)
     }
 }
 
@@ -422,6 +472,10 @@ final class VoWLANController {
         }
         let epoch = identityEpoch
         do {
+            // On a cellular-only path the request below could only run into its timeout. Failing here leaves the
+            // same state as that timeout, without making a call wait for it.
+            guard VoWLANLocalPathPolicy.localRouteIsPossible(interfaces: VoWLANLocalPathPolicy.currentInterfaces())
+            else { throw VoWLANControllerError.noLocalNetwork }
             let (data, response) = try await VoWLANProbeRecovery.run {
                 let signed = try VoWLANRequestSigner(secret: credential.secret).sign(
                     method: "GET",

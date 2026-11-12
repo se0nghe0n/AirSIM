@@ -166,9 +166,38 @@ enum CloudCallAnswerPolicy {
     /// stale heartbeat) resend the answer after this delay instead of the next 3–5 s slot.
     static let quickReplayDelay: TimeInterval = 1
 
+    /// An outgoing owner join reaches the Agent right after the dial result, often before Telecom has bound the
+    /// call, so its first `answer_pending` is retried early.
+    static let outgoingFirstPendingReplayDelay: TimeInterval = 0.3
+
+    /// Delay before the resend that follows a "not yet" reply. `priorOutgoingPendingReplays` counts the resends
+    /// already scheduled for `answer_pending` on this outgoing call. The second one completes the regular
+    /// interval, so an outgoing join is never confirmed later than with `quickReplayDelay` alone; after that the
+    /// regular interval applies. Incoming calls and other replies always use `quickReplayDelay`.
+    static func quickReplayDelay(
+        status: String,
+        isOutgoing: Bool,
+        priorOutgoingPendingReplays: Int
+    ) -> TimeInterval {
+        guard isOutgoing, status == "answer_pending" else { return quickReplayDelay }
+        switch priorOutgoingPendingReplays {
+        case 0: return outgoingFirstPendingReplayDelay
+        case 1: return quickReplayDelay - outgoingFirstPendingReplayDelay
+        default: return quickReplayDelay
+        }
+    }
+
     static func shouldReplaySoon(status: String, action: String?) -> Bool {
         guard action == nil || action == "answer" else { return false }
         return status == "answer_pending" || status == "action_error" || status == "action_rejected"
+    }
+}
+
+enum CloudOutgoingPrewarmPolicy {
+    /// The call ended before it was answered here. The prewarmed socket is released; `answer()`, if it still
+    /// comes, then connects as before and receives the terminal status on that connection.
+    static func endsPrewarm(status: String) -> Bool {
+        ["remote_ended", "ended", "rejected", "ownership_lost"].contains(status)
     }
 }
 
@@ -510,6 +539,9 @@ final class IPhoneCloudCallSession {
     private var answerRetryTask: Task<Void, Never>?
     private var answerRetryGeneration = 0
     private var quickAnswerReplayTask: Task<Void, Never>?
+    private var outgoingPendingReplays = 0
+    private let outgoingPrewarm = CloudOutgoingPrewarm()
+    private var setupTimeline: OutgoingCallSetupTimeline?
     private let icePreparation = CloudICEPreparation()
     private let answerHandshake = CloudWebRTCAnswerHandshake()
     private var answerAcknowledged: Bool { answerHandshake.acknowledged }
@@ -539,9 +571,11 @@ final class IPhoneCloudCallSession {
                 if connected {
                     session.webRTCReadiness.nativeConnected(negotiation)
                     session.traceAudio(phase: "native_connected", title: "WebRTC Connected")
+                    session.markSetup(.nativeConnected)
                     if session.webRTCReadiness.isReady, !session.audioState.isConnected {
                         session.audioState = .connected
                         session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                        session.markSetup(.audioReady)
                     }
                 } else {
                     session.webRTCReadiness.reset()
@@ -563,7 +597,12 @@ final class IPhoneCloudCallSession {
         media.onConnectionLost = { connection in
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
-                guard session.call != nil, session.media.isCurrentConnection(connection) else { return }
+                // A prewarmed socket that drops is not a media failure: before `answer()` there is no call, and
+                // during adoption `answer()` falls back to its own connect.
+                guard session.call != nil,
+                    !session.outgoingPrewarm.isAdopting,
+                    session.media.isCurrentConnection(connection)
+                else { return }
                 session.answerHandshake.invalidate()
                 session.requestMediaRebuild(.connectionLost)
             }
@@ -585,6 +624,18 @@ final class IPhoneCloudCallSession {
                         isFailure: ["action_error", "action_rejected", "agent_media_failed", "webrtc_failed"]
                             .contains(status)
                     )
+                }
+                // Before `answer()` a prewarmed socket has no call: its statuses change nothing here. The Agent
+                // and Relay send `agent_ready` and `peer_connected` only to prompt an `answer` that has not been
+                // sent yet, and `answer()` sends it once the dial completed.
+                if session.call == nil,
+                    let prewarmed = session.outgoingPrewarm.entry?.call,
+                    session.media.isCurrentConnection(connection),
+                    control.matches(callID: prewarmed.callID, uuid: prewarmed.uuid, generation: prewarmed.generation),
+                    CloudOutgoingPrewarmPolicy.endsPrewarm(status: status)
+                {
+                    session.discardOutgoingPrewarm(prewarmed)
+                    return
                 }
                 // A queued callback can outlive hangup or even the next call.
                 guard let call = session.call,
@@ -622,6 +673,7 @@ final class IPhoneCloudCallSession {
                         if session.webRTCReadiness.isReady, !session.audioState.isConnected {
                             session.audioState = .connected
                             session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                            session.markSetup(.audioReady)
                         }
                     }
                 case "webrtc_failed":
@@ -636,7 +688,8 @@ final class IPhoneCloudCallSession {
                         session.requestMediaRebuild(.connectionLost)
                     }
                 case _ where CloudCallAnswerPolicy.shouldReplaySoon(status: status, action: control.action):
-                    session.scheduleQuickAnswerReplay()
+                    if status == "answer_pending" { session.markSetup(.answerPending) }
+                    session.scheduleQuickAnswerReplay(after: status)
                 case "webrtc_recovering":
                     if session.usesWebRTC { session.webRTCReadiness.agentRecovering() }
                     session.audioState = .connecting(
@@ -659,7 +712,10 @@ final class IPhoneCloudCallSession {
         }
         try media.prepareForCallKit(webRTC: true)
         let callChanged = call?.uuid != incoming.uuid
+        // A socket prewarmed for this call while it was dialing is adopted below; one for any other call is dropped.
+        let prewarmed = outgoingPrewarm.beginAdoption(for: incoming)
         call = incoming
+        if callChanged { outgoingPendingReplays = 0 }
         if callChanged || audioSetupStartedAt == nil {
             audioSetupStartedAt = ProcessInfo.processInfo.systemUptime
             audioState = .starting
@@ -677,7 +733,15 @@ final class IPhoneCloudCallSession {
             mediaHealthTracker?.recordRoute(media.audioRouteDescription)
             publishMediaHealth()
         }
-        if callChanged || !media.isConnected {
+        var signalingPrewarmed = false
+        if let prewarmed {
+            let connected = await prewarmed.connection.value
+            // `stop()` or a newer call during the wait already released the prewarm.
+            guard call?.uuid == incoming.uuid, answered else { return }
+            outgoingPrewarm.finishAdoption(prewarmed)
+            signalingPrewarmed = connected && media.isConnected
+        }
+        if !signalingPrewarmed, callChanged || !media.isConnected {
             media.stop()
             do {
                 try await media.connect(to: url, secret: secret)
@@ -692,8 +756,57 @@ final class IPhoneCloudCallSession {
             }
         }
         guard call?.uuid == incoming.uuid, answered else { return }
-        traceAudio(phase: "signaling_connected", title: "Cloud Signaling Connected")
+        traceAudio(
+            phase: "signaling_connected",
+            title: "Cloud Signaling Connected",
+            additionalFields: ["prewarmed": String(signalingPrewarmed)]
+        )
+        markSetup(.signalingConnected, signalingPrewarmed ? .prewarmed : .notPrewarmed)
         scheduleAnswerConfirmation(for: incoming)
+    }
+
+    /// Prepares media for an outgoing call whose dial command the Relay accepted but the Android phone has not yet
+    /// confirmed: TURN credentials, the native WebRTC factory and the signaling socket. Nothing is sent on that
+    /// socket, so the Relay sees a silent client without ownership and the Agent is not asked to join. The session
+    /// keeps no `call`, stays unanswered and idle, and starts no peer. Ignored while a call is in the session.
+    func prewarmOutgoing(_ outgoing: IncomingVoIPCall, timeline: OutgoingCallSetupTimeline? = nil) {
+        guard outgoing.isOutgoing,
+            let url = outgoing.authenticatedMediaURL,
+            let secret = outgoing.mediaSecret
+        else { return }
+        if let timeline { setupTimeline = timeline }
+        let media = media
+        let started = outgoingPrewarm.begin(
+            outgoing,
+            sessionHasCall: call != nil,
+            release: { releaseOutgoingPrewarmMedia() },
+            connect: {
+                try await media.connect(to: url, secret: secret)
+                timeline?.mark(.prewarmSignalingConnected)
+            },
+            expired: { [weak self] expired in self?.discardOutgoingPrewarm(expired) }
+        )
+        guard started else { return }
+        icePreparation.prefetch(for: outgoing)
+        Task.detached(priority: .userInitiated) { CloudWebRTCPeer.prepareFactory() }
+    }
+
+    /// The dial failed, timed out, was cancelled or superseded. Closes the socket and drops the TURN preparation
+    /// of exactly this call; a newer prewarm or an answered call is left untouched.
+    func discardOutgoingPrewarm(_ outgoing: IncomingVoIPCall) {
+        outgoingPrewarm.discard(callUUID: outgoing.uuid) { releaseOutgoingPrewarmMedia() }
+        if setupTimeline?.covers(outgoing.uuid) == true, call?.uuid != outgoing.uuid { setupTimeline = nil }
+    }
+
+    /// Only reached while the session has no call: the bridge then holds nothing but the prewarmed socket.
+    private func releaseOutgoingPrewarmMedia() {
+        icePreparation.cancel()
+        media.stop()
+    }
+
+    private func markSetup(_ phase: OutgoingCallSetupPhase, _ detail: OutgoingCallSetupDetail? = nil) {
+        guard let call, call.isOutgoing, let setupTimeline, setupTimeline.covers(call.uuid) else { return }
+        setupTimeline.mark(phase, detail)
     }
 
     func reject(_ incoming: IncomingVoIPCall) async throws {
@@ -733,6 +846,7 @@ final class IPhoneCloudCallSession {
     /// A cancelled dial can return a cloud identity after its UI is gone. End
     /// exactly that remote call without replacing/stopping a newer media session.
     func endUnadoptedOutgoing(_ outgoing: IncomingVoIPCall) {
+        discardOutgoingPrewarm(outgoing)
         guard let envelope = media.controlEnvelope(action: "end", call: outgoing),
             let credentials = VoIPPushController.shared.cloudCallControlCredentials()
         else {
@@ -980,6 +1094,9 @@ final class IPhoneCloudCallSession {
         answerRetryTask = nil
         quickAnswerReplayTask?.cancel()
         quickAnswerReplayTask = nil
+        outgoingPendingReplays = 0
+        outgoingPrewarm.reset()
+        setupTimeline = nil
         reconnectTask?.cancel()
         reconnectTask = nil
         media.stop()
@@ -1030,15 +1147,22 @@ final class IPhoneCloudCallSession {
 
     /// Resend once, shortly, after an explicit "not yet". Only inside the current confirmation
     /// window, so the overall answer budget and its final failure state are unchanged.
-    private func scheduleQuickAnswerReplay() {
+    private func scheduleQuickAnswerReplay(after status: String) {
         guard answered,
             !answerAcknowledged,
             answerRetryTask != nil,
             quickAnswerReplayTask == nil,
             let uuid = call?.uuid
         else { return }
+        let isOutgoing = call?.isOutgoing == true
+        let delay = CloudCallAnswerPolicy.quickReplayDelay(
+            status: status,
+            isOutgoing: isOutgoing,
+            priorOutgoingPendingReplays: outgoingPendingReplays
+        )
+        if isOutgoing, status == "answer_pending" { outgoingPendingReplays += 1 }
         quickAnswerReplayTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(CloudCallAnswerPolicy.quickReplayDelay))
+            try? await Task.sleep(for: .seconds(delay))
             guard let self, !Task.isCancelled else { return }
             quickAnswerReplayTask = nil
             guard answered,
@@ -1058,6 +1182,7 @@ final class IPhoneCloudCallSession {
             isOutgoing: call?.isOutgoing == true,
             callConnected: {
                 emitLifecycle(.active, source: .agent, traceID: traceID)
+                markSetup(.active)
             }
         ) { startWebRTCIfReady() }
         guard answerAcknowledged else { return }
@@ -1066,6 +1191,7 @@ final class IPhoneCloudCallSession {
                 phase: status == "media_prepared" ? "media_prepared" : "answer_confirmed",
                 title: status == "media_prepared" ? "Outgoing WebRTC Prepared" : "Android Answer Confirmed"
             )
+            markSetup(status == "media_prepared" ? .mediaPrepared : .answerConfirmed)
         }
         answerRetryGeneration &+= 1
         answerRetryTask?.cancel()
@@ -1142,6 +1268,7 @@ final class IPhoneCloudCallSession {
                         )
                     ]
                 )
+                markSetup(.iceConfigReady)
                 let rtc = RTCAudioSession.sharedInstance()
                 if !CallKitController.shared.managesCurrentCall, !ownsWebRTCAudioActivation {
                     rtc.lockForConfiguration()
@@ -1153,6 +1280,7 @@ final class IPhoneCloudCallSession {
                 let negotiation = try media.startWebRTC(call: call, servers: config.iceServers.map(\.native))
                 webRTCReadiness.begin(negotiation)
                 traceAudio(phase: "peer_started", title: "WebRTC Peer Started")
+                markSetup(.peerStarted)
             } catch {
                 guard !Task.isCancelled, webRTCStartID == id else { return }
                 audioState = .failed(error.localizedDescription)
@@ -1242,6 +1370,8 @@ final class IPhoneCloudCallSession {
                     try await self.media.connect(to: url, secret: secret)
                 },
                 connected: {
+                    // Logged only when the first connect of this call failed; later rebuilds keep the timeline.
+                    self.markSetup(.signalingConnected, .notPrewarmed)
                     self.answerHandshake.invalidate()
                     self.replayAnswerIfNeeded()
                     self.scheduleAnswerConfirmation(for: call)

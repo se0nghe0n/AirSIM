@@ -194,6 +194,22 @@ assert_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
 assert_not_contains "$ROOT/src/com/airsim/phonecontrol/TelephonyWebRTCPeer.java" \
   'new Socket' \
   'Native carrier audio must remain in process'
+# The carrier uplink loop against a scripted track and clock. The real device class is compiled
+# against android.jar only for its failure reason codes; no audio route is opened.
+UPLINK_OUT="$OUT/carrier-uplink"
+mkdir -p "$UPLINK_OUT"
+compile_test "$UPLINK_OUT" "$ANDROID_JAR" \
+  "$ROOT"/test/peer-disposal/com/airsim/phonecontrol/BridgeLog.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PrivilegedBridgeProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayoutClock.java \
+  "$ROOT"/src/org/webrtc/audio/ExternalPlayoutClock.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayout.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierUplink.java \
+  "$ROOT"/src/com/airsim/phonecontrol/TelephonyAudioDevice.java \
+  "$ROOT"/test/com/airsim/phonecontrol/CarrierUplinkTests.java
+"$JAVA" -cp "$(with_stdlib "$UPLINK_OUT:$ANDROID_JAR")" com.airsim.phonecontrol.CarrierUplinkTests
+
 compile_test "$OUT" "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCCaptureClock.java \
