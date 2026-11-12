@@ -214,6 +214,17 @@ public final class MainActivity extends Activity {
         requestPermissions(missing, OPTIONAL_CALL_HISTORY_REQUEST);
     }
 
+	private String smsRelaySummary() {
+		try {
+			StandaloneAgentStore agent = new StandaloneAgentStore(this);
+			boolean cloud = agent.configured() && agent.cloudEnabled();
+			return SMSRelayStatus.summary(cloud, new StandaloneSMSStore(this).cloudPendingCount(),
+					System.currentTimeMillis());
+		} catch (Exception unavailable) {
+			return "SMS relay status unavailable";
+		}
+	}
+
 	private void startSMSInboxBaselineIfAuthorized() {
 		if (checkSelfPermission(Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
 			SMS_SCAN_WORKER.execute(() -> SMSInboxScanner.scanIfDue(getApplicationContext()));
@@ -570,15 +581,17 @@ public final class MainActivity extends Activity {
         }
         root.addView(callAccountCard, matchWithTop(10));
 
-		root.addView(sectionTitle("SMS inbox fallback"), matchWithTop(22));
+		root.addView(sectionTitle("SMS relay"), matchWithTop(22));
 		LinearLayout smsCard = card(SURFACE, 22);
 		smsCard.setOrientation(LinearLayout.VERTICAL);
 		smsCard.setPadding(dp(16), dp(16), dp(16), dp(16));
+		smsCard.addView(label(smsRelaySummary(), 14, TEXT, Gravity.START));
 		boolean inboxGranted = checkSelfPermission(Manifest.permission.READ_SMS)
 				== PackageManager.PERMISSION_GRANTED;
-		smsCard.addView(label(inboxGranted ? "Authorized · Scans newly received messages only"
-				: "Not authorized · SMS broadcasts are still used", 14, TEXT, Gravity.START));
-		smsCard.addView(description("Optional permission to retrieve new messages when broadcasts are missed. Existing messages are not imported."), matchWithTop(6));
+		smsCard.addView(label(inboxGranted ? "Inbox fallback authorized · Also relays MMS/LMS text"
+				: "Inbox fallback not authorized · SMS broadcasts only, no MMS/LMS", 14, TEXT, Gravity.START),
+				matchWithTop(10));
+		smsCard.addView(description("Optional Read SMS permission retrieves new messages when a broadcast is missed and relays the text of MMS and long (LMS) messages after the default SMS app downloads them. Existing messages are not imported. RCS chats are not visible to AirSIM."), matchWithTop(6));
 		if (!inboxGranted) {
 			TextView permissionAction = secondaryButton("Allow SMS access in system settings");
 			permissionAction.setOnClickListener(ignored -> startActivity(new Intent(

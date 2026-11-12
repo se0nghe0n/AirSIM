@@ -1721,7 +1721,10 @@ async function receiveSMS(request, env) {
       timestamp > now + 300_000) {
     return jsonResponse(400, { error: "invalid incoming SMS" });
   }
-  const sender = nonEmpty(message.sender) ? message.sender.trim() : "Unknown number";
+  // MMS senders can be e-mail style addresses; keep the title (and the payload) bounded.
+  const sender = nonEmpty(message.sender)
+    ? [...message.sender.trim()].slice(0, 64).join("")
+    : "Unknown number";
   // Android's carrier timestamp can be old when the inbox provider restores a message,
   // or when an offline Agent flushes its durable queue after a long Relay outage.
   // Preserve the delivery ID for deduplication, but show the arrival time on iPhone.
@@ -1735,10 +1738,9 @@ async function receiveSMS(request, env) {
   }
   await writeRelayState(env, dedupeKey, "1", 7 * 24 * 60 * 60);
 
-  const [content, truncated] = truncateCodePoints(message.content, 700);
-  const payload = {
+  const payload = fitIncomingSMSPayload(message.content, (text, cut) => ({
     aps: {
-      alert: { title: sender, body: content },
+      alert: { title: sender, body: text },
       sound: "default",
       "thread-id": `airsim-sms-${sender}`.slice(0, 64),
       "content-available": 1,
@@ -1746,11 +1748,11 @@ async function receiveSMS(request, env) {
     event: "incoming_sms",
     delivery_id: message.delivery_id,
     sender,
-    content,
-    content_truncated: truncated,
+    content: text,
+    content_truncated: cut,
     code: stringValue(message.code),
     timestamp: deliveryTimestamp,
-  };
+  }));
   try {
     await sendAPNs(env, authenticated.device, authenticated.device.alert_token, {
       topic: authenticated.device.bundle_id,
@@ -2288,10 +2290,23 @@ async function boundedCollapseID(value) {
   return `airsim-${(await sha256Hex(text)).slice(0, 57)}`;
 }
 
-function truncateCodePoints(value, maximum) {
-  const points = [...value];
-  if (points.length <= maximum) return [value, false];
-  return [points.slice(0, maximum).join("") + "…", true];
+// sendAPNs refuses payloads over 4 KB, as APNs does. The SMS text appears twice (alert body and
+// `content`), so Korean or emoji text near 700 code points used to fail on every retry. Shorten
+// the text until the whole payload fits, with a margin for JSON escaping differences.
+const SMS_ALERT_PAYLOAD_BUDGET = MAX_APNS_PAYLOAD_BYTES - 96;
+const SMS_ALERT_MAX_CODE_POINTS = 700;
+
+export function fitIncomingSMSPayload(content, build) {
+  const points = [...content];
+  let maximum = Math.min(points.length, SMS_ALERT_MAX_CODE_POINTS);
+  for (;;) {
+    const cut = maximum < points.length;
+    const payload = build(cut ? points.slice(0, maximum).join("") + "…" : content, cut);
+    if (maximum === 0 || encoder.encode(JSON.stringify(payload)).length <= SMS_ALERT_PAYLOAD_BUDGET) {
+      return payload;
+    }
+    maximum = Math.floor(maximum * 0.9);
+  }
 }
 
 function normalizeECDSASignature(signature) {
