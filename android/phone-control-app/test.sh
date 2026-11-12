@@ -300,3 +300,20 @@ compile_test "$PREFETCH_OUT" "$OUT:$JSON_JAR" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCCloudPeer.java \
   "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/WebRTCICEPreparationTests.java
 "$JAVA" -cp "$(with_stdlib "$PREFETCH_OUT:$OUT:$JSON_JAR")" com.airsim.phonecontrol.WebRTCICEPreparationTests
+
+# Run the real cloud-session reconnect loop against fake transport/native boundaries. Never dial.
+RECOVERY_OUT="$OUT/cloud-recovery"
+mkdir -p "$RECOVERY_OUT"
+compile_test "$RECOVERY_OUT" "$JSON_JAR" \
+  "$ROOT"/test/cloud-recovery/android/content/Context.java \
+  "$ROOT"/test/cloud-recovery/android/telecom/Call.java \
+  "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/MediaRecoveryFixtures.java \
+  "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/CloudCarrierRecoveryTests.java \
+  "$ROOT"/src/com/airsim/phonecontrol/StandaloneCloudMediaManager.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudCarrierRecovery.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudCallMedia.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudCallTarget.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudAnswerReplayPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CallLifecycleConflict.java \
+  "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java
+"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$JSON_JAR")" com.airsim.phonecontrol.CloudCarrierRecoveryTests

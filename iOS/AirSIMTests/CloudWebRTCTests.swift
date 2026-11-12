@@ -1208,3 +1208,96 @@ struct CloudAudioStatusTests {
         #expect(control.sessionID == nil)
     }
 }
+
+struct CloudCarrierRouteRecoveryTests {
+    private let uuid = UUID()
+
+    private func message(
+        uuid: UUID?,
+        generation: UInt64? = 3,
+        status: String = "agent_media_failed",
+        reason: String = "carrier_route_recovery_required",
+        callID: String? = "call"
+    ) throws -> CloudCallControlMessage {
+        var payload: [String: Any] = ["status": status, "message": reason]
+        if let uuid { payload["call_uuid"] = uuid.uuidString }
+        if let generation { payload["generation"] = generation }
+        if let callID { payload["call_id"] = callID }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let decoded = try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self))
+        return try #require(decoded)
+    }
+
+    @Test func `Only the explicit recovery diagnostic for this call stops retries`() throws {
+        var recovery = CloudCarrierRouteRecovery()
+        recovery.begin(uuid: uuid, generation: 3)
+        for control in [
+            try message(uuid: UUID()),
+            try message(uuid: uuid, generation: 2),
+            try message(uuid: nil),
+            try message(uuid: uuid, generation: nil),
+            try message(uuid: uuid, callID: "different-call"),
+            try message(uuid: uuid, status: "webrtc_failed"),
+            try message(uuid: uuid, reason: "carrier_route_inactive"),
+            try message(uuid: uuid, reason: "ice_failed"),
+        ] {
+            let accepted1 = recovery.receive(control, callID: "call")
+            #expect(!accepted1)
+            #expect(!recovery.required)
+            #expect(recovery.audioState(.starting) == .starting)
+        }
+        let accepted2 = try recovery.receive(message(uuid: uuid, callID: nil), callID: "call")
+        #expect(accepted2)
+        #expect(recovery.required)
+    }
+
+    @Test func `Queued audio updates cannot hide carrier recovery guidance`() throws {
+        var recovery = CloudCarrierRouteRecovery()
+        recovery.begin(uuid: uuid, generation: 3)
+        let accepted3 = try recovery.receive(message(uuid: uuid), callID: "call")
+        #expect(accepted3)
+        for update: CloudCallAudioState in [
+            .connected, .connecting(attempt: 1, maximumAttempts: 4), .starting,
+            .failed("Late connection failure"), .idle,
+        ] {
+            #expect(recovery.audioState(update) == .failed(CloudCarrierRouteRecovery.message))
+        }
+        for status in [
+            "webrtc_ready", "webrtc_recovering", "webrtc_failed", "peer_connected", "agent_ready", "answer_ok",
+        ] {
+            #expect(!recovery.allowsControl(status: status))
+        }
+    }
+
+    @Test func `Recovery preserves call lifecycle and end controls`() throws {
+        var recovery = CloudCarrierRouteRecovery()
+        recovery.begin(uuid: uuid, generation: 3)
+        let accepted4 = try recovery.receive(message(uuid: uuid), callID: "call")
+        #expect(accepted4)
+        for status in ["active", "ended", "remote_ended", "rejected", "ownership_lost"] {
+            #expect(recovery.allowsControl(status: status))
+        }
+        #expect(recovery.required)
+    }
+
+    @Test func `Answer replay retains recovery while a new generation or call clears it`() throws {
+        var recovery = CloudCarrierRouteRecovery()
+        recovery.begin(uuid: uuid, generation: 3)
+        let accepted5 = try recovery.receive(message(uuid: uuid), callID: "call")
+        #expect(accepted5)
+        recovery.begin(uuid: uuid, generation: 3)
+        #expect(recovery.required)
+        recovery.begin(uuid: uuid, generation: 4)
+        #expect(!recovery.required)
+        let accepted6 = recovery.receive(try message(uuid: uuid), callID: "call")
+        #expect(!accepted6)
+        #expect(recovery.audioState(.connected) == .connected)
+        let accepted7 = try recovery.receive(message(uuid: uuid, generation: 4), callID: "call")
+        #expect(accepted7)
+        recovery.begin(uuid: UUID(), generation: 4)
+        #expect(!recovery.required)
+        #expect(recovery.allowsControl(status: "webrtc_ready"))
+        let accepted8 = recovery.receive(try message(uuid: uuid, generation: 4), callID: "call")
+        #expect(!accepted8)
+    }
+}

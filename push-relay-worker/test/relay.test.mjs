@@ -1827,6 +1827,19 @@ test("outgoing preparation and carrier answer preserve the same WebRTC negotiati
   assert.equal(watch.sent.length, 0);
 });
 
+test("carrier recovery diagnostic is forwarded without ending the call or losing end control", async () => {
+  const { relay, iphone, agent, watch } = await webRTCSession();
+  const failure = JSON.stringify({ status: "agent_media_failed", call_id: "ice-call",
+    call_uuid: webRTCCallUUID, generation: 3, message: "carrier_route_recovery_required" });
+  await relay.webSocketMessage(agent, failure);
+  assert.equal(iphone.sent.at(-1), failure);
+  assert.equal(watch.sent.length, 0);
+  assert.equal(Boolean(relay.terminal), false);
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "end", call_id: "ice-call",
+    call_uuid: webRTCCallUUID, generation: 3, command_id: "end-after-carrier-failure" }));
+  assert.equal(JSON.parse(agent.sent.at(-1)).action, "end");
+});
+
 test("WebRTC rejects wrong roles, identity, stale sessions and oversized payloads", async () => {
   const { relay, iphone, agent, watch } = await webRTCSession();
   for (const [sender, message] of [
