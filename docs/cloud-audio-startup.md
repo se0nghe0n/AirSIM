@@ -55,3 +55,43 @@ Android logs to logcat under the tag `AirSIMBridge`:
 - The privileged Shizuku process logs `standalone_carrier_attach_retry attempt=… reason=…`, `standalone_webrtc_failed reason=…` and `standalone_webrtc_stats`. These appear only in logcat (`adb logcat -s AirSIMBridge`), not in the in-app debug log.
 
 Logcat and the debug log carry timestamps, but neither records the iPhone-side phases, so they cannot measure the full setup timeline on their own.
+
+## Persistent Android carrier-route failures
+
+Cloud signaling and TURN credential retrieval can succeed while Android has no usable carrier
+output route. For example, Android's audio-policy service can retain an output-patch entry that
+AudioFlinger no longer has. Rebuilding the WebRTC peer does not reset either system service.
+A successful `AudioTrack.write`, advancing playback head, or preferred TELEPHONY device alone
+is not proof that audio reaches the carrier. Do not bypass the actual TELEPHONY route check.
+
+A cloud call permits three native-peer failures with known carrier-route reason codes. The
+existing bounded carrier-attachment attempts still run within each native peer. After the third
+route failure, Android releases media but retains the control socket, sends
+`agent_media_failed` with `message: carrier_route_recovery_required`, and stops starting new
+peers for that call UUID and generation. Socket reconnection and repeated answer controls replay
+the recovery status instead of fetching credentials or reopening carrier audio. Network and ICE
+errors retain their existing retry behavior and do not spend the carrier-route budget. A new
+call or generation has a fresh budget. No state is written to pairing or persistent device data.
+
+A matching iPhone build displays an Android call-audio recovery message. It stops audio-start
+and reconnect tasks without ending the cellular call or disabling end/reject controls. Late
+readiness callbacks cannot replace the message with a false connected/retrying state. The
+existing Relay forwards this status, so no Relay deployment or protocol migration is needed.
+After this terminal media failure, iPhone does not rebuild its signaling connection if that
+connection later drops; explicit end/reject still uses the durable HTTP control path.
+Older iPhone builds still receive the diagnostic but may continue displaying their older UI.
+
+This change bounds and explains a failure; it does **not** repair an Android system route or
+establish that every route failure has the same cause. End the current call before restarting
+the Android phone. Reopen AirSIM and restart/reconnect Shizuku if needed. Do not clear app data,
+reinstall, manually create/release system audio patches, or accept a speaker route as a fallback.
+A reboot is a recovery step, not a proven permanent fix. If the failure returns, collect fresh
+route-state evidence before changing routing behavior.
+
+Tests run the real cloud-session loop with fake network/native boundaries and cover a bounded
+route-failure budget, ordinary ICE failure, stale peer callbacks, answer replay, ACTIVE/SDP
+suppression, control reconnection, explicit end/reject, and a fresh generation. iPhone tests
+cover exact token and identity validation, sticky failure state, permitted lifecycle controls,
+and reset for a new call. These tests open no hardware route and make no real calls. Physical
+acceptance still requires a user-initiated cloud call after recovery, including bidirectional
+speech, hangup, repeated calls, and confirmation that the failure does not recur.

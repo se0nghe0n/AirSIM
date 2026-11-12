@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** App-owned signaling proxy. All audio, codec and RTP work stays in the privileged native peer. */
 final class WebRTCCloudPeer implements Closeable {
     interface Signals { void send(JSONObject value) throws Exception; }
+    interface Failure { void failed(String reason); }
     private final ShizukuBridgeManager bridge;
     private final String callUUID;
     private final long generation;
@@ -27,7 +28,7 @@ final class WebRTCCloudPeer implements Closeable {
     private final String relayURL;
     private final String secret;
     private final Signals signals;
-    private final Runnable failed;
+    private final Failure failed;
     private final boolean hostOnly;
     private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -43,16 +44,16 @@ final class WebRTCCloudPeer implements Closeable {
     }
 
     WebRTCCloudPeer(Context context, String callUUID, long generation, String relayURL,
-                    String secret, Signals signals, Runnable failed) {
+                    String secret, Signals signals, Failure failed) {
         this(context, callUUID, generation, relayURL, secret, signals, failed, false);
     }
 
     static WebRTCCloudPeer host(Context context, String callUUID, long generation, Signals signals, Runnable failed) {
-        return new WebRTCCloudPeer(context, callUUID, generation, "", "", signals, failed, true);
+        return new WebRTCCloudPeer(context, callUUID, generation, "", "", signals, reason -> failed.run(), true);
     }
 
     private WebRTCCloudPeer(Context context, String callUUID, long generation, String relayURL,
-                    String secret, Signals signals, Runnable failed, boolean hostOnly) {
+                    String secret, Signals signals, Failure failed, boolean hostOnly) {
         PrivilegedMediaProtocol.requireIdentity(callUUID, generation);
         this.bridge = ShizukuBridgeManager.get(context); this.callUUID = callUUID; this.generation = generation;
         this.relayURL = relayURL; this.secret = secret; this.signals = signals; this.failed = failed; this.hostOnly = hostOnly;
@@ -201,7 +202,7 @@ final class WebRTCCloudPeer implements Closeable {
                     .put("call_uuid", callUUID).put("generation", generation)); }
             catch (Exception ignored) {}
         }
-        failed.run();
+        failed.failed(reason);
     }
 
     @Override public void close() {

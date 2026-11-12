@@ -43,6 +43,41 @@ enum CloudCallAudioState: Equatable, Sendable {
     }
 }
 
+struct CloudCarrierRouteRecovery: Sendable {
+    static let message =
+        "Android’s call-audio route is unavailable. Automatic audio retries have stopped. End the call, then restart the Android phone and reconnect Shizuku."
+    private var callUUID: UUID?
+    private var generation: UInt64?
+    private(set) var required = false
+
+    mutating func begin(uuid: UUID, generation: UInt64) {
+        guard callUUID != uuid || self.generation != generation else { return }
+        callUUID = uuid
+        self.generation = generation
+        required = false
+    }
+
+    mutating func receive(_ control: CloudCallControlMessage, callID: String) -> Bool {
+        guard control.status == "agent_media_failed",
+            control.message == "carrier_route_recovery_required",
+            let callUUID, let generation,
+            control.callUUID?.lowercased() == callUUID.uuidString.lowercased(),
+            control.generation == generation,
+            control.matches(callID: callID, uuid: callUUID, generation: generation)
+        else { return false }
+        required = true
+        return true
+    }
+
+    func allowsControl(status: String) -> Bool {
+        !required || ["ownership_lost", "rejected", "ended", "remote_ended", "active"].contains(status)
+    }
+
+    func audioState(_ proposed: CloudCallAudioState) -> CloudCallAudioState {
+        required ? .failed(Self.message) : proposed
+    }
+}
+
 enum CloudCallAudioStartupPolicy {
     static func shouldStart(
         answered: Bool,
@@ -494,10 +529,15 @@ final class IPhoneCloudCallSession {
     private(set) var answered = false
     private(set) var lifecycleState: CallLifecycleState = .idle
 
-    private(set) var audioState: CloudCallAudioState = .idle {
-        didSet {
-            guard audioState != oldValue else { return }
-            onAudioStateChange?(audioState)
+    private var carrierRouteRecovery = CloudCarrierRouteRecovery()
+    private var currentAudioState: CloudCallAudioState = .idle
+    private(set) var audioState: CloudCallAudioState {
+        get { currentAudioState }
+        set {
+            let next = carrierRouteRecovery.audioState(newValue)
+            guard next != currentAudioState else { return }
+            currentAudioState = next
+            onAudioStateChange?(next)
         }
     }
 
@@ -525,7 +565,8 @@ final class IPhoneCloudCallSession {
     var hasActiveCall: Bool { call != nil && answered && lifecycleState == .active }
 
     private var canAttemptAudio: Bool {
-        call != nil && answered && isPrepared && (lifecycleState == .connecting || lifecycleState == .active)
+        !carrierRouteRecovery.required && call != nil && answered && isPrepared
+            && (lifecycleState == .connecting || lifecycleState == .active)
     }
 
     var isRecovering: Bool { reconnectTask != nil }
@@ -534,7 +575,8 @@ final class IPhoneCloudCallSession {
         media.onWebRTCState = { connected, connection, negotiation in
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
-                guard session.usesWebRTC, session.media.isCurrentWebRTCSession(negotiation, connection: connection)
+                guard !session.carrierRouteRecovery.required, session.usesWebRTC,
+                    session.media.isCurrentWebRTCSession(negotiation, connection: connection)
                 else { return }
                 if connected {
                     session.webRTCReadiness.nativeConnected(negotiation)
@@ -552,7 +594,9 @@ final class IPhoneCloudCallSession {
         media.onWebRTCRecovering = { connection, negotiation in
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
-                guard session.media.isCurrentWebRTCSession(negotiation, connection: connection) else { return }
+                guard !session.carrierRouteRecovery.required,
+                    session.media.isCurrentWebRTCSession(negotiation, connection: connection)
+                else { return }
                 session.webRTCReadiness.nativeDisconnected(negotiation)
                 session.traceAudio(phase: "native_disconnected", title: "WebRTC Path Interrupted")
                 session.audioState = session.audioState.afterNativeDisconnect(
@@ -563,7 +607,9 @@ final class IPhoneCloudCallSession {
         media.onConnectionLost = { connection in
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
-                guard session.call != nil, session.media.isCurrentConnection(connection) else { return }
+                guard !session.carrierRouteRecovery.required, session.call != nil,
+                    session.media.isCurrentConnection(connection)
+                else { return }
                 session.answerHandshake.invalidate()
                 session.requestMediaRebuild(.connectionLost)
             }
@@ -591,6 +637,11 @@ final class IPhoneCloudCallSession {
                     session.media.isCurrentConnection(connection),
                     control.matches(callID: call.callID, uuid: call.uuid, generation: call.generation)
                 else { return }
+                if session.usesWebRTC, session.carrierRouteRecovery.receive(control, callID: call.callID) {
+                    session.requireCarrierRouteRecovery()
+                    return
+                }
+                guard session.carrierRouteRecovery.allowsControl(status: status) else { return }
                 if status == "peer_connected",
                     session.usesWebRTC,
                     CloudWebRTCReadiness.shouldRenegotiatePeer(role: control.role)
@@ -657,8 +708,18 @@ final class IPhoneCloudCallSession {
         else {
             throw IPhoneCloudCallError.mediaUnavailable
         }
+        let callChanged = call?.uuid != incoming.uuid || call?.generation != incoming.generation
+        carrierRouteRecovery.begin(uuid: incoming.uuid, generation: incoming.generation)
+        guard !carrierRouteRecovery.required else { return }
+        if callChanged {
+            reconnectID = UUID()
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            webRTCStartID = UUID()
+            webRTCStartTask?.cancel()
+            webRTCStartTask = nil
+        }
         try media.prepareForCallKit(webRTC: true)
-        let callChanged = call?.uuid != incoming.uuid
         call = incoming
         if callChanged || audioSetupStartedAt == nil {
             audioSetupStartedAt = ProcessInfo.processInfo.systemUptime
@@ -685,13 +746,17 @@ final class IPhoneCloudCallSession {
                 // System answer actions must not fail outright due to initial WebSocket connection jitter.
                 // Retain the same call and perform bounded background reconnection, then resend the answer control
                 // frame upon success.
-                guard call?.uuid == incoming.uuid, answered else { return }
+                guard !carrierRouteRecovery.required, call?.uuid == incoming.uuid,
+                    call?.generation == incoming.generation, answered
+                else { return }
                 requestMediaRebuild(.connectionLost)
                 scheduleAnswerConfirmation(for: incoming)
                 return
             }
         }
-        guard call?.uuid == incoming.uuid, answered else { return }
+        guard !carrierRouteRecovery.required, call?.uuid == incoming.uuid, call?.generation == incoming.generation,
+            answered
+        else { return }
         traceAudio(phase: "signaling_connected", title: "Cloud Signaling Connected")
         scheduleAnswerConfirmation(for: incoming)
     }
@@ -980,8 +1045,10 @@ final class IPhoneCloudCallSession {
         answerRetryTask = nil
         quickAnswerReplayTask?.cancel()
         quickAnswerReplayTask = nil
+        reconnectID = UUID()
         reconnectTask?.cancel()
         reconnectTask = nil
+        carrierRouteRecovery = CloudCarrierRouteRecovery()
         media.stop()
         call = nil
         answered = false
@@ -994,6 +1061,7 @@ final class IPhoneCloudCallSession {
     }
 
     private func scheduleAnswerConfirmation(for incoming: IncomingVoIPCall) {
+        guard !carrierRouteRecovery.required else { return }
         answerRetryGeneration &+= 1
         let generation = answerRetryGeneration
         answerRetryTask?.cancel()
@@ -1024,14 +1092,14 @@ final class IPhoneCloudCallSession {
     }
 
     private func replayAnswerIfNeeded() {
-        guard answered, let call else { return }
+        guard !carrierRouteRecovery.required, answered, let call else { return }
         answerHandshake.replayIfNeeded { media.sendControl("answer", call: call) }
     }
 
     /// Resend once, shortly, after an explicit "not yet". Only inside the current confirmation
     /// window, so the overall answer budget and its final failure state are unchanged.
     private func scheduleQuickAnswerReplay() {
-        guard answered,
+        guard !carrierRouteRecovery.required, answered,
             !answerAcknowledged,
             answerRetryTask != nil,
             quickAnswerReplayTask == nil,
@@ -1075,7 +1143,7 @@ final class IPhoneCloudCallSession {
     }
 
     private func restartWebRTCNegotiation() {
-        guard usesWebRTC, answered, let call else { return }
+        guard !carrierRouteRecovery.required, usesWebRTC, answered, let call else { return }
         let replacingPeer = media.isAudioRunning
         answerHandshake.agentReconnected(
             role: "agent",
@@ -1127,6 +1195,7 @@ final class IPhoneCloudCallSession {
                 let config = try await icePreparation.configuration(for: call)
                 guard !Task.isCancelled,
                     self.call?.uuid == call.uuid,
+                    self.call?.generation == call.generation,
                     webRTCStartID == id,
                     audioStartupPermitted,
                     answerAcknowledged,
@@ -1166,8 +1235,23 @@ final class IPhoneCloudCallSession {
         }
     }
 
+    private func requireCarrierRouteRecovery() {
+        icePreparation.cancel()
+        answerRetryGeneration &+= 1
+        answerRetryTask?.cancel()
+        answerRetryTask = nil
+        quickAnswerReplayTask?.cancel()
+        quickAnswerReplayTask = nil
+        reconnectID = UUID()
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        stopAudio()
+        audioState = .failed(CloudCarrierRouteRecovery.message)
+        traceAudio(phase: "carrier_route_recovery_required", title: "Android Audio Recovery Required", isFailure: true)
+    }
+
     private func requestMediaRebuild(_ issue: CloudMediaHealthIssue) {
-        guard reconnectTask == nil, let call, answered else { return }
+        guard !carrierRouteRecovery.required, reconnectTask == nil, let call, answered else { return }
         if mediaHealthTracker == nil {
             mediaHealthTracker = CloudMediaHealthTracker(maximumRebuilds: 3)
         }
@@ -1213,7 +1297,7 @@ final class IPhoneCloudCallSession {
     }
 
     private func recoverConnectionIfNeeded() {
-        guard reconnectTask == nil,
+        guard !carrierRouteRecovery.required, reconnectTask == nil,
             let call,
             answered,
             let url = call.authenticatedMediaURL,
@@ -1235,19 +1319,24 @@ final class IPhoneCloudCallSession {
             let delays = CloudCallRetryPolicy.reconnectDelays
             await CloudCallRecoveryCoordinator.run(
                 delays: delays,
-                isCurrent: { self.call?.uuid == call.uuid && self.answered && self.reconnectID == id },
+                isCurrent: {
+                    !self.carrierRouteRecovery.required && self.call?.uuid == call.uuid
+                        && self.call?.generation == call.generation && self.answered && self.reconnectID == id
+                },
                 connect: { index in
                     self.audioState = .connecting(attempt: index + 1, maximumAttempts: delays.count)
                     self.media.stop()
                     try await self.media.connect(to: url, secret: secret)
                 },
                 connected: {
+                    guard !self.carrierRouteRecovery.required, self.reconnectID == id else { return }
                     self.answerHandshake.invalidate()
                     self.replayAnswerIfNeeded()
                     self.scheduleAnswerConfirmation(for: call)
                     self.startAudioWithRetry()
                 },
                 failed: { error in
+                    guard !self.carrierRouteRecovery.required, self.reconnectID == id else { return }
                     self.audioState = .failed(error.localizedDescription)
                     self.emitLifecycle(.failed, source: .relay, traceID: nil, failure: error.localizedDescription)
                     CallKitController.shared.reportCurrentCallEnded(reason: .failed)

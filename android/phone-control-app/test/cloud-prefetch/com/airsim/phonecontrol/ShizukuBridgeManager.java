@@ -12,6 +12,7 @@ final class ShizukuBridgeManager {
     final CountDownLatch activated = new CountDownLatch(1);
     final AtomicInteger activations = new AtomicInteger();
     volatile boolean carrierDeferred;
+    volatile String failureReason;
     static ShizukuBridgeManager get(Context context) { return current; }
     boolean mediaAvailable() { return true; }
     String mediaRequest(String encoded) throws Exception {
@@ -24,7 +25,11 @@ final class ShizukuBridgeManager {
             activations.incrementAndGet();
             activated.countDown();
         }
-        return new JSONObject().put("version", 2).put("request_id", request.getLong("request_id"))
-                .put("ok", true).put("active", true).toString();
+        JSONObject response = new JSONObject().put("version", 2).put("request_id", request.getLong("request_id"))
+                .put("ok", true).put("active", true);
+        if ("poll".equals(request.getString("action")) && failureReason != null) {
+            response.put("event", new JSONObject().put("status", "webrtc_failed").put("reason", failureReason));
+        }
+        return response.toString();
     }
 }
