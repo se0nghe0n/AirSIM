@@ -27,6 +27,7 @@ final class TelephonyAudioDevice implements Closeable {
     private volatile Thread worker;
     private volatile Thread uplink;
     private volatile String failureReason = "carrier_media_unavailable";
+    private boolean failing; // Guarded by this.
 
     TelephonyAudioDevice(WebRTCPcmBuffer capture, WebRTCPcmBuffer playback, Runnable ready, Runnable failed) {
         this.capture = capture; this.playback = playback; this.ready = ready; this.failed = failed;
@@ -90,6 +91,10 @@ final class TelephonyAudioDevice implements Closeable {
             for (int i = 0; i < 64; i++) {
                 if (output.write(frame, 0, frame.length, AudioTrack.WRITE_NON_BLOCKING) < frame.length) break;
             }
+            // From here the track is never left without data: the uplink writes silence until
+            // WebRTC playout delivers frames, however long capture and negotiation take.
+            uplink = new Thread(() -> play(output), "airsim-carrier-uplink");
+            uplink.start();
             // Discard capture queued during route verification; only live audio starts the stream.
             for (int i = 0; i < 64; i++) {
                 if (input.read(frame, 0, frame.length, AudioRecord.READ_NON_BLOCKING) < frame.length) break;
@@ -97,9 +102,12 @@ final class TelephonyAudioDevice implements Closeable {
             int count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
             if (count <= 0 || input.getAudioSource() != SOURCE_VOICE_DOWNLINK) throw new IOException("carrier capture failed");
             capture.offer(frame, 0, count & ~1);
-            ready.run();
-            uplink = new Thread(() -> play(output), "airsim-carrier-uplink");
-            uplink.start();
+            synchronized (this) {
+                // The uplink is already running. A device it has failed must not report ready
+                // afterwards, or the peer would treat an unverified retry as a verified route.
+                if (closed.get() || failing) return;
+                ready.run();
+            }
             while (!closed.get()) {
                 count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
                 if (count < 0) throw new IOException("carrier capture stopped");
@@ -116,15 +124,24 @@ final class TelephonyAudioDevice implements Closeable {
 
     private void play(AudioTrack output) {
         audioPriority();
-        try {
-            while (!closed.get()) {
-                byte[] frame = playback.take();
-                if (frame == null) return;
+        CarrierUplink.Sink sink = new CarrierUplink.Sink() {
+            @Override public int routedType() {
                 AudioDeviceInfo route = output.getRoutedDevice();
-                if (route == null || route.getType() != AudioDeviceInfo.TYPE_TELEPHONY)
-                    throw new IOException("carrier route lost");
-                try { write(output, frame); } finally { Arrays.fill(frame, (byte) 0); }
+                return route == null ? CarrierUplink.ROUTE_NONE : route.getType();
             }
+            @Override public void write(byte[] frame) throws IOException {
+                TelephonyAudioDevice.this.write(output, frame);
+            }
+            @Override public int writeNow(byte[] frame) throws IOException {
+                int count = output.write(frame, 0, frame.length, AudioTrack.WRITE_NON_BLOCKING);
+                if (count < 0) throw new IOException("carrier playback stopped");
+                return count;
+            }
+        };
+        // The route check, the silence that keeps the track active and their limits are in CarrierUplink.
+        try {
+            new CarrierUplink(playback, sink, AudioDeviceInfo.TYPE_TELEPHONY, closed::get,
+                    System::nanoTime, BridgeLog::info).run();
         } catch (Exception | LinkageError error) { if (!closed.get()) fail(error); }
     }
 
@@ -146,7 +163,7 @@ final class TelephonyAudioDevice implements Closeable {
     }
 
     private void fail(Throwable error) {
-        failureReason = reason(error);
+        synchronized (this) { failing = true; failureReason = reason(error); }
         failed.run();
     }
 

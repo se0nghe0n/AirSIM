@@ -301,6 +301,8 @@ final class TelephonyWebRTCPeer implements Closeable {
                             pcm.put("pcm_capture_drop_total", capture.drops());
                             pcm.put("pcm_capture_conceal_total", capture.underruns());
                             pcm.put("pcm_playback_drop_total", playback.drops());
+                            // 10 ms silence frames that kept the carrier track fed without playout.
+                            pcm.put("pcm_playback_fill_total", playback.underruns());
                             int carrierUnderruns = device == null ? -1 : device.playbackUnderruns();
                             if (carrierUnderruns >= 0) pcm.put("carrier_underrun_total", carrierUnderruns);
                             for (Map<String, Object> fields : statistics.sample(entries)) {

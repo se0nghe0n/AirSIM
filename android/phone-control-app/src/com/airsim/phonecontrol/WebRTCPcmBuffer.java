@@ -142,6 +142,8 @@ final class WebRTCPcmBuffer {
     synchronized long underruns() { return underruns; }
     /** Frames the consumer has taken; lets a producer see that a stalled consumer resumed. */
     synchronized long consumed() { return consumed; }
+    /** Tells a timed take that gave up from one that ended because the queue closed. */
+    synchronized boolean isClosed() { return closed; }
 
     synchronized void close() {
         closed = true; frames.clear(); partialSize = 0; forget(); notifyAll();

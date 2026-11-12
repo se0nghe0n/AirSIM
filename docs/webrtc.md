@@ -88,6 +88,7 @@ log. See [Cloud audio startup diagnostics](cloud-audio-startup.md#diagnostics).
 | `rx_concealed_samples`, `rx_concealment_pct` | Concealed audio samples and their share of received samples during the interval |
 | `pcm_capture_drop_total`, `pcm_capture_conceal_total` | Android only. Cumulative carrier-capture frames discarded by the 60 ms/80 ms loopback cap, and 10 ms frames concealed because the attached carrier stalled. Either one is heard on the iPhone as a short gap. Outside the RTP loss count |
 | `pcm_playback_drop_total`, `carrier_underrun_total` | Android only. Cumulative decoded frames the carrier loopback discarded at its 60 ms cap, and the platform's underrun count for the carrier AudioTrack. Either one is heard by the far end. Outside the RTP loss count |
+| `pcm_playback_fill_total` | Android only. Cumulative 10 ms silence frames written to the carrier AudioTrack because no decoded frame arrived within 40 ms. It grows while the carrier is attached without running WebRTC playout: before the first offer is answered and during a renegotiation. Growth during speech means playout stalled, and the far end heard a faded gap |
 
 The buffer mean uses the change in `jitterBufferDelay` divided by the change in
 `jitterBufferEmittedCount`, following the [WebRTC statistics specification](https://www.w3.org/TR/webrtc-stats/).
@@ -116,6 +117,20 @@ steady part of the iPhone-to-carrier delay rather than one that drifts until it
 starves or overflows. Acoustic output and a platform
 minimum larger than 80 ms remain outside this cap. This bound is not a
 listening-quality result.
+
+WebRTC decodes audio only while a negotiated peer is playing. The carrier can be
+attached without one: when the call is already active before the iPhone's offer
+arrives, on every rebuild during an active call, and across a renegotiation.
+Android removes an AudioTrack that gets no data from its output after about 50
+mixer cycles and tells audio policy that the client stopped. The carrier uplink
+therefore never leaves the track empty. When no decoded frame arrives for 40 ms
+it writes 10 ms silence frames at the carrier clock until one does. 40 ms is
+half the 80 ms buffer floor, so the track still holds audio when silence
+starts. With playout running, a decoded frame follows within a few milliseconds
+of the queue having room, so no silence is added and the carrier clock still
+paces NetEq. Silence adds no delay beyond the AudioTrack buffer that steady
+state already keeps full. The first silence frame fades the last speech out and
+the next decoded frame fades in.
 
 ## Validation
 
