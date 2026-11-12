@@ -170,10 +170,12 @@ final class CallRecordingsViewController: PhoneTableController {
             self?.send(.deleteTapped(recording))
             done(true)
         }
+        delete.image = UIImage(systemName: "trash")
         let share = UIContextualAction(style: .normal, title: "Share") { [weak self] _, _, done in
             self?.share(recording)
             done(true)
         }
+        share.image = UIImage(systemName: "square.and.arrow.up")
         return UISwipeActionsConfiguration(actions: [delete, share])
     }
 }

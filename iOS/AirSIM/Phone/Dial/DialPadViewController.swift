@@ -19,6 +19,7 @@ final class DialPadViewController: ObservingViewController {
     }
 
     private var agentCard: UIView?
+    private var renderedAgentCard: AndroidAgentCardView.Content?
     private var keys: [(key: DialKey, button: UIButton)] = []
 
     private lazy var callButton = phoneButton("Dial", image: "phone.fill", color: .white) { [weak self] in
@@ -34,6 +35,7 @@ final class DialPadViewController: ObservingViewController {
     private lazy var agentHeight = agentButton.heightAnchor.constraint(equalToConstant: Metrics.agentCardHeight)
     private var keyHeight: NSLayoutConstraint?
     private var lastLayoutSize = CGSize.zero
+    private var lastAgentCardExtraHeight: CGFloat = 0
 
     // MARK: Lifecycle
 
@@ -53,6 +55,11 @@ final class DialPadViewController: ObservingViewController {
         buildNumber()
         buildAgentButton()
         buildKeypad()
+        // The card's text follows Dynamic Type, so a new text size measures it again.
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (controller: Self, _) in
+            controller.renderedAgentCard = nil
+            controller.renderAgentCard()
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -82,27 +89,39 @@ final class DialPadViewController: ObservingViewController {
 
     private func renderButtons() {
         callButton.isEnabled = store.canCall
-        let opacity = store.callIsDimmed ? Metrics.dimmedCallOpacity : 1
-        callButton.alpha = callButton.isEnabled ? opacity : opacity * Metrics.disabledCallOpacityFactor
+        // Dimmed only without a number or a route, as the SwiftUI button was; a busy model disables it undimmed.
+        callButton.alpha = store.callIsDimmed ? Metrics.dimmedCallOpacity : 1
         deleteButton.isEnabled = store.canDelete
     }
 
     private func renderAgentCard() {
         agentButton.isHidden = !store.showsAgentCard
-        agentButton.configuration = nil
-        agentCard?.removeFromSuperview()
-        let card = AndroidAgentCardView(
+        let content = AndroidAgentCardView.Content(
             agent: store.currentAgent,
             count: store.agentCount,
             cloudEnabled: store.cloudModeEnabled
         )
+        agentButton.accessibilityLabel = content.accessibilityLabel
+        // Typing a digit renders again; the card and its material are rebuilt only when what they show changes.
+        guard content != renderedAgentCard else { return }
+        renderedAgentCard = content
+        agentButton.configuration = nil
+        agentCard?.removeFromSuperview()
+        let card = AndroidAgentCardView(content: content)
         card.isUserInteractionEnabled = false
         agentButton.addPinnedSubview(card)
         agentCard = card
-        agentHeight.constant =
-            store.currentAgent == nil
-            ? Metrics.agentCardHeightWithoutCurrent
-            : Metrics.agentCardHeight
+        let minimum = content.agent == nil ? Metrics.agentCardHeightWithoutCurrent : Metrics.agentCardHeight
+        let fitting = card.systemLayoutSizeFitting(
+            CGSize(width: max(1, contentWidth.constant), height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        )
+        let height = max(minimum, ceil(fitting.height))
+        if abs(agentHeight.constant - height) > 0.5 {
+            agentHeight.constant = height
+            view.setNeedsLayout()
+        }
     }
 
     // MARK: Layout
@@ -158,6 +177,7 @@ final class DialPadViewController: ObservingViewController {
 
     private func buildAgentButton() {
         agentButton.titleLabel?.numberOfLines = 3
+        agentButton.accessibilityHint = "Shows paired Android Agents"
         stack.addArrangedSubview(agentButton)
         NSLayoutConstraint.activate([
             agentButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -210,6 +230,7 @@ final class DialPadViewController: ObservingViewController {
         button.widthAnchor.constraint(equalTo: button.heightAnchor).isActive = true
         if key.digit == "0" {
             let longPress = UILongPressGestureRecognizer(target: self, action: #selector(zeroLongPressed(_:)))
+            longPress.minimumPressDuration = Metrics.plusPressDuration
             button.addGestureRecognizer(longPress)
         }
         return button
@@ -264,20 +285,24 @@ final class DialPadViewController: ObservingViewController {
             self?.send(.deleteActivated)
         }
         deleteButton.addAction(UIAction { [weak self] _ in self?.send(.deletePressed) }, for: .touchDown)
+        // Like the SwiftUI drag gesture, holding keeps deleting until the finger lifts, even after it slides off.
         deleteButton.addAction(
             UIAction { [weak self] _ in self?.send(.deleteReleased) },
-            for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit]
+            for: [.touchUpInside, .touchUpOutside, .touchCancel]
         )
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let area = view.safeAreaLayoutGuide.layoutFrame
-        guard area.size != lastLayoutSize else { return }
+        // A card taller than its default, at a large text size, takes its extra height from the keys.
+        let cardExtra = agentButton.isHidden ? 0 : max(0, agentHeight.constant - Metrics.agentCardHeight)
+        guard area.size != lastLayoutSize || cardExtra != lastAgentCardExtraHeight else { return }
         lastLayoutSize = area.size
+        lastAgentCardExtraHeight = cardExtra
         applyLayout(
             DialPadLayoutMetrics(
-                availableHeight: area.height,
+                availableHeight: area.height - cardExtra,
                 availableWidth: area.width,
                 compactWidth: traitCollection.horizontalSizeClass == .compact
             )
@@ -408,7 +433,7 @@ private enum Metrics {
     static let agentCardHeightWithoutCurrent: CGFloat = 74
     static let letterKern: CGFloat = 1.4
     static let dimmedCallOpacity: CGFloat = 0.4
-    static let disabledCallOpacityFactor: CGFloat = 0.5
+    static let plusPressDuration: TimeInterval = 0.45
     static let initialContentWidth: CGFloat = 360
     static let initialSectionSpacing: CGFloat = 12
     static let initialNumberHeight: CGFloat = 46

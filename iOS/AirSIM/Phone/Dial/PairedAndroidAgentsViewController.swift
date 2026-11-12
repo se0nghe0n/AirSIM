@@ -36,9 +36,9 @@ final class PairedAndroidAgentsViewController: PhoneTableController {
             id: row.id,
             title: row.title,
             detail: row.detail,
-            image: row.isCurrent ? "checkmark.circle.fill" : "circle",
-            color: row.isCurrent ? .systemGreen : .label,
-            action: { [weak self] in self?.send(.agentChosen(row.id)) }
+            action: { [weak self] in self?.send(.agentChosen(row.id)) },
+            bodyViewProvider: { PairedAgentRowView(row: row) },
+            bodyVersion: "\(row.isCurrent)"
         )
     }
 
@@ -49,6 +49,49 @@ final class PairedAndroidAgentsViewController: PhoneTableController {
             image: "smartphone.slash"
         )
     }
+}
+
+/// A sheet row as the SwiftUI list drew it: name and number, a check for the current agent, and route pills.
+@MainActor
+final class PairedAgentRowView: UIView {
+    init(row: PairedAgentRow) {
+        super.init(frame: .zero)
+        let name = phoneLabel(row.title)
+        name.font = .preferredFont(forTextStyle: .headline)
+        let number = phoneLabel(row.number, color: .secondaryLabel)
+        number.font = .preferredFont(forTextStyle: .subheadline)
+        let names = UIStackView([name, number], axis: .vertical, spacing: Metrics.nameSpacing)
+        let check = UIImageView(image: UIImage(systemName: row.isCurrent ? "checkmark.circle.fill" : "circle"))
+        check.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .title3)
+        check.tintColor = row.isCurrent ? .systemGreen : .secondaryLabel
+        check.setContentHuggingPriority(.required, for: .horizontal)
+        let header = UIStackView([names, check], axis: .horizontal, spacing: Metrics.spacing, alignment: .top)
+        let kind = phoneLabel(row.kind, color: .secondaryLabel)
+        kind.font = .preferredFont(forTextStyle: .caption1)
+        kind.numberOfLines = 1
+        let routes = UIStackView(
+            AndroidAgentCardView.transportPills(agent: row.agent, cloudEnabled: row.cloudModeEnabled) + [
+                UIView(), kind,
+            ],
+            axis: .horizontal,
+            spacing: Metrics.spacing,
+            alignment: .center
+        )
+        let stack = UIStackView([header, routes], axis: .vertical, spacing: Metrics.rowSpacing)
+        addPinnedSubview(stack, insets: Metrics.insets)
+        isAccessibilityElement = true
+        accessibilityLabel = row.accessibilityLabel
+        accessibilityTraits = row.isCurrent ? [.button, .selected] : .button
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+private enum Metrics {
+    static let nameSpacing: CGFloat = 2
+    static let spacing: CGFloat = 8
+    static let rowSpacing: CGFloat = 9
+    static let insets = UIEdgeInsets(top: 5, left: 0, bottom: 5, right: 0)
 }
 
 #if DEBUG

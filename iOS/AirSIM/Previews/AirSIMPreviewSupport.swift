@@ -159,14 +159,14 @@ enum AirSIMPreviewFixtures {
         return report
     }
 
-    static func call(_ state: String) -> CallRecord {
+    static func call(_ state: String, number: String = phone) -> CallRecord {
         let now = Date()
         return CallRecord(
             id: "preview-call",
             index: 0,
             direction: "incoming",
             state: state,
-            number: phone,
+            number: number,
             startedAt: now.addingTimeInterval(-65),
             updatedAt: now,
             endedAt: nil,
@@ -177,10 +177,18 @@ enum AirSIMPreviewFixtures {
     static func store(
         tab: PhoneTab = .dial,
         callState: String? = nil,
+        callNumber: String = phone,
+        isRecording: Bool = false,
         empty: Bool = false,
         appearance: AppAppearance = .light
     ) -> StoreOf<AirSIMFeature> {
-        let snapshot = backendSnapshot(callState: callState, empty: empty, appearance: appearance)
+        let snapshot = backendSnapshot(
+            callState: callState,
+            callNumber: callNumber,
+            isRecording: isRecording,
+            empty: empty,
+            appearance: appearance
+        )
         let services = empty ? [] : pairingServices
         let status = empty ? "Waiting for the Android pairing broadcast…" : "Found 1 device available to pair"
         let report = selfTestReport
@@ -225,7 +233,13 @@ enum AirSIMPreviewFixtures {
         }
     }
 
-    private static func backendSnapshot(callState: String?, empty: Bool, appearance: AppAppearance) -> AirSIMSnapshot {
+    private static func backendSnapshot(
+        callState: String?,
+        callNumber: String = phone,
+        isRecording: Bool = false,
+        empty: Bool,
+        appearance: AppAppearance
+    ) -> AirSIMSnapshot {
         var snapshot = AirSIMSnapshot()
         snapshot.numberInput = phone
         snapshot.contacts = ContactDirectory(all: empty ? [] : contacts, isAuthorized: true, authorization: .authorized)
@@ -248,7 +262,7 @@ enum AirSIMPreviewFixtures {
         snapshot.preferenceOnboardingComplete = true
         snapshot.cloudModeEnabled = true
         if let callState {
-            let record = call(callState)
+            let record = call(callState, number: callNumber)
             snapshot.inAppPresentedCall = record
             snapshot.callLifecycleSnapshot = CallLifecycleSnapshot(
                 callID: record.id,
@@ -265,6 +279,7 @@ enum AirSIMPreviewFixtures {
             snapshot.callAudioStatusText = callState == "active" ? "Audio Connected" : "Connecting Audio"
             snapshot.audioRoute = "iPhone"
             snapshot.canToggleRecording = callState == "active"
+            snapshot.isRecording = isRecording
         }
         return snapshot
     }
@@ -282,6 +297,19 @@ enum AirSIMPreviewFixtures {
         dark: Bool = false
     ) -> UIViewController {
         PreviewCanvasViewController(content: content, size: CGSize(width: width, height: height), dark: dark)
+    }
+
+    static func canvas(
+        _ controller: UIViewController,
+        width: CGFloat,
+        height: CGFloat,
+        dark: Bool = false
+    ) -> UIViewController {
+        PreviewControllerCanvasViewController(
+            child: controller,
+            size: CGSize(width: width, height: height),
+            dark: dark
+        )
     }
 }
 
@@ -311,6 +339,38 @@ private final class PreviewCanvasViewController: UIViewController {
             content.widthAnchor.constraint(equalToConstant: size.width),
             content.heightAnchor.constraint(equalToConstant: size.height),
         ])
+    }
+}
+
+@MainActor
+private final class PreviewControllerCanvasViewController: UIViewController {
+    let child: UIViewController
+    let size: CGSize
+
+    init(child: UIViewController, size: CGSize, dark: Bool) {
+        self.child = child
+        self.size = size
+        super.init(nibName: nil, bundle: nil)
+        overrideUserInterfaceStyle = dark ? .dark : .light
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        addChild(child)
+        child.view.translatesAutoresizingMaskIntoConstraints = false
+        child.view.clipsToBounds = true
+        child.view.layer.cornerRadius = 24
+        view.addSubview(child.view)
+        NSLayoutConstraint.activate([
+            child.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            child.view.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            child.view.widthAnchor.constraint(equalToConstant: size.width),
+            child.view.heightAnchor.constraint(equalToConstant: size.height),
+        ])
+        child.didMove(toParent: self)
     }
 }
 #endif

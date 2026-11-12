@@ -49,19 +49,16 @@ struct MessagesFeature {
                 composer = ComposerFeature.State(recipient: recipient, body: body, snapshot: $snapshot)
                 return
             }
-            // A send to the old recipient no longer belongs to this composer; a failure goes to the root alert.
-            if composer?.recipient != recipient {
-                composer?.sendID = nil
-            }
+            // A send in flight stays attached and keeps Send disabled, so the same text cannot go out twice; its
+            // completion checks whether the composer was readdressed meanwhile.
             composer?.recipient = recipient
             if !body.isEmpty {
                 composer?.body = body
             }
         }
 
+        /// The composer above the thread keeps its draft and any send in flight.
         mutating func openConversation(_ sender: String) {
-            // The composer's send keeps running; its result is dropped once the composer is gone.
-            composer = nil
             // Re-opening the visible thread, e.g. from its SMS banner, keeps its draft and reply in flight.
             guard conversation != sender else { return }
             conversation = sender
@@ -78,7 +75,7 @@ struct MessagesFeature {
         case compose(String)
         case sendResponse(id: UUID, success: Bool, body: String, error: String? = nil)
         case composer(PresentationAction<ComposerFeature.Action>)
-        case composerSendFinished(id: UUID, result: AirSIMMessageResult)
+        case composerSendFinished(id: UUID, to: String, body: String, result: AirSIMMessageResult)
         case alert(PresentationAction<Alert>)
         case delegate(Delegate)
 
@@ -193,16 +190,22 @@ struct MessagesFeature {
                 // Not tied to the composer's presentation: closing the sheet must not cancel or forget an SMS in
                 // flight.
                 return .run { [client] send in
-                    await send(.composerSendFinished(id: id, result: await client.sendSMS(to, body)))
+                    let result = await client.sendSMS(to, body)
+                    await send(.composerSendFinished(id: id, to: to, body: body, result: result))
                 }
 
-            case let .composerSendFinished(id, result):
+            case let .composerSendFinished(id, to, body, result):
                 guard state.composer?.sendID == id else { return result.success ? .none : unreported(result.error) }
+                state.composer?.sendID = nil
                 if result.success {
-                    state.composer = nil
+                    if state.composer?.recipient == to {
+                        state.composer = nil
+                    } else if state.composer?.body == body {
+                        // Readdressed while sending: it stays open for the new recipient without the sent text.
+                        state.composer?.body = ""
+                    }
                     return .none
                 }
-                state.composer?.sendID = nil
                 state.composer?.alert = .sendFailed(result.error ?? "Unable to send message. Your draft has been kept.")
                 return .none
 

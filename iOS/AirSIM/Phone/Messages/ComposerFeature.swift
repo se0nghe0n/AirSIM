@@ -6,6 +6,7 @@ struct ComposerFeature {
     struct Suggestion: Equatable {
         let name: String
         let phone: String?
+        let photo: Data?
         let recipient: String
     }
 
@@ -33,14 +34,23 @@ struct ComposerFeature {
                 && !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
+        var recognizedContact: ContactStore.Contact? {
+            snapshot.contacts.contact(for: recipient)
+        }
+
         var recognizedName: String? {
-            snapshot.contacts.contact(for: recipient)?.name
+            recognizedContact?.name
         }
 
         var suggestions: [Suggestion] {
             let typed = recipient.trimmingCharacters(in: .whitespaces)
             return snapshot.contacts.suggestions(for: recipient).map { contact in
-                Suggestion(name: contact.name, phone: contact.phones.first, recipient: contact.phones.first ?? typed)
+                Suggestion(
+                    name: contact.name,
+                    phone: contact.phones.first,
+                    photo: contact.photoData,
+                    recipient: contact.phones.first ?? typed
+                )
             }
         }
     }

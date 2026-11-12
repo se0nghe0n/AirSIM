@@ -19,6 +19,14 @@ final class RecentsViewController: PhoneTableController {
         primaryAction: UIAction { [weak self] _ in self?.send(.refreshTapped) }
     )
 
+    /// Stands in for Refresh while history loads, as the SwiftUI toolbar's progress view did.
+    private lazy var refreshingItem: UIBarButtonItem = {
+        let spinner = UIActivityIndicatorView(style: .medium)
+        spinner.accessibilityLabel = "Refreshing call history"
+        spinner.startAnimating()
+        return UIBarButtonItem(customView: spinner)
+    }()
+
     // MARK: Lifecycle
 
     init(store: StoreOf<RecentsFeature>) {
@@ -33,7 +41,9 @@ final class RecentsViewController: PhoneTableController {
         title = "Recents"
         buildNavigationItems()
         buildStatusBanner()
-        table.addGestureRecognizer(UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:))))
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:)))
+        longPress.minimumPressDuration = Metrics.detailsPressDuration
+        table.addGestureRecognizer(longPress)
         enableRefresh { [weak self] in await self?.send(.refreshTapped).finish() }
     }
 
@@ -46,7 +56,10 @@ final class RecentsViewController: PhoneTableController {
 
     override func render() {
         renderStatus(store.statusMessage)
-        refreshButton.isEnabled = !store.isRefreshing
+        let refreshItem = store.isRefreshing ? refreshingItem : refreshButton
+        if navigationItem.rightBarButtonItem !== refreshItem {
+            navigationItem.rightBarButtonItem = refreshItem
+        }
         let rows = store.rows
         table.separatorStyle = rows.isEmpty ? .none : .singleLine
         setSections([PhoneSection(rows: rows.isEmpty ? [emptyRow()] : rows.map(callRow))])
@@ -79,7 +92,10 @@ final class RecentsViewController: PhoneTableController {
                     avatarName: row.avatarName,
                     time: row.time,
                     missed: row.isMissed,
-                    callAction: { [weak self] in self?.send(.callTapped(row)) }
+                    subtitleSymbol: row.directionSymbol,
+                    subtitleAccessibilityLabel: row.subtitleAccessibilityLabel,
+                    callAction: { [weak self] in self?.send(.callTapped(row)) },
+                    callEnabled: row.dialNumber != nil
                 )
             },
             bodyVersion: row.number,
@@ -158,17 +174,20 @@ final class RecentsViewController: PhoneTableController {
             self?.send(.deleteTapped(id))
             done(true)
         }
+        delete.image = UIImage(systemName: "trash")
         var actions = [delete]
         if row.dialNumber != nil {
             let message = UIContextualAction(style: .normal, title: "Messages") { [weak self] _, _, done in
                 self?.send(.messageTapped(row))
                 done(true)
             }
+            message.image = UIImage(systemName: "message.fill")
             message.backgroundColor = .systemBlue
             let dial = UIContextualAction(style: .normal, title: "Dial") { [weak self] _, _, done in
                 self?.send(.callTapped(row))
                 done(true)
             }
+            dial.image = UIImage(systemName: "phone.fill")
             dial.backgroundColor = .systemGreen
             actions += [message, dial]
         }
@@ -181,6 +200,7 @@ final class RecentsViewController: PhoneTableController {
 private enum Metrics {
     static let statusPadding = UIEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
     static let statusBannerHeight: CGFloat = 80
+    static let detailsPressDuration: TimeInterval = 0.38
     static let rowInsets = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
 }
 

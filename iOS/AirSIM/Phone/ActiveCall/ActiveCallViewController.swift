@@ -12,61 +12,157 @@ final class ActiveCallViewController: ObservingViewController {
 
     // MARK: Views
 
-    private let headerBar = UIStackView(axis: .horizontal, spacing: Metrics.headerSpacing, alignment: .center)
-    private let headerLabel = phoneLabel(size: 16, color: .lightGray)
+    private let mainContainer = UIView()
 
-    private lazy var recordButton = phoneButton("Record", image: "record.circle", color: .white) { [weak self] in
-        self?.send(.recordButtonTapped)
-    }
+    /// Centered top header with symmetric horizontal clearance so nothing ever enters the top-right corner
+    /// where folded iPhone Duo places its vertical Dynamic Island, clock and cellular gauge.
+    private let headerStack = UIStackView(axis: .vertical, spacing: Metrics.headerItemSpacing, alignment: .center)
+    private let durationLabel = phoneLabel(size: 20, color: UIColor.white.withAlphaComponent(0.78))
+    private let nameLabel = phoneLabel(size: 46, color: .white)
+    private let numberLabel = phoneLabel(size: 16, color: UIColor.white.withAlphaComponent(0.76))
 
-    private let center = UIStackView(axis: .vertical, spacing: Metrics.centerSpacing, alignment: .center)
-    private let avatar = UIImageView()
-    private let nameLabel = phoneLabel(size: 38, color: .white)
-    private let numberLabel = phoneLabel(size: 20, color: .lightGray)
-    private let durationLabel = phoneLabel(size: 24, color: .lightGray)
-    private let statusBadge = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let centerStack = UIStackView(axis: .vertical, spacing: Metrics.centerItemSpacing, alignment: .center)
+    private let heroAvatar = CallHeroAvatarView()
+    private let statusBadge = UIVisualEffectView(effect: nil)
     private let statusDot = UIView()
     private let statusLabel = phoneLabel(size: 12, color: .white)
-    private let bottomStack = UIStackView(axis: .vertical, spacing: Metrics.initialBottomSpacing, alignment: .center)
-    private let controls = UIStackView(axis: .horizontal, spacing: Metrics.initialControlSpacing, alignment: .top)
+    private let audioErrorLabel = phoneLabel(color: UIColor.systemRed.withAlphaComponent(Metrics.audioErrorAlpha))
 
-    private lazy var muteControl = CallCircleControl(
-        title: "Mute",
-        icon: "mic.fill",
-        size: Metrics.controlSize
-    ) { [weak self] in
-        self?.send(.muteButtonTapped)
-    }
+    /// Centered one-tap recording status / stop button using native prominent Liquid Glass.
+    private lazy var recordingPillButton = buildRecordingPillButton()
 
-    private lazy var speakerControl = CallCircleControl(
-        title: "Speaker",
-        icon: "speaker.fill",
-        size: Metrics.controlSize
-    ) { [weak self] in
-        self?.send(.speakerButtonTapped)
-    }
-
-    private let decisions = UIStackView(
+    private let bottomArea = UIView()
+    private let connectedGridContainer = UIVisualEffectView(effect: nil)
+    private let connectedGrid = UIStackView(axis: .vertical, spacing: Metrics.initialRowSpacing, alignment: .center)
+    private let connectedRow1 = UIStackView(
+        axis: .horizontal,
+        spacing: Metrics.initialColumnSpacing,
+        alignment: .top,
+        distribution: .fillEqually
+    )
+    private let connectedRow2 = UIStackView(
+        axis: .horizontal,
+        spacing: Metrics.initialColumnSpacing,
+        alignment: .top,
+        distribution: .fillEqually
+    )
+    private let incomingDecisions = UIStackView(
         axis: .horizontal,
         spacing: Metrics.decisionSpacing,
         alignment: .top,
         distribution: .equalSpacing
     )
 
-    private var lastPhase: ActiveCallContent.Phase?
-    private lazy var avatarWidth = avatar.widthAnchor.constraint(equalToConstant: Metrics.initialAvatarSize)
+    private lazy var audioControl = CallCircleControl(
+        title: "Audio",
+        icon: "speaker.wave.2.fill",
+        size: Metrics.initialControlSize
+    ) { [weak self] in
+        self?.send(.speakerButtonTapped)
+    }
 
-    private lazy var headerTop = headerBar.topAnchor.constraint(
-        equalTo: view.safeAreaLayoutGuide.topAnchor,
+    private lazy var faceTimeControl: CallCircleControl = {
+        let control = CallCircleControl(
+            title: "FaceTime",
+            icon: "questionmark.video.fill",
+            size: Metrics.initialControlSize
+        ) {}
+        control.isEnabled = false
+        control.controlAccessibilityHint = "Video calling is not supported on AirSIM"
+        return control
+    }()
+
+    private lazy var muteControl = CallCircleControl(
+        title: "Mute",
+        icon: "mic.slash.fill",
+        size: Metrics.initialControlSize
+    ) { [weak self] in
+        self?.send(.muteButtonTapped)
+    }
+
+    private lazy var moreControl = CallCircleControl(
+        title: "More",
+        icon: "ellipsis",
+        size: Metrics.initialControlSize
+    ) { [weak self] in
+        self?.send(.moreButtonTapped)
+    }
+
+    private lazy var endControl = CallCircleControl(
+        title: "End",
+        icon: "phone.down.fill",
+        size: Metrics.initialControlSize,
+        color: .systemRed
+    ) { [weak self] in
+        self?.send(.endButtonTapped)
+    }
+
+    private lazy var keypadControl = CallCircleControl(
+        title: "Keypad",
+        icon: "circle.grid.3x3.fill",
+        size: Metrics.initialControlSize
+    ) { [weak self] in
+        self?.send(.keypadButtonTapped)
+    }
+
+    private lazy var declineControl = CallCircleControl(
+        title: "Decline",
+        icon: "phone.down.fill",
+        size: Metrics.decisionSize,
+        color: .systemRed
+    ) { [weak self] in
+        self?.send(.declineButtonTapped)
+    }
+
+    private lazy var acceptControl = CallCircleControl(
+        title: "Accept",
+        icon: "phone.fill",
+        size: Metrics.decisionSize,
+        color: .systemGreen
+    ) { [weak self] in
+        self?.send(.answerButtonTapped)
+    }
+
+    private let moreDismissBackdrop = UIButton(type: .custom)
+    private let moreMenuView = CallMoreMenuView()
+    private var keypadController: DTMFKeypadViewController?
+
+    // MARK: Constraints & State
+
+    private var lastPhase: ActiveCallContent.Phase?
+    private var lastMoreVisible = false
+    private var lastKeypadVisible = false
+    private var layoutBasis: CallLayout.Basis?
+
+    private lazy var headerTopConstraint = headerStack.topAnchor.constraint(
+        equalTo: mainContainer.safeAreaLayoutGuide.topAnchor,
         constant: Metrics.initialHeaderTop
     )
-
-    private lazy var headerWidth = headerBar.widthAnchor.constraint(equalToConstant: Metrics.initialHeaderWidth)
-    private lazy var decisionsWidth = decisions.widthAnchor.constraint(equalToConstant: Metrics.initialDecisionsWidth)
-
-    private lazy var bottomInset = bottomStack.bottomAnchor.constraint(
-        equalTo: view.safeAreaLayoutGuide.bottomAnchor,
+    private lazy var headerMaxWidthConstraint = headerStack.widthAnchor.constraint(
+        lessThanOrEqualToConstant: Metrics.initialHeaderMaxWidth
+    )
+    private lazy var avatarSizeConstraint = heroAvatar.widthAnchor.constraint(
+        equalToConstant: Metrics.initialAvatarSize
+    )
+    private lazy var gridWidthConstraint = connectedRow1.widthAnchor.constraint(
+        equalToConstant: Metrics.initialGridWidth
+    )
+    private lazy var gridRow2WidthConstraint = connectedRow2.widthAnchor.constraint(
+        equalToConstant: Metrics.initialGridWidth
+    )
+    private lazy var incomingDecisionsWidthConstraint = incomingDecisions.widthAnchor.constraint(
+        equalToConstant: Metrics.initialDecisionsWidth
+    )
+    private lazy var bottomInsetConstraint = bottomArea.bottomAnchor.constraint(
+        equalTo: mainContainer.safeAreaLayoutGuide.bottomAnchor,
         constant: -Metrics.initialBottomInset
+    )
+    private lazy var moreMenuWidthConstraint = moreMenuView.widthAnchor.constraint(
+        equalToConstant: Metrics.moreMenuMaxWidth
+    )
+    private lazy var moreMenuLeadingConstraint = moreMenuView.leadingAnchor.constraint(
+        equalTo: view.leadingAnchor,
+        constant: 20
     )
 
     private var durationTimer: RepeatingTimer?
@@ -88,13 +184,26 @@ final class ActiveCallViewController: ObservingViewController {
         overrideUserInterfaceStyle = .dark
         view.accessibilityViewIsModal = true
         buildBackdrop()
+        buildMainContainer()
         buildHeader()
         buildCenter()
-        buildControls()
-        buildBottom()
-        buildLayout()
+        buildBottomControls()
+        buildMainLayout()
+        buildMoreOverlay()
         startDurationTimer()
-        bindPresentations()
+        registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitPreferredContentSizeCategory.self]) {
+            (controller: Self, _) in
+            controller.layoutBasis = nil
+            controller.view.setNeedsLayout()
+        }
+    }
+
+    /// Rotation, Split View, Stage Manager and iPhone Duo fold/unfold resize the call without a store change.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let basis = currentLayoutBasis
+        guard basis.boundsSize.width > 0, basis.boundsSize.height > 0, layoutBasis != basis else { return }
+        render()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -108,234 +217,548 @@ final class ActiveCallViewController: ObservingViewController {
 
     override func render() {
         guard let content = store.content else { return }
-        let compact = traitCollection.horizontalSizeClass == .compact || view.bounds.height < Metrics.compactHeight
-        let layout = CallLayout(width: view.bounds.width, compact: compact, incoming: content.isIncoming)
+        guard let lastPhase, lastPhase != content.phase else {
+            renderContent(content)
+            return
+        }
+        UIView.transition(
+            with: view,
+            duration: Metrics.phaseTransitionDuration,
+            options: [.transitionCrossDissolve, .allowUserInteraction]
+        ) {
+            UIView.performWithoutAnimation { self.renderContent(content) }
+        }
+    }
+
+    private func renderContent(_ content: ActiveCallContent) {
+        let basis = currentLayoutBasis
+        layoutBasis = basis
+        let layout = CallLayout(
+            basis: basis,
+            incoming: content.isIncoming,
+            hasSecondaryHeaderLine: content.showsNumber,
+            hasExtraStatusItems: content.showsRecordingPill || content.audioError != nil
+        )
+        lastPhase = content.phase
+
         renderLayout(layout)
-        renderCaller(content, layout: layout)
-        renderRecordButton(content)
+        renderHeader(content, layout: layout)
+        renderCenter(content, layout: layout)
         renderControls(content)
-        renderDecisions(content.phase)
-        renderStatus(content)
-        renderDuration(content)
+        renderMoreMenu(content)
+        renderInlineKeypad(content)
+
         if !isPresentationPreview {
             UIDevice.current.isProximityMonitoringEnabled = content.monitorsProximity
         }
     }
 
-    private func renderLayout(_ layout: CallLayout) {
-        avatarWidth.constant = layout.avatarSize
-        avatar.layer.cornerRadius = layout.avatarSize / 2
-        headerWidth.constant = layout.headerWidth
-        headerTop.constant = layout.headerTop
-        decisionsWidth.constant = layout.decisionsWidth
-        bottomInset.constant = -layout.bottomInset
-        bottomStack.spacing = layout.bottomSpacing
-        controls.spacing = layout.controlSpacing
-        for control in controls.arrangedSubviews {
-            (control as? CallCircleControl)?.setSize(layout.controlSize)
-        }
-        center.setCustomSpacing(layout.spacingAfterAvatar, after: avatar)
-        center.setCustomSpacing(layout.spacingAfterDuration, after: durationLabel)
+    private var currentLayoutBasis: CallLayout.Basis {
+        CallLayout.Basis(
+            boundsSize: view.bounds.size,
+            safeInsets: view.safeAreaInsets,
+            horizontalSizeClass: traitCollection.horizontalSizeClass
+        )
     }
 
-    private func renderCaller(_ content: ActiveCallContent, layout: CallLayout) {
-        headerLabel.text = content.header
+    private func renderLayout(_ layout: CallLayout) {
+        headerTopConstraint.constant = layout.headerTop
+        headerMaxWidthConstraint.constant = layout.headerMaxWidth
+        avatarSizeConstraint.constant = layout.avatarSize
+        connectedGrid.spacing = layout.rowSpacing
+        connectedRow1.spacing = layout.columnSpacing
+        connectedRow2.spacing = layout.columnSpacing
+        gridWidthConstraint.constant = layout.gridWidth
+        gridRow2WidthConstraint.constant = layout.gridWidth
+        incomingDecisionsWidthConstraint.constant = layout.decisionsWidth
+        bottomInsetConstraint.constant = -layout.bottomInset
+        moreMenuWidthConstraint.constant = layout.moreMenuWidth
+        moreMenuLeadingConstraint.constant = layout.moreMenuLeading
+
+        for control in [audioControl, faceTimeControl, muteControl, moreControl, endControl, keypadControl] {
+            control.setSize(layout.controlSize)
+        }
+    }
+
+    private func renderHeader(_ content: ActiveCallContent, layout: CallLayout) {
+        renderDuration(content, layout: layout)
         nameLabel.text = content.name
         nameLabel.font = UIFontMetrics(forTextStyle: .largeTitle)
-            .scaledFont(for: .systemFont(ofSize: layout.nameFontSize, weight: .semibold))
+            .scaledFont(for: .systemFont(ofSize: layout.nameFontSize, weight: .semibold).rounded())
         numberLabel.text = content.number
         numberLabel.isHidden = !content.showsNumber
-        avatar.image = phoneAvatar(name: content.name, photo: content.photo, size: layout.avatarSize)
     }
 
-    private func renderRecordButton(_ content: ActiveCallContent) {
-        let icon = content.isRecording ? "record.circle.fill" : "record.circle"
-        recordButton.isHidden = content.isIncoming
-        recordButton.isEnabled = content.canToggleRecording
-        recordButton.configuration?.image = UIImage(systemName: icon)
-        recordButton.accessibilityLabel = content.isRecording ? "Stop Recording" : "Record"
-        recordButton.configuration?.baseForegroundColor = content.isRecording ? .systemRed : .white
+    private func renderDuration(_ content: ActiveCallContent, layout: CallLayout? = nil) {
+        let fontSize = layout?.durationFontSize ?? (content.showsDuration ? 20 : 16)
+        if content.isIncoming {
+            durationLabel.text = content.header
+            durationLabel.font = UIFontMetrics(forTextStyle: .subheadline)
+                .scaledFont(for: .systemFont(ofSize: fontSize, weight: .semibold))
+        } else {
+            durationLabel.text = content.duration(at: Date())
+            durationLabel.font = UIFontMetrics(forTextStyle: .title3)
+                .scaledFont(for: .monospacedDigitSystemFont(ofSize: fontSize, weight: .semibold))
+        }
+    }
+
+    private func renderCenter(_ content: ActiveCallContent, layout: CallLayout) {
+        heroAvatar.update(
+            contactName: content.contact?.name,
+            photo: content.photo,
+            size: layout.avatarSize
+        )
+        statusLabel.text = content.status
+        statusDot.backgroundColor = content.dotTone.color
+        if #unavailable(iOS 26.0) {
+            statusBadge.contentView.backgroundColor = content.badgeTone.color.withAlphaComponent(0.16)
+        }
+
+        audioErrorLabel.text = content.audioError
+        audioErrorLabel.isHidden = content.audioError == nil
+
+        recordingPillButton.isHidden = !content.showsRecordingPill
+        recordingPillButton.isEnabled = content.canToggleRecording
+        recordingPillButton.accessibilityLabel = content.isRecording ? "Stop Recording" : content.recordingPillTitle
+        updateRecordingPillConfiguration(content)
+    }
+
+    private func updateRecordingPillConfiguration(_ content: ActiveCallContent) {
+        var config: UIButton.Configuration
+        if #available(iOS 26.0, *) {
+            config = .prominentGlass()
+        } else {
+            config = .filled()
+        }
+        config.cornerStyle = .capsule
+        config.baseBackgroundColor = .systemRed
+        config.baseForegroundColor = .white
+        config.showsActivityIndicator = content.isRecordingBusy
+        config.image = content.isRecordingBusy ? nil : UIImage(systemName: "stop.circle.fill")
+        config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
+        config.imagePadding = 6
+        config.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14)
+
+        var titleAttributes = AttributeContainer()
+        titleAttributes.font = UIFontMetrics(forTextStyle: .caption1)
+            .scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))
+        config.attributedTitle = AttributedString(content.recordingPillTitle, attributes: titleAttributes)
+        recordingPillButton.configuration = config
     }
 
     private func renderControls(_ content: ActiveCallContent) {
-        controls.isHidden = content.isIncoming
+        connectedGridContainer.isHidden = content.isIncoming
+        incomingDecisions.isHidden = !content.isIncoming
+
+        audioControl.update(
+            title: "Audio",
+            icon: content.speakerEnabled ? "speaker.wave.3.fill" : "speaker.wave.2.fill",
+            isActive: content.speakerEnabled,
+            accessibilityTitle: "Audio"
+        )
+        audioControl.controlAccessibilityValue = content.speakerEnabled ? "Speaker On" : "Receiver"
+        audioControl.controlIdentifier = "callAudioControl"
+
+        faceTimeControl.update(
+            title: "FaceTime",
+            icon: "questionmark.video.fill",
+            isActive: false,
+            accessibilityTitle: "FaceTime"
+        )
+        faceTimeControl.controlIdentifier = "callFaceTimeControl"
+
         muteControl.update(
-            title: content.isMuted ? "Unmute" : "Mute",
-            icon: content.isMuted ? "mic.slash.fill" : "mic.fill",
-            tint: content.isMuted ? .systemOrange : nil
+            title: "Mute",
+            icon: "mic.slash.fill",
+            isActive: content.isMuted,
+            accessibilityTitle: content.isMuted ? "Unmute" : "Mute"
         )
-        speakerControl.update(
-            title: "Speaker",
-            icon: content.speakerEnabled ? "speaker.wave.2.fill" : "speaker.fill",
-            tint: content.speakerEnabled ? .systemBlue : nil
+        muteControl.controlIdentifier = "callMuteControl"
+
+        let moreActive = store.isShowingMoreMenu
+        moreControl.update(
+            title: "More",
+            icon: "ellipsis",
+            isActive: moreActive,
+            accessibilityTitle: "More"
         )
+        moreControl.controlIdentifier = "callMoreControl"
+
+        endControl.controlIdentifier = "callEndControl"
+        keypadControl.controlIdentifier = "callKeypadControl"
     }
 
-    private func renderDecisions(_ phase: ActiveCallContent.Phase) {
-        guard phase != lastPhase else { return }
-        lastPhase = phase
-        for button in decisions.arrangedSubviews {
-            decisions.removeArrangedSubview(button)
-            button.removeFromSuperview()
+    private func renderMoreMenu(_ content: ActiveCallContent) {
+        moreMenuView.update(content: content)
+        let shouldShow = store.isShowingMoreMenu && !content.isIncoming && store.keypad == nil
+        mainContainer.accessibilityElementsHidden = shouldShow || store.keypad != nil
+        guard shouldShow != lastMoreVisible else {
+            moreDismissBackdrop.isHidden = !shouldShow
+            moreMenuView.isHidden = !shouldShow
+            return
         }
-        switch phase {
-        case .incoming:
-            decisions.addArrangedSubview(
-                decisionControl("Decline", icon: "phone.down.fill", color: .systemRed, action: .declineButtonTapped)
-            )
-            decisions.addArrangedSubview(
-                decisionControl("Accept", icon: "phone.fill", color: .systemGreen, action: .answerButtonTapped)
-            )
-        case .connected:
-            decisions.addArrangedSubview(
-                decisionControl("End", icon: "phone.down.fill", color: .systemRed, action: .endButtonTapped)
-            )
+        lastMoreVisible = shouldShow
+        let animated = view.window != nil && !UIAccessibility.isReduceMotionEnabled && !isPresentationPreview
+        if shouldShow {
+            moreDismissBackdrop.isHidden = false
+            moreMenuView.isHidden = false
+            if animated {
+                moreDismissBackdrop.alpha = 0
+                moreMenuView.alpha = 0
+                moreMenuView.transform = CGAffineTransform(scaleX: 0.92, y: 0.92).translatedBy(x: -8, y: 18)
+                UIView.animate(
+                    springDuration: 0.24,
+                    bounce: 0.18,
+                    options: [.allowUserInteraction, .beginFromCurrentState]
+                ) {
+                    self.moreDismissBackdrop.alpha = 1
+                    self.moreMenuView.alpha = 1
+                    self.moreMenuView.transform = .identity
+                }
+            } else {
+                moreDismissBackdrop.alpha = 1
+                moreMenuView.alpha = 1
+                moreMenuView.transform = .identity
+            }
+            UIAccessibility.post(notification: .layoutChanged, argument: moreMenuView)
+        } else if animated {
+            UIView.animate(
+                withDuration: 0.16,
+                delay: 0,
+                options: [.curveEaseIn, .allowUserInteraction, .beginFromCurrentState]
+            ) {
+                self.moreDismissBackdrop.alpha = 0
+                self.moreMenuView.alpha = 0
+                self.moreMenuView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94).translatedBy(x: 0, y: 12)
+            } completion: { _ in
+                guard !self.lastMoreVisible else { return }
+                self.moreDismissBackdrop.isHidden = true
+                self.moreMenuView.isHidden = true
+                self.moreMenuView.transform = .identity
+            }
+        } else {
+            moreDismissBackdrop.isHidden = true
+            moreMenuView.isHidden = true
+            moreDismissBackdrop.alpha = 0
+            moreMenuView.alpha = 0
+            moreMenuView.transform = .identity
         }
     }
 
-    private func renderStatus(_ content: ActiveCallContent) {
-        statusLabel.text = content.status
-        statusDot.backgroundColor = content.dotTone.color
-        statusBadge.contentView.backgroundColor = content.badgeTone.color.withAlphaComponent(0.1)
+    private func renderInlineKeypad(_ content: ActiveCallContent) {
+        let keypadStore: StoreOf<KeypadFeature>? = store.scope(state: \.keypad, action: \.keypad.presented)
+        let shouldShow = keypadStore != nil && !content.isIncoming
+        let fallbackText = content.number ?? content.name
+
+        if shouldShow, let keypadStore {
+            if let existing = keypadController {
+                existing.callerFallbackText = fallbackText
+            } else {
+                let controller = DTMFKeypadViewController(store: keypadStore, callerFallback: fallbackText)
+                addChild(controller)
+                controller.view.translatesAutoresizingMaskIntoConstraints = false
+                view.addSubview(controller.view)
+                NSLayoutConstraint.activate([
+                    controller.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                    controller.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                    controller.view.topAnchor.constraint(equalTo: view.topAnchor),
+                    controller.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                ])
+                controller.didMove(toParent: self)
+                keypadController = controller
+            }
+        }
+
+        guard shouldShow != lastKeypadVisible else {
+            mainContainer.isHidden = shouldShow
+            return
+        }
+        lastKeypadVisible = shouldShow
+        let animated = view.window != nil && !UIAccessibility.isReduceMotionEnabled && !isPresentationPreview
+
+        if shouldShow, let keypadView = keypadController?.view {
+            if animated {
+                keypadView.alpha = 0
+                keypadView.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+                mainContainer.isHidden = false
+                UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+                    self.mainContainer.alpha = 0
+                    keypadView.alpha = 1
+                    keypadView.transform = .identity
+                } completion: { _ in
+                    self.mainContainer.isHidden = self.lastKeypadVisible
+                    self.mainContainer.alpha = 1
+                }
+            } else {
+                mainContainer.isHidden = true
+                mainContainer.alpha = 1
+                keypadView.alpha = 1
+                keypadView.transform = .identity
+            }
+            UIAccessibility.post(notification: .screenChanged, argument: keypadController?.view)
+        } else if let departing = keypadController {
+            keypadController = nil
+            mainContainer.isHidden = false
+            if animated {
+                mainContainer.alpha = 0
+                UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+                    self.mainContainer.alpha = 1
+                    departing.view.alpha = 0
+                    departing.view.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+                } completion: { _ in
+                    departing.willMove(toParent: nil)
+                    departing.view.removeFromSuperview()
+                    departing.removeFromParent()
+                }
+            } else {
+                mainContainer.alpha = 1
+                departing.willMove(toParent: nil)
+                departing.view.removeFromSuperview()
+                departing.removeFromParent()
+            }
+            UIAccessibility.post(notification: .screenChanged, argument: keypadControl)
+        }
     }
 
-    private func renderDuration(_ content: ActiveCallContent) {
-        durationLabel.text = content.duration(at: Date())
-        durationLabel.font = .monospacedDigitSystemFont(
-            ofSize: content.showsDuration ? Metrics.durationFontSize : Metrics.waitingFontSize,
-            weight: .medium
-        )
-    }
-
-    // MARK: Layout
+    // MARK: Layout Construction
 
     private func buildBackdrop() {
         let backdrop = CallBackdropView()
-        backdrop.frame = view.bounds
-        backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(backdrop)
+        backdrop.isUserInteractionEnabled = false
+        backdrop.accessibilityElementsHidden = true
+        view.addPinnedSubview(backdrop)
+    }
+
+    private func buildMainContainer() {
+        view.addPinnedSubview(mainContainer)
     }
 
     private func buildHeader() {
-        let antenna = UIImageView(image: UIImage(systemName: "antenna.radiowaves.left.and.right"))
-        antenna.tintColor = .lightGray
-        headerLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        recordButton.configuration?.title = nil
-        NSLayoutConstraint.activate([
-            recordButton.widthAnchor.constraint(equalToConstant: Metrics.recordButtonSize),
-            recordButton.heightAnchor.constraint(equalToConstant: Metrics.recordButtonSize),
-        ])
-        for part in [antenna, headerLabel, UIView(), recordButton] {
-            headerBar.addArrangedSubview(part)
-        }
+        durationLabel.textAlignment = .center
+        durationLabel.numberOfLines = 1
+        durationLabel.accessibilityIdentifier = "callStatusOrTimer"
+
+        nameLabel.textAlignment = .center
+        nameLabel.numberOfLines = 1
+        nameLabel.adjustsFontSizeToFitWidth = true
+        nameLabel.minimumScaleFactor = 0.56
+        nameLabel.accessibilityIdentifier = "callCallerName"
+
+        numberLabel.textAlignment = .center
+        numberLabel.numberOfLines = 1
+        numberLabel.adjustsFontSizeToFitWidth = true
+        numberLabel.minimumScaleFactor = 0.72
+        numberLabel.isHidden = true
+
+        headerStack.addArrangedSubview(durationLabel)
+        headerStack.addArrangedSubview(nameLabel)
+        headerStack.addArrangedSubview(numberLabel)
+        headerStack.setCustomSpacing(2, after: durationLabel)
+        headerStack.setCustomSpacing(4, after: nameLabel)
     }
 
     private func buildCenter() {
-        avatar.isAccessibilityElement = false
-        avatar.layer.borderWidth = 1
-        avatar.layer.borderColor = UIColor.white.withAlphaComponent(0.2).cgColor
-        avatar.layer.shadowColor = UIColor.black.cgColor
-        avatar.layer.shadowRadius = 28
-        avatar.layer.shadowOpacity = 0.34
-        avatar.layer.shadowOffset = CGSize(width: 0, height: 16)
         NSLayoutConstraint.activate([
-            avatarWidth,
-            avatar.heightAnchor.constraint(equalTo: avatar.widthAnchor),
+            avatarSizeConstraint,
+            heroAvatar.heightAnchor.constraint(equalTo: heroAvatar.widthAnchor),
         ])
-        center.addArrangedSubview(avatar)
-        center.setCustomSpacing(Metrics.initialSpacingAfterAvatar, after: avatar)
-        for label in [nameLabel, numberLabel, durationLabel] {
-            label.textAlignment = .center
-            label.numberOfLines = 2
-            center.addArrangedSubview(label)
-        }
-        nameLabel.adjustsFontSizeToFitWidth = true
-        nameLabel.minimumScaleFactor = 0.68
         buildStatusBadge()
-        center.addArrangedSubview(statusBadge)
-        center.setCustomSpacing(Metrics.initialSpacingAfterDuration, after: durationLabel)
+        audioErrorLabel.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .systemFont(ofSize: 12))
+        audioErrorLabel.textAlignment = .center
+        audioErrorLabel.numberOfLines = 2
+        audioErrorLabel.isHidden = true
+
+        centerStack.addArrangedSubview(heroAvatar)
+        centerStack.addArrangedSubview(statusBadge)
+        centerStack.addArrangedSubview(recordingPillButton)
+        centerStack.addArrangedSubview(audioErrorLabel)
+        centerStack.setCustomSpacing(14, after: heroAvatar)
+        centerStack.setCustomSpacing(8, after: statusBadge)
+        centerStack.setCustomSpacing(8, after: recordingPillButton)
     }
 
     private func buildStatusBadge() {
-        statusBadge.layer.cornerRadius = Metrics.badgeCornerRadius
-        statusBadge.clipsToBounds = true
+        if #available(iOS 26.0, *) {
+            let glass = UIGlassEffect(style: .regular)
+            glass.tintColor = UIColor.white.withAlphaComponent(0.06)
+            statusBadge.effect = glass
+            statusBadge.cornerConfiguration = .capsule()
+        } else {
+            statusBadge.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+            statusBadge.layer.cornerRadius = Metrics.badgeCornerRadius
+            statusBadge.clipsToBounds = true
+            statusBadge.layer.borderWidth = 0.6
+            statusBadge.layer.borderColor = UIColor.white.withAlphaComponent(0.22).cgColor
+        }
+
         statusDot.backgroundColor = .systemOrange
         statusDot.layer.cornerRadius = Metrics.dotSize / 2
         NSLayoutConstraint.activate([
             statusDot.widthAnchor.constraint(equalToConstant: Metrics.dotSize),
             statusDot.heightAnchor.constraint(equalToConstant: Metrics.dotSize),
         ])
-        let content = UIStackView(
+        statusLabel.font = UIFontMetrics(forTextStyle: .caption1)
+            .scaledFont(for: .systemFont(ofSize: 12, weight: .medium))
+        statusLabel.numberOfLines = 1
+        statusLabel.adjustsFontSizeToFitWidth = true
+        statusLabel.minimumScaleFactor = 0.78
+
+        let row = UIStackView(
             [statusDot, statusLabel],
             axis: .horizontal,
             spacing: Metrics.dotSpacing,
             alignment: .center
         )
-        statusBadge.contentView.addPinnedSubview(content, insets: Metrics.badgeInsets)
+        statusBadge.contentView.addPinnedSubview(row, insets: Metrics.badgeInsets)
     }
 
-    private func buildControls() {
-        let keypad = CallCircleControl(
-            title: "Keypad",
-            icon: "circle.grid.3x3.fill",
-            size: Metrics.controlSize
-        ) { [weak self] in
-            self?.send(.keypadButtonTapped)
+    private func buildRecordingPillButton() -> UIButton {
+        let button = UIButton(type: .system)
+        button.isHidden = true
+        button.accessibilityIdentifier = "callRecordingPill"
+        button.heightAnchor.constraint(greaterThanOrEqualToConstant: 34).isActive = true
+        button.addAction(UIAction { [weak self] _ in self?.send(.recordButtonTapped) }, for: .touchUpInside)
+        return button
+    }
+
+    private func buildBottomControls() {
+        for control in [audioControl, faceTimeControl, muteControl] {
+            connectedRow1.addArrangedSubview(control)
         }
-        for control in [muteControl, keypad, speakerControl] {
-            controls.addArrangedSubview(control)
+        for control in [moreControl, endControl, keypadControl] {
+            connectedRow2.addArrangedSubview(control)
         }
+        connectedGrid.addArrangedSubview(connectedRow1)
+        connectedGrid.addArrangedSubview(connectedRow2)
+
+        if #available(iOS 26.0, *) {
+            let containerEffect = UIGlassContainerEffect()
+            containerEffect.spacing = 12
+            connectedGridContainer.effect = containerEffect
+        }
+        connectedGridContainer.contentView.addPinnedSubview(connectedGrid)
+
+        incomingDecisions.addArrangedSubview(declineControl)
+        incomingDecisions.addArrangedSubview(acceptControl)
+
+        for child in [connectedGridContainer, incomingDecisions] {
+            child.translatesAutoresizingMaskIntoConstraints = false
+            bottomArea.addSubview(child)
+            NSLayoutConstraint.activate([
+                child.topAnchor.constraint(equalTo: bottomArea.topAnchor),
+                child.bottomAnchor.constraint(equalTo: bottomArea.bottomAnchor),
+                child.centerXAnchor.constraint(equalTo: bottomArea.centerXAnchor),
+                child.leadingAnchor.constraint(greaterThanOrEqualTo: bottomArea.leadingAnchor),
+                child.trailingAnchor.constraint(lessThanOrEqualTo: bottomArea.trailingAnchor),
+            ])
+        }
+        NSLayoutConstraint.activate([
+            gridWidthConstraint,
+            gridRow2WidthConstraint,
+            incomingDecisionsWidthConstraint,
+        ])
     }
 
-    private func buildBottom() {
-        bottomStack.addArrangedSubview(controls)
-        bottomStack.addArrangedSubview(decisions)
-    }
-
-    private func buildLayout() {
-        for part in [headerBar, center, bottomStack] {
+    private func buildMainLayout() {
+        let safeArea = mainContainer.safeAreaLayoutGuide
+        for part in [headerStack, centerStack, bottomArea] {
             part.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(part)
+            mainContainer.addSubview(part)
         }
+
+        // Centered horizontally across the full screen (matching native iOS Phone on folded iPhone Duo), while
+        // headerMaxWidthConstraint clamps the top header symmetrically clear of the right-edge Dynamic Island + clock.
         NSLayoutConstraint.activate([
-            headerTop,
-            headerWidth,
-            headerBar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            headerTopConstraint,
+            headerMaxWidthConstraint,
+            headerStack.centerXAnchor.constraint(equalTo: mainContainer.centerXAnchor),
+            headerStack.leadingAnchor.constraint(
+                greaterThanOrEqualTo: safeArea.leadingAnchor,
+                constant: 16
+            ),
+            headerStack.trailingAnchor.constraint(
+                lessThanOrEqualTo: safeArea.trailingAnchor,
+                constant: -16
+            ),
         ])
+
         NSLayoutConstraint.activate([
-            center.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            center.widthAnchor.constraint(lessThanOrEqualToConstant: Metrics.maximumCenterWidth),
-            center.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: Metrics.centerMargin),
-            center.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -Metrics.centerMargin),
+            centerStack.centerXAnchor.constraint(equalTo: mainContainer.centerXAnchor),
+            centerStack.widthAnchor.constraint(lessThanOrEqualToConstant: Metrics.maximumCenterWidth),
+            centerStack.leadingAnchor.constraint(
+                greaterThanOrEqualTo: mainContainer.leadingAnchor,
+                constant: Metrics.centerMargin
+            ),
+            centerStack.trailingAnchor.constraint(
+                lessThanOrEqualTo: mainContainer.trailingAnchor,
+                constant: -Metrics.centerMargin
+            ),
         ])
+
         NSLayoutConstraint.activate([
-            bottomStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            bottomInset,
-            decisionsWidth,
+            bottomArea.centerXAnchor.constraint(equalTo: mainContainer.centerXAnchor),
+            bottomArea.leadingAnchor.constraint(greaterThanOrEqualTo: mainContainer.leadingAnchor, constant: 16),
+            bottomArea.trailingAnchor.constraint(lessThanOrEqualTo: mainContainer.trailingAnchor, constant: -16),
+            bottomInsetConstraint,
         ])
-        let above = UILayoutGuide()
-        let below = UILayoutGuide()
-        view.addLayoutGuide(above)
-        view.addLayoutGuide(below)
+
+        let aboveGuide = UILayoutGuide()
+        let belowGuide = UILayoutGuide()
+        mainContainer.addLayoutGuide(aboveGuide)
+        mainContainer.addLayoutGuide(belowGuide)
         NSLayoutConstraint.activate([
-            above.topAnchor.constraint(equalTo: headerBar.bottomAnchor),
-            above.bottomAnchor.constraint(equalTo: center.topAnchor),
-            below.topAnchor.constraint(equalTo: center.bottomAnchor),
-            below.bottomAnchor.constraint(equalTo: bottomStack.topAnchor),
-            above.heightAnchor.constraint(equalTo: below.heightAnchor),
-            above.heightAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            aboveGuide.topAnchor.constraint(equalTo: headerStack.bottomAnchor),
+            aboveGuide.bottomAnchor.constraint(equalTo: centerStack.topAnchor),
+            belowGuide.topAnchor.constraint(equalTo: centerStack.bottomAnchor),
+            belowGuide.bottomAnchor.constraint(equalTo: bottomArea.topAnchor),
+            aboveGuide.heightAnchor.constraint(equalTo: belowGuide.heightAnchor),
+            aboveGuide.heightAnchor.constraint(greaterThanOrEqualToConstant: 8),
+            belowGuide.heightAnchor.constraint(greaterThanOrEqualToConstant: 8),
         ])
     }
 
-    private func decisionControl(
-        _ title: String,
-        icon: String,
-        color: UIColor,
-        action: ActiveCallFeature.Action.View
-    ) -> CallCircleControl {
-        CallCircleControl(title: title, icon: icon, size: Metrics.decisionSize, color: color) { [weak self] in
-            self?.send(action)
+    private func buildMoreOverlay() {
+        moreDismissBackdrop.backgroundColor = UIColor.black.withAlphaComponent(0.14)
+        moreDismissBackdrop.isHidden = true
+        moreDismissBackdrop.accessibilityLabel = "Dismiss More Menu"
+        moreDismissBackdrop.accessibilityIdentifier = "callMoreDismissBackdrop"
+        moreDismissBackdrop.addAction(UIAction { [weak self] _ in self?.send(.moreMenuDismissed) }, for: .touchUpInside)
+        view.addPinnedSubview(moreDismissBackdrop)
+
+        moreMenuView.isHidden = true
+        moreMenuView.accessibilityIdentifier = "callMoreMenuCard"
+        moreMenuView.onToggleRecording = { [weak self] in
+            self?.send(.recordButtonTapped)
         }
+        moreMenuView.onOpenContactCard = { [weak self] in
+            self?.presentContactCard()
+        }
+        moreMenuView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(moreMenuView)
+
+        let safeArea = view.safeAreaLayoutGuide
+        moreMenuLeadingConstraint.priority = .defaultHigh
+
+        let bottomAlign = moreMenuView.bottomAnchor.constraint(equalTo: connectedRow2.bottomAnchor, constant: 4)
+        bottomAlign.priority = .defaultHigh
+
+        NSLayoutConstraint.activate([
+            moreMenuWidthConstraint,
+            moreMenuLeadingConstraint,
+            bottomAlign,
+            moreMenuView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+            moreMenuView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
+            moreMenuView.bottomAnchor.constraint(lessThanOrEqualTo: safeArea.bottomAnchor, constant: -16),
+            moreMenuView.topAnchor.constraint(greaterThanOrEqualTo: safeArea.topAnchor, constant: 24),
+        ])
+    }
+
+    // MARK: Actions & Navigation
+
+    private func presentContactCard() {
+        guard let contact = store.content?.contact else { return }
+        send(.moreMenuDismissed)
+        showPhoneSheet(CallContactCardViewController(contact: contact))
     }
 
     private func startDurationTimer() {
@@ -348,42 +771,83 @@ final class ActiveCallViewController: ObservingViewController {
         guard let content = store.content else { return }
         renderDuration(content)
     }
-
-    // MARK: Navigation
-
-    private func bindPresentations() {
-        present(item: UIBindable(store).scope(\.$keypad, action: \.keypad)) {
-            phoneSheet(DTMFKeypadViewController(store: $0))
-        }
-    }
 }
 
 private struct CallLayout {
-    let avatarSize: CGFloat
+    struct Basis: Equatable {
+        let boundsSize: CGSize
+        let safeInsets: UIEdgeInsets
+        let horizontalSizeClass: UIUserInterfaceSizeClass
+
+        var safeHeight: CGFloat {
+            max(0, boundsSize.height - safeInsets.top - safeInsets.bottom)
+        }
+
+        var isCompactWidth: Bool { horizontalSizeClass == .compact || boundsSize.width < 520 }
+        var isShortHeight: Bool { safeHeight < Metrics.shortHeightThreshold }
+    }
+
     let headerTop: CGFloat
-    let headerWidth: CGFloat
+    let headerMaxWidth: CGFloat
+    let durationFontSize: CGFloat
+    let nameFontSize: CGFloat
+    let avatarSize: CGFloat
+    let controlSize: CGFloat
+    let columnSpacing: CGFloat
+    let rowSpacing: CGFloat
+    let gridWidth: CGFloat
     let decisionsWidth: CGFloat
     let bottomInset: CGFloat
-    let bottomSpacing: CGFloat
-    let controlSpacing: CGFloat
-    let controlSize: CGFloat
-    let spacingAfterAvatar: CGFloat
-    let spacingAfterDuration: CGFloat
-    let nameFontSize: CGFloat
+    let moreMenuWidth: CGFloat
+    let moreMenuLeading: CGFloat
 
-    init(width: CGFloat, compact: Bool, incoming: Bool) {
-        let outerMargin: CGFloat = compact ? 20 : 32
-        avatarSize = incoming ? (compact ? 116 : 132) : (compact ? 92 : 112)
-        headerTop = compact ? 18 : 26
-        headerWidth = min(520, max(0, width - outerMargin * 2))
-        decisionsWidth = min(430, max(0, width - outerMargin * 2 - (compact ? 24 : 56)))
-        bottomInset = (compact ? 18 : 26) + (incoming ? (compact ? 16 : 28) : (compact ? 8 : 18))
-        bottomSpacing = compact ? 30 : 42
-        controlSpacing = compact ? 20 : 34
-        controlSize = compact ? 62 : 68
-        spacingAfterAvatar = incoming ? 24 : 22
-        spacingAfterDuration = incoming ? 22 : 20
-        nameFontSize = incoming ? (compact ? 38 : 44) : 34
+    init(
+        basis: Basis,
+        incoming: Bool,
+        hasSecondaryHeaderLine: Bool,
+        hasExtraStatusItems: Bool
+    ) {
+        let width = max(320, basis.boundsSize.width)
+        let height = max(460, basis.safeHeight > 0 ? basis.safeHeight : basis.boundsSize.height)
+        let short = basis.isShortHeight
+        let compact = basis.isCompactWidth
+
+        headerTop = short ? 10 : (height < 670 ? 22 : 18)
+        let sideObstruction = max(basis.safeInsets.left, basis.safeInsets.right)
+        let symmetricClearance = max(Metrics.headerHorizontalClearance, sideObstruction + 16)
+        headerMaxWidth = max(150, min(460, width - symmetricClearance * 2))
+
+        durationFontSize = incoming ? 15 : (short ? 18 : 21)
+        nameFontSize = incoming ? (short ? 34 : 44) : (short ? 38 : 48)
+
+        let desiredControlSize: CGFloat = short ? 62 : (compact ? 76 : 80)
+        let usableGridWidth = min(380, max(236, width - 48))
+        let desiredColumnSpacing: CGFloat = short ? 24 : (compact ? 32 : 38)
+        let maxControlByWidth = (usableGridWidth - desiredColumnSpacing * 2) / 3
+        controlSize = min(desiredControlSize, max(56, floor(maxControlByWidth)))
+        columnSpacing = min(desiredColumnSpacing, max(16, floor((usableGridWidth - controlSize * 3) / 2)))
+        rowSpacing = short ? 12 : 18
+        gridWidth = controlSize * 3 + columnSpacing * 2
+
+        let outerMargin: CGFloat = compact ? 24 : 40
+        decisionsWidth = min(340, max(220, width - outerMargin * 2 - 16))
+        bottomInset = short ? 10 : 20
+
+        let headerEstimatedHeight: CGFloat =
+            durationFontSize + nameFontSize + (hasSecondaryHeaderLine ? 24 : 0) + 16
+        let bottomEstimatedHeight: CGFloat =
+            incoming ? 108 : (controlSize * 2 + 48 + rowSpacing)
+        let statusEstimatedHeight: CGFloat = 52 + (hasExtraStatusItems ? 46 : 0)
+        let availableForAvatar =
+            height - headerTop - headerEstimatedHeight - bottomEstimatedHeight - statusEstimatedHeight - 36
+
+        let maxAvatar: CGFloat = incoming ? (compact ? 188 : 220) : (compact ? 224 : 244)
+        let minAvatar: CGFloat = short ? 92 : 132
+        avatarSize = min(maxAvatar, max(minAvatar, floor(availableForAvatar)))
+
+        moreMenuWidth = min(344, max(248, width - 56))
+        let gridLeading = (width - gridWidth) / 2
+        moreMenuLeading = compact ? 18 : max(20, gridLeading - 16)
     }
 }
 
@@ -413,42 +877,84 @@ private final class RepeatingTimer {
 }
 
 private enum Metrics {
-    static let compactHeight: CGFloat = 700
-    static let headerSpacing: CGFloat = 10
-    static let recordButtonSize: CGFloat = 44
-    static let centerSpacing: CGFloat = 8
-    static let maximumCenterWidth: CGFloat = 520
-    static let centerMargin: CGFloat = 20
-    static let badgeCornerRadius: CGFloat = 19
-    static let badgeInsets = UIEdgeInsets(top: 11, left: 14, bottom: 11, right: 14)
+    static let shortHeightThreshold: CGFloat = 580
+    static let headerHorizontalClearance: CGFloat = 68
+    static let headerItemSpacing: CGFloat = 4
+    static let centerItemSpacing: CGFloat = 10
+    static let maximumCenterWidth: CGFloat = 480
+    static let centerMargin: CGFloat = 24
+    static let badgeCornerRadius: CGFloat = 18
+    static let badgeInsets = UIEdgeInsets(top: 8, left: 13, bottom: 8, right: 13)
     static let dotSize: CGFloat = 8
-    static let dotSpacing: CGFloat = 8
-    static let durationFontSize: CGFloat = 24
-    static let waitingFontSize: CGFloat = 15
-    static let controlSize: CGFloat = 62
-    static let decisionSize: CGFloat = 76
-    static let decisionSpacing: CGFloat = 100
-    static let initialAvatarSize: CGFloat = 116
-    static let initialHeaderTop: CGFloat = 18
-    static let initialHeaderWidth: CGFloat = 362
-    static let initialDecisionsWidth: CGFloat = 338
-    static let initialBottomInset: CGFloat = 34
-    static let initialBottomSpacing: CGFloat = 30
-    static let initialControlSpacing: CGFloat = 20
-    static let initialSpacingAfterAvatar: CGFloat = 24
-    static let initialSpacingAfterDuration: CGFloat = 20
+    static let dotSpacing: CGFloat = 7
+    static let decisionSize: CGFloat = 74
+    static let decisionSpacing: CGFloat = 96
+    static let initialHeaderTop: CGFloat = 14
+    static let initialHeaderMaxWidth: CGFloat = 260
+    static let initialAvatarSize: CGFloat = 168
+    static let initialControlSize: CGFloat = 72
+    static let initialColumnSpacing: CGFloat = 28
+    static let initialRowSpacing: CGFloat = 16
+    static let initialGridWidth: CGFloat = 272
+    static let initialDecisionsWidth: CGFloat = 280
+    static let initialBottomInset: CGFloat = 18
+    static let moreMenuMaxWidth: CGFloat = 320
+    static let audioErrorAlpha: CGFloat = 0.94
+    static let phaseTransitionDuration: TimeInterval = 0.2
 }
 
 #if DEBUG
-#Preview("Call · Incoming") {
-    let store = AirSIMPreviewFixtures.store(callState: "incoming")
+#Preview("Call · Connected (114 Silhouette)") {
+    let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
     let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
     controller.isPresentationPreview = true
     return controller
 }
 
-#Preview("Call · Connected") {
+#Preview("Call · More Menu Open") {
     let store = AirSIMPreviewFixtures.store(callState: "active")
+    store.send(.activeCall(.view(.moreButtonTapped)))
+    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+    controller.isPresentationPreview = true
+    return controller
+}
+
+#Preview("Call · Recording Active") {
+    let store = AirSIMPreviewFixtures.store(callState: "active", isRecording: true)
+    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+    controller.isPresentationPreview = true
+    return controller
+}
+
+#Preview("Call · In-Call Keypad") {
+    let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
+    store.send(.activeCall(.view(.keypadButtonTapped)))
+    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+    controller.isPresentationPreview = true
+    return controller
+}
+
+#Preview("Call · In-Call Keypad (Digits Entered)") {
+    let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
+    store.send(.activeCall(.view(.keypadButtonTapped)))
+    for digit in ["1", "1", "1", "1", "2", "3", "4", "5", "6"] {
+        store.send(.activeCall(.keypad(.presented(.view(.digitTapped(digit))))))
+    }
+    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+    controller.isPresentationPreview = true
+    return controller
+}
+
+#Preview("Call · Folded Duo Proportion (352×512)") {
+    let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
+    store.send(.activeCall(.view(.moreButtonTapped)))
+    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+    controller.isPresentationPreview = true
+    return AirSIMPreviewFixtures.canvas(controller, width: 352, height: 512, dark: true)
+}
+
+#Preview("Call · Incoming") {
+    let store = AirSIMPreviewFixtures.store(callState: "incoming")
     let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
     controller.isPresentationPreview = true
     return controller

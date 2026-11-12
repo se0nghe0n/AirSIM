@@ -7,6 +7,7 @@ struct ActiveCallFeature {
     struct State: Equatable {
         @SharedReader fileprivate var snapshot: AirSIMSnapshot
         @Presents var keypad: KeypadFeature.State?
+        var isShowingMoreMenu = false
         #if DEBUG
         var layoutPreviewCall: CallRecord?
         #endif
@@ -45,6 +46,9 @@ struct ActiveCallFeature {
             case speakerButtonTapped
             case recordButtonTapped
             case keypadButtonTapped
+            case keypadHideTapped
+            case moreButtonTapped
+            case moreMenuDismissed
         }
     }
 
@@ -54,12 +58,16 @@ struct ActiveCallFeature {
         Reduce { state, action in
             switch action {
             case .view(.answerButtonTapped):
+                state.isShowingMoreMenu = false
                 return command(.answer)
 
             case .view(.declineButtonTapped):
+                state.isShowingMoreMenu = false
                 return command(.reject)
 
             case .view(.endButtonTapped):
+                state.isShowingMoreMenu = false
+                state.keypad = nil
                 return command(.hangup)
 
             case .view(.muteButtonTapped):
@@ -69,13 +77,37 @@ struct ActiveCallFeature {
                 return command(.speaker)
 
             case .view(.recordButtonTapped):
+                state.isShowingMoreMenu = false
                 return command(.recording)
 
             case .view(.keypadButtonTapped):
-                // A repeated tap while the sheet is presenting keeps the digits already sent.
-                if state.snapshot.inAppPresentedCall != nil, state.keypad == nil {
+                state.isShowingMoreMenu = false
+                // A repeated tap while the keypad is open keeps the digits already sent.
+                if state.call != nil, state.keypad == nil {
                     state.keypad = KeypadFeature.State()
                 }
+                return .none
+
+            case .view(.keypadHideTapped):
+                state.keypad = nil
+                return .none
+
+            case .view(.moreButtonTapped):
+                guard state.call != nil, state.content?.phase == .connected else { return .none }
+                state.isShowingMoreMenu.toggle()
+                return .none
+
+            case .view(.moreMenuDismissed):
+                state.isShowingMoreMenu = false
+                return .none
+
+            case .keypad(.presented(.delegate(.endCallTapped))):
+                state.isShowingMoreMenu = false
+                state.keypad = nil
+                return command(.hangup)
+
+            case .keypad(.presented(.delegate(.hideKeypadTapped))):
+                state.keypad = nil
                 return .none
 
             case .keypad:

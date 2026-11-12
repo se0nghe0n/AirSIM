@@ -64,7 +64,10 @@ struct SettingsFeature {
         var modeTitle: String { String(localized: mode.title) }
         var modeDetail: String { String(localized: mode.detail) }
 
-        var modeIcon: String {
+        var modeIcon: String { Self.icon(for: mode) }
+
+        /// The mode's symbol, shown on the selected value and on each menu entry.
+        static func icon(for mode: AirSIMConnectionMode) -> String {
             switch mode {
             case .vowlan:
                 "wifi"
@@ -91,9 +94,8 @@ struct SettingsFeature {
         var devices: [PairedDeviceRow] { snapshot.pairedDeviceHistory.map(PairedDeviceRow.init) }
         var remoteCallsStatus: String { modeUsesCloud ? "Enabled" : "Disabled" }
 
-        var selfTestTitle: String {
-            selfTestRunning ? "Run Cloud Self-Test · Running…" : "Run Cloud Self-Test"
-        }
+        /// Shown as a spinner beside the unchanged run title and read by VoiceOver as the run row's value.
+        var selfTestStatus: String? { selfTestRunning ? "Running" : nil }
 
         var canRunSelfTest: Bool { modeUsesCloud && !selfTestRunning }
 

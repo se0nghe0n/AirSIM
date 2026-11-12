@@ -113,7 +113,8 @@ struct AirSIMFeature {
                 state.selectedTab = .messages
                 return .merge(
                     .send(.messages(.openConversation(sender))),
-                    command(.reloadLocalMessages)
+                    command(.reloadLocalMessages),
+                    command(.persistTab(.messages))
                 )
 
             case .remoteSMSReceived:
@@ -165,6 +166,7 @@ struct AirSIMFeature {
         state.dial.reconcile(backendNumber: value.numberInput)
         if value.inAppPresentedCall == nil {
             state.activeCall.keypad = nil
+            state.activeCall.isShowingMoreMenu = false
         }
         if value.errorMessage != state.lastBackendError {
             state.lastBackendError = value.errorMessage
@@ -188,10 +190,14 @@ struct AirSIMFeature {
         )
     }
 
-    private func dialWithoutRememberingTab(_ number: String, state: inout State) -> Effect<Action> {
+    /// Keeps the number as a draft even when it equals the backend's, e.g. for a `tel:` link.
+    private func dialHoldingDraft(_ number: String, state: inout State) -> Effect<Action> {
         state.dial.holdDraft(number)
         state.selectedTab = .dial
-        return command(.dialNumber(number))
+        return .merge(
+            command(.persistTab(.dial)),
+            command(.dialNumber(number))
+        )
     }
 
     private func compose(_ draft: MessageDraft, state: inout State) -> Effect<Action> {
@@ -205,7 +211,7 @@ struct AirSIMFeature {
             return compose(MessageDraft(recipient: recipient), state: &state)
 
         case .call(let number):
-            return dialWithoutRememberingTab(number, state: &state)
+            return dialHoldingDraft(number, state: &state)
 
         case let .liveActivity(action, callID):
             // The backend gate runs immediately before execution. The UI

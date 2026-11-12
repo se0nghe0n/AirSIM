@@ -11,8 +11,8 @@ final class AirSIMSettingsViewController: PhoneTableController {
     // MARK: Views
 
     /// Built in viewDidLoad, so their symbol images resolve with the screen's traits.
-    private lazy var modeControl = MenuValueButton()
-    private lazy var appearanceControl = MenuValueButton()
+    private lazy var modeControl = MenuValueButton(settingName: "Connection Mode")
+    private lazy var appearanceControl = MenuValueButton(settingName: "Appearance")
     private let activitySwitch = UISwitch()
     private let relayURL = UITextField()
 
@@ -141,16 +141,22 @@ final class AirSIMSettingsViewController: PhoneTableController {
         )
     }
 
+    /// The row itself is not an action: its trailing trash button opens the deletion confirmation.
     private func deviceRow(_ device: PairedDeviceRow) -> PhoneRow {
-        PhoneRow(
+        var row = PhoneRow(
             id: device.id,
             title: device.name,
             detail: device.detail,
             image: "smartphone",
             enabled: !store.deletingDevice,
-            action: { [weak self] in self?.confirmForget(device) },
-            accessibilityHint: "Delete \(device.name) pairing record"
+            insets: Metrics.trailingControlInsets
         )
+        let shown = row
+        row.bodyViewProvider = { [weak self] in
+            guard let self else { return UIView() }
+            return self.listRowView(shown, trailing: self.deleteButton(for: device, enabled: shown.enabled))
+        }
+        return row
     }
 
     private func liveActivitySection() -> PhoneSection {
@@ -203,16 +209,7 @@ final class AirSIMSettingsViewController: PhoneTableController {
     }
 
     private func selfTestSection() -> PhoneSection {
-        var rows = [
-            PhoneRow(
-                id: "run",
-                title: store.selfTestTitle,
-                image: "stethoscope",
-                color: .systemBlue,
-                enabled: store.canRunSelfTest,
-                action: { [weak self] in self?.send(.runSelfTestTapped) }
-            )
-        ]
+        var rows = [selfTestRunRow()]
         rows += store.selfTestSteps.map(selfTestStepRow)
         if let result = store.selfTestResult {
             rows.append(
@@ -224,6 +221,28 @@ final class AirSIMSettingsViewController: PhoneTableController {
             )
         }
         return PhoneSection(title: "Cloud Self-Test", footer: store.selfTestFooter, rows: rows)
+    }
+
+    /// Keeps its title while a test runs and shows a spinner after it instead.
+    private func selfTestRunRow() -> PhoneRow {
+        var row = PhoneRow(
+            id: "run",
+            title: "Run Cloud Self-Test",
+            image: "stethoscope",
+            color: .systemBlue,
+            enabled: store.canRunSelfTest,
+            action: { [weak self] in self?.send(.runSelfTestTapped) }
+        )
+        guard let status = store.selfTestStatus else { return row }
+        let shown = row
+        row.insets = Metrics.trailingControlInsets
+        row.bodyVersion = status
+        row.bodyViewProvider = { [weak self] in
+            let spinner = UIActivityIndicatorView(style: .medium)
+            spinner.startAnimating()
+            return self?.listRowView(shown, trailing: spinner, accessibilityValue: status) ?? UIView()
+        }
+        return row
     }
 
     private func selfTestStepRow(_ step: SelfTestStepRow) -> PhoneRow {
@@ -269,6 +288,49 @@ final class AirSIMSettingsViewController: PhoneTableController {
         )
     }
 
+    /// The table's own symbol, title and detail layout with a control after it. A PhoneRow accessory would replace
+    /// the symbol and detail with a lone title.
+    private func listRowView(_ row: PhoneRow, trailing control: UIView, accessibilityValue: String? = nil) -> UIView {
+        var content = UIListContentConfiguration.subtitleCell()
+        content.text = row.title
+        content.secondaryText = row.detail.isEmpty ? nil : row.detail
+        content.image = row.image.flatMap(UIImage.init(systemName:))
+        content.textProperties.font = .preferredFont(forTextStyle: row.textStyle)
+        content.textProperties.color = row.enabled ? row.color : .secondaryLabel
+        content.textProperties.numberOfLines = 0
+        content.secondaryTextProperties.numberOfLines = 0
+        content.imageProperties.maximumSize = CGSize(width: Metrics.imageSize, height: Metrics.imageSize)
+        content.axesPreservingSuperviewLayoutMargins = []
+        content.directionalLayoutMargins.leading = Metrics.groupedMargin
+        content.directionalLayoutMargins.trailing = 0
+        let text = UIListContentView(configuration: content)
+        text.isAccessibilityElement = true
+        text.accessibilityLabel = row.title
+        text.accessibilityValue =
+            accessibilityValue ?? content.secondaryText?.replacingOccurrences(of: "\n", with: ", ")
+        if row.action != nil {
+            text.accessibilityTraits = row.enabled ? .button : [.button, .notEnabled]
+        }
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        control.setContentCompressionResistancePriority(.required, for: .horizontal)
+        return UIStackView([text, control], axis: .horizontal, spacing: Metrics.controlSpacing, alignment: .center)
+    }
+
+    private func deleteButton(for device: PairedDeviceRow, enabled: Bool) -> UIButton {
+        var configuration = UIButton.Configuration.borderless()
+        configuration.image = UIImage(systemName: "trash")
+        configuration.baseForegroundColor = .systemRed
+        let button = UIButton(configuration: configuration)
+        button.addAction(UIAction { [weak self] _ in self?.confirmForget(device) }, for: .touchUpInside)
+        button.isEnabled = enabled
+        button.accessibilityLabel = "Delete \(device.name) pairing record"
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(greaterThanOrEqualToConstant: Metrics.minimumTapTarget),
+            button.heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.minimumTapTarget),
+        ])
+        return button
+    }
+
     // MARK: Layout
 
     private func buildControls() {
@@ -310,7 +372,11 @@ final class AirSIMSettingsViewController: PhoneTableController {
     // MARK: Actions
 
     private func modeChoice(_ mode: AirSIMConnectionMode) -> UIAction {
-        UIAction(title: String(localized: mode.title), state: mode == store.mode ? .on : .off) { [weak self] _ in
+        UIAction(
+            title: String(localized: mode.title),
+            image: UIImage(systemName: SettingsFeature.State.icon(for: mode)),
+            state: mode == store.mode ? .on : .off
+        ) { [weak self] _ in
             self?.send(.modeChanged(mode))
         }
     }
@@ -345,6 +411,15 @@ private extension SettingsTone {
             .systemRed
         }
     }
+}
+
+private enum Metrics {
+    /// Matches PhoneTableController's grouped row margin and symbol size.
+    static let groupedMargin: CGFloat = 16
+    static let imageSize: CGFloat = 44
+    static let trailingControlInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: groupedMargin)
+    static let controlSpacing: CGFloat = 8
+    static let minimumTapTarget: CGFloat = 44
 }
 
 #if DEBUG

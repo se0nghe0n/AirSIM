@@ -23,11 +23,15 @@ struct RecentCallRow: Equatable, Identifiable {
     var isMissed: Bool { call.missed }
     var dialNumber: String? { RecentCallDialPolicy.numberToDial(call.number) }
 
-    var subtitle: String { "\(directionArrow) \(kind)" }
-    var detail: String { "\(kind) · \(directionArrow) · \(time)" }
+    /// The call kind; `directionSymbol` draws the arrow before it, as the SwiftUI row did.
+    var subtitle: String { kind }
+    var directionSymbol: String { isIncoming ? "arrow.down.left" : "arrow.up.right" }
+    var subtitleAccessibilityLabel: String { "\(direction), \(kind)" }
+    var detail: String { "\(kind) · \(direction) · \(time)" }
 
     private var kind: String { call.missed ? "Missed" : "AirSIM Audio" }
-    private var directionArrow: String { call.direction == "incoming" ? "↙" : "↗" }
+    private var isIncoming: Bool { call.direction == "incoming" }
+    private var direction: String { isIncoming ? "Incoming" : "Outgoing" }
 }
 
 enum RecentCallTimeFormatter {

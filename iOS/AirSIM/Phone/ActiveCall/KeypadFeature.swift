@@ -7,15 +7,33 @@ struct KeypadFeature {
     struct State: Equatable {
         var digits = ""
 
-        var displayText: String { digits.isEmpty ? "Tap keys to send DTMF tones" : digits }
-        var digitsAccessibilityLabel: String { digits.isEmpty ? "No digits entered" : digits }
+        var showsPlaceholder: Bool { digits.isEmpty }
+        var displayText: String { showsPlaceholder ? "Tap keys to send DTMF tones" : digits }
+        var digitsAccessibilityLabel: String { showsPlaceholder ? "No digits entered" : digits }
+
+        func headerDisplayText(callerFallback: String) -> String {
+            digits.isEmpty ? callerFallback : digits
+        }
+
+        func headerAccessibilityLabel(callerFallback: String) -> String {
+            digits.isEmpty ? "Caller \(callerFallback), no keypad digits entered" : "Keypad digits \(digits)"
+        }
     }
 
     enum Action: ViewAction {
         case view(View)
+        case delegate(Delegate)
 
         enum View {
             case digitTapped(String)
+            case endButtonTapped
+            case hideButtonTapped
+        }
+
+        @CasePathable
+        enum Delegate: Equatable {
+            case endCallTapped
+            case hideKeypadTapped
         }
     }
 
@@ -28,6 +46,15 @@ struct KeypadFeature {
                 state.digits = String((state.digits + digit).suffix(18))
                 // sendDTMF reports its own failures through the backend error, which the root alert shows.
                 return .run { [client] _ in try? await client.command(.dtmf(digit)) }
+
+            case .view(.endButtonTapped):
+                return .send(.delegate(.endCallTapped))
+
+            case .view(.hideButtonTapped):
+                return .send(.delegate(.hideKeypadTapped))
+
+            case .delegate:
+                return .none
             }
         }
     }
