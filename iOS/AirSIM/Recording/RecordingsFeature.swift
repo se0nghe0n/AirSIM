@@ -57,10 +57,10 @@ struct RecordingsFeature {
                 return run(.stopPlayback(!state.isCallActive))
 
             case .view(.playTapped(let recording)):
-                return run(.play(recording))
+                return run(.play(recording), failure: "Unable to play recording")
 
             case .view(.deleteTapped(let recording)):
-                return run(.deleteRecording(recording))
+                return run(.deleteRecording(recording), failure: "Unable to delete recording")
 
             case .stopPlayback(let deactivateSession):
                 return run(.stopPlayback(deactivateSession))
@@ -76,12 +76,14 @@ struct RecordingsFeature {
         .ifLet(\.$alert, action: \.alert)
     }
 
-    private func run(_ command: AirSIMCommand) -> Effect<Action> {
+    /// A failure names its operation when one is given, e.g. "Unable to play recording: <reason>".
+    private func run(_ command: AirSIMCommand, failure operation: String? = nil) -> Effect<Action> {
         .run { [client] send in
             do {
                 try await client.command(command)
             } catch {
-                await send(.failed(error.localizedDescription))
+                let reason = error.localizedDescription
+                await send(.failed(operation.map { "\($0): \(reason)" } ?? reason))
             }
         }
     }

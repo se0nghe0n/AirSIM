@@ -100,18 +100,21 @@ final class AirSIMFirstConnectionViewController: ObservingViewController {
         return UIStackView([image, label], axis: .horizontal, spacing: 10, alignment: .top)
     }
 
+    /// Both actions span the bottom bar's column, as the SwiftUI full-width buttons did.
     private func actionStack() -> UIStackView {
         let start = phoneButton("Start Pairing", image: "lock.shield") { [weak self] in self?.showPairing() }
-        start.configuration = .filled()
-        start.configuration?.title = "Start Pairing"
-        start.configuration?.image = UIImage(systemName: "lock.shield")
-        start.configuration?.imagePadding = 8
-        start.configuration?.cornerStyle = .capsule
-        start.configuration?.contentInsets = Metrics.startPairingInsets
+        var prominent = UIButton.Configuration.filled()
+        prominent.title = "Start Pairing"
+        prominent.image = UIImage(systemName: "lock.shield")
+        prominent.imagePadding = 8
+        prominent.buttonSize = .large
+        prominent.cornerStyle = .capsule
+        start.configuration = prominent
         let later = phoneButton("Pair Later in Settings") { [weak self] in self?.send(.pairLaterTapped) }
-        later.configuration = .plain()
-        later.setTitle("Pair Later in Settings", for: .normal)
-        return UIStackView([start, later], axis: .vertical, spacing: 10, alignment: .center)
+        var plain = UIButton.Configuration.plain()
+        plain.title = "Pair Later in Settings"
+        later.configuration = plain
+        return UIStackView([start, later], axis: .vertical, spacing: Metrics.actionSpacing)
     }
 
     private func buildLayout(content: UIStackView, actions: UIStackView) {
@@ -156,21 +159,37 @@ final class AirSIMFirstConnectionViewController: ObservingViewController {
             bottomBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             bottomBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+        layoutActions(actions, in: bottomBar)
+    }
+
+    /// Up to 600pt wide with 24pt side and 16pt vertical padding, centered in the safe area.
+    private func layoutActions(_ actions: UIStackView, in bottomBar: UIView) {
+        let safeArea = view.safeAreaLayoutGuide
+        let preferredWidth = actions.widthAnchor.constraint(
+            equalTo: safeArea.widthAnchor,
+            constant: -2 * Metrics.actionsHorizontalPadding
+        )
+        preferredWidth.priority = .defaultHigh
         NSLayoutConstraint.activate([
-            actions.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: Metrics.actionsPadding),
-            actions.centerXAnchor.constraint(equalTo: bottomBar.centerXAnchor),
-            actions.bottomAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-                constant: -Metrics.actionsPadding
-            ),
+            actions.topAnchor.constraint(equalTo: bottomBar.topAnchor, constant: Metrics.actionsVerticalPadding),
+            actions.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor, constant: -Metrics.actionsVerticalPadding),
+            actions.centerXAnchor.constraint(equalTo: safeArea.centerXAnchor),
+            preferredWidth,
+            actions.widthAnchor.constraint(lessThanOrEqualToConstant: Metrics.maximumContentWidth),
         ])
     }
 
     // MARK: Navigation
 
+    /// Opens at full height without a grabber, like the SwiftUI default sheet; it keeps the app sheet's Done button.
     private func showPairing() {
         send(.startPairingTapped)
-        showPhoneSheet(SamsungPairingViewController(store: store.scope(state: \.pairing, action: \.pairing)))
+        let pairing = phoneSheet(SamsungPairingViewController(store: store.scope(state: \.pairing, action: \.pairing)))
+        if let sheet = pairing.sheetPresentationController {
+            sheet.detents = [.large()]
+            sheet.prefersGrabberVisible = false
+        }
+        present(pairing, animated: true)
     }
 
     // MARK: Actions
@@ -188,8 +207,9 @@ private enum Metrics {
     static let iconCornerRadius: CGFloat = 22
     static let cardCornerRadius: CGFloat = 24
     static let cardPadding = UIEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-    static let startPairingInsets = NSDirectionalEdgeInsets(top: 16, leading: 20, bottom: 16, trailing: 20)
-    static let actionsPadding: CGFloat = 16
+    static let actionSpacing: CGFloat = 16
+    static let actionsHorizontalPadding: CGFloat = 24
+    static let actionsVerticalPadding: CGFloat = 16
 }
 
 #if DEBUG

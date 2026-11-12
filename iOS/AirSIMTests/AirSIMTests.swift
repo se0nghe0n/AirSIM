@@ -1795,9 +1795,69 @@ struct RecentsFeatureTests {
     @Test func `A contact's call shows the contact name, a stranger's call shows the number`() {
         let state = RecentsFeature.State(snapshot: SharedReader(value: snapshot()))
         let mina = state.row(id: "preview-recent-1")
-        #expect(mina?.name == "Mina Kim" && mina?.avatarName == "Mina Kim" && mina?.subtitle == "↙ AirSIM Audio")
+        #expect(mina?.name == "Mina Kim" && mina?.avatarName == "Mina Kim" && mina?.subtitle == "AirSIM Audio")
         let stranger = state.row(id: "preview-recent-3")
-        #expect(stranger?.name == "+1 202 555 0199" && stranger?.avatarName == "" && stranger?.subtitle == "↙ Missed")
+        #expect(stranger?.name == "+1 202 555 0199" && stranger?.avatarName == "" && stranger?.subtitle == "Missed")
+        // The direction is a symbol before the kind, read by VoiceOver as a word rather than an arrow glyph.
+        #expect(
+            mina?.directionSymbol == "arrow.down.left" && mina?.subtitleAccessibilityLabel == "Incoming, AirSIM Audio"
+        )
+    }
+
+    @Test func `A call without a number draws its call button disabled and its row unavailable to VoiceOver`() throws {
+        var withUnknown = snapshot()
+        let known = try #require(withUnknown.callHistory.first)
+        withUnknown.callHistory = [
+            CallRecord(
+                id: "unknown",
+                index: 0,
+                direction: "incoming",
+                state: "ended",
+                number: nil,
+                startedAt: known.startedAt,
+                updatedAt: known.updatedAt,
+                endedAt: known.endedAt,
+                missed: false
+            ),
+            known,
+        ]
+        let store = Store(initialState: RecentsFeature.State(snapshot: SharedReader(value: withUnknown))) {
+            RecentsFeature()
+        } withDependencies: {
+            $0.airSIM = AirSIMClient(
+                snapshots: { AsyncStream { $0.finish() } },
+                command: { _ in },
+                sendSMS: { _, _ in .init(success: true) },
+                selfTest: { AsyncStream { $0.finish() } },
+                pairing: { AsyncStream { $0.finish() } },
+                pair: { _, _, _ in "" }
+            )
+        }
+        let recents = RecentsViewController(store: store)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = UINavigationController(rootViewController: recents)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        recents.render()
+        window.layoutIfNeeded()
+        recents.table.layoutIfNeeded()
+        func dialButton(at row: Int) -> UIButton? {
+            let cell = recents.table.cellForRow(at: IndexPath(row: row, section: 0))
+            func find(_ view: UIView) -> UIButton? {
+                if let button = view as? UIButton, button.accessibilityLabel == "Dial" { return button }
+                return view.subviews.lazy.compactMap(find).first
+            }
+            return cell.flatMap(find)
+        }
+        let unknown = try #require(dialButton(at: 0))
+        let callable = try #require(dialButton(at: 1))
+        #expect(!unknown.isEnabled && callable.isEnabled)
+        let unknownCell = try #require(recents.table.cellForRow(at: IndexPath(row: 0, section: 0)))
+        #expect(unknownCell.accessibilityTraits.contains(.notEnabled))
+        #expect(
+            recents.table.cellForRow(at: IndexPath(row: 1, section: 0))?.accessibilityTraits.contains(.notEnabled)
+                == false
+        )
     }
 
     @Test func `A row drawn before a history refresh still calls and messages the number it showed`() async throws {
@@ -2046,6 +2106,38 @@ struct DialFeatureTests {
         )
         #expect(!state().showsAgentCard)
         #expect(state { $0.currentAndroidAgent = agents[0] }.showsAgentCard)
+    }
+
+    @Test func `VoiceOver hears everything the agent card shows`() throws {
+        let agents = AirSIMPreviewFixtures.agents
+        let current = AndroidAgentCardView.Content(agent: agents[0], count: 2, cloudEnabled: true)
+        #expect(
+            current.accessibilityLabel
+                == "Samsung Galaxy, Current, +1 202 555 0100, VoWLAN Online, Cloud Online, Standalone, All 2"
+        )
+        let single = AndroidAgentCardView.Content(agent: agents[1], count: 1, cloudEnabled: false)
+        #expect(
+            single.accessibilityLabel
+                == "Pixel 8 Pro, Current, Number unavailable, VoWLAN Offline, Cloud Off, Standalone"
+        )
+        let none = AndroidAgentCardView.Content(agent: nil, count: 2, cloudEnabled: true)
+        #expect(none.accessibilityLabel == "Paired Android Agents, 2, No call route is currently available")
+        let store = Store(
+            initialState: state {
+                $0.pairedAndroidAgents = agents
+                $0.currentAndroidAgent = agents[0]
+                $0.cloudModeEnabled = true
+            }
+        ) {
+            DialFeature()
+        } withDependencies: {
+            $0.airSIM = client()
+        }
+        let dial = DialPadViewController(store: store)
+        dial.loadViewIfNeeded()
+        dial.render()
+        let card = try #require(button(current.accessibilityLabel, in: dial.view))
+        #expect(card.accessibilityHint == "Shows paired Android Agents")
     }
 
     @Test func `Dial's keys, Delete and Call send their actions from the screen`() async throws {
@@ -2335,8 +2427,7 @@ struct MessagesFeatureTests {
         #expect(commands.value.map { "\($0)" } == ["loadMessages", "refreshMessages", "clearMessages"])
     }
 
-    @Test func `Tapping the open conversation keeps the composer, and closing an old thread keeps the open one`() async
-    {
+    @Test func `Opening any conversation keeps the composer, and closing an old thread keeps the open one`() async {
         let reader = SharedReader(value: snapshot())
         var state = MessagesFeature.State(snapshot: reader)
         state.conversation = "X"
@@ -2345,13 +2436,14 @@ struct MessagesFeatureTests {
         let store = TestStore(initialState: state) { MessagesFeature() }
         await store.send(.view(.conversationTapped("X")))
         await store.send(.view(.threadLoaded("X")))
+        // The thread opens beneath the composer sheet, which keeps its draft.
         await store.send(.view(.conversationTapped("Z"))) {
             $0.conversation = "Z"
             $0.reply = ""
-            $0.composer = nil
         }
         await store.send(.view(.threadClosed("X")))
         await store.send(.view(.threadLoaded("W"))) { $0.conversation = "W" }
+        #expect(store.state.composer?.body == "Composer draft")
     }
 
     @Test func `The compose button opens an empty composer on the Messages tab once onboarding is done`() async {
@@ -2420,9 +2512,14 @@ struct MessagesFeatureTests {
         #expect(recognized.recognizedName == "Alex Rivera" && recognized.suggestions.isEmpty)
         let typing = ComposerFeature.State(recipient: " mi ", snapshot: reader)
         #expect(typing.recognizedName == nil)
-        #expect(typing.suggestions == [.init(name: "Mina Kim", phone: "+12025550100", recipient: "+12025550100")])
+        let mina = AirSIMPreviewFixtures.contacts.first { $0.name == "Mina Kim" }
+        #expect(
+            typing.suggestions == [
+                .init(name: "Mina Kim", phone: "+12025550100", photo: mina?.photoData, recipient: "+12025550100")
+            ]
+        )
         let unnumbered = ComposerFeature.State(recipient: " Sam ", snapshot: reader)
-        #expect(unnumbered.suggestions == [.init(name: "Sam Lee", phone: nil, recipient: "Sam")])
+        #expect(unnumbered.suggestions == [.init(name: "Sam Lee", phone: nil, photo: nil, recipient: "Sam")])
     }
 
     @Test func `Opening the composer loads contacts only if allowed`() async {
@@ -3196,12 +3293,14 @@ struct TCAUIKitFeatureTests {
         #expect(store.state.composer == ComposerFeature.State(recipient: "456", snapshot: snapshot))
     }
 
-    @Test func `Readdressing a composer mid-send detaches that send from it`() async {
+    @Test func `Readdressing a composer mid-send keeps Send disabled until that send finishes`() async {
         let release = AsyncStream<Void>.makeStream()
         let result = LockIsolated(AirSIMMessageResult(success: true))
+        let sent = LockIsolated<[String]>([])
         var dependency = client()
-        dependency.sendSMS = { _, _ in
+        dependency.sendSMS = { to, body in
             for await _ in release.stream { break }
+            sent.withValue { $0.append("\(to):\(body)") }
             return result.value
         }
         let store = TestStore(initialState: composing("A", body: "On my way")) {
@@ -3212,25 +3311,32 @@ struct TCAUIKitFeatureTests {
         }
         await store.send(.composer(.presented(.view(.sendButtonTapped)))) { $0.composer?.sendID = UUID(0) }
         await store.receive(\.composer.presented.delegate)
-        // A's success must not close the composer the user just addressed to B.
-        await store.send(.compose("B")) {
-            $0.composer?.recipient = "B"
-            $0.composer?.sendID = nil
-        }
+        // The send to A stays attached, so the same text cannot be sent again to B while it is in flight.
+        await store.send(.compose("B")) { $0.composer?.recipient = "B" }
+        #expect(store.state.composer?.canSend == false)
+        await store.send(.composer(.presented(.view(.sendButtonTapped))))
+        // A's success leaves the composer open for B without the text that already went to A.
         release.continuation.yield()
-        await store.receive(\.composerSendFinished)
-        // Nor may a failure alert there with B's address; the root alert reports it.
+        await store.receive(\.composerSendFinished) {
+            $0.composer?.sendID = nil
+            $0.composer?.body = ""
+        }
+        #expect(sent.value == ["A:On my way"])
+        // A failure after a readdress keeps the draft and reports it in the composer.
+        await store.send(.composer(.presented(.view(.bodyChanged("Running late"))))) {
+            $0.composer?.body = "Running late"
+        }
         await store.send(.composer(.presented(.view(.sendButtonTapped)))) { $0.composer?.sendID = UUID(1) }
         await store.receive(\.composer.presented.delegate)
-        await store.send(.compose("C")) {
-            $0.composer?.recipient = "C"
-            $0.composer?.sendID = nil
-        }
+        await store.send(.compose("C")) { $0.composer?.recipient = "C" }
         result.setValue(.init(success: false, error: "Offline"))
         release.continuation.yield()
-        await store.receive(\.composerSendFinished)
-        await store.receive(\.delegate.unreportedSendFailure, "Offline")
-        #expect(store.state.composer == ComposerFeature.State(recipient: "C", body: "On my way", snapshot: snapshot))
+        await store.receive(\.composerSendFinished) {
+            $0.composer?.sendID = nil
+            $0.composer?.alert = .sendFailed("Offline")
+        }
+        await store.send(.composer(.presented(.alert(.presented(.ok))))) { $0.composer?.alert = nil }
+        #expect(store.state.composer?.body == "Running late" && store.state.composer?.recipient == "C")
         // Composing to the same recipient keeps the send attached, so its success still closes the composer.
         result.setValue(.init(success: true))
         await store.send(.composer(.presented(.view(.sendButtonTapped)))) { $0.composer?.sendID = UUID(2) }
@@ -3238,6 +3344,35 @@ struct TCAUIKitFeatureTests {
         await store.send(.compose("C"))
         release.continuation.yield()
         await store.receive(\.composerSendFinished) { $0.composer = nil }
+        #expect(sent.value == ["A:On my way", "B:Running late", "C:Running late"])
+    }
+
+    @Test func `A completed send preserves a changed draft after readdressing away and back`() async {
+        let release = AsyncStream<Void>.makeStream()
+        let sent = LockIsolated<[String]>([])
+        var dependency = client()
+        dependency.sendSMS = { to, body in
+            for await _ in release.stream { break }
+            sent.withValue { $0.append("\(to):\(body)") }
+            return .init(success: true)
+        }
+        let store = TestStore(initialState: composing("A", body: "Original message")) {
+            MessagesFeature()
+        } withDependencies: {
+            $0.airSIM = dependency
+            $0.uuid = .incrementing
+        }
+        await store.send(.composer(.presented(.view(.sendButtonTapped)))) { $0.composer?.sendID = UUID(0) }
+        await store.receive(\.composer.presented.delegate)
+        await store.send(.compose("B")) { $0.composer?.recipient = "B" }
+        await store.send(.composer(.presented(.view(.bodyChanged("New draft"))))) { $0.composer?.body = "New draft" }
+        await store.send(.compose("A")) { $0.composer?.recipient = "A" }
+        #expect(store.state.composer?.canSend == false)
+        release.continuation.yield()
+        await store.receive(\.composerSendFinished) { $0.composer?.sendID = nil }
+        #expect(sent.value == ["A:Original message"])
+        #expect(store.state.composer?.recipient == "A" && store.state.composer?.body == "New draft")
+        #expect(store.state.composer?.canSend == true && store.state.composer?.alert == nil)
     }
 
     @Test func `Visible thread reply retains its recipient if route state was cleared`() async {
@@ -3278,8 +3413,15 @@ struct TCAUIKitFeatureTests {
         await store.send(.composer(.dismiss)) { $0.composer = nil }
         await store.send(.compose("new")) { $0.composer = ComposerFeature.State(recipient: "new", snapshot: snapshot) }
         await store.send(.composer(.presented(.view(.bodyChanged("new draft"))))) { $0.composer?.body = "new draft" }
-        await store.send(.composerSendFinished(id: oldID, result: .init(success: true)))
-        await store.send(.composerSendFinished(id: oldID, result: .init(success: false, error: "Old failure")))
+        await store.send(.composerSendFinished(id: oldID, to: "old", body: "old body", result: .init(success: true)))
+        await store.send(
+            .composerSendFinished(
+                id: oldID,
+                to: "old",
+                body: "old body",
+                result: .init(success: false, error: "Old failure")
+            )
+        )
         await store.receive(\.delegate.unreportedSendFailure, "Old failure")
         #expect(store.state.composer?.body == "new draft")
         #expect(store.state.composer?.alert == nil)
@@ -3329,7 +3471,7 @@ struct TCAUIKitFeatureTests {
         }
     }
 
-    @Test func `Reopening the visible conversation closes the composer and keeps the thread draft`() async {
+    @Test func `Reopening the visible conversation keeps the composer, its send and the thread draft`() async {
         var state = composing("Y", body: "Composer draft", sendID: UUID())
         state.conversation = "X"
         state.reply = "draft"
@@ -3339,9 +3481,30 @@ struct TCAUIKitFeatureTests {
         } withDependencies: {
             $0.airSIM = client()
         }
-        await store.send(.openConversation("X")) { $0.composer = nil }
+        await store.send(.openConversation("X"))
         #expect(store.state.reply == "draft")
         #expect(store.state.alert == nil)
+        #expect(store.state.composer?.body == "Composer draft" && store.state.composer?.sending == true)
+    }
+
+    @Test func `An SMS notification opens its conversation beneath the composer without losing its draft`() async {
+        let commands = LockIsolated<[AirSIMCommand]>([])
+        var dependency = client()
+        dependency.command = { command in commands.withValue { $0.append(command) } }
+        var state = AirSIMFeature.State(snapshot: snapshot.wrappedValue)
+        state.firstConnectionComplete = true
+        state.messages.composer = ComposerFeature.State(recipient: "Y", body: "Half written", snapshot: snapshot)
+        let store = TestStore(initialState: state) {
+            AirSIMFeature()
+        } withDependencies: {
+            $0.airSIM = dependency
+        }
+        await store.send(.openSMS("X")) { $0.selectedTab = .messages }
+        await store.receive(\.messages.openConversation) { $0.messages.conversation = "X" }
+        await store.finish()
+        #expect(store.state.messages.composer?.body == "Half written")
+        #expect(commands.value.contains { if case .reloadLocalMessages = $0 { true } else { false } })
+        #expect(commands.value.contains { if case .persistTab(.messages) = $0 { true } else { false } })
     }
 
     @Test func `Reopening the visible conversation keeps its draft and send`() async {
@@ -3457,6 +3620,27 @@ struct TCAUIKitFeatureTests {
         await store.send(.alert(.presented(.ok))) { $0.alert = nil }
     }
 
+    @Test func `A failed play or delete names the operation in the recording alert`() async throws {
+        let recording = try #require(AirSIMPreviewFixtures.recordings.first)
+        let reason = CocoaError(.fileReadCorruptFile).localizedDescription
+        var dependency = client()
+        dependency.command = { _ in throw CocoaError(.fileReadCorruptFile) }
+        let store = TestStore(initialState: RecordingsFeature.State(snapshot: SharedReader(value: AirSIMSnapshot()))) {
+            RecordingsFeature()
+        } withDependencies: {
+            $0.airSIM = dependency
+        }
+        await store.send(.view(.playTapped(recording)))
+        await store.receive(\.failed) {
+            $0.alert = .error("Unable to play recording: \(reason)", title: "Recording Error", ok: .ok)
+        }
+        await store.send(.alert(.presented(.ok))) { $0.alert = nil }
+        await store.send(.view(.deleteTapped(recording)))
+        await store.receive(\.failed) {
+            $0.alert = .error("Unable to delete recording: \(reason)", title: "Recording Error", ok: .ok)
+        }
+    }
+
     @Test func `Changing mode cancels streaming self test without completing it`() async {
         let store = TestStore(initialState: SettingsFeature.State(snapshot: snapshot)) {
             SettingsFeature()
@@ -3562,7 +3746,11 @@ struct TCARootNavigationTests {
         await store.receive(\.settings.delegate.onboardingCompleted) {
             $0.firstConnectionComplete = true
             $0.pendingDraft = nil
-            $0.messages.composer = ComposerFeature.State(recipient: "+12025550100", body: "Running late", snapshot: snapshot)
+            $0.messages.composer = ComposerFeature.State(
+                recipient: "+12025550100",
+                body: "Running late",
+                snapshot: snapshot
+            )
         }
         await store.finish()
     }
@@ -3704,6 +3892,27 @@ struct TCARootNavigationTests {
         #expect(performed.value == ["answer:call-A"])
     }
 
+    @Test func `A tel link shows Dial with its number, remembers the tab and dials`() async throws {
+        let commands = LockIsolated<[AirSIMCommand]>([])
+        var dependency = client
+        dependency.command = { command in commands.withValue { $0.append(command) } }
+        var state = AirSIMFeature.State()
+        state.selectedTab = .messages
+        let store = TestStore(initialState: state) {
+            AirSIMFeature()
+        } withDependencies: {
+            $0.airSIM = dependency
+        }
+        await store.send(.openURL(try #require(URL(string: "tel:+12025550100")))) {
+            $0.selectedTab = .dial
+            $0.dial.number = "+12025550100"
+            $0.dial.hasDraft = true
+        }
+        await store.finish()
+        #expect(commands.value.contains { if case .persistTab(.dial) = $0 { true } else { false } })
+        #expect(commands.value.contains { if case .dialNumber("+12025550100") = $0 { true } else { false } })
+    }
+
     @Test func `New SMS, an opened incoming call and an opened conversation reach the backend`() async {
         let commands = LockIsolated<[String]>([])
         var dependency = client
@@ -3726,7 +3935,11 @@ struct TCARootNavigationTests {
             $0.messages.conversation = "+12025550100"
         }
         await store.finish()
-        #expect(commands.value == ["reloadLocalMessages", "presentCall", "reloadLocalMessages"])
+        // Opening a conversation also remembers the Messages tab, as the SwiftUI tab selection did.
+        let persistMessages = String(describing: AirSIMCommand.persistTab(.messages))
+        #expect(Array(commands.value.prefix(2)) == ["reloadLocalMessages", "presentCall"])
+        #expect(Set(commands.value.dropFirst(2)) == ["reloadLocalMessages", persistMessages])
+        #expect(commands.value.count == 4)
     }
 
     @Test func `The live store starts from the saved tab, onboarding flag and preferences`() {
@@ -3946,8 +4159,14 @@ struct ActiveCallFeatureTests {
     }
 
     private func button(_ label: String, in view: UIView) -> UIButton? {
+        guard !view.isHidden, view.alpha > 0 else { return nil }
         if let button = view as? UIButton, button.accessibilityLabel == label { return button }
         return view.subviews.lazy.compactMap { self.button(label, in: $0) }.first
+    }
+
+    private func visibleTexts(in view: UIView) -> [String] {
+        guard !view.isHidden, view.alpha > 0 else { return [] }
+        return ((view as? UILabel)?.text.map { [$0] } ?? []) + view.subviews.flatMap { visibleTexts(in: $0) }
     }
 
     private func texts(in view: UIView) -> [String] {
@@ -4009,7 +4228,10 @@ struct ActiveCallFeatureTests {
             $0.callAudioStatusText = "Audio Failed"
             $0.audioError = "Microphone unavailable"
         }
-        #expect(failed.status == "Audio Failed\nMicrophone unavailable")
+        // The error stands apart from the badge, as a red caption under it.
+        #expect(failed.status == "Audio Failed" && failed.audioError == "Microphone unavailable")
+        #expect(content("active") { $0.audioError = "" }.audioError == nil)
+        #expect(content("incoming") { $0.audioError = "Microphone unavailable" }.audioError == nil)
     }
 
     @Test func `A connected call's badge follows the call audio and its dot turns green once audio is active`() {
@@ -4048,11 +4270,24 @@ struct ActiveCallFeatureTests {
             $0.isRecording = true
         }
         #expect(recording.canToggleRecording && recording.isRecording)
+        #expect(recording.recordingMenuTitle == "Stop Recording")
+        #expect(recording.recordingPillTitle == "Recording · Stop")
         let busy = content("active") {
             $0.canToggleRecording = true
             $0.isRecordingBusy = true
         }
-        #expect(!busy.canToggleRecording)
+        #expect(!busy.canToggleRecording && busy.isRecordingBusy && !ready.isRecordingBusy)
+        for isRecording in [false, true] {
+            let updating = content("active") {
+                $0.isRecordingBusy = true
+                $0.isRecording = isRecording
+            }
+            #expect(updating.recordingMenuTitle == "Updating Recording…")
+            #expect(updating.recordingPillTitle == "Updating Recording…")
+            #expect(updating.recordingMenuSubtitle == "Please wait while local recording updates")
+            #expect(updating.showsRecordingPill && !updating.canToggleRecording)
+        }
+        #expect(ready.recordingMenuTitle == "Call Recording")
         #expect(!content("active").canToggleRecording)
     }
 
@@ -4077,10 +4312,14 @@ struct ActiveCallFeatureTests {
         }
         await store.send(.view(.answerButtonTapped))
         await store.send(.view(.declineButtonTapped))
-        await store.send(.view(.endButtonTapped))
+        await store.send(.view(.moreButtonTapped)) { $0.isShowingMoreMenu = true }
+        await store.send(.view(.recordButtonTapped)) { $0.isShowingMoreMenu = false }
+        await store.send(.view(.moreButtonTapped)) { $0.isShowingMoreMenu = true }
+        await store.send(.view(.moreMenuDismissed)) { $0.isShowingMoreMenu = false }
+        await store.send(.view(.keypadButtonTapped)) { $0.keypad = KeypadFeature.State() }
+        await store.send(.view(.endButtonTapped)) { $0.keypad = nil }
         await store.send(.view(.muteButtonTapped))
         await store.send(.view(.speakerButtonTapped))
-        await store.send(.view(.recordButtonTapped))
         await store.finish()
         #expect(commands.value.sorted() == ["answer", "hangup", "mute", "recording", "reject", "speaker"])
     }
@@ -4122,21 +4361,92 @@ struct ActiveCallFeatureTests {
         window.rootViewController = screen
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
-        #expect(texts(in: screen.view).contains("AirSIM Incoming Call") && texts(in: screen.view).contains("Mina Kim"))
+        #expect(
+            visibleTexts(in: screen.view).contains("AirSIM Incoming Call")
+                && visibleTexts(in: screen.view).contains("Mina Kim")
+        )
         #expect(button("End", in: screen.view) == nil)
         for label in ["Decline", "Accept"] {
             try #require(button(label, in: screen.view)).sendActions(for: .touchUpInside)
         }
         shared.withLock { $0.inAppPresentedCall = call("active") }
         _ = try #require(await eventually { button("End", in: screen.view) })
-        #expect(texts(in: screen.view).contains("AirSIM Call") && button("Accept", in: screen.view) == nil)
-        for label in ["Mute", "Speaker", "Record", "End"] {
+        #expect(button("Accept", in: screen.view) == nil)
+        #expect(button("FaceTime", in: screen.view) == nil)
+
+        // Connected call controls and the native recording menu.
+        for label in ["Mute", "Audio"] {
             try #require(button(label, in: screen.view)).sendActions(for: .touchUpInside)
         }
-        #expect(try await eventually { commands.value.count == 6 ? true : nil } == true)
-        #expect(commands.value.sorted() == ["answer", "hangup", "mute", "recording", "reject", "speaker"])
+        let more = try #require(button("More", in: screen.view))
+        #expect(more.showsMenuAsPrimaryAction)
+        let record = try #require(more.menu?.children.compactMap { $0 as? UIAction }.first)
+        #expect(record.identifier.rawValue == "callRecording")
+        let actionButton = UIButton(type: .system)
+        actionButton.addAction(record, for: .primaryActionTriggered)
+        actionButton.sendActions(for: .primaryActionTriggered)
+        #expect(!store.isShowingMoreMenu)
+        screen.render()
+
+        // Active recording also exposes the centered one-tap Stop Recording pill.
+        shared.withLock { $0.isRecording = true }
+        let stopPill = try #require(await eventually { button("Stop Recording", in: screen.view) })
+        stopPill.sendActions(for: .touchUpInside)
+
         try #require(button("Keypad", in: screen.view)).sendActions(for: .touchUpInside)
         #expect(store.keypad == KeypadFeature.State())
+        screen.render()
+
+        try #require(button("Hide Keypad", in: screen.view)).sendActions(for: .touchUpInside)
+        #expect(store.keypad == nil)
+        screen.render()
+
+        try #require(button("End", in: screen.view)).sendActions(for: .touchUpInside)
+        #expect(try await eventually { commands.value.count == 7 ? true : nil } == true)
+        #expect(
+            commands.value.sorted() == ["answer", "hangup", "mute", "recording", "recording", "reject", "speaker"]
+        )
+    }
+
+    @Test func `Folded iPhone Duo layout keeps header and recording controls away from the top-right corner`() throws {
+        var snapshot = AirSIMSnapshot()
+        snapshot.contacts = ContactDirectory(
+            all: AirSIMPreviewFixtures.contacts,
+            isAuthorized: true,
+            authorization: .authorized
+        )
+        snapshot.inAppPresentedCall = call("active", number: "114")
+        snapshot.canToggleRecording = true
+        let store = Store(initialState: ActiveCallFeature.State(snapshot: SharedReader(value: snapshot))) {
+            ActiveCallFeature()
+        } withDependencies: {
+            $0.airSIM = client(commands: LockIsolated([]))
+        }
+        let screen = ActiveCallViewController(store: store)
+        screen.isPresentationPreview = true
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 352, height: 512))
+        window.rootViewController = screen
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        screen.view.layoutIfNeeded()
+
+        // Nothing interactive may live in the top-right region occupied by folded Duo's Dynamic Island / status gauge.
+        let topRightHazard = CGRect(x: window.bounds.width - 88, y: 0, width: 88, height: 140)
+        func interactiveButtons(in view: UIView) -> [UIButton] {
+            guard !view.isHidden, view.alpha > 0 else { return [] }
+            let current: [UIButton] = (view as? UIButton).map { $0.isEnabled ? [$0] : [] } ?? []
+            return current + view.subviews.flatMap(interactiveButtons)
+        }
+        for control in interactiveButtons(in: screen.view) {
+            let frameInWindow = control.convert(control.bounds, to: window)
+            #expect(!frameInWindow.intersects(topRightHazard))
+            #expect(window.bounds.contains(frameInWindow))
+        }
+
+        // UIKit owns menu anchoring and safe-area avoidance from this actual glass button.
+        let more = try #require(button("More", in: screen.view))
+        #expect(more.showsMenuAsPrimaryAction && more.menu?.preferredElementSize == .large)
+        #expect(more.menu?.children.compactMap { $0 as? UIAction }.first?.identifier.rawValue == "callRecording")
     }
 
     @Test func `A layout preview call opens the call window while the backend presents no call`() throws {
@@ -4352,14 +4662,14 @@ struct TCANavigationDismissalTests {
         #expect(store.state.conversation == nil)
     }
 
-    @Test func `Opening notification conversation dismisses current composer state`() async {
+    @Test func `Opening notification conversation keeps the composer and its draft above it`() async {
         var state = MessagesFeature.State(snapshot: snapshot)
         state.composer = ComposerFeature.State(recipient: "other", body: "draft", snapshot: snapshot)
         let store = TestStore(initialState: state) { MessagesFeature() }
         await store.send(.openConversation("+12025550100")) {
             $0.conversation = "+12025550100"
-            $0.composer = nil
         }
+        #expect(store.state.composer?.body == "draft")
     }
 }
 
@@ -4411,9 +4721,11 @@ struct UIKitNavigationBridgeTests {
         #expect(try await eventually { commands.value.last == "presentCall" ? true : nil } == true)
         center.post(name: .airsimOpenSMSConversation, object: nil, userInfo: ["sender": "+12025550100"])
         #expect(try await eventually { store.messages.conversation == "+12025550100" ? true : nil } == true)
-        #expect(try await eventually { commands.value.count == 3 ? true : nil } == true)
+        #expect(try await eventually { commands.value.count == 4 ? true : nil } == true)
         #expect(store.selectedTab == .messages)
-        #expect(commands.value == ["reloadLocalMessages", "presentCall", "reloadLocalMessages"])
+        let persistMessages = String(describing: AirSIMCommand.persistTab(.messages))
+        #expect(Array(commands.value.prefix(2)) == ["reloadLocalMessages", "presentCall"])
+        #expect(Set(commands.value.dropFirst(2)) == ["reloadLocalMessages", persistMessages])
         withExtendedLifetime(root) {}
     }
 
@@ -4424,7 +4736,7 @@ struct UIKitNavigationBridgeTests {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = nav
         window.makeKeyAndVisible()
-        controller.openConversation("+12025550100")
+        controller.openConversation("+12025550100", animated: false)
         #expect(nav.topViewController is MessageThreadViewController)
         nav.popViewController(animated: false)
         #expect(store.messages.conversation == nil)
@@ -4543,8 +4855,8 @@ struct SettingsFeatureTests {
         #expect(automatic.modeIcon == "arrow.triangle.branch" && automatic.cloudRelayStatus == "Agent Online")
         var running = automatic
         running.selfTestRunning = true
-        #expect(!running.canRunSelfTest && running.selfTestTitle == "Run Cloud Self-Test · Running…")
-        #expect(automatic.selfTestTitle == "Run Cloud Self-Test")
+        #expect(!running.canRunSelfTest && running.selfTestStatus == "Running")
+        #expect(automatic.selfTestStatus == nil)
         #expect(state { $0.connectionMessage = "" }.connectionMessage == nil)
         #expect(state { $0.connectionMessage = "Reconnecting" }.connectionMessage == "Reconnecting")
         #expect(
@@ -4628,7 +4940,21 @@ struct SettingsFeatureTests {
         )
         let device = try #require(rows.first { $0.id == "preview-samsung" })
         #expect(device.detail == "\(AirSIMPreviewFixtures.phone)\nVoWLAN Online · Cloud Online" && !device.isValue)
-        #expect(device.accessibilityHint == "Delete Samsung Galaxy pairing record" && device.enabled)
+        #expect(device.accessibilityHint == nil && device.action == nil && device.enabled)
+        func descendants(of view: UIView) -> [UIView] { view.subviews.flatMap { [$0] + descendants(of: $0) } }
+        let deviceView = try #require(device.bodyViewProvider?())
+        let trash = try #require(descendants(of: deviceView).compactMap { $0 as? UIButton }.first)
+        #expect(trash.accessibilityLabel == "Delete Samsung Galaxy pairing record" && trash.isEnabled)
+        #expect(trash.configuration?.baseForegroundColor == .systemRed)
+        let mode = try #require(rows.first { $0.id == "mode" }?.accessory as? MenuValueButton)
+        #expect(mode.accessibilityLabel == "Connection Mode" && mode.accessibilityValue == "Automatic")
+        let modeChoices = mode.menu?.children.compactMap { $0 as? UIAction } ?? []
+        #expect(modeChoices.count == 3 && modeChoices.allSatisfy { $0.image?.isSymbolImage == true })
+        let appearance = try #require(rows.first { $0.id == "appearance" }?.accessory as? MenuValueButton)
+        #expect(appearance.accessibilityLabel == "Appearance")
+        #expect(appearance.accessibilityValue == store.settings.appearance.title)
+        let run = try #require(rows.first { $0.id == "run" })
+        #expect(run.title == "Run Cloud Self-Test" && run.bodyViewProvider == nil)
         let steps = ["configuration", "relayIdentity", "deviceRegistration", "agentHeartbeat"].compactMap { id in
             rows.first { $0.id == id }
         }
@@ -4785,11 +5111,49 @@ struct UIKitConversationReplacementTests {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = nav
         window.makeKeyAndVisible()
-        controller.openConversation("A")
-        controller.openConversation("B")
+        controller.openConversation("A", animated: false)
+        controller.openConversation("B", animated: false)
         #expect(store.messages.conversation == "B")
         #expect((nav.topViewController as? MessageThreadViewController)?.sender == "B")
         window.isHidden = true
+    }
+
+    @Test func `Tapping a conversation pushes its thread with the standard animation`() {
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let list = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
+        let nav = PushRecordingNavigationController(rootViewController: list)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = nav
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        list.openConversation("A")
+        #expect(nav.pushes == [true])
+        #expect((nav.topViewController as? MessageThreadViewController)?.sender == "A")
+        #expect(store.messages.conversation == "A")
+    }
+
+    @Test func `A conversation opened off screen is installed without animation`() {
+        let store = AirSIMPreviewFixtures.store(tab: .messages)
+        let list = MessagesViewController(store: store.scope(state: \.messages, action: \.messages))
+        let nav = PushRecordingNavigationController(rootViewController: list)
+        list.loadViewIfNeeded()
+        list.openConversation("A")
+        store.send(.messages(.openConversation("B")))
+        list.showConversationIfNeeded("B", animated: true)
+        #expect(nav.pushes == [false])
+        #expect((nav.topViewController as? MessageThreadViewController)?.sender == "B")
+    }
+}
+
+private final class PushRecordingNavigationController: UINavigationController {
+    /// Animation flags of thread pushes; the root controller's own push at initialization is not one.
+    var pushes: [Bool] = []
+
+    override func pushViewController(_ viewController: UIViewController, animated: Bool) {
+        if viewController is MessageThreadViewController {
+            pushes.append(animated)
+        }
+        super.pushViewController(viewController, animated: animated)
     }
 }
 
@@ -5090,22 +5454,20 @@ struct UIKitAdversarialRegressionTests {
         root.render()
         let callWindow = try #require(root.callWindow)
         let keypad = try #require(await presentKeypad(store, in: callWindow))
-        #expect(keypad.topViewController is DTMFKeypadViewController)
-        #expect(
-            keypad.sheetPresentationController?.prefersGrabberVisible == true
-                && keypad.topViewController?.navigationItem.rightBarButtonItem != nil
-        )
+        #expect(keypad.parent is ActiveCallViewController)
+        #expect(keypad.view.window === callWindow)
+        #expect(callWindow.rootViewController?.presentedViewController == nil)
         #expect(root.presentedViewController == nil)
         root.render()
         try await Task.sleep(for: .milliseconds(50))
-        #expect(!keypad.isBeingDismissed && keypad.presentingViewController != nil && store.activeCall.keypad != nil)
+        #expect(keypad.parent != nil && store.activeCall.keypad != nil)
         var ended = store.snapshot
         ended.inAppPresentedCall = nil
         ended.callLifecycleSnapshot = .idle
         store.send(.snapshot(ended))
         root.render()
         #expect(store.activeCall.keypad == nil)
-        #expect(try await eventually { keypad.presentingViewController == nil ? true : nil } == true)
+        #expect(root.callWindow == nil)
     }
 
     @Test func `Closing the call keypad clears its state so the next one starts empty`() async throws {
@@ -5120,18 +5482,15 @@ struct UIKitAdversarialRegressionTests {
             window.isHidden = true
         }
         let callWindow = try #require(root.callWindow)
-        let keypad = try #require(await presentKeypad(store, in: callWindow))
-        let pad = try #require(keypad.topViewController as? DTMFKeypadViewController)
+        let pad = try #require(await presentKeypad(store, in: callWindow))
         pad.store.send(.view(.digitTapped("7")))
         #expect(store.activeCall.keypad?.digits == "7")
-        // Done and swipe-down are UIKit dismissals; the presentation binding writes the closed state back.
-        keypad.dismiss(animated: false)
-        #expect(try await eventually { store.activeCall.keypad == nil ? true : nil } == true)
-        // present(item:) applies the closed state on a later main-actor turn; a reopen before then reuses the
-        // cached child store and is skipped. A person cannot tap within that turn.
-        try await Task.sleep(for: .milliseconds(50))
+        store.send(.activeCall(.view(.keypadHideTapped)))
+        root.activeCallController?.render()
+        #expect(store.activeCall.keypad == nil)
+        #expect(try await eventually { pad.parent == nil ? true : nil } == true)
         let reopened = try #require(await presentKeypad(store, in: callWindow))
-        #expect(reopened !== keypad && store.activeCall.keypad?.digits == "")
+        #expect(reopened !== pad && store.activeCall.keypad?.digits == "")
     }
 
     @Test func `Composing while root shows another sheet replaces it with the composer`() async throws {
@@ -5382,16 +5741,13 @@ struct UIKitAdversarialRegressionTests {
     }
 
     private func presentKeypad(_ store: StoreOf<AirSIMFeature>, in callWindow: UIWindow) async throws
-        -> UINavigationController?
+        -> DTMFKeypadViewController?
     {
-        let previous = callWindow.rootViewController?.presentedViewController
+        let callController = (callWindow.rootViewController as? ActiveCallContainerViewController)?.call
         withUITransaction(\.uiKit.disablesAnimations, true) { _ = store.send(.activeCall(.view(.keypadButtonTapped))) }
+        callController?.render()
         return try await eventually {
-            guard let nav = callWindow.rootViewController?.presentedViewController as? UINavigationController,
-                nav !== previous,
-                !nav.isBeingPresented
-            else { return nil }
-            return nav
+            callController?.children.compactMap { $0 as? DTMFKeypadViewController }.first
         }
     }
 
@@ -5403,7 +5759,7 @@ struct UIKitAdversarialRegressionTests {
         window.rootViewController = nav
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
-        list.openConversation("123")
+        list.openConversation("123", animated: false)
         store.send(.messages(.view(.replyChanged("Reply after cancelled Back"))))
         // During an interactive pop UIKit exposes the proposed stack before didShow.
         let departingThread = nav.topViewController
@@ -5468,8 +5824,12 @@ struct UIKitAdversarialRegressionTests {
         let picker = try #require(pickerSheet.topViewController as? ContactsViewController)
         #expect(pickerSheet.sheetPresentationController?.prefersGrabberVisible == true)
         #expect(pickerSheet.sheetPresentationController?.detents.count == 2)
-        #expect(picker.navigationItem.rightBarButtonItem != nil && picker.navigationItem.title == "Choose Contact")
+        // Cancel on the left and no Done, no pull-to-refresh, and a chevron on each row, like the SwiftUI picker.
+        #expect(picker.navigationItem.leftBarButtonItem?.title == "Cancel")
+        #expect(picker.navigationItem.rightBarButtonItem == nil && picker.navigationItem.title == "Choose Contact")
+        #expect(picker.table.refreshControl == nil)
         let alex = try #require(await eventually { picker.sections.first?.rows.first { $0.title == "Alex Rivera" } })
+        #expect(alex.disclosure)
         withUITransaction(\.uiKit.disablesAnimations, true) { alex.action?() }
         #expect(try await eventually { sheet.presentedViewController == nil ? true : nil } == true)
         #expect(composer.store.recipient == "+12025550102" && composer.store.contactPicker == nil)
@@ -5495,5 +5855,132 @@ struct UIKitAdversarialRegressionTests {
         thread.render()
         thread.view.layoutIfNeeded()
         #expect(thread.reply.bounds.height == 32)
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct InteractiveCallPreviewTests {
+    @Test func mockControlsUpdateOnlyTheirOwnPreview() async {
+        let store = AirSIMPreviewFixtures.store(callState: "active")
+        let other = AirSIMPreviewFixtures.store(callState: "active")
+        await store.send(.activeCall(.view(.muteButtonTapped))).finish()
+        #expect(store.snapshot.isMuted)
+        await store.send(.activeCall(.view(.speakerButtonTapped))).finish()
+        #expect(store.snapshot.speakerEnabled && store.activeCall.content?.status == "Audio Connected · Speaker")
+        await store.send(.activeCall(.view(.recordButtonTapped))).finish()
+        #expect(store.snapshot.isRecording && store.activeCall.content?.showsRecordingPill == true)
+        #expect(!other.snapshot.isMuted && !other.snapshot.speakerEnabled && !other.snapshot.isRecording)
+        await store.send(.activeCall(.view(.muteButtonTapped))).finish()
+        await store.send(.activeCall(.view(.speakerButtonTapped))).finish()
+        await store.send(.activeCall(.view(.recordButtonTapped))).finish()
+        #expect(!store.snapshot.isMuted && !store.snapshot.speakerEnabled && !store.snapshot.isRecording)
+        #expect(store.snapshot.audioRoute == "iPhone")
+    }
+
+    @Test func answerAndEndReconcileCallAndKeypadState() async {
+        let store = AirSIMPreviewFixtures.store(callState: "incoming")
+        let callID = store.activeCall.call?.id
+        await store.send(.activeCall(.view(.answerButtonTapped))).finish()
+        #expect(store.activeCall.call?.id == callID && store.activeCall.call?.state == "active")
+        #expect(store.snapshot.callLifecycleSnapshot.state == .active && store.snapshot.canToggleRecording)
+        await store.send(.activeCall(.view(.recordButtonTapped))).finish()
+        store.send(.activeCall(.view(.keypadButtonTapped)))
+        await store.send(.activeCall(.keypad(.presented(.view(.digitTapped("7")))))).finish()
+        #expect(store.activeCall.keypad?.digits == "7")
+        await store.send(.activeCall(.view(.endButtonTapped))).finish()
+        #expect(store.activeCall.call == nil && store.activeCall.keypad == nil)
+        #expect(store.snapshot.callLifecycleSnapshot == .idle && !store.snapshot.audioActive)
+        #expect(!store.snapshot.isRecording && !store.snapshot.canToggleRecording)
+    }
+
+    @Test func standalonePreviewCanRestartAfterDecline() async throws {
+        let store = AirSIMPreviewFixtures.store(callState: "incoming")
+        let host = try #require(AirSIMPreviewFixtures.activeCall(store) as? ObservingViewController)
+        host.loadViewIfNeeded()
+        #expect(host.children.count == 1)
+        await store.send(.activeCall(.view(.declineButtonTapped))).finish()
+        host.render()
+        #expect(host.children.isEmpty && store.activeCall.call == nil)
+        let reset = try #require(find(UIButton.self, in: host.view) { $0.accessibilityIdentifier == "restartPreviewCall" })
+        reset.sendActions(for: .touchUpInside)
+        host.render()
+        #expect(host.children.count == 1 && store.activeCall.content?.isIncoming == true)
+        #expect(!store.snapshot.isMuted && !store.snapshot.isRecording)
+    }
+
+    @Test(arguments: [
+        CGSize(width: 320, height: 844), CGSize(width: 352, height: 512),
+        CGSize(width: 390, height: 844), CGSize(width: 744, height: 900),
+    ])
+    func keypadMatchesCallControlsAndSurvivesReversal(size: CGSize) async throws {
+        let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
+        let screen = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+        screen.isPresentationPreview = true
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        window.rootViewController = screen
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        screen.view.layoutIfNeeded()
+        let more = try #require(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callMoreControl" })
+        let end = try #require(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callEndControl" })
+        let endFrame = end.convert(end.bounds, to: screen.view)
+        let row = try #require(end.superview?.superview?.superview as? UIStackView)
+        let grid = try #require(row.superview as? UIStackView)
+        for controlRow in grid.arrangedSubviews.compactMap({ $0 as? UIStackView }) {
+            let requiredWidth = try #require(controlRow.constraints.first {
+                $0.firstAttribute == .width && $0.secondItem == nil && $0.relation == .equal
+                    && $0.priority == .required
+            })
+            let minimumWidths = try controlRow.arrangedSubviews.map { control in
+                try #require(control.constraints.first {
+                    $0.firstAttribute == .width && $0.secondItem == nil && $0.relation == .greaterThanOrEqual
+                        && $0.priority == .required
+                }).constant
+            }
+            let minimumRowWidth = minimumWidths.reduce(0, +) + controlRow.spacing * CGFloat(minimumWidths.count - 1)
+            #expect(requiredWidth.constant >= minimumRowWidth)
+            #expect(abs(controlRow.bounds.width - requiredWidth.constant) < 1)
+            #expect(screen.view.bounds.contains(controlRow.convert(controlRow.bounds, to: screen.view)))
+            for (control, minimumWidth) in zip(controlRow.arrangedSubviews, minimumWidths) {
+                #expect(control.bounds.width >= minimumWidth - 0.5)
+            }
+        }
+        #expect(more.showsMenuAsPrimaryAction && more.menu?.preferredElementSize == .large)
+        store.send(.activeCall(.view(.keypadButtonTapped)))
+        screen.render()
+        store.send(.activeCall(.view(.keypadHideTapped)))
+        screen.render()
+        store.send(.activeCall(.view(.keypadButtonTapped)))
+        screen.render()
+        try await Task.sleep(for: .milliseconds(500))
+        let keypads = screen.children.compactMap { $0 as? DTMFKeypadViewController }
+        #expect(keypads.count == 1 && keypads.first?.view.alpha == 1)
+        #expect(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callEndControl" } === end)
+        #expect(end.convert(end.bounds, to: screen.view) == endFrame)
+        #expect(find(UIButton.self, in: keypads[0].view) { $0.accessibilityLabel == "End" } == nil)
+        #expect(keypads[0].view.convert(keypads[0].view.bounds, to: screen.view).maxY <= endFrame.minY)
+        screen.view.layoutIfNeeded()
+        let pad = try #require(keypads.first)
+        for digit in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"] {
+            let key = try #require(find(UIButton.self, in: pad.view) { $0.accessibilityIdentifier == "dtmfKey_\(digit)" })
+            #expect(abs(key.bounds.width - end.bounds.width) < 1)
+            let frame = key.convert(key.bounds, to: screen.view)
+            #expect(screen.view.bounds.contains(frame) && frame.maxY < endFrame.minY)
+        }
+        let two = try #require(find(UIButton.self, in: pad.view) { $0.accessibilityIdentifier == "dtmfKey_2" })
+        #expect(abs(two.convert(two.bounds, to: screen.view).midX - endFrame.midX) < 1)
+        let one = try #require(find(UIButton.self, in: pad.view) { $0.accessibilityIdentifier == "dtmfKey_1" })
+        #expect(abs(one.convert(one.bounds, to: screen.view).midX - more.convert(more.bounds, to: screen.view).midX) < 1)
+        store.send(.activeCall(.view(.keypadHideTapped)))
+        screen.render()
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(screen.children.isEmpty)
+        #expect(more.superview?.superview?.alpha == 1)
+    }
+
+    private func find<T: UIView>(_ type: T.Type, in view: UIView, matching: (T) -> Bool = { _ in true }) -> T? {
+        if let result = view as? T, matching(result) { return result }
+        return view.subviews.compactMap { find(type, in: $0, matching: matching) }.first
     }
 }

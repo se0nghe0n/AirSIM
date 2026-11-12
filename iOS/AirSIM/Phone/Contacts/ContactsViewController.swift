@@ -25,7 +25,12 @@ final class ContactsViewController: PhoneTableController, UISearchResultsUpdatin
     override func viewDidLoad() {
         super.viewDidLoad()
         buildSearch()
-        enableRefresh { [weak self] in await self?.send(.refreshPulled).finish() }
+        switch store.mode {
+        case .browse:
+            enableRefresh { [weak self] in await self?.send(.refreshPulled).finish() }
+        case .pick:
+            buildCancelItem()
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -133,7 +138,7 @@ final class ContactsViewController: PhoneTableController, UISearchResultsUpdatin
             id: row.id,
             title: row.name,
             detail: row.phone,
-            disclosure: store.mode == .browse,
+            disclosure: true,
             action: { [weak self] in self?.rowTapped(row) },
             photo: row.photo,
             avatarName: row.name,
@@ -158,6 +163,16 @@ final class ContactsViewController: PhoneTableController, UISearchResultsUpdatin
         search.searchBar.placeholder = "Search name or number"
         navigationItem.searchController = search
         navigationItem.hidesSearchBarWhenScrolling = false
+    }
+
+    /// The picker's sheet otherwise gets a Done item; like a swipe-down, Cancel closes it without a choice.
+    private func buildCancelItem() {
+        let cancel = UIBarButtonItem(
+            title: "Cancel",
+            primaryAction: UIAction { [weak self] _ in self?.cancelTapped() }
+        )
+        cancel.tintColor = .systemBlue
+        navigationItem.leftBarButtonItem = cancel
     }
 
     // MARK: Navigation
@@ -186,6 +201,11 @@ final class ContactsViewController: PhoneTableController, UISearchResultsUpdatin
             guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
             UIApplication.shared.open(url)
         }
+    }
+
+    /// The presentation binding writes the closed picker back to its parent's state.
+    private func cancelTapped() {
+        navigationController?.dismiss(animated: true)
     }
 
     // MARK: UISearchResultsUpdating

@@ -12,8 +12,18 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
 
     let recipient = UITextField()
     let content = UITextView()
-    private let recognized = phoneLabel(size: 14)
+    private let recognizedAvatar = UIImageView()
+    private let recognizedName = phoneLabel()
+    private lazy var recognized = UIStackView(
+        [recognizedAvatar, recognizedName],
+        axis: .horizontal,
+        spacing: Metrics.chipImageSpacing,
+        alignment: .center
+    )
     private let suggestions = UIStackView(axis: .horizontal, spacing: Metrics.suggestionSpacing)
+    private var renderedSuggestions: [ComposerFeature.Suggestion]?
+    private var suggestionHeight: NSLayoutConstraint?
+    private var suggestionSeparator: UIView?
     private let messagePlaceholder = phoneLabel("Message", color: .placeholderText)
     private lazy var contentHeight = content.heightAnchor.constraint(equalToConstant: Metrics.minimumContentHeight)
 
@@ -80,24 +90,61 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
     }
 
     private func renderRecognizedContact() {
-        let name = store.recognizedName
-        recognized.text = name
-        recognized.isHidden = name == nil
-        recognized.accessibilityLabel = name.map { "Recognized contact: \($0)" }
+        let contact = store.recognizedContact
+        recognized.isHidden = contact == nil
+        guard let contact else { return }
+        recognizedName.text = contact.name
+        recognizedAvatar.image = phoneAvatar(name: contact.name, photo: contact.photoData, size: Metrics.chipAvatarSize)
+        recognized.accessibilityLabel = "Recognized contact: \(contact.name)"
     }
 
+    /// Chips are rebuilt only when the list changes, so an unrelated update cannot replace one under a finger.
     private func renderSuggestions() {
+        let current = store.suggestions
+        guard current != renderedSuggestions else { return }
+        renderedSuggestions = current
         for button in suggestions.arrangedSubviews {
             suggestions.removeArrangedSubview(button)
             button.removeFromSuperview()
         }
-        for suggestion in store.suggestions {
-            let button = phoneButton(suggestion.name) { [weak self] in
-                self?.send(.recipientChanged(suggestion.recipient))
-            }
-            button.configuration?.subtitle = suggestion.phone
-            suggestions.addArrangedSubview(button)
+        for suggestion in current {
+            suggestions.addArrangedSubview(suggestionChip(suggestion))
         }
+        // The strip and its lower divider take no room until there is something to suggest.
+        let empty = current.isEmpty
+        suggestionHeight?.constant = empty ? 0 : Metrics.suggestionScrollHeight
+        suggestions.superview?.isHidden = empty
+        suggestionSeparator?.isHidden = empty
+    }
+
+    private func suggestionChip(_ suggestion: ComposerFeature.Suggestion) -> UIButton {
+        var configuration = UIButton.Configuration.filled()
+        configuration.baseBackgroundColor = .secondarySystemGroupedBackground
+        configuration.baseForegroundColor = .label
+        configuration.cornerStyle = .capsule
+        configuration.contentInsets = Metrics.chipInsets
+        configuration.image = phoneAvatar(name: suggestion.name, photo: suggestion.photo, size: Metrics.chipAvatarSize)
+            .withRenderingMode(.alwaysOriginal)
+        configuration.imagePadding = Metrics.chipImageSpacing
+        configuration.titleAlignment = .leading
+        configuration.titlePadding = 1
+        var name = AttributeContainer()
+        name.font = UIFontMetrics(forTextStyle: .footnote).scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))
+        name.foregroundColor = UIColor.label
+        configuration.attributedTitle = AttributedString(suggestion.name, attributes: name)
+        if let phone = suggestion.phone {
+            var number = AttributeContainer()
+            number.font = UIFontMetrics(forTextStyle: .caption2).scaledFont(for: .systemFont(ofSize: 11))
+            number.foregroundColor = UIColor.secondaryLabel
+            configuration.attributedSubtitle = AttributedString(phone, attributes: number)
+        }
+        let chip = UIButton(configuration: configuration)
+        chip.addAction(
+            UIAction { [weak self] _ in self?.send(.recipientChanged(suggestion.recipient)) },
+            for: .touchUpInside
+        )
+        chip.accessibilityLabel = [suggestion.name, suggestion.phone].compactMap { $0 }.joined(separator: ", ")
+        return chip
     }
 
     // MARK: Layout
@@ -140,9 +187,7 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         choose.widthAnchor.constraint(equalToConstant: Metrics.chooseButtonWidth).isActive = true
         let to = phoneLabel("To:", color: .secondaryLabel)
         to.setContentHuggingPriority(.required, for: .horizontal)
-        recognized.setContentHuggingPriority(.required, for: .horizontal)
-        recognized.font = .preferredFont(forTextStyle: .subheadline)
-        recognized.numberOfLines = 1
+        buildRecognizedChip()
         return UIStackView(
             [choose, to, recipient, recognized],
             axis: .horizontal,
@@ -151,21 +196,42 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         )
     }
 
+    /// Avatar and name, at most 130pt wide with the name shrinking to fit, as in the SwiftUI recipient bar.
+    private func buildRecognizedChip() {
+        recognizedName.font = UIFontMetrics(forTextStyle: .subheadline)
+            .scaledFont(for: .systemFont(ofSize: 15, weight: .semibold))
+        recognizedName.numberOfLines = 1
+        recognizedName.adjustsFontSizeToFitWidth = true
+        recognizedName.minimumScaleFactor = 0.8
+        recognizedAvatar.contentMode = .scaleAspectFill
+        NSLayoutConstraint.activate([
+            recognizedAvatar.widthAnchor.constraint(equalToConstant: Metrics.chipAvatarSize),
+            recognizedAvatar.heightAnchor.constraint(equalToConstant: Metrics.chipAvatarSize),
+            recognized.widthAnchor.constraint(lessThanOrEqualToConstant: Metrics.recognizedMaximumWidth),
+        ])
+        recognized.setContentHuggingPriority(.required, for: .horizontal)
+        recognized.isAccessibilityElement = true
+        recognized.isHidden = true
+    }
+
     private func buildSuggestionScroll() -> UIScrollView {
         let scroll = UIScrollView()
         scroll.showsHorizontalScrollIndicator = false
         suggestions.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(suggestions)
         let guide = scroll.contentLayoutGuide
+        // Just below required: the strip collapses to zero height while there are no suggestions.
+        let fillsStrip = suggestions.heightAnchor.constraint(
+            equalTo: scroll.frameLayoutGuide.heightAnchor,
+            constant: -2 * Metrics.suggestionPadding
+        )
+        fillsStrip.priority = .required - 1
         NSLayoutConstraint.activate([
             suggestions.leadingAnchor.constraint(equalTo: guide.leadingAnchor, constant: Metrics.horizontalMargin),
             suggestions.trailingAnchor.constraint(equalTo: guide.trailingAnchor, constant: -Metrics.horizontalMargin),
             suggestions.topAnchor.constraint(equalTo: guide.topAnchor, constant: Metrics.suggestionPadding),
             suggestions.bottomAnchor.constraint(equalTo: guide.bottomAnchor, constant: -Metrics.suggestionPadding),
-            suggestions.heightAnchor.constraint(
-                equalTo: scroll.frameLayoutGuide.heightAnchor,
-                constant: -2 * Metrics.suggestionPadding
-            ),
+            fillsStrip,
         ])
         return scroll
     }
@@ -213,6 +279,7 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
             view.addSubview(part)
         }
         addSeparator(top: recipientBar.bottomAnchor, offset: 0)
+        suggestionSeparator = addSeparator(top: suggestionScroll.bottomAnchor, offset: 0)
         addSeparator(top: entry.topAnchor, offset: -Metrics.entryMargin)
         NSLayoutConstraint.activate([
             recipientBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Metrics.horizontalMargin),
@@ -220,11 +287,15 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
             recipientBar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             recipientBar.heightAnchor.constraint(equalToConstant: Metrics.recipientBarHeight),
         ])
+        let suggestionHeight = suggestionScroll.heightAnchor.constraint(equalToConstant: 0)
+        self.suggestionHeight = suggestionHeight
+        suggestionScroll.isHidden = true
+        suggestionSeparator?.isHidden = true
         NSLayoutConstraint.activate([
             suggestionScroll.topAnchor.constraint(equalTo: recipientBar.bottomAnchor),
             suggestionScroll.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             suggestionScroll.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            suggestionScroll.heightAnchor.constraint(equalToConstant: Metrics.suggestionScrollHeight),
+            suggestionHeight,
         ])
         NSLayoutConstraint.activate([
             entry.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Metrics.horizontalMargin),
@@ -233,7 +304,8 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
         ])
     }
 
-    private func addSeparator(top anchor: NSLayoutYAxisAnchor, offset: CGFloat) {
+    @discardableResult
+    private func addSeparator(top anchor: NSLayoutYAxisAnchor, offset: CGFloat) -> UIView {
         let separator = UIView()
         separator.backgroundColor = UIColor.separator.withAlphaComponent(0.10)
         separator.translatesAutoresizingMaskIntoConstraints = false
@@ -244,6 +316,7 @@ final class MessageComposerViewController: ObservingViewController, UITextViewDe
             separator.heightAnchor.constraint(equalToConstant: Metrics.separatorHeight),
             separator.topAnchor.constraint(equalTo: anchor, constant: offset),
         ])
+        return separator
     }
 
     // MARK: Navigation
@@ -271,6 +344,10 @@ private enum Metrics {
     static let suggestionScrollHeight: CGFloat = 60
     static let suggestionSpacing: CGFloat = 8
     static let suggestionPadding: CGFloat = 8
+    static let chipAvatarSize: CGFloat = 28
+    static let chipImageSpacing: CGFloat = 7
+    static let chipInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
+    static let recognizedMaximumWidth: CGFloat = 130
     static let textInsets = UIEdgeInsets(top: 9, left: 13, bottom: 9, right: 13)
     static let minimumContentHeight: CGFloat = 40
     static let maximumContentHeight: CGFloat = 130

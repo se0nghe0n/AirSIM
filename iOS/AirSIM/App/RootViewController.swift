@@ -245,6 +245,7 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         host.endEditing(true)
         callWindow = window
         window.makeKeyAndVisible()
+        fadeIn(window, content: controller.view)
         // VoiceOver reads every visible window; the call view's modality only hides its siblings in the call window.
         host.accessibilityElementsHidden = true
         callHostWindow = host
@@ -258,16 +259,59 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         if alertController?.hostWindow === window {
             alertController = nil
         }
+        let host = callHostWindow ?? view.window
+        fadeOut(window, over: host)
         window.rootViewController?.dismiss(animated: false)
         window.isHidden = true
         callWindow = nil
-        let host = callHostWindow ?? view.window
         callHostWindow = nil
         host?.accessibilityElementsHidden = false
         host?.makeKey()
         UIAccessibility.post(notification: .screenChanged, argument: nil)
         UIDevice.current.isProximityMonitoringEnabled = false
         setNeedsStatusBarAppearanceUpdate()
+    }
+
+    /// The call surface fades and settles in, as the SwiftUI overlay's opacity and scale transition did.
+    private func fadeIn(_ window: UIWindow, content: UIView) {
+        window.alpha = 0
+        let scales = !UIAccessibility.isReduceMotionEnabled
+        if scales {
+            content.transform = CGAffineTransform(scaleX: CallTransition.scale, y: CallTransition.scale)
+        }
+        UIView.animate(
+            withDuration: CallTransition.duration,
+            delay: 0,
+            options: [.curveEaseInOut, .allowUserInteraction]
+        ) {
+            window.alpha = 1
+            if scales {
+                content.transform = .identity
+            }
+        }
+    }
+
+    /// The call window itself hides at once, so state and VoiceOver move on; a still image of it fades out on top of
+    /// the main window.
+    private func fadeOut(_ window: UIWindow, over host: UIWindow?) {
+        guard let host, window.alpha > 0, let image = window.snapshotView(afterScreenUpdates: false) else { return }
+        image.frame = host.convert(window.bounds, from: window)
+        image.isUserInteractionEnabled = false
+        image.accessibilityElementsHidden = true
+        host.addSubview(image)
+        let scales = !UIAccessibility.isReduceMotionEnabled
+        UIView.animate(
+            withDuration: CallTransition.duration,
+            delay: 0,
+            options: [.curveEaseInOut]
+        ) {
+            image.alpha = 0
+            if scales {
+                image.transform = CGAffineTransform(scaleX: CallTransition.scale, y: CallTransition.scale)
+            }
+        } completion: { _ in
+            image.removeFromSuperview()
+        }
     }
 
     // MARK: Navigation
@@ -296,9 +340,11 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
 
     func openSMSConversation(_ sender: String) {
         loadViewIfNeeded()
+        // Like a tapped row when Messages is already on screen; a tab switch or launch installs the thread at once.
+        let messagesVisible = view.window != nil && tabs.selectedViewController === messages.navigationController
         store.send(.openSMS(sender))
         appliedConversation = sender
-        messages.showConversationIfNeeded(sender)
+        messages.showConversationIfNeeded(sender, animated: messagesVisible)
     }
 
     func consumePendingSMS() {
@@ -350,6 +396,11 @@ final class RootViewController: ObservingViewController, UITabBarControllerDeleg
         store.send(.selectTab(PhoneTab.allCases[tabs.selectedIndex]))
         UISelectionFeedbackGenerator().selectionChanged()
     }
+}
+
+private enum CallTransition {
+    static let duration: TimeInterval = 0.2
+    static let scale: CGFloat = 0.98
 }
 
 #if DEBUG

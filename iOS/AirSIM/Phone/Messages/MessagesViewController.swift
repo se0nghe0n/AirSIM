@@ -108,12 +108,13 @@ final class MessagesViewController: PhoneTableController, UINavigationController
     private var applyingNavigation = false
     private var renderedThreadID: String?
 
-    func openConversation(_ sender: String) {
+    /// A tapped row pushes its thread with the standard transition; routes from links and notifications do not animate.
+    func openConversation(_ sender: String, animated: Bool = true) {
         send(.conversationTapped(sender))
-        showConversationIfNeeded(sender)
+        showConversationIfNeeded(sender, animated: animated)
     }
 
-    func showConversationIfNeeded(_ sender: String) {
+    func showConversationIfNeeded(_ sender: String, animated: Bool = false) {
         guard store.conversation == sender else { return }
         loadViewIfNeeded()
         guard let nav = navigationController else { return }
@@ -126,13 +127,20 @@ final class MessagesViewController: PhoneTableController, UINavigationController
         }
         if let transition = nav.transitionCoordinator {
             transition.animate(alongsideTransition: nil) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.showConversationIfNeeded(sender) }
+                Task { @MainActor [weak self] in self?.showConversationIfNeeded(sender, animated: animated) }
             }
             return
         }
         applyingNavigation = true
         renderedThreadID = sender
-        nav.setViewControllers([self, MessageThreadViewController(store: store, sender: sender)], animated: false)
+        let thread = MessageThreadViewController(store: store, sender: sender)
+        // A hidden tab or a launch that has not reached the window yet applies the route at once.
+        let animates = animated && nav.viewIfLoaded?.window != nil
+        if nav.viewControllers == [self] {
+            nav.pushViewController(thread, animated: animates)
+        } else {
+            nav.setViewControllers([self, thread], animated: animates)
+        }
         applyingNavigation = false
     }
 

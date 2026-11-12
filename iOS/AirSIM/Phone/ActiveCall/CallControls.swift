@@ -1,28 +1,59 @@
 import UIKit
 
+/// Full-bleed atmospheric blue-slate / indigo backdrop matching the native iOS Phone call screen.
 @MainActor
 final class CallBackdropView: UIView {
-    private let topGlow = CAGradientLayer()
-    private let bottomGlow = CAGradientLayer()
+    private let baseGradient = CAGradientLayer()
+    private let upperAtmosphereGlow = CAGradientLayer()
+    private let lowerIndigoGlow = CAGradientLayer()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = UIColor(red: 0.008, green: 0.012, blue: 0.025, alpha: 1)
-        configureGlow(topGlow, color: UIColor.systemBlue.withAlphaComponent(0.24))
-        configureGlow(bottomGlow, color: UIColor.cyan.withAlphaComponent(0.12))
-        layer.addSublayer(topGlow)
-        layer.addSublayer(bottomGlow)
+        backgroundColor = UIColor(red: 0.14, green: 0.17, blue: 0.34, alpha: 1)
+        baseGradient.colors = [
+            UIColor(red: 0.42, green: 0.48, blue: 0.59, alpha: 1).cgColor,
+            UIColor(red: 0.31, green: 0.37, blue: 0.55, alpha: 1).cgColor,
+            UIColor(red: 0.21, green: 0.25, blue: 0.50, alpha: 1).cgColor,
+            UIColor(red: 0.14, green: 0.16, blue: 0.44, alpha: 1).cgColor,
+        ]
+        baseGradient.locations = [0.0, 0.36, 0.72, 1.0]
+        baseGradient.startPoint = CGPoint(x: 0.22, y: 0.0)
+        baseGradient.endPoint = CGPoint(x: 0.78, y: 1.0)
+        layer.addSublayer(baseGradient)
+
+        configureRadialGlow(
+            upperAtmosphereGlow,
+            color: UIColor(red: 0.64, green: 0.72, blue: 0.86, alpha: 0.34)
+        )
+        configureRadialGlow(
+            lowerIndigoGlow,
+            color: UIColor(red: 0.19, green: 0.18, blue: 0.58, alpha: 0.46)
+        )
+        layer.addSublayer(upperAtmosphereGlow)
+        layer.addSublayer(lowerIndigoGlow)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        topGlow.frame = CGRect(x: bounds.width - 420, y: -420, width: 840, height: 840)
-        bottomGlow.frame = CGRect(x: -360, y: bounds.height - 360, width: 720, height: 720)
+        baseGradient.frame = bounds
+        let span = max(bounds.width, bounds.height)
+        upperAtmosphereGlow.frame = CGRect(
+            x: -span * 0.25,
+            y: -span * 0.32,
+            width: span * 1.15,
+            height: span * 1.15
+        )
+        lowerIndigoGlow.frame = CGRect(
+            x: bounds.width - span * 0.85,
+            y: bounds.height - span * 0.72,
+            width: span * 1.1,
+            height: span * 1.1
+        )
     }
 
-    private func configureGlow(_ glow: CAGradientLayer, color: UIColor) {
+    private func configureRadialGlow(_ glow: CAGradientLayer, color: UIColor) {
         glow.type = .radial
         glow.colors = [color.cgColor, UIColor.clear.cgColor]
         glow.startPoint = CGPoint(x: 0.5, y: 0.5)
@@ -30,145 +61,424 @@ final class CallBackdropView: UIView {
     }
 }
 
+/// Translucent Liquid Glass circular hero avatar showing contact photo, monogram, or native silhouette.
 @MainActor
-final class CallCircleControl: UIButton {
-    private let caption = phoneLabel(size: 12, color: UIColor.white.withAlphaComponent(0.88))
-    private let iconView = UIImageView()
-    private let circle = UIView()
-    private var sizeConstraints: [NSLayoutConstraint] = []
-    private let material = UIVisualEffectView(effect: nil)
-    private let gradient = CAGradientLayer()
-    private let isDecision: Bool
+final class CallHeroAvatarView: UIView {
+    private let glassView = UIVisualEffectView(effect: nil)
+    private let photoView = UIImageView()
+    private let monogramLabel = UILabel()
+    private let personImageView = UIImageView()
+    private var currentSize: CGFloat = 180
 
-    init(title: String, icon: String, size: CGFloat, color: UIColor? = nil, action: @escaping () -> Void) {
-        isDecision = color != nil
-        super.init(frame: .zero)
-        let isLarge = size == Metrics.largeSize
-        buildCircle(size: size, color: color, isLarge: isLarge)
-        buildStack(size: size, isLarge: isLarge)
-        update(title: title, icon: icon, tint: color)
-        addAction(UIAction { _ in action() }, for: .touchUpInside)
+    private var personWidthConstraint: NSLayoutConstraint?
+    private var personHeightConstraint: NSLayoutConstraint?
+    private var personCenterYConstraint: NSLayoutConstraint?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        isAccessibilityElement = false
+
+        if #available(iOS 26.0, *) {
+            let glass = UIGlassEffect(style: .regular)
+            glass.tintColor = UIColor.white.withAlphaComponent(0.06)
+            glassView.effect = glass
+            glassView.cornerConfiguration = .capsule()
+        } else {
+            glassView.effect = UIBlurEffect(style: .systemUltraThinMaterialLight)
+            glassView.contentView.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+            glassView.clipsToBounds = true
+            glassView.layer.borderWidth = 1
+            glassView.layer.borderColor = UIColor.white.withAlphaComponent(0.28).cgColor
+        }
+        addPinnedSubview(glassView)
+
+        photoView.contentMode = .scaleAspectFill
+        photoView.clipsToBounds = true
+        photoView.isHidden = true
+        glassView.contentView.addPinnedSubview(photoView)
+
+        monogramLabel.textColor = .white
+        monogramLabel.textAlignment = .center
+        monogramLabel.isHidden = true
+        glassView.contentView.addPinnedSubview(monogramLabel)
+
+        personImageView.image = UIImage(systemName: "person.fill")
+        personImageView.tintColor = UIColor.white.withAlphaComponent(0.94)
+        personImageView.contentMode = .scaleAspectFit
+        personImageView.translatesAutoresizingMaskIntoConstraints = false
+        glassView.contentView.addSubview(personImageView)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let radius = min(bounds.width, bounds.height) / 2
+        photoView.layer.cornerRadius = radius
+        if #unavailable(iOS 26.0) {
+            glassView.layer.cornerRadius = radius
+        }
+    }
+
+    func update(contactName: String?, photo: Data?, size: CGFloat) {
+        currentSize = size
+        ensurePersonConstraints()
+        personWidthConstraint?.constant = size * 0.66
+        personHeightConstraint?.constant = size * 0.66
+        personCenterYConstraint?.constant = size * 0.06
+
+        if let photo, let image = UIImage(data: photo) {
+            photoView.image = image
+            photoView.isHidden = false
+            monogramLabel.isHidden = true
+            personImageView.isHidden = true
+            return
+        }
+
+        photoView.image = nil
+        photoView.isHidden = true
+
+        let initial = contactName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .first
+            .flatMap { $0.isLetter ? String($0).uppercased() : nil }
+
+        if let initial {
+            monogramLabel.text = initial
+            monogramLabel.font = UIFont.systemFont(ofSize: size * 0.42, weight: .semibold).rounded()
+            monogramLabel.isHidden = false
+            personImageView.isHidden = true
+        } else {
+            monogramLabel.isHidden = true
+            personImageView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
+                pointSize: size * 0.56,
+                weight: .regular
+            )
+            personImageView.isHidden = false
+        }
+    }
+
+    private func ensurePersonConstraints() {
+        guard personWidthConstraint == nil else { return }
+        let width = personImageView.widthAnchor.constraint(equalToConstant: currentSize * 0.66)
+        let height = personImageView.heightAnchor.constraint(equalToConstant: currentSize * 0.66)
+        let centerY = personImageView.centerYAnchor.constraint(
+            equalTo: glassView.contentView.centerYAnchor,
+            constant: currentSize * 0.06
+        )
+        personWidthConstraint = width
+        personHeightConstraint = height
+        personCenterYConstraint = centerY
+        NSLayoutConstraint.activate([
+            personImageView.centerXAnchor.constraint(equalTo: glassView.contentView.centerXAnchor),
+            centerY,
+            width,
+            height,
+        ])
+    }
+}
+
+/// Circular control in the 2×3 call grid backed directly by a native `UIButton` using `.glass()` / `.prominentGlass()`.
+@MainActor
+final class CallCircleControl: UIView {
+    private let button = CallMenuButton(type: .system)
+    private let caption = phoneLabel(size: 13, color: UIColor.white.withAlphaComponent(0.95))
+    private var sizeConstraints: [NSLayoutConstraint] = []
+    private var minWidthConstraint: NSLayoutConstraint?
+    private let decisionTint: UIColor?
+    private let showsCaption: Bool
+
+    private var currentTitle: String
+    private var currentIcon: String
+    private var currentTint: UIColor?
+    private var currentIsActive = false
+    private var currentSize: CGFloat
+
+    var isEnabled: Bool {
+        get { button.isEnabled }
+        set {
+            button.isEnabled = newValue
+            caption.alpha = newValue ? 1.0 : Metrics.disabledCaptionAlpha
+        }
+    }
+
+    var controlIdentifier: String? {
+        get { button.accessibilityIdentifier }
+        set { button.accessibilityIdentifier = newValue }
+    }
+
+    var controlAccessibilityValue: String? {
+        get { button.accessibilityValue }
+        set { button.accessibilityValue = newValue }
+    }
+
+    var controlAccessibilityHint: String? {
+        get { button.accessibilityHint }
+        set { button.accessibilityHint = newValue }
+    }
+
+    init(
+        title: String,
+        icon: String,
+        size: CGFloat,
+        color: UIColor? = nil,
+        showsCaption: Bool = true,
+        action: @escaping () -> Void
+    ) {
+        self.decisionTint = color
+        self.showsCaption = showsCaption
+        self.currentTitle = title
+        self.currentIcon = icon
+        self.currentTint = color
+        self.currentSize = size
+        super.init(frame: .zero)
+        let isLarge = size >= Metrics.largeSize && color != nil && showsCaption
+        buildViews(size: size, isLarge: isLarge, action: action)
+        applyButtonConfiguration()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configureMenu(_ menu: UIMenu, onPresentationChanged: @escaping (Bool) -> Void) {
+        button.menu = menu
+        button.showsMenuAsPrimaryAction = true
+        button.preferredMenuElementOrder = .fixed
+        button.onMenuPresentationChanged = onPresentationChanged
+    }
+
+    func presentMenu() {
+        guard #available(iOS 17.4, *), button.window != nil, !button.isHeld else { return }
+        button.performPrimaryAction()
+    }
+
+    func dismissMenu() {
+        button.contextMenuInteraction?.dismissMenu()
+    }
+
+    nonisolated static func captionedWidth(for size: CGFloat) -> CGFloat {
+        max(size + 6, 72)
+    }
+
     func setSize(_ size: CGFloat) {
+        guard currentSize != size else { return }
+        currentSize = size
         for constraint in sizeConstraints {
             constraint.constant = size
         }
-        circle.layer.cornerRadius = size / 2
-        material.layer.cornerRadius = size / 2
+        minWidthConstraint?.constant = showsCaption ? Self.captionedWidth(for: size) : size
+        applyButtonConfiguration()
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        gradient.frame = circle.bounds
-        gradient.cornerRadius = circle.bounds.width / 2
-        material.layer.cornerRadius = circle.bounds.width / 2
-    }
-
-    func update(title: String, icon: String, tint: UIColor?) {
+    func update(
+        title: String,
+        icon: String,
+        tint: UIColor? = nil,
+        isActive: Bool = false,
+        accessibilityTitle: String? = nil
+    ) {
+        currentTitle = title
+        currentIcon = icon
+        currentTint = tint ?? decisionTint
+        currentIsActive = isActive
         caption.text = title
-        iconView.image = UIImage(systemName: icon)
-        accessibilityLabel = title
-        if isDecision, let tint {
-            gradient.colors = [Self.highlight(tint).cgColor, tint.cgColor]
-            circle.backgroundColor = tint
-        } else {
-            circle.backgroundColor = .clear
-            if #available(iOS 26.0, *) {
-                let glass = UIGlassEffect(style: .regular)
-                glass.isInteractive = true
-                glass.tintColor = tint?.withAlphaComponent(Metrics.glassTintAlpha)
-                material.effect = glass
-            } else {
-                material.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
-                material.contentView.backgroundColor = tint?.withAlphaComponent(Metrics.glassTintAlpha)
-            }
+        caption.isHidden = !showsCaption
+        button.accessibilityLabel = accessibilityTitle ?? title
+        if decisionTint != nil {
+            button.accessibilityValue = nil
         }
+        applyButtonConfiguration()
     }
 
-    private func buildCircle(size: CGFloat, color: UIColor?, isLarge: Bool) {
-        if isDecision {
-            circle.layer.insertSublayer(gradient, at: 0)
-        } else {
-            material.frame = circle.bounds
-            material.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            material.clipsToBounds = true
-            circle.addSubview(material)
-        }
-        circle.layer.cornerRadius = size / 2
-        circle.backgroundColor = color ?? UIColor.white.withAlphaComponent(0.12)
-        circle.layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
-        circle.layer.borderWidth = 0.5
-        if isLarge {
-            circle.layer.shadowColor = (color ?? .clear).cgColor
-            circle.layer.shadowOpacity = 0.28
-            circle.layer.shadowRadius = 16
-            circle.layer.shadowOffset = CGSize(width: 0, height: 8)
-        }
-        iconView.tintColor = .white
-        iconView.contentMode = .center
-        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
-            pointSize: isLarge ? Metrics.largeIconSize : Metrics.iconSize,
-            weight: .semibold
+    private func buildViews(size: CGFloat, isLarge: Bool, action: @escaping () -> Void) {
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.accessibilityLabel = currentTitle
+        button.addAction(
+            UIAction { [weak button] _ in
+                guard button?.menu == nil else { return }
+                action()
+            },
+            for: .touchUpInside
         )
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        circle.addSubview(iconView)
         sizeConstraints = [
-            circle.widthAnchor.constraint(equalToConstant: size),
-            circle.heightAnchor.constraint(equalToConstant: size),
+            button.widthAnchor.constraint(equalToConstant: size),
+            button.heightAnchor.constraint(equalToConstant: size),
         ]
         NSLayoutConstraint.activate(sizeConstraints)
-        NSLayoutConstraint.activate([
-            iconView.centerXAnchor.constraint(equalTo: circle.centerXAnchor),
-            iconView.centerYAnchor.constraint(equalTo: circle.centerYAnchor),
-        ])
-    }
 
-    private func buildStack(size: CGFloat, isLarge: Bool) {
+        caption.text = currentTitle
         caption.textAlignment = .center
-        if isLarge {
-            caption.font = .systemFont(ofSize: 15, weight: .medium)
-        }
+        caption.numberOfLines = 1
+        caption.isAccessibilityElement = false
+        caption.font = UIFontMetrics(forTextStyle: .footnote)
+            .scaledFont(for: .systemFont(ofSize: isLarge ? 14 : 13, weight: .medium))
+        caption.isHidden = !showsCaption
+
+        let arranged: [UIView] = showsCaption ? [button, caption] : [button]
         let stack = UIStackView(
-            [circle, caption],
+            arranged,
             axis: .vertical,
             spacing: isLarge ? Metrics.largeCaptionSpacing : Metrics.captionSpacing,
             alignment: .center
         )
-        stack.isUserInteractionEnabled = false
         addPinnedSubview(stack)
-        widthAnchor.constraint(greaterThanOrEqualToConstant: isLarge ? Metrics.largeMinimumWidth : size).isActive = true
-        if isDecision {
-            heightAnchor.constraint(greaterThanOrEqualToConstant: Metrics.decisionMinimumHeight).isActive = true
-        }
+
+        let width = widthAnchor.constraint(
+            greaterThanOrEqualToConstant: showsCaption
+                ? (isLarge ? Metrics.largeMinimumWidth : Self.captionedWidth(for: size)) : size
+        )
+        width.isActive = true
+        minWidthConstraint = width
     }
 
-    private static func highlight(_ color: UIColor) -> UIColor {
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return UIColor(
-            red: red + (1 - red) * 0.12,
-            green: green + (1 - green) * 0.12,
-            blue: blue + (1 - blue) * 0.12,
-            alpha: 1
-        )
+    private func applyButtonConfiguration() {
+        let isDecision = decisionTint != nil
+        let symbolSize = isDecision ? max(22, currentSize * 0.36) : max(20, currentSize * 0.33)
+        let symbolConfig = UIImage.SymbolConfiguration(pointSize: symbolSize, weight: .semibold)
+        var config: UIButton.Configuration
+
+        if let tint = currentTint, isDecision {
+            if #available(iOS 26.0, *) {
+                config = .prominentGlass()
+            } else {
+                config = .filled()
+            }
+            config.baseBackgroundColor = tint
+            config.baseForegroundColor = .white
+        } else if currentIsActive {
+            if #available(iOS 26.0, *) {
+                config = .prominentGlass()
+            } else {
+                config = .filled()
+            }
+            config.baseBackgroundColor = .white
+            config.baseForegroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.28, alpha: 1)
+        } else {
+            if #available(iOS 26.0, *) {
+                config = .glass()
+                if let tint = currentTint {
+                    config.baseBackgroundColor = tint.withAlphaComponent(Metrics.glassTintAlpha)
+                }
+            } else {
+                config = .gray()
+                config.background.backgroundColor =
+                    (currentTint ?? .white).withAlphaComponent(currentTint == nil ? 0.16 : Metrics.glassTintAlpha)
+            }
+            config.baseForegroundColor = .white
+        }
+
+        config.cornerStyle = .capsule
+        let symbol = UIImage(systemName: currentIcon, withConfiguration: symbolConfig)
+        config.image =
+            currentIsActive
+            ? symbol?.withTintColor(config.baseForegroundColor ?? .white, renderingMode: .alwaysOriginal)
+            : symbol
+        config.preferredSymbolConfigurationForImage = symbolConfig
+        config.contentInsets = .zero
+        button.configuration = config
+    }
+}
+
+/// Preserve UIKit's glass-button menu transition and report only its lifecycle to the store.
+@MainActor
+private final class CallMenuButton: UIButton {
+    var onMenuPresentationChanged: ((Bool) -> Void)?
+
+    override func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        willDisplayMenuFor configuration: UIContextMenuConfiguration,
+        animator: (any UIContextMenuInteractionAnimating)?
+    ) {
+        super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)
+        onMenuPresentationChanged?(true)
+    }
+
+    override func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        willEndFor configuration: UIContextMenuConfiguration,
+        animator: (any UIContextMenuInteractionAnimating)?
+    ) {
+        super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+        onMenuPresentationChanged?(false)
+    }
+}
+
+/// Read-only contact summary sheet presented over the call window when "Contact Card" is tapped in `More`.
+@MainActor
+final class CallContactCardViewController: UIViewController {
+    private let contact: ContactStore.Contact
+
+    init(contact: ContactStore.Contact) {
+        self.contact = contact
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Contact Card"
+        navigationItem.largeTitleDisplayMode = .never
+        view.backgroundColor = .systemGroupedBackground
+
+        let scroll = UIScrollView()
+        view.addPinnedSubview(scroll)
+
+        let avatar = UIImageView(image: phoneAvatar(name: contact.name, photo: contact.photoData, size: 84))
+        NSLayoutConstraint.activate([
+            avatar.widthAnchor.constraint(equalToConstant: 84),
+            avatar.heightAnchor.constraint(equalToConstant: 84),
+        ])
+        let nameLabel = phoneLabel(contact.name, size: 24)
+        nameLabel.font = UIFontMetrics(forTextStyle: .title2)
+            .scaledFont(for: .systemFont(ofSize: 24, weight: .semibold))
+        nameLabel.textAlignment = .center
+
+        let cardStack = UIStackView([avatar, nameLabel], axis: .vertical, spacing: 12, alignment: .center)
+        cardStack.setCustomSpacing(20, after: nameLabel)
+
+        let phones = ContactPhoneListPolicy.displayPhones(for: contact.phones)
+        for phone in phones {
+            cardStack.addArrangedSubview(detailRow(title: "Phone", value: phone, symbol: "phone.fill"))
+        }
+        for email in contact.emails where !email.isEmpty {
+            cardStack.addArrangedSubview(detailRow(title: "Email", value: email, symbol: "envelope.fill"))
+        }
+
+        cardStack.translatesAutoresizingMaskIntoConstraints = false
+        scroll.addSubview(cardStack)
+        NSLayoutConstraint.activate([
+            cardStack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 24),
+            cardStack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
+            cardStack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 20),
+            cardStack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -20),
+        ])
+    }
+
+    private func detailRow(title: String, value: String, symbol: String) -> UIView {
+        let box = UIView()
+        box.backgroundColor = .secondarySystemGroupedBackground
+        box.layer.cornerRadius = 14
+        let icon = UIImageView(image: UIImage(systemName: symbol))
+        icon.tintColor = .secondaryLabel
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+        let kind = phoneLabel(title, size: 12, color: .secondaryLabel)
+        let text = phoneLabel(value, size: 16, color: .label)
+        let labels = UIStackView([kind, text], axis: .vertical, spacing: 2, alignment: .leading)
+        let row = UIStackView([icon, labels, UIView()], axis: .horizontal, spacing: 12, alignment: .center)
+        box.addPinnedSubview(row, insets: UIEdgeInsets(top: 12, left: 16, bottom: 12, right: 16))
+        box.widthAnchor.constraint(lessThanOrEqualToConstant: 520).isActive = true
+        return box
     }
 }
 
 private enum Metrics {
     static let largeSize: CGFloat = 76
-    static let iconSize: CGFloat = 24
-    static let largeIconSize: CGFloat = 28
     static let captionSpacing: CGFloat = 7
     static let largeCaptionSpacing: CGFloat = 10
     static let largeMinimumWidth: CGFloat = 96
-    static let decisionMinimumHeight: CGFloat = 108
-    static let glassTintAlpha: CGFloat = 0.24
+    static let glassTintAlpha: CGFloat = 0.28
+    static let disabledCaptionAlpha: CGFloat = 0.48
 }
 
 #if DEBUG
@@ -178,7 +488,7 @@ private enum Metrics {
 
 #Preview("Component · Call Circle Control") {
     AirSIMPreviewFixtures.canvas(
-        CallCircleControl(title: "End", icon: "phone.down.fill", size: 76, color: .systemRed) {},
+        CallCircleControl(title: "End", icon: "phone.down.fill", size: 72, color: .systemRed) {},
         width: 110,
         height: 108,
         dark: true

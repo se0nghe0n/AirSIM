@@ -210,6 +210,12 @@ class PhoneTableController: ObservingViewController, UITableViewDataSource, UITa
         cell.accessoryType = row.disclosure ? .disclosureIndicator : .none
         cell.selectionStyle = row.action != nil && row.enabled ? .default : .none
         cell.accessibilityHint = row.accessibilityHint
+        // Custom row bodies draw their own content, so VoiceOver learns from the cell that a row is unavailable.
+        if row.enabled {
+            cell.accessibilityTraits.remove(.notEnabled)
+        } else {
+            cell.accessibilityTraits.insert(.notEnabled)
+        }
     }
 
     private func listContent(

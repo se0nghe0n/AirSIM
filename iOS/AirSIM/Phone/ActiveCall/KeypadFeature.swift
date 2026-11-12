@@ -7,8 +7,17 @@ struct KeypadFeature {
     struct State: Equatable {
         var digits = ""
 
-        var displayText: String { digits.isEmpty ? "Tap keys to send DTMF tones" : digits }
-        var digitsAccessibilityLabel: String { digits.isEmpty ? "No digits entered" : digits }
+        var showsPlaceholder: Bool { digits.isEmpty }
+        var displayText: String { showsPlaceholder ? "Tap keys to send DTMF tones" : digits }
+        var digitsAccessibilityLabel: String { showsPlaceholder ? "No digits entered" : digits }
+
+        func headerDisplayText(callerFallback: String) -> String {
+            digits.isEmpty ? callerFallback : digits
+        }
+
+        func headerAccessibilityLabel(callerFallback: String) -> String {
+            digits.isEmpty ? "Caller \(callerFallback), no keypad digits entered" : "Keypad digits \(digits)"
+        }
     }
 
     enum Action: ViewAction {

@@ -120,14 +120,19 @@ extension UIFont {
     }
 }
 
+/// A menu picker's trailing value. VoiceOver reads the setting name as its label and the current choice as its value,
+/// as it did for the SwiftUI pickers.
 @MainActor
 final class MenuValueButton: UIButton {
+    let settingName: String
     private let valueLabel = phoneLabel(color: .systemBlue)
     private let symbol = UIImageView()
     private let chevron = UIImageView(image: UIImage(systemName: "chevron.up.chevron.down"))
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init(settingName: String) {
+        self.settingName = settingName
+        super.init(frame: .zero)
+        accessibilityLabel = settingName
         symbol.tintColor = .systemBlue
         symbol.contentMode = .scaleAspectFit
         symbol.widthAnchor.constraint(equalToConstant: MenuValueMetrics.symbolWidth).isActive = true
@@ -151,7 +156,7 @@ final class MenuValueButton: UIButton {
         valueLabel.text = title
         symbol.image = icon.flatMap(UIImage.init(systemName:))
         symbol.isHidden = icon == nil
-        accessibilityLabel = title
+        accessibilityValue = title
         invalidateIntrinsicContentSize()
     }
 
@@ -183,7 +188,7 @@ private enum MenuValueMetrics {
 }
 
 #Preview("Component · Menu Value Button") {
-    let button = MenuValueButton()
+    let button = MenuValueButton(settingName: "Connection Mode")
     button.update(title: "Automatic", icon: "arrow.triangle.branch")
     return AirSIMPreviewFixtures.canvas(button, width: 180, height: 44)
 }

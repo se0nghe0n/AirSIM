@@ -1,14 +1,16 @@
 import ComposableArchitecture
 import UIKit
 
-/// The app's sheet style, built without presenting so state-driven presentation can present it.
+/// The app's sheet style, built without presenting so state-driven presentation can present it. A screen with no
+/// bar buttons of its own gets Done; one that brings its own, such as a Cancel, keeps them.
 @MainActor
 func phoneSheet(_ controller: UIViewController) -> UINavigationController {
     controller.loadViewIfNeeded()
     let nav = UINavigationController(rootViewController: controller)
-    if controller.navigationItem.rightBarButtonItem == nil {
+    let item = controller.navigationItem
+    if item.leftBarButtonItem == nil && item.rightBarButtonItem == nil {
         let done = UIAction { [weak nav] _ in nav?.dismiss(animated: true) }
-        controller.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: done)
+        item.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: done)
     }
     if let sheet = nav.sheetPresentationController {
         sheet.detents = [.medium(), .large()]

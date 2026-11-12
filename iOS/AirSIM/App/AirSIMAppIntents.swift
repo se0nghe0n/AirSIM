@@ -463,6 +463,9 @@ struct AirSIMShortcuts: AppShortcutsProvider {
     }
 }
 
+// ToolIntent first ships in the iOS 27.3 SDK's AppIntents 301.2.7.2.
+// Runtime availability alone cannot hide this protocol from the iOS 27.1 SDK used by Previews.
+#if canImport(AppIntents, _version: 301.2.7.2)
 // Siri may call these as tools. `@AppIntent(.tool)` is itself iOS 27.3-only and cannot mark an iOS 17 type.
 // Check Connection and Sync Messages stay out: they need AirSIM already running, and tools must work whenever called.
 @available(iOS 27.3, *) extension AnswerCurrentAirSIMCallIntent: ToolIntent {}
@@ -474,3 +477,4 @@ struct AirSIMShortcuts: AppShortcutsProvider {
 @available(iOS 27.3, *) extension SendAirSIMCallDigitsIntent: ToolIntent {}
 @available(iOS 27.3, *) extension SetAirSIMConnectionModeIntent: ToolIntent {}
 @available(iOS 27.3, *) extension OpenAirSIMTabIntent: ToolIntent {}
+#endif

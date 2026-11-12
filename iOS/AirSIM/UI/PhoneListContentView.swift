@@ -2,6 +2,8 @@ import UIKit
 
 @MainActor
 final class PhoneListContentView: UIView {
+    /// `subtitleSymbol` draws before the subtitle, e.g. a call's direction; `subtitleAccessibilityLabel` names it.
+    /// `callEnabled` false dims and disables the call button, for a row without a number to call.
     init(
         name: String,
         subtitle: String,
@@ -9,11 +11,21 @@ final class PhoneListContentView: UIView {
         avatarName: String,
         time: String? = nil,
         missed: Bool = false,
-        callAction: (() -> Void)? = nil
+        subtitleSymbol: String? = nil,
+        subtitleAccessibilityLabel: String? = nil,
+        callAction: (() -> Void)? = nil,
+        callEnabled: Bool = true
     ) {
         super.init(frame: .zero)
+        let text = textStack(
+            name: name,
+            subtitle: subtitle,
+            missed: missed,
+            symbol: subtitleSymbol,
+            accessibilityLabel: subtitleAccessibilityLabel
+        )
         let row = UIStackView(
-            [avatarView(name: avatarName, photo: photo), textStack(name: name, subtitle: subtitle, missed: missed)],
+            [avatarView(name: avatarName, photo: photo), text],
             axis: .horizontal,
             spacing: Metrics.avatarSpacing,
             alignment: .center
@@ -22,7 +34,9 @@ final class PhoneListContentView: UIView {
             row.addArrangedSubview(timeLabel(time))
         }
         if let callAction {
-            row.addArrangedSubview(dialButton(callAction))
+            let button = dialButton(callAction)
+            button.isEnabled = callEnabled
+            row.addArrangedSubview(button)
         }
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
@@ -48,14 +62,32 @@ final class PhoneListContentView: UIView {
         return avatar
     }
 
-    private func textStack(name: String, subtitle: String, missed: Bool) -> UIStackView {
+    private func textStack(
+        name: String,
+        subtitle: String,
+        missed: Bool,
+        symbol: String?,
+        accessibilityLabel: String?
+    ) -> UIStackView {
         let title = phoneLabel(name)
         title.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 17, weight: .semibold))
         title.numberOfLines = 1
         title.textColor = missed ? .systemRed : .label
-        let detail = phoneLabel(subtitle, size: 15, color: missed ? .systemRed : .secondaryLabel)
+        let color: UIColor = missed ? .systemRed : .secondaryLabel
+        let detail = phoneLabel(subtitle, size: 15, color: color)
         detail.numberOfLines = 1
-        return UIStackView([title, detail], axis: .vertical, spacing: Metrics.textSpacing)
+        let subtitleRow = UIStackView([detail], axis: .horizontal, spacing: Metrics.symbolSpacing, alignment: .center)
+        if let symbol {
+            let image = UIImageView(image: UIImage(systemName: symbol))
+            image.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .caption2)
+                .applying(UIImage.SymbolConfiguration(weight: .semibold))
+            image.tintColor = color
+            image.setContentHuggingPriority(.required, for: .horizontal)
+            image.isAccessibilityElement = false
+            subtitleRow.insertArrangedSubview(image, at: 0)
+        }
+        detail.accessibilityLabel = accessibilityLabel
+        return UIStackView([title, subtitleRow], axis: .vertical, spacing: Metrics.textSpacing)
     }
 
     private func timeLabel(_ time: String) -> UILabel {
@@ -86,6 +118,7 @@ private enum Metrics {
     static let avatarSize: CGFloat = 50
     static let avatarSpacing: CGFloat = 11
     static let textSpacing: CGFloat = 3
+    static let symbolSpacing: CGFloat = 4
     static let timeWidth: CGFloat = 76
     static let dialButtonSize: CGFloat = 44
 }
@@ -95,10 +128,11 @@ private enum Metrics {
     AirSIMPreviewFixtures.canvas(
         PhoneListContentView(
             name: "Mina Kim",
-            subtitle: "↙ AirSIM Audio",
+            subtitle: "AirSIM Audio",
             photo: nil,
             avatarName: "Mina Kim",
             time: "10:42",
+            subtitleSymbol: "arrow.down.left",
             callAction: {}
         ),
         height: 74

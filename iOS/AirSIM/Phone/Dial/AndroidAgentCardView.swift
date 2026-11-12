@@ -2,12 +2,42 @@ import UIKit
 
 @MainActor
 final class AndroidAgentCardView: UIView {
-    init(agent: AndroidAgentPresentation?, count: Int, cloudEnabled: Bool) {
+    /// Everything the card shows; the Dial screen rebuilds the card only when this changes.
+    struct Content: Equatable {
+        let agent: AndroidAgentPresentation?
+        let count: Int
+        let cloudEnabled: Bool
+
+        /// The card is one button, so VoiceOver hears what it shows in a single label.
+        var accessibilityLabel: String {
+            guard let agent else {
+                return "Paired Android Agents, \(count), No call route is currently available"
+            }
+            var parts = [
+                agent.deviceName,
+                "Current",
+                agent.phoneNumber ?? "Number unavailable",
+                agent.vowlanStatus,
+                agent.cloudStatus(cloudModeEnabled: cloudEnabled),
+                String(localized: agent.agentKindTitle),
+            ]
+            if count > 1 {
+                parts.append("All \(count)")
+            }
+            return parts.joined(separator: ", ")
+        }
+    }
+
+    convenience init(agent: AndroidAgentPresentation?, count: Int, cloudEnabled: Bool) {
+        self.init(content: Content(agent: agent, count: count, cloudEnabled: cloudEnabled))
+    }
+
+    init(content: Content) {
         super.init(frame: .zero)
         let stack = UIStackView(axis: .vertical, spacing: Metrics.sectionSpacing)
-        stack.addArrangedSubview(summaryRow(agent: agent, count: count))
-        if let agent {
-            stack.addArrangedSubview(routesRow(agent: agent, cloudEnabled: cloudEnabled))
+        stack.addArrangedSubview(summaryRow(content))
+        if let agent = content.agent {
+            stack.addArrangedSubview(routesRow(agent: agent, cloudEnabled: content.cloudEnabled))
         }
         let material = UIVisualEffectView(effect: UIBlurEffect(style: .systemThinMaterial))
         material.layer.cornerRadius = Metrics.cornerRadius
@@ -18,15 +48,23 @@ final class AndroidAgentCardView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private func summaryRow(agent: AndroidAgentPresentation?, count: Int) -> UIStackView {
+    private func summaryRow(_ content: Content) -> UIStackView {
         let row = UIStackView(
-            [icon(for: agent), titleAndDetail(agent: agent, count: count)],
+            [icon(for: content.agent), titleAndDetail(agent: content.agent, count: content.count)],
             axis: .horizontal,
             spacing: Metrics.rowSpacing,
             alignment: .center
         )
-        if count > 1 {
-            let all = phoneLabel("All \(count)", size: 12, color: .systemBlue)
+        if content.agent == nil {
+            let chevron = UIImageView(image: UIImage(systemName: "chevron.right"))
+            chevron.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .caption1, scale: .default)
+                .applying(UIImage.SymbolConfiguration(weight: .semibold))
+            chevron.tintColor = .tertiaryLabel
+            chevron.setContentHuggingPriority(.required, for: .horizontal)
+            row.addArrangedSubview(chevron)
+        } else if content.count > 1 {
+            let all = Self.label("All \(content.count)", style: .caption1, size: 12, weight: .semibold)
+            all.textColor = .systemBlue
             all.setContentHuggingPriority(.required, for: .horizontal)
             row.addArrangedSubview(all)
         }
@@ -47,12 +85,15 @@ final class AndroidAgentCardView: UIView {
     }
 
     private func titleAndDetail(agent: AndroidAgentPresentation?, count: Int) -> UIStackView {
-        let title = phoneLabel(agent?.deviceName ?? "Paired Android Agents · \(count)", size: 15)
-        title.font = .systemFont(ofSize: 15, weight: .semibold)
-        title.numberOfLines = 1
+        let title = Self.label(
+            agent?.deviceName ?? "Paired Android Agents · \(count)",
+            style: .subheadline,
+            size: 15,
+            weight: .semibold
+        )
         let titleRow = UIStackView([title], axis: .horizontal, spacing: Metrics.titleSpacing)
         if agent != nil {
-            titleRow.addArrangedSubview(pill("Current", color: .systemGreen))
+            titleRow.addArrangedSubview(Self.pill("Current", color: .systemGreen, weight: .bold))
         }
         titleRow.addArrangedSubview(UIView())
         let detailText =
@@ -61,36 +102,78 @@ final class AndroidAgentCardView: UIView {
             } else {
                 "No call route is currently available"
             }
-        let detail = phoneLabel(detailText, size: 12, color: .secondaryLabel)
-        detail.numberOfLines = 1
+        let detail = Self.label(detailText, style: .caption1, size: 12)
+        detail.textColor = .secondaryLabel
         return UIStackView([titleRow, detail], axis: .vertical, spacing: Metrics.titleToDetailSpacing)
     }
 
     private func routesRow(agent: AndroidAgentPresentation, cloudEnabled: Bool) -> UIStackView {
-        let vowlan = pill(agent.vowlanStatus, color: agent.vowlanOnline ? .systemGreen : .secondaryLabel)
-        let cloud = pill(
-            agent.cloudStatus(cloudModeEnabled: cloudEnabled),
-            color: cloudEnabled && agent.cloudOnline ? .systemGreen : .secondaryLabel
-        )
-        let kind = phoneLabel(String(localized: agent.agentKindTitle), size: 10, color: .secondaryLabel)
+        let kind = Self.label(String(localized: agent.agentKindTitle), style: .caption2, size: 10)
+        kind.textColor = .secondaryLabel
         return UIStackView(
-            [vowlan, cloud, UIView(), kind],
+            Self.transportPills(agent: agent, cloudEnabled: cloudEnabled) + [UIView(), kind],
             axis: .horizontal,
             spacing: Metrics.routeSpacing,
             alignment: .center
         )
     }
 
-    private func pill(_ title: String, color: UIColor) -> UIView {
-        let text = phoneLabel(title, size: 10, color: color)
-        text.font = .systemFont(ofSize: 10, weight: .medium)
-        text.numberOfLines = 1
-        let box = UIStackView([text], axis: .horizontal)
+    // MARK: Shared parts
+
+    /// The VoWLAN and Cloud pills, green while the route is online and enabled, as on the SwiftUI card and sheet.
+    static func transportPills(agent: AndroidAgentPresentation, cloudEnabled: Bool) -> [UIView] {
+        [
+            transportPill(agent.vowlanStatus, online: agent.vowlanOnline, enabled: true),
+            transportPill(
+                agent.cloudStatus(cloudModeEnabled: cloudEnabled),
+                online: agent.cloudOnline,
+                enabled: cloudEnabled
+            ),
+        ]
+    }
+
+    private static func transportPill(_ title: String, online: Bool, enabled: Bool) -> UIView {
+        let color: UIColor = enabled && online ? .systemGreen : .secondaryLabel
+        let dot = UIView()
+        dot.backgroundColor = color
+        dot.layer.cornerRadius = Metrics.dotSize / 2
+        NSLayoutConstraint.activate([
+            dot.widthAnchor.constraint(equalToConstant: Metrics.dotSize),
+            dot.heightAnchor.constraint(equalToConstant: Metrics.dotSize),
+        ])
+        let text = label(title, style: .caption2, size: 10, weight: .medium)
+        text.textColor = color
+        let box = UIStackView([dot, text], axis: .horizontal, spacing: Metrics.dotSpacing, alignment: .center)
+        return capsule(box, color: color)
+    }
+
+    private static func pill(_ title: String, color: UIColor, weight: UIFont.Weight = .medium) -> UIView {
+        let text = label(title, style: .caption2, size: 10, weight: weight)
+        text.textColor = color
+        return capsule(UIStackView([text], axis: .horizontal), color: color)
+    }
+
+    private static func capsule(_ box: UIStackView, color: UIColor) -> UIView {
         box.isLayoutMarginsRelativeArrangement = true
         box.layoutMargins = Metrics.pillPadding
         box.backgroundColor = color.withAlphaComponent(0.1)
         box.layer.cornerRadius = Metrics.pillCornerRadius
+        box.setContentHuggingPriority(.required, for: .horizontal)
         return box
+    }
+
+    /// One line in a Dynamic Type font: the card grows with the text size instead of truncating it.
+    private static func label(
+        _ text: String,
+        style: UIFont.TextStyle,
+        size: CGFloat,
+        weight: UIFont.Weight = .regular
+    ) -> UILabel {
+        let label = phoneLabel(text)
+        label.font = UIFontMetrics(forTextStyle: style).scaledFont(for: .systemFont(ofSize: size, weight: weight))
+        label.adjustsFontForContentSizeCategory = true
+        label.numberOfLines = 1
+        return label
     }
 }
 
@@ -103,6 +186,8 @@ private enum Metrics {
     static let titleSpacing: CGFloat = 6
     static let titleToDetailSpacing: CGFloat = 2
     static let routeSpacing: CGFloat = 8
+    static let dotSize: CGFloat = 6
+    static let dotSpacing: CGFloat = 4
     static let pillPadding = UIEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
     static let pillCornerRadius: CGFloat = 10
 }
@@ -112,6 +197,13 @@ private enum Metrics {
     AirSIMPreviewFixtures.canvas(
         AndroidAgentCardView(agent: AirSIMPreviewFixtures.agents[0], count: 2, cloudEnabled: true),
         height: 94
+    )
+}
+
+#Preview("Component · Android Agent Card · No Route") {
+    AirSIMPreviewFixtures.canvas(
+        AndroidAgentCardView(agent: nil, count: 2, cloudEnabled: true),
+        height: 74
     )
 }
 #endif

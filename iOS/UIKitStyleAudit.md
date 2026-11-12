@@ -172,3 +172,26 @@ retainers, equality identity fields, and Codable or ActivityKit wire fields.
 Debug and Release simulator builds passed. The native suite passed with
 **159 passed, 0 failed, 1 skipped** across 160 test functions; the skip is the TURN case above.
 All 35 previews remain. Tests only for removed code were deleted.
+
+## Baseline deviation fixes (2026-11-05)
+
+A second source comparison against `2ed128b` found behavior and presentation that
+the UIKit screens had changed. These now follow the SwiftUI baseline again:
+
+| Area | Restored behavior |
+| --- | --- |
+| Messages | Opening a conversation, including from an SMS notification, keeps an open composer, its draft and its send; the thread opens beneath it. Tapping a conversation pushes it with the standard animation; a route that arrives while Messages is visible animates too, a tab switch or launch does not. |
+| Composer | Readdressing it during a send keeps Send disabled until that send finishes; success to the earlier recipient keeps it open for the new one without the sent text. Recognized-contact and suggestion chips show avatars; the suggestion strip takes no room when empty and is rebuilt only when its list changes. |
+| Contact picker | Left Cancel, no Done, no pull-to-refresh, disclosure chevrons. |
+| Tabs | `tel:` links and SMS notifications remember the tab they select. |
+| Dial | VoiceOver reads the agent card's name, number, routes and kind; the card's text follows Dynamic Type and its height grows with it. The call button dims to 0.4 only without a number or route. Held Delete keeps deleting after the finger slides off; "+" needs 0.45 s on 0. |
+| Paired agents | Rows show colored VoWLAN/Cloud pills and a green current check. |
+| Recents | Direction symbols, swipe action icons, a refresh spinner, a 0.38 s detail press, and a disabled call button and `notEnabled` trait on rows without a number. |
+| Call | Native iOS Phone Liquid Glass layout: top-center timer/caller header kept clear of folded iPhone Duo's right-edge Dynamic Island, adaptive translucent hero avatar, 2×3 interactive Liquid Glass control grid (`Audio`, disabled `FaceTime`, `Mute` / `More`, `End`, `Keypad`), bottom-left `More` menu (`Call Recording` with busy spinner + conditional `Contact Card`), one-tap `Recording · Stop` pill while active, inline 4×3 Liquid Glass DTMF keypad, red two-line audio error caption, and call-window fade transitions. |
+| Settings | Connection Mode and Appearance menus are announced by setting name with the value; mode entries have icons; the self-test row keeps its title with a spinner; paired devices have a trash button instead of a tap-to-delete row. |
+| Onboarding, Recordings | Full-width bottom actions and a full-height pairing sheet; play and delete errors name the operation. |
+
+Simulator suite: **306 passed, 0 failed** (299 before, plus regression tests for these
+behaviors). The rebuilt screens were rendered on an iPhone 17 simulator and inspected.
+This does not establish VoiceOver, Dynamic Type, iPad multitasking or physical-device
+behavior; those remain manual checks.
