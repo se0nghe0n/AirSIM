@@ -275,6 +275,8 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile boolean mediaStarted;
         private boolean carrierActive;
         private StandaloneWebSocket activeAnnounced;
+        // Survives socket/peer replacement, but never carries into another call or generation.
+        private final CloudCarrierRecovery carrierRecovery = new CloudCarrierRecovery();
 
         CloudSession(Descriptor descriptor) {
             this.descriptor = descriptor;
@@ -295,7 +297,9 @@ final class StandaloneCloudMediaManager implements Closeable {
                     // Overlap call-scoped ICE retrieval with ringing/signaling. Carrier audio
                     // still starts only after Telecom confirms the answer below.
                     prepareWebRTC(owner);
-                    owner.writeText(status("agent_ready", ""));
+                    synchronized (this) {
+                        if (!sendCarrierRecoveryRequired(owner)) owner.writeText(status("agent_ready", ""));
+                    }
                     BridgeLog.info("standalone_cloud_media_connected call_uuid="
                             + DebugRedactor.safeIdentifier(descriptor.callUUID));
                     readLoop(owner);
@@ -329,12 +333,18 @@ final class StandaloneCloudMediaManager implements Closeable {
                 if (control.has("generation") && descriptor.generation != control.optLong("generation", -1)) continue;
                 String action = control.optString("action", "");
                 if (action.startsWith("webrtc_")) {
+                    if (carrierRecovery.isBlocked()) continue;
                     WebRTCCloudPeer peer = webRTC;
                     if (mediaStarted && peer != null && CloudCallMedia.WEBRTC.equals(mediaTransport)) peer.receive(control);
                     continue;
                 }
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
-                if ("answer".equals(action)) mediaTransport = control.optString("media_transport", descriptor.mediaTransport);
+                if ("answer".equals(action)) {
+                    synchronized (this) {
+                        if (sendCarrierRecoveryRequired(owner)) continue;
+                    }
+                    mediaTransport = control.optString("media_transport", descriptor.mediaTransport);
+                }
                 if ("answer".equals(action) && (!CloudCallMedia.WEBRTC.equals(mediaTransport)
                         || !awaitMediaAvailable(owner))) {
                     owner.writeText(status("action_error", "privileged_media_unavailable"));
@@ -373,7 +383,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         }
 
         private synchronized void prepareOutgoingMedia(StandaloneWebSocket owner) throws Exception {
-            if (!running || webSocket != owner) return;
+            if (!running || webSocket != owner || sendCarrierRecoveryRequired(owner)) return;
             if (!CallRepository.canPrepareOutgoingMedia(descriptor.androidID)) {
                 owner.writeText(status("answer_pending", ""));
                 return;
@@ -385,7 +395,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         }
 
         private synchronized void beginMedia(StandaloneWebSocket owner, boolean deferCarrierAudio) {
-            if (!running || webSocket != owner || mediaStarted) return;
+            if (!running || webSocket != owner || mediaStarted || carrierRecovery.isBlocked()) return;
             StandaloneAgentStore.startCloudCallMedia(mediaTransport, () -> {
                 mediaStarted = true;
                 BridgeLog.info("standalone_webrtc_starting call_uuid="
@@ -396,7 +406,7 @@ final class StandaloneCloudMediaManager implements Closeable {
 
         private synchronized void carrierBecameActive() {
             carrierActive = true;
-            if (!running || !mediaStarted || webRTC == null || webSocket == null) return;
+            if (!running || !mediaStarted || webRTC == null || webSocket == null || carrierRecovery.isBlocked()) return;
             webRTC.activateCarrierAudio();
             // Telecom and the agent loop can both report ACTIVE. Announce it once per socket.
             if (activeAnnounced == webSocket) return;
@@ -421,21 +431,43 @@ final class StandaloneCloudMediaManager implements Closeable {
 
         private void prepareWebRTC(StandaloneWebSocket owner) {
             synchronized (this) {
-                if (!running || webSocket != owner || webRTC != null) return;
+                if (!running || webSocket != owner || webRTC != null || carrierRecovery.isBlocked()) return;
                 webRTC = new WebRTCCloudPeer(context, descriptor.callUUID, descriptor.generation,
                         descriptor.relayURL, descriptor.secret, signal -> {
                     if (running && webSocket == owner) owner.writeText(signal.toString());
-                }, () -> closeSocket(owner));
+                }, reason -> mediaFailed(owner, reason));
                 webRTC.prepare();
             }
         }
 
         private void startWebRTC(StandaloneWebSocket owner, boolean deferCarrierAudio) {
             synchronized (this) {
-                if (!running || webSocket != owner) return;
+                if (!running || webSocket != owner || carrierRecovery.isBlocked()) return;
                 prepareWebRTC(owner);
                 if (webRTC != null) webRTC.start(deferCarrierAudio);
             }
+        }
+
+        private synchronized void mediaFailed(StandaloneWebSocket owner, String reason) {
+            // A retired socket cannot spend the current call's retry budget or stop its new peer.
+            if (!running || webSocket != owner) return;
+            if (!carrierRecovery.recordFailure(reason)) {
+                closeSocket(owner);
+                return;
+            }
+            mediaStarted = false;
+            closeSocket(webRTC); webRTC = null;
+            BridgeLog.info("standalone_carrier_recovery_required");
+            // Keep signaling alive: rejecting/ending the real call must still work. A network
+            // reconnect replays this status instead of prefetching credentials or starting audio.
+            try { sendCarrierRecoveryRequired(owner); }
+            catch (Exception error) { closeSocket(owner); }
+        }
+
+        private boolean sendCarrierRecoveryRequired(StandaloneWebSocket owner) throws Exception {
+            if (!carrierRecovery.isBlocked()) return false;
+            owner.writeText(status("agent_media_failed", CloudCarrierRecovery.RECOVERY_REQUIRED));
+            return true;
         }
 
         private String status(String value, String message) throws Exception {

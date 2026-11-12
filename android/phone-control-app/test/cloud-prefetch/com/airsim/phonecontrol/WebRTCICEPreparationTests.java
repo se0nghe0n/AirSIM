@@ -21,6 +21,8 @@ public final class WebRTCICEPreparationTests {
     private static final class Fixture implements AutoCloseable {
         final AtomicInteger requests = new AtomicInteger();
         final AtomicInteger failures = new AtomicInteger();
+        final CountDownLatch failed = new CountDownLatch(1);
+        volatile String failureReason;
         final CountDownLatch requested = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
         final ShizukuBridgeManager bridge = new ShizukuBridgeManager();
@@ -47,7 +49,7 @@ public final class WebRTCICEPreparationTests {
             server.start();
             peer = new WebRTCCloudPeer(new Context(), UUID.randomUUID().toString(), 1,
                     "http://127.0.0.1:" + server.getAddress().getPort(), "fixture-secret",
-                    signal -> {}, failures::incrementAndGet);
+                    signal -> {}, reason -> { failureReason = reason; failures.incrementAndGet(); failed.countDown(); });
         }
 
         public void close() {
@@ -134,6 +136,15 @@ public final class WebRTCICEPreparationTests {
             check(f.bridge.carrierDeferred);
             check(f.bridge.starts.get() == 1 && f.bridge.activations.get() == 1);
             check(f.requests.get() == 1 && f.failures.get() == 0);
+        }
+        // The app-level call manager needs the exact bounded native reason to distinguish carrier
+        // routing failures from transient ICE/network failures without parsing exception text.
+        try (Fixture f = new Fixture()) {
+            f.bridge.failureReason = "carrier_route_inactive";
+            f.peer.start();
+            check(f.failed.await(3, TimeUnit.SECONDS));
+            check("carrier_route_inactive".equals(f.failureReason));
+            check(f.failures.get() == 1);
         }
         System.out.println("WebRTC ICE preparation tests passed (" + checks + " checks)");
     }
