@@ -30,18 +30,17 @@ final class DTMFKeypadViewController: ObservingViewController {
         lessThanOrEqualToConstant: Metrics.initialHeaderMaxWidth
     )
 
-    private lazy var endButton = CallCircleControl(
-        title: "End",
-        icon: "phone.down.fill",
-        size: Metrics.initialKeySize,
-        color: .systemRed,
-        showsCaption: false
-    ) { [weak self] in
-        self?.send(.endButtonTapped)
-    }
-
-    private lazy var hideButton = buildHideButton()
     private var lastBasis: DTMFKeypadLayout.Basis?
+    private var controlSize: CGFloat = 76
+    private var controlSpacing: CGFloat = 32
+
+    func updateControlLayout(size: CGFloat, spacing: CGFloat) {
+        guard controlSize != size || controlSpacing != spacing else { return }
+        controlSize = size
+        controlSpacing = spacing
+        lastBasis = nil
+        viewIfLoaded?.setNeedsLayout()
+    }
 
     // MARK: Lifecycle
 
@@ -70,12 +69,11 @@ final class DTMFKeypadViewController: ObservingViewController {
         super.viewDidLayoutSubviews()
         let basis = DTMFKeypadLayout.Basis(
             boundsSize: view.bounds.size,
-            safeInsets: view.safeAreaInsets,
-            compactWidth: traitCollection.horizontalSizeClass == .compact || view.bounds.width < 520
+            safeInsets: view.safeAreaInsets
         )
         guard basis.boundsSize.width > 0, basis.boundsSize.height > 0, basis != lastBasis else { return }
         lastBasis = basis
-        applyLayout(DTMFKeypadLayout(basis: basis))
+        applyLayout(DTMFKeypadLayout(basis: basis, controlSize: controlSize, controlSpacing: controlSpacing))
     }
 
     // MARK: Rendering
@@ -110,9 +108,9 @@ final class DTMFKeypadViewController: ObservingViewController {
             stack.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: Metrics.sideMargin),
             stack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -Metrics.sideMargin),
         ])
-        let centerY = stack.centerYAnchor.constraint(equalTo: safeArea.centerYAnchor)
-        centerY.priority = .defaultHigh
-        centerY.isActive = true
+        let bottom = stack.bottomAnchor.constraint(equalTo: safeArea.bottomAnchor, constant: -Metrics.bottomMargin)
+        bottom.priority = .defaultHigh
+        bottom.isActive = true
 
         digitsLabel.font = Self.digitsFont(size: Metrics.initialHeaderFontSize, hasEnteredDigits: false)
         digitsLabel.numberOfLines = 1
@@ -149,33 +147,9 @@ final class DTMFKeypadViewController: ObservingViewController {
             addKeypadRow(row)
         }
 
-        endButton.controlIdentifier = "dtmfEndCall"
-        let leftSpacer = UIView()
-        let rightCell = UIView()
-        hideButton.translatesAutoresizingMaskIntoConstraints = false
-        rightCell.addSubview(hideButton)
-        NSLayoutConstraint.activate([
-            hideButton.centerXAnchor.constraint(equalTo: rightCell.centerXAnchor),
-            hideButton.centerYAnchor.constraint(equalTo: rightCell.centerYAnchor),
-            hideButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 56),
-            hideButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 56),
-        ])
-
-        let bottomRow = UIStackView(
-            [leftSpacer, endButton, rightCell],
-            axis: .horizontal,
-            spacing: Metrics.initialColumnSpacing,
-            alignment: .fill,
-            distribution: .fillEqually
-        )
-        addKeypadRow(bottomRow)
-
         if let firstButton = keys.first?.button {
             let height = firstButton.heightAnchor.constraint(equalToConstant: Metrics.initialKeySize)
-            NSLayoutConstraint.activate([
-                height,
-                bottomRow.heightAnchor.constraint(equalTo: firstButton.heightAnchor),
-            ])
+            height.isActive = true
             keyHeightConstraint = height
         }
     }
@@ -223,34 +197,8 @@ final class DTMFKeypadViewController: ObservingViewController {
         return configuration
     }
 
-    private func buildHideButton() -> UIButton {
-        let button = UIButton(type: .system)
-        var configuration = UIButton.Configuration.plain()
-        configuration.baseForegroundColor = .white
-        button.configuration = configuration
-        button.accessibilityLabel = "Hide Keypad"
-        button.accessibilityIdentifier = "dtmfHideKeypad"
-
-        let grid = UIImageView(image: UIImage(systemName: "circle.grid.3x3.fill"))
-        grid.tintColor = .white
-        grid.contentMode = .scaleAspectFit
-        grid.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
-
-        let chevron = UIImageView(image: UIImage(systemName: "chevron.down"))
-        chevron.tintColor = .white
-        chevron.contentMode = .scaleAspectFit
-        chevron.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 11, weight: .bold)
-
-        let iconStack = UIStackView([grid, chevron], axis: .vertical, spacing: 2, alignment: .center)
-        iconStack.isUserInteractionEnabled = false
-        button.addPinnedSubview(iconStack, insets: UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14))
-        button.addAction(UIAction { [weak self] _ in self?.send(.hideButtonTapped) }, for: .touchUpInside)
-        return button
-    }
-
     private func applyLayout(_ layout: DTMFKeypadLayout) {
         keyHeightConstraint?.constant = layout.keySize
-        endButton.setSize(layout.keySize)
         stack.spacing = layout.headerToKeypadSpacing
         keypadStack.spacing = layout.rowSpacing
         for row in keypadRows {
@@ -327,7 +275,6 @@ private struct DTMFKeypadLayout {
     struct Basis: Equatable {
         let boundsSize: CGSize
         let safeInsets: UIEdgeInsets
-        let compactWidth: Bool
 
         var safeHeight: CGFloat {
             max(0, boundsSize.height - safeInsets.top - safeInsets.bottom)
@@ -345,31 +292,18 @@ private struct DTMFKeypadLayout {
     var digitFontSize: CGFloat { min(36, max(24, keySize * 0.41)) }
     var letterFontSize: CGFloat { min(10.5, max(8.5, keySize * 0.115)) }
 
-    init(basis: Basis) {
-        let width = max(320, basis.boundsSize.width)
-        let height = max(440, basis.safeHeight > 0 ? basis.safeHeight : basis.boundsSize.height)
-        let shortHeight = height < 580
-
-        let desiredKeySize: CGFloat = shortHeight ? 64 : (basis.compactWidth ? 82 : 88)
-        let desiredColumnSpacing: CGFloat = shortHeight ? 20 : (basis.compactWidth ? 26 : 32)
-        let desiredRowSpacing: CGFloat = shortHeight ? 12 : 16
-        headerToKeypadSpacing = shortHeight ? 18 : 28
-        headerFontSize = shortHeight ? 38 : 48
-
+    init(basis: Basis, controlSize: CGFloat, controlSpacing: CGFloat) {
+        let width = basis.boundsSize.width
+        let height = basis.safeHeight
+        keySize = controlSize
+        columnSpacing = controlSpacing
+        // The parent owns button geometry. Fit the header and gaps to the remaining content region.
+        headerFontSize = height < 420 ? 32 : 44
+        headerToKeypadSpacing = height < 420 ? 12 : 24
+        let availableForGaps = height - 32 - headerFontSize - headerToKeypadSpacing - keySize * 4
+        rowSpacing = min(16, max(6, floor(availableForGaps / 3)))
         let sideObstruction = max(basis.safeInsets.left, basis.safeInsets.right)
-        let symmetricClearance = max(68, sideObstruction + 16)
-        headerMaxWidth = max(160, min(460, width - symmetricClearance * 2))
-
-        // Keep keypad width clear of folded Duo's right-edge Dynamic Island pill (~390pt) near the top row.
-        let maxSafeKeypadWidth = sideObstruction > 40 ? max(240, width - (sideObstruction + 8) * 2) : width - 56
-        let usableWidth = min(380, max(220, maxSafeKeypadWidth))
-        let maxHorizontalKey = (usableWidth - desiredColumnSpacing * 2) / 3
-        let reservedVertical = headerFontSize + headerToKeypadSpacing + desiredRowSpacing * 4 + 32
-        let maxVerticalKey = (height - reservedVertical) / 5
-
-        keySize = min(desiredKeySize, max(56, floor(min(maxHorizontalKey, maxVerticalKey))))
-        columnSpacing = min(desiredColumnSpacing, max(14, floor((usableWidth - keySize * 3) / 2)))
-        rowSpacing = keySize < 66 ? 11 : desiredRowSpacing
+        headerMaxWidth = max(160, min(460, width - max(68, sideObstruction + 16) * 2))
     }
 }
 
@@ -391,14 +325,6 @@ private enum Metrics {
 #Preview("Call · DTMF Keypad") {
     let store = AirSIMPreviewFixtures.store(callState: "active")
     store.send(.activeCall(.view(.keypadButtonTapped)))
-    let keypad = store.scope(state: \.activeCall.keypad, action: \.activeCall.keypad.presented)!
-    let controller = DTMFKeypadViewController(store: keypad, callerFallback: "114")
-    let host = UIViewController()
-    let backdrop = CallBackdropView()
-    host.view.addPinnedSubview(backdrop)
-    host.addChild(controller)
-    host.view.addPinnedSubview(controller.view)
-    controller.didMove(toParent: host)
-    return host
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 #endif

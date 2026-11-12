@@ -101,15 +101,6 @@ struct ActiveCallFeature {
                 state.isShowingMoreMenu = false
                 return .none
 
-            case .keypad(.presented(.delegate(.endCallTapped))):
-                state.isShowingMoreMenu = false
-                state.keypad = nil
-                return command(.hangup)
-
-            case .keypad(.presented(.delegate(.hideKeypadTapped))):
-                state.keypad = nil
-                return .none
-
             case .keypad:
                 return .none
             }

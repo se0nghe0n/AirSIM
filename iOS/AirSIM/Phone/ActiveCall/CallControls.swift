@@ -182,7 +182,7 @@ final class CallHeroAvatarView: UIView {
 /// Circular control in the 2×3 call grid backed directly by a native `UIButton` using `.glass()` / `.prominentGlass()`.
 @MainActor
 final class CallCircleControl: UIView {
-    private let button = UIButton(type: .system)
+    private let button = CallMenuButton(type: .system)
     private let caption = phoneLabel(size: 13, color: UIColor.white.withAlphaComponent(0.95))
     private var sizeConstraints: [NSLayoutConstraint] = []
     private var minWidthConstraint: NSLayoutConstraint?
@@ -240,6 +240,22 @@ final class CallCircleControl: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    func configureMenu(_ menu: UIMenu, onPresentationChanged: @escaping (Bool) -> Void) {
+        button.menu = menu
+        button.showsMenuAsPrimaryAction = true
+        button.preferredMenuElementOrder = .fixed
+        button.onMenuPresentationChanged = onPresentationChanged
+    }
+
+    func presentMenu() {
+        guard #available(iOS 17.4, *), button.window != nil, !button.isHeld else { return }
+        button.performPrimaryAction()
+    }
+
+    func dismissMenu() {
+        button.contextMenuInteraction?.dismissMenu()
+    }
+
     func setSize(_ size: CGFloat) {
         guard currentSize != size else { return }
         currentSize = size
@@ -273,7 +289,13 @@ final class CallCircleControl: UIView {
     private func buildViews(size: CGFloat, isLarge: Bool, action: @escaping () -> Void) {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.accessibilityLabel = currentTitle
-        button.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        button.addAction(
+            UIAction { [weak button] _ in
+                guard button?.menu == nil else { return }
+                action()
+            },
+            for: .touchUpInside
+        )
         sizeConstraints = [
             button.widthAnchor.constraint(equalToConstant: size),
             button.heightAnchor.constraint(equalToConstant: size),
@@ -342,233 +364,38 @@ final class CallCircleControl: UIView {
         }
 
         config.cornerStyle = .capsule
-        config.image = UIImage(systemName: currentIcon)
+        let symbol = UIImage(systemName: currentIcon, withConfiguration: symbolConfig)
+        config.image =
+            currentIsActive
+            ? symbol?.withTintColor(config.baseForegroundColor ?? .white, renderingMode: .alwaysOriginal)
+            : symbol
         config.preferredSymbolConfigurationForImage = symbolConfig
         config.contentInsets = .zero
         button.configuration = config
     }
 }
 
-/// Structured Liquid Glass `More` menu anchored above the bottom-left `More` button, matching iOS Phone.
+/// Preserve UIKit's glass-button menu transition and report only its lifecycle to the store.
 @MainActor
-final class CallMoreMenuView: UIView {
-    private let card = UIVisualEffectView(effect: nil)
-    private let stack = UIStackView(axis: .vertical, spacing: 4)
-    private let recordingRowButton = CallMoreMenuRowButton()
-    private let divider = UIView()
-    private let contactRowButton = CallMoreMenuRowButton()
+private final class CallMenuButton: UIButton {
+    var onMenuPresentationChanged: ((Bool) -> Void)?
 
-    var onToggleRecording: (() -> Void)?
-    var onOpenContactCard: (() -> Void)?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        accessibilityViewIsModal = true
-        buildCard()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func update(content: ActiveCallContent) {
-        recordingRowButton.configureRecording(
-            title: content.recordingMenuTitle,
-            subtitle: content.recordingMenuSubtitle,
-            isRecording: content.isRecording,
-            isBusy: content.isRecordingBusy,
-            isEnabled: content.canToggleRecording
-        )
-        recordingRowButton.accessibilityLabel = content.isRecording ? "Stop Recording" : "Record"
-        recordingRowButton.accessibilityValue = content.recordingMenuSubtitle
-        recordingRowButton.accessibilityIdentifier = "callMoreRecordRow"
-
-        if let contact = content.contact {
-            divider.isHidden = false
-            contactRowButton.isHidden = false
-            contactRowButton.configureSymbol(
-                title: "Contact Card",
-                subtitle: contact.name,
-                symbol: "person.crop.circle.fill",
-                badgeColor: UIColor(white: 0.22, alpha: 0.85)
-            )
-            contactRowButton.accessibilityLabel = "Contact Card"
-            contactRowButton.accessibilityValue = contact.name
-            contactRowButton.accessibilityIdentifier = "callMoreContactRow"
-        } else {
-            divider.isHidden = true
-            contactRowButton.isHidden = true
-        }
-    }
-
-    private func buildCard() {
-        if #available(iOS 26.0, *) {
-            let glass = UIGlassEffect(style: .regular)
-            glass.isInteractive = true
-            glass.tintColor = UIColor(red: 0.34, green: 0.39, blue: 0.62, alpha: 0.22)
-            card.effect = glass
-            card.cornerConfiguration = .uniformCorners(radius: .fixed(28))
-        } else {
-            card.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
-            card.contentView.backgroundColor = UIColor(red: 0.22, green: 0.26, blue: 0.45, alpha: 0.56)
-            card.layer.cornerRadius = 28
-            card.clipsToBounds = true
-            card.layer.borderWidth = 1
-            card.layer.borderColor = UIColor.white.withAlphaComponent(0.28).cgColor
-        }
-        addPinnedSubview(card)
-
-        recordingRowButton.addAction(UIAction { [weak self] _ in self?.onToggleRecording?() }, for: .touchUpInside)
-        contactRowButton.addAction(UIAction { [weak self] _ in self?.onOpenContactCard?() }, for: .touchUpInside)
-
-        divider.backgroundColor = UIColor.white.withAlphaComponent(0.16)
-        divider.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
-
-        stack.addArrangedSubview(recordingRowButton)
-        stack.addArrangedSubview(divider)
-        stack.addArrangedSubview(contactRowButton)
-        card.contentView.addPinnedSubview(stack, insets: UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12))
-    }
-}
-
-@MainActor
-private final class CallMoreMenuRowButton: UIButton {
-    private let badgeContainer = UIView()
-    private let recordOuterRing = UIView()
-    private let recordInnerDot = UIView()
-    private let symbolView = UIImageView()
-    private let spinner = UIActivityIndicatorView(style: .medium)
-    private let titleLabelView = phoneLabel(size: 17, color: .white)
-    private let subtitleLabelView = phoneLabel(size: 13, color: UIColor.white.withAlphaComponent(0.74))
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        buildRow()
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func configureRecording(
-        title: String,
-        subtitle: String,
-        isRecording: Bool,
-        isBusy: Bool,
-        isEnabled: Bool
+    override func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        willDisplayMenuFor configuration: UIContextMenuConfiguration,
+        animator: (any UIContextMenuInteractionAnimating)?
     ) {
-        self.isEnabled = isEnabled
-        alpha = isEnabled || isBusy ? 1.0 : 0.55
-        titleLabelView.text = title
-        subtitleLabelView.text = subtitle
-        subtitleLabelView.isHidden = subtitle.isEmpty
-
-        symbolView.isHidden = true
-        badgeContainer.backgroundColor = .clear
-        recordOuterRing.isHidden = isBusy
-        recordInnerDot.isHidden = isBusy
-        recordInnerDot.layer.cornerRadius = isRecording ? 6 : 14.5
-        recordInnerDot.transform = isRecording ? CGAffineTransform(scaleX: 0.56, y: 0.56) : .identity
-        if isBusy {
-            spinner.startAnimating()
-        } else {
-            spinner.stopAnimating()
-        }
+        super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)
+        onMenuPresentationChanged?(true)
     }
 
-    func configureSymbol(title: String, subtitle: String, symbol: String, badgeColor: UIColor) {
-        isEnabled = true
-        alpha = 1.0
-        titleLabelView.text = title
-        subtitleLabelView.text = subtitle
-        subtitleLabelView.isHidden = subtitle.isEmpty
-
-        spinner.stopAnimating()
-        recordOuterRing.isHidden = true
-        recordInnerDot.isHidden = true
-        badgeContainer.backgroundColor = badgeColor
-        symbolView.isHidden = false
-        symbolView.image = UIImage(systemName: symbol)
-    }
-
-    private func buildRow() {
-        var rowConfig: UIButton.Configuration
-        if #available(iOS 26.0, *) {
-            rowConfig = .clearGlass()
-        } else {
-            rowConfig = .plain()
-        }
-        rowConfig.cornerStyle = .large
-        rowConfig.contentInsets = .zero
-        configuration = rowConfig
-
-        badgeContainer.isUserInteractionEnabled = false
-        badgeContainer.layer.cornerRadius = 21
-        badgeContainer.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            badgeContainer.widthAnchor.constraint(equalToConstant: 42),
-            badgeContainer.heightAnchor.constraint(equalToConstant: 42),
-        ])
-
-        recordOuterRing.isUserInteractionEnabled = false
-        recordOuterRing.layer.cornerRadius = 21
-        recordOuterRing.layer.borderWidth = 3
-        recordOuterRing.layer.borderColor = UIColor.white.cgColor
-        badgeContainer.addPinnedSubview(recordOuterRing)
-
-        recordInnerDot.isUserInteractionEnabled = false
-        recordInnerDot.backgroundColor = .systemRed
-        recordInnerDot.layer.cornerRadius = 14.5
-        recordInnerDot.translatesAutoresizingMaskIntoConstraints = false
-        badgeContainer.addSubview(recordInnerDot)
-        NSLayoutConstraint.activate([
-            recordInnerDot.centerXAnchor.constraint(equalTo: badgeContainer.centerXAnchor),
-            recordInnerDot.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor),
-            recordInnerDot.widthAnchor.constraint(equalToConstant: 29),
-            recordInnerDot.heightAnchor.constraint(equalToConstant: 29),
-        ])
-
-        symbolView.isUserInteractionEnabled = false
-        symbolView.tintColor = .white
-        symbolView.contentMode = .scaleAspectFit
-        symbolView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)
-        symbolView.translatesAutoresizingMaskIntoConstraints = false
-        badgeContainer.addSubview(symbolView)
-        NSLayoutConstraint.activate([
-            symbolView.centerXAnchor.constraint(equalTo: badgeContainer.centerXAnchor),
-            symbolView.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor),
-        ])
-
-        spinner.color = .white
-        spinner.hidesWhenStopped = true
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        badgeContainer.addSubview(spinner)
-        NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: badgeContainer.centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor),
-        ])
-
-        titleLabelView.font = UIFontMetrics(forTextStyle: .body)
-            .scaledFont(for: .systemFont(ofSize: 17, weight: .semibold))
-        titleLabelView.numberOfLines = 1
-        titleLabelView.isAccessibilityElement = false
-        subtitleLabelView.font = UIFontMetrics(forTextStyle: .footnote)
-            .scaledFont(for: .systemFont(ofSize: 13, weight: .regular))
-        subtitleLabelView.numberOfLines = 2
-        subtitleLabelView.isAccessibilityElement = false
-
-        let textStack = UIStackView(
-            [titleLabelView, subtitleLabelView],
-            axis: .vertical,
-            spacing: 2,
-            alignment: .leading
-        )
-        textStack.isUserInteractionEnabled = false
-
-        let rowStack = UIStackView(
-            [badgeContainer, textStack],
-            axis: .horizontal,
-            spacing: 14,
-            alignment: .center
-        )
-        rowStack.isUserInteractionEnabled = false
-        addPinnedSubview(rowStack, insets: UIEdgeInsets(top: 10, left: 10, bottom: 10, right: 12))
+    override func contextMenuInteraction(
+        _ interaction: UIContextMenuInteraction,
+        willEndFor configuration: UIContextMenuConfiguration,
+        animator: (any UIContextMenuInteractionAnimating)?
+    ) {
+        super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+        onMenuPresentationChanged?(false)
     }
 }
 

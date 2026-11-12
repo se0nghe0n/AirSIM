@@ -200,14 +200,10 @@ enum AirSIMPreviewFixtures {
         state.settings.pairing.services = services
         state.settings.pairing.status = status
 
+        let calls = PreviewCallClient()
         let client = AirSIMClient(
-            snapshots: { [snapshot] in
-                AsyncStream {
-                    $0.yield(snapshot)
-                    $0.finish()
-                }
-            },
-            command: { _ in },
+            snapshots: { await calls.snapshots() },
+            command: { await calls.command($0) },
             sendSMS: { _, _ in .init(success: true) },
             selfTest: {
                 AsyncStream {
@@ -223,7 +219,7 @@ enum AirSIMPreviewFixtures {
             },
             pair: { _, _, _ in "Preview pairing complete. No device was contacted." }
         )
-        return Store(initialState: state) {
+        let store = Store(initialState: state) {
             AirSIMFeature()
         } withDependencies: {
             $0.airSIM = client
@@ -231,6 +227,12 @@ enum AirSIMPreviewFixtures {
             // Freeze the diagnostic refresh loop; only explicit actions update previews.
             $0.continuousClock = TestClock<Duration>()
         }
+        calls.store = store
+        return store
+    }
+
+    static func activeCall(_ store: StoreOf<AirSIMFeature>) -> UIViewController {
+        PreviewActiveCallViewController(store: store)
     }
 
     private static func backendSnapshot(
@@ -310,6 +312,143 @@ enum AirSIMPreviewFixtures {
             size: CGSize(width: width, height: height),
             dark: dark
         )
+    }
+}
+
+/// Commands feed the same root snapshot action as the real backend, without any device services.
+@MainActor
+private final class PreviewCallClient {
+    weak var store: StoreOf<AirSIMFeature>?
+
+    func snapshots() -> AsyncStream<AirSIMSnapshot> {
+        AsyncStream { continuation in
+            if let store { continuation.yield(store.snapshot) }
+            continuation.finish()
+        }
+    }
+
+    func command(_ command: AirSIMCommand) {
+        guard let store, let call = store.snapshot.inAppPresentedCall else { return }
+        var snapshot = store.snapshot
+        switch command {
+        case .answer:
+            guard ["incoming", "waiting"].contains(call.state) else { return }
+            let now = Date()
+            snapshot.inAppPresentedCall = CallRecord(
+                id: call.id,
+                index: call.index,
+                direction: call.direction,
+                state: "active",
+                number: call.number,
+                startedAt: now,
+                updatedAt: now,
+                endedAt: nil,
+                missed: false
+            )
+            let lifecycle = snapshot.callLifecycleSnapshot
+            snapshot.callLifecycleSnapshot = CallLifecycleSnapshot(
+                callID: call.id,
+                callUUID: lifecycle.callUUID,
+                generation: lifecycle.generation,
+                state: .active,
+                source: .app,
+                timestamp: now,
+                traceID: lifecycle.traceID,
+                failure: nil
+            )
+            snapshot.audioActive = true
+            snapshot.callAudioIsActive = true
+            snapshot.callAudioStatusText = "Audio Connected"
+            snapshot.canToggleRecording = true
+        case .reject, .hangup:
+            snapshot.inAppPresentedCall = nil
+            snapshot.callLifecycleSnapshot = .idle
+            snapshot.audioActive = false
+            snapshot.callAudioIsActive = false
+            snapshot.callAudioStatusText = "Call Ended"
+            snapshot.canToggleRecording = false
+            snapshot.isRecording = false
+            snapshot.isRecordingBusy = false
+            snapshot.isMuted = false
+            snapshot.speakerEnabled = false
+            snapshot.audioRoute = "iPhone"
+        case .mute:
+            guard call.state == "active" else { return }
+            snapshot.isMuted.toggle()
+        case .speaker:
+            guard call.state == "active" else { return }
+            snapshot.speakerEnabled.toggle()
+            snapshot.audioRoute = snapshot.speakerEnabled ? "Speaker" : "iPhone"
+        case .recording:
+            guard snapshot.canToggleRecording, !snapshot.isRecordingBusy else { return }
+            snapshot.isRecording.toggle()
+        default:
+            return
+        }
+        store.send(.snapshot(snapshot))
+    }
+}
+
+/// Keeps standalone call previews usable after End/Decline, without presenting a separate app window.
+@MainActor
+private final class PreviewActiveCallViewController: ObservingViewController {
+    private let store: StoreOf<AirSIMFeature>
+    private let initialSnapshot: AirSIMSnapshot
+    private var callController: ActiveCallViewController?
+    private let endedStack = UIStackView(axis: .vertical, spacing: 20, alignment: .center)
+
+    init(store: StoreOf<AirSIMFeature>) {
+        self.store = store
+        initialSnapshot = store.snapshot
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        overrideUserInterfaceStyle = .dark
+        let label = phoneLabel(size: 28, color: .white)
+        label.text = "Call Ended"
+        let reset = UIButton(type: .system)
+        reset.configuration = .filled()
+        reset.configuration?.title = "Restart Preview Call"
+        reset.accessibilityIdentifier = "restartPreviewCall"
+        reset.addAction(
+            UIAction { [weak self] _ in
+                guard let self else { return }
+                self.store.send(.snapshot(self.initialSnapshot))
+            },
+            for: .touchUpInside
+        )
+        endedStack.addArrangedSubview(label)
+        endedStack.addArrangedSubview(reset)
+        endedStack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(endedStack)
+        NSLayoutConstraint.activate([
+            endedStack.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            endedStack.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+        ])
+        render()
+    }
+
+    override func render() {
+        let hasCall = store.snapshot.inAppPresentedCall != nil
+        endedStack.isHidden = hasCall
+        if hasCall, callController == nil {
+            let child = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+            child.isPresentationPreview = true
+            addChild(child)
+            view.addPinnedSubview(child.view)
+            child.didMove(toParent: self)
+            callController = child
+        } else if !hasCall, let child = callController {
+            child.willMove(toParent: nil)
+            child.view.removeFromSuperview()
+            child.removeFromParent()
+            callController = nil
+        }
     }
 }
 

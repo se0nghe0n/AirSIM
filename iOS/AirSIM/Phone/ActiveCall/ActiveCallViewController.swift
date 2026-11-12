@@ -8,6 +8,7 @@ final class ActiveCallViewController: ObservingViewController {
 
     let store: StoreOf<ActiveCallFeature>
     var call: CallRecord? { store.call }
+    /// Suppresses device proximity monitoring; Live Previews still animate and accept input.
     var isPresentationPreview = false
 
     // MARK: Views
@@ -61,17 +62,6 @@ final class ActiveCallViewController: ObservingViewController {
         self?.send(.speakerButtonTapped)
     }
 
-    private lazy var faceTimeControl: CallCircleControl = {
-        let control = CallCircleControl(
-            title: "FaceTime",
-            icon: "questionmark.video.fill",
-            size: Metrics.initialControlSize
-        ) {}
-        control.isEnabled = false
-        control.controlAccessibilityHint = "Video calling is not supported on AirSIM"
-        return control
-    }()
-
     private lazy var muteControl = CallCircleControl(
         title: "Mute",
         icon: "mic.slash.fill",
@@ -102,7 +92,8 @@ final class ActiveCallViewController: ObservingViewController {
         icon: "circle.grid.3x3.fill",
         size: Metrics.initialControlSize
     ) { [weak self] in
-        self?.send(.keypadButtonTapped)
+        guard let self else { return }
+        self.send(self.store.keypad == nil ? .keypadButtonTapped : .keypadHideTapped)
     }
 
     private lazy var declineControl = CallCircleControl(
@@ -123,9 +114,8 @@ final class ActiveCallViewController: ObservingViewController {
         self?.send(.answerButtonTapped)
     }
 
-    private let moreDismissBackdrop = UIButton(type: .custom)
-    private let moreMenuView = CallMoreMenuView()
     private var keypadController: DTMFKeypadViewController?
+    private var keypadAnimator: UIViewPropertyAnimator?
 
     // MARK: Constraints & State
 
@@ -157,14 +147,6 @@ final class ActiveCallViewController: ObservingViewController {
         equalTo: mainContainer.safeAreaLayoutGuide.bottomAnchor,
         constant: -Metrics.initialBottomInset
     )
-    private lazy var moreMenuWidthConstraint = moreMenuView.widthAnchor.constraint(
-        equalToConstant: Metrics.moreMenuMaxWidth
-    )
-    private lazy var moreMenuLeadingConstraint = moreMenuView.leadingAnchor.constraint(
-        equalTo: view.leadingAnchor,
-        constant: 20
-    )
-
     private var durationTimer: RepeatingTimer?
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
@@ -180,7 +162,6 @@ final class ActiveCallViewController: ObservingViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.isUserInteractionEnabled = !isPresentationPreview
         overrideUserInterfaceStyle = .dark
         view.accessibilityViewIsModal = true
         buildBackdrop()
@@ -189,7 +170,6 @@ final class ActiveCallViewController: ObservingViewController {
         buildCenter()
         buildBottomControls()
         buildMainLayout()
-        buildMoreOverlay()
         startDurationTimer()
         registerForTraitChanges([UITraitHorizontalSizeClass.self, UITraitPreferredContentSizeCategory.self]) {
             (controller: Self, _) in
@@ -204,6 +184,11 @@ final class ActiveCallViewController: ObservingViewController {
         let basis = currentLayoutBasis
         guard basis.boundsSize.width > 0, basis.boundsSize.height > 0, layoutBasis != basis else { return }
         render()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if let content = store.content { renderMoreMenu(content) }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -246,7 +231,7 @@ final class ActiveCallViewController: ObservingViewController {
         renderCenter(content, layout: layout)
         renderControls(content)
         renderMoreMenu(content)
-        renderInlineKeypad(content)
+        renderInlineKeypad(content, layout: layout)
 
         if !isPresentationPreview {
             UIDevice.current.isProximityMonitoringEnabled = content.monitorsProximity
@@ -268,14 +253,12 @@ final class ActiveCallViewController: ObservingViewController {
         connectedGrid.spacing = layout.rowSpacing
         connectedRow1.spacing = layout.columnSpacing
         connectedRow2.spacing = layout.columnSpacing
-        gridWidthConstraint.constant = layout.gridWidth
+        gridWidthConstraint.constant = max(layout.controlSize + 6, 72) * 2 + layout.columnSpacing
         gridRow2WidthConstraint.constant = layout.gridWidth
         incomingDecisionsWidthConstraint.constant = layout.decisionsWidth
         bottomInsetConstraint.constant = -layout.bottomInset
-        moreMenuWidthConstraint.constant = layout.moreMenuWidth
-        moreMenuLeadingConstraint.constant = layout.moreMenuLeading
 
-        for control in [audioControl, faceTimeControl, muteControl, moreControl, endControl, keypadControl] {
+        for control in [audioControl, muteControl, moreControl, endControl, keypadControl] {
             control.setSize(layout.controlSize)
         }
     }
@@ -359,14 +342,6 @@ final class ActiveCallViewController: ObservingViewController {
         audioControl.controlAccessibilityValue = content.speakerEnabled ? "Speaker On" : "Receiver"
         audioControl.controlIdentifier = "callAudioControl"
 
-        faceTimeControl.update(
-            title: "FaceTime",
-            icon: "questionmark.video.fill",
-            isActive: false,
-            accessibilityTitle: "FaceTime"
-        )
-        faceTimeControl.controlIdentifier = "callFaceTimeControl"
-
         muteControl.update(
             title: "Mute",
             icon: "mic.slash.fill",
@@ -375,77 +350,66 @@ final class ActiveCallViewController: ObservingViewController {
         )
         muteControl.controlIdentifier = "callMuteControl"
 
-        let moreActive = store.isShowingMoreMenu
         moreControl.update(
             title: "More",
             icon: "ellipsis",
-            isActive: moreActive,
+            isActive: false,
             accessibilityTitle: "More"
         )
         moreControl.controlIdentifier = "callMoreControl"
 
         endControl.controlIdentifier = "callEndControl"
+        let showsKeypad = store.keypad != nil
+        keypadControl.update(
+            title: showsKeypad ? "Hide" : "Keypad",
+            icon: showsKeypad ? "chevron.down" : "circle.grid.3x3.fill",
+            isActive: false,
+            accessibilityTitle: showsKeypad ? "Hide Keypad" : "Keypad"
+        )
         keypadControl.controlIdentifier = "callKeypadControl"
     }
 
     private func renderMoreMenu(_ content: ActiveCallContent) {
-        moreMenuView.update(content: content)
-        let shouldShow = store.isShowingMoreMenu && !content.isIncoming && store.keypad == nil
-        mainContainer.accessibilityElementsHidden = shouldShow || store.keypad != nil
-        guard shouldShow != lastMoreVisible else {
-            moreDismissBackdrop.isHidden = !shouldShow
-            moreMenuView.isHidden = !shouldShow
-            return
+        let record = UIAction(
+            title: content.recordingMenuTitle,
+            subtitle: content.recordingMenuSubtitle,
+            image: UIImage(systemName: content.isRecording ? "stop.circle" : "record.circle"),
+            identifier: UIAction.Identifier("callRecording"),
+            attributes: content.canToggleRecording ? [] : [.disabled]
+        ) { [weak self] _ in self?.send(.recordButtonTapped) }
+        var actions: [UIMenuElement] = [record]
+        if let contact = content.contact {
+            actions.append(
+                UIAction(
+                    title: "Contact Card",
+                    subtitle: contact.name,
+                    image: UIImage(systemName: "person.crop.circle"),
+                    identifier: UIAction.Identifier("callContactCard")
+                ) { [weak self] _ in self?.presentContactCard() }
+            )
         }
+        let menu = UIMenu(children: actions)
+        menu.preferredElementSize = .large
+        moreControl.configureMenu(menu) { [weak self] visible in
+            guard let self else { return }
+            self.lastMoreVisible = visible
+            if visible && !self.store.isShowingMoreMenu {
+                self.send(.moreButtonTapped)
+            } else if !visible && self.store.isShowingMoreMenu {
+                self.send(.moreMenuDismissed)
+            }
+        }
+        let shouldShow = store.isShowingMoreMenu && !content.isIncoming && store.keypad == nil
+        guard view.window != nil, shouldShow != lastMoreVisible else { return }
         lastMoreVisible = shouldShow
-        let animated = view.window != nil && !UIAccessibility.isReduceMotionEnabled && !isPresentationPreview
         if shouldShow {
-            moreDismissBackdrop.isHidden = false
-            moreMenuView.isHidden = false
-            if animated {
-                moreDismissBackdrop.alpha = 0
-                moreMenuView.alpha = 0
-                moreMenuView.transform = CGAffineTransform(scaleX: 0.92, y: 0.92).translatedBy(x: -8, y: 18)
-                UIView.animate(
-                    springDuration: 0.24,
-                    bounce: 0.18,
-                    options: [.allowUserInteraction, .beginFromCurrentState]
-                ) {
-                    self.moreDismissBackdrop.alpha = 1
-                    self.moreMenuView.alpha = 1
-                    self.moreMenuView.transform = .identity
-                }
-            } else {
-                moreDismissBackdrop.alpha = 1
-                moreMenuView.alpha = 1
-                moreMenuView.transform = .identity
-            }
-            UIAccessibility.post(notification: .layoutChanged, argument: moreMenuView)
-        } else if animated {
-            UIView.animate(
-                withDuration: 0.16,
-                delay: 0,
-                options: [.curveEaseIn, .allowUserInteraction, .beginFromCurrentState]
-            ) {
-                self.moreDismissBackdrop.alpha = 0
-                self.moreMenuView.alpha = 0
-                self.moreMenuView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94).translatedBy(x: 0, y: 12)
-            } completion: { _ in
-                guard !self.lastMoreVisible else { return }
-                self.moreDismissBackdrop.isHidden = true
-                self.moreMenuView.isHidden = true
-                self.moreMenuView.transform = .identity
-            }
+            moreControl.presentMenu()
         } else {
-            moreDismissBackdrop.isHidden = true
-            moreMenuView.isHidden = true
-            moreDismissBackdrop.alpha = 0
-            moreMenuView.alpha = 0
-            moreMenuView.transform = .identity
+            moreControl.dismissMenu()
         }
     }
 
-    private func renderInlineKeypad(_ content: ActiveCallContent) {
+    private func renderInlineKeypad(_ content: ActiveCallContent, layout: CallLayout) {
         let keypadStore: StoreOf<KeypadFeature>? = store.scope(state: \.keypad, action: \.keypad.presented)
         let shouldShow = keypadStore != nil && !content.isIncoming
         let fallbackText = content.number ?? content.name
@@ -457,66 +421,83 @@ final class ActiveCallViewController: ObservingViewController {
                 let controller = DTMFKeypadViewController(store: keypadStore, callerFallback: fallbackText)
                 addChild(controller)
                 controller.view.translatesAutoresizingMaskIntoConstraints = false
-                view.addSubview(controller.view)
+                mainContainer.addSubview(controller.view)
                 NSLayoutConstraint.activate([
                     controller.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                     controller.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                    controller.view.topAnchor.constraint(equalTo: view.topAnchor),
-                    controller.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    controller.view.topAnchor.constraint(equalTo: mainContainer.safeAreaLayoutGuide.topAnchor),
+                    controller.view.bottomAnchor.constraint(equalTo: connectedRow2.topAnchor, constant: -12),
                 ])
                 controller.didMove(toParent: self)
                 keypadController = controller
             }
+            keypadController?.updateControlLayout(size: layout.controlSize, spacing: layout.columnSpacing)
         }
 
-        guard shouldShow != lastKeypadVisible else {
-            mainContainer.isHidden = shouldShow
-            return
-        }
+        guard shouldShow != lastKeypadVisible else { return }
+        // Finish the previous transition before reusing/removing its child on a rapid reversal.
+        keypadAnimator?.stopAnimation(false)
+        keypadAnimator?.finishAnimation(at: .end)
+        keypadAnimator = nil
         lastKeypadVisible = shouldShow
-        let animated = view.window != nil && !UIAccessibility.isReduceMotionEnabled && !isPresentationPreview
+        let animated = view.window != nil && UIView.areAnimationsEnabled && !UIAccessibility.isReduceMotionEnabled
 
         if shouldShow, let keypadView = keypadController?.view {
-            if animated {
-                keypadView.alpha = 0
-                keypadView.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
-                mainContainer.isHidden = false
-                UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
-                    self.mainContainer.alpha = 0
-                    keypadView.alpha = 1
-                    keypadView.transform = .identity
-                } completion: { _ in
-                    self.mainContainer.isHidden = self.lastKeypadVisible
-                    self.mainContainer.alpha = 1
-                }
-            } else {
-                mainContainer.isHidden = true
-                mainContainer.alpha = 1
+            view.layoutIfNeeded()
+            keypadView.alpha = 0
+            keypadView.transform = CGAffineTransform(scaleX: 0.94, y: 0.94).translatedBy(x: 0, y: 18)
+            let changes = {
+                self.setCallDetailsVisible(false)
                 keypadView.alpha = 1
                 keypadView.transform = .identity
             }
-            UIAccessibility.post(notification: .screenChanged, argument: keypadController?.view)
+            let completion = {
+                self.keypadAnimator = nil
+                UIAccessibility.post(notification: .screenChanged, argument: keypadView)
+            }
+            if animated {
+                let animator = UIViewPropertyAnimator(duration: 0.34, dampingRatio: 0.9, animations: changes)
+                keypadAnimator = animator
+                animator.addCompletion { _ in completion() }
+                animator.startAnimation()
+            } else {
+                changes()
+                completion()
+            }
         } else if let departing = keypadController {
             keypadController = nil
-            mainContainer.isHidden = false
-            if animated {
-                mainContainer.alpha = 0
-                UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
-                    self.mainContainer.alpha = 1
-                    departing.view.alpha = 0
-                    departing.view.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
-                } completion: { _ in
-                    departing.willMove(toParent: nil)
-                    departing.view.removeFromSuperview()
-                    departing.removeFromParent()
-                }
-            } else {
-                mainContainer.alpha = 1
+            departing.view.isUserInteractionEnabled = false
+            let changes = {
+                self.setCallDetailsVisible(true)
+                departing.view.alpha = 0
+                departing.view.transform = CGAffineTransform(scaleX: 0.94, y: 0.94).translatedBy(x: 0, y: 18)
+            }
+            let completion = {
                 departing.willMove(toParent: nil)
                 departing.view.removeFromSuperview()
                 departing.removeFromParent()
+                self.keypadAnimator = nil
+                UIAccessibility.post(notification: .screenChanged, argument: self.keypadControl)
             }
-            UIAccessibility.post(notification: .screenChanged, argument: keypadControl)
+            if animated {
+                let animator = UIViewPropertyAnimator(duration: 0.3, dampingRatio: 0.9, animations: changes)
+                keypadAnimator = animator
+                animator.addCompletion { _ in completion() }
+                animator.startAnimation()
+            } else {
+                changes()
+                completion()
+            }
+        }
+    }
+
+    /// Only the call details and auxiliary controls give way to DTMF; End stays in its original row.
+    private func setCallDetailsVisible(_ visible: Bool) {
+        for part in [headerStack, centerStack, connectedRow1, moreControl] {
+            part.alpha = visible ? 1 : 0
+            part.transform = visible ? .identity : CGAffineTransform(scaleX: 1.04, y: 1.04)
+            part.isUserInteractionEnabled = visible
+            part.accessibilityElementsHidden = !visible
         }
     }
 
@@ -622,7 +603,7 @@ final class ActiveCallViewController: ObservingViewController {
     }
 
     private func buildBottomControls() {
-        for control in [audioControl, faceTimeControl, muteControl] {
+        for control in [audioControl, muteControl] {
             connectedRow1.addArrangedSubview(control)
         }
         for control in [moreControl, endControl, keypadControl] {
@@ -717,42 +698,6 @@ final class ActiveCallViewController: ObservingViewController {
         ])
     }
 
-    private func buildMoreOverlay() {
-        moreDismissBackdrop.backgroundColor = UIColor.black.withAlphaComponent(0.14)
-        moreDismissBackdrop.isHidden = true
-        moreDismissBackdrop.accessibilityLabel = "Dismiss More Menu"
-        moreDismissBackdrop.accessibilityIdentifier = "callMoreDismissBackdrop"
-        moreDismissBackdrop.addAction(UIAction { [weak self] _ in self?.send(.moreMenuDismissed) }, for: .touchUpInside)
-        view.addPinnedSubview(moreDismissBackdrop)
-
-        moreMenuView.isHidden = true
-        moreMenuView.accessibilityIdentifier = "callMoreMenuCard"
-        moreMenuView.onToggleRecording = { [weak self] in
-            self?.send(.recordButtonTapped)
-        }
-        moreMenuView.onOpenContactCard = { [weak self] in
-            self?.presentContactCard()
-        }
-        moreMenuView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(moreMenuView)
-
-        let safeArea = view.safeAreaLayoutGuide
-        moreMenuLeadingConstraint.priority = .defaultHigh
-
-        let bottomAlign = moreMenuView.bottomAnchor.constraint(equalTo: connectedRow2.bottomAnchor, constant: 4)
-        bottomAlign.priority = .defaultHigh
-
-        NSLayoutConstraint.activate([
-            moreMenuWidthConstraint,
-            moreMenuLeadingConstraint,
-            bottomAlign,
-            moreMenuView.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
-            moreMenuView.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
-            moreMenuView.bottomAnchor.constraint(lessThanOrEqualTo: safeArea.bottomAnchor, constant: -16),
-            moreMenuView.topAnchor.constraint(greaterThanOrEqualTo: safeArea.topAnchor, constant: 24),
-        ])
-    }
-
     // MARK: Actions & Navigation
 
     private func presentContactCard() {
@@ -798,8 +743,6 @@ private struct CallLayout {
     let gridWidth: CGFloat
     let decisionsWidth: CGFloat
     let bottomInset: CGFloat
-    let moreMenuWidth: CGFloat
-    let moreMenuLeading: CGFloat
 
     init(
         basis: Basis,
@@ -845,9 +788,6 @@ private struct CallLayout {
         let minAvatar: CGFloat = short ? 92 : 132
         avatarSize = min(maxAvatar, max(minAvatar, floor(availableForAvatar)))
 
-        moreMenuWidth = min(344, max(248, width - 56))
-        let gridLeading = (width - gridWidth) / 2
-        moreMenuLeading = compact ? 18 : max(20, gridLeading - 16)
     }
 }
 
@@ -898,7 +838,6 @@ private enum Metrics {
     static let initialGridWidth: CGFloat = 272
     static let initialDecisionsWidth: CGFloat = 280
     static let initialBottomInset: CGFloat = 18
-    static let moreMenuMaxWidth: CGFloat = 320
     static let audioErrorAlpha: CGFloat = 0.94
     static let phaseTransitionDuration: TimeInterval = 0.2
 }
@@ -906,32 +845,24 @@ private enum Metrics {
 #if DEBUG
 #Preview("Call · Connected (114 Silhouette)") {
     let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return controller
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 
 #Preview("Call · More Menu Open") {
     let store = AirSIMPreviewFixtures.store(callState: "active")
     store.send(.activeCall(.view(.moreButtonTapped)))
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return controller
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 
 #Preview("Call · Recording Active") {
     let store = AirSIMPreviewFixtures.store(callState: "active", isRecording: true)
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return controller
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 
 #Preview("Call · In-Call Keypad") {
     let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
     store.send(.activeCall(.view(.keypadButtonTapped)))
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return controller
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 
 #Preview("Call · In-Call Keypad (Digits Entered)") {
@@ -940,23 +871,17 @@ private enum Metrics {
     for digit in ["1", "1", "1", "1", "2", "3", "4", "5", "6"] {
         store.send(.activeCall(.keypad(.presented(.view(.digitTapped(digit))))))
     }
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return controller
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 
 #Preview("Call · Folded Duo Proportion (352×512)") {
     let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
     store.send(.activeCall(.view(.moreButtonTapped)))
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return AirSIMPreviewFixtures.canvas(controller, width: 352, height: 512, dark: true)
+    return AirSIMPreviewFixtures.canvas(AirSIMPreviewFixtures.activeCall(store), width: 352, height: 512, dark: true)
 }
 
 #Preview("Call · Incoming") {
     let store = AirSIMPreviewFixtures.store(callState: "incoming")
-    let controller = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
-    controller.isPresentationPreview = true
-    return controller
+    return AirSIMPreviewFixtures.activeCall(store)
 }
 #endif

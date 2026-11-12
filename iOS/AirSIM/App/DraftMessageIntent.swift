@@ -49,4 +49,7 @@ struct DraftAirSIMMessageIntent: AppIntent {
     }
 }
 
+// Match the SDK gate for the other Siri tools in AirSIMAppIntents.swift.
+#if canImport(AppIntents, _version: 301.2.7.2)
 @available(iOS 27.3, *) extension DraftAirSIMMessageIntent: ToolIntent {}
+#endif

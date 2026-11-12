@@ -22,18 +22,9 @@ struct KeypadFeature {
 
     enum Action: ViewAction {
         case view(View)
-        case delegate(Delegate)
 
         enum View {
             case digitTapped(String)
-            case endButtonTapped
-            case hideButtonTapped
-        }
-
-        @CasePathable
-        enum Delegate: Equatable {
-            case endCallTapped
-            case hideKeypadTapped
         }
     }
 
@@ -46,15 +37,6 @@ struct KeypadFeature {
                 state.digits = String((state.digits + digit).suffix(18))
                 // sendDTMF reports its own failures through the backend error, which the root alert shows.
                 return .run { [client] _ in try? await client.command(.dtmf(digit)) }
-
-            case .view(.endButtonTapped):
-                return .send(.delegate(.endCallTapped))
-
-            case .view(.hideButtonTapped):
-                return .send(.delegate(.hideKeypadTapped))
-
-            case .delegate:
-                return .none
             }
         }
     }

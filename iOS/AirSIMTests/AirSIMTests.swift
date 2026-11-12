@@ -4276,8 +4276,7 @@ struct ActiveCallFeatureTests {
         await store.send(.view(.moreButtonTapped)) { $0.isShowingMoreMenu = true }
         await store.send(.view(.moreMenuDismissed)) { $0.isShowingMoreMenu = false }
         await store.send(.view(.keypadButtonTapped)) { $0.keypad = KeypadFeature.State() }
-        await store.send(.keypad(.presented(.view(.endButtonTapped))))
-        await store.receive(\.keypad.presented.delegate.endCallTapped) { $0.keypad = nil }
+        await store.send(.view(.endButtonTapped)) { $0.keypad = nil }
         await store.send(.view(.muteButtonTapped))
         await store.send(.view(.speakerButtonTapped))
         await store.finish()
@@ -4332,17 +4331,19 @@ struct ActiveCallFeatureTests {
         shared.withLock { $0.inAppPresentedCall = call("active") }
         _ = try #require(await eventually { button("End", in: screen.view) })
         #expect(button("Accept", in: screen.view) == nil)
-        let faceTime = try #require(button("FaceTime", in: screen.view))
-        #expect(!faceTime.isEnabled)
+        #expect(button("FaceTime", in: screen.view) == nil)
 
-        // Connected 2x3 grid + More Liquid Glass menu for Call Recording.
+        // Connected call controls and the native recording menu.
         for label in ["Mute", "Audio"] {
             try #require(button(label, in: screen.view)).sendActions(for: .touchUpInside)
         }
-        try #require(button("More", in: screen.view)).sendActions(for: .touchUpInside)
-        #expect(store.isShowingMoreMenu)
-        screen.render()
-        try #require(button("Record", in: screen.view)).sendActions(for: .touchUpInside)
+        let more = try #require(button("More", in: screen.view))
+        #expect(more.showsMenuAsPrimaryAction)
+        let record = try #require(more.menu?.children.compactMap { $0 as? UIAction }.first)
+        #expect(record.identifier.rawValue == "callRecording")
+        let actionButton = UIButton(type: .system)
+        actionButton.addAction(record, for: .primaryActionTriggered)
+        actionButton.sendActions(for: .primaryActionTriggered)
         #expect(!store.isShowingMoreMenu)
         screen.render()
 
@@ -4401,15 +4402,10 @@ struct ActiveCallFeatureTests {
             #expect(window.bounds.contains(frameInWindow))
         }
 
-        // Opening More anchors Call Recording in the lower Liquid Glass menu within screen bounds.
-        try #require(button("More", in: screen.view)).sendActions(for: .touchUpInside)
-        screen.render()
-        screen.view.layoutIfNeeded()
-        let recordRow = try #require(button("Record", in: screen.view))
-        let recordFrame = recordRow.convert(recordRow.bounds, to: window)
-        #expect(!recordFrame.intersects(topRightHazard))
-        #expect(recordFrame.minY > window.bounds.midY - 60)
-        #expect(window.bounds.contains(recordFrame))
+        // UIKit owns menu anchoring and safe-area avoidance from this actual glass button.
+        let more = try #require(button("More", in: screen.view))
+        #expect(more.showsMenuAsPrimaryAction && more.menu?.preferredElementSize == .large)
+        #expect(more.menu?.children.compactMap { $0 as? UIAction }.first?.identifier.rawValue == "callRecording")
     }
 
     @Test func `A layout preview call opens the call window while the backend presents no call`() throws {
@@ -5448,10 +5444,10 @@ struct UIKitAdversarialRegressionTests {
         let pad = try #require(await presentKeypad(store, in: callWindow))
         pad.store.send(.view(.digitTapped("7")))
         #expect(store.activeCall.keypad?.digits == "7")
-        pad.store.send(.view(.hideButtonTapped))
+        store.send(.activeCall(.view(.keypadHideTapped)))
         root.activeCallController?.render()
         #expect(store.activeCall.keypad == nil)
-        #expect(pad.parent == nil)
+        #expect(try await eventually { pad.parent == nil ? true : nil } == true)
         let reopened = try #require(await presentKeypad(store, in: callWindow))
         #expect(reopened !== pad && store.activeCall.keypad?.digits == "")
     }
@@ -5818,5 +5814,108 @@ struct UIKitAdversarialRegressionTests {
         thread.render()
         thread.view.layoutIfNeeded()
         #expect(thread.reply.bounds.height == 32)
+    }
+}
+
+@MainActor
+@Suite(.serialized)
+struct InteractiveCallPreviewTests {
+    @Test func mockControlsUpdateOnlyTheirOwnPreview() async {
+        let store = AirSIMPreviewFixtures.store(callState: "active")
+        let other = AirSIMPreviewFixtures.store(callState: "active")
+        await store.send(.activeCall(.view(.muteButtonTapped))).finish()
+        #expect(store.snapshot.isMuted)
+        await store.send(.activeCall(.view(.speakerButtonTapped))).finish()
+        #expect(store.snapshot.speakerEnabled && store.activeCall.content?.status == "Audio Connected · Speaker")
+        await store.send(.activeCall(.view(.recordButtonTapped))).finish()
+        #expect(store.snapshot.isRecording && store.activeCall.content?.showsRecordingPill == true)
+        #expect(!other.snapshot.isMuted && !other.snapshot.speakerEnabled && !other.snapshot.isRecording)
+        await store.send(.activeCall(.view(.muteButtonTapped))).finish()
+        await store.send(.activeCall(.view(.speakerButtonTapped))).finish()
+        await store.send(.activeCall(.view(.recordButtonTapped))).finish()
+        #expect(!store.snapshot.isMuted && !store.snapshot.speakerEnabled && !store.snapshot.isRecording)
+        #expect(store.snapshot.audioRoute == "iPhone")
+    }
+
+    @Test func answerAndEndReconcileCallAndKeypadState() async {
+        let store = AirSIMPreviewFixtures.store(callState: "incoming")
+        let callID = store.activeCall.call?.id
+        await store.send(.activeCall(.view(.answerButtonTapped))).finish()
+        #expect(store.activeCall.call?.id == callID && store.activeCall.call?.state == "active")
+        #expect(store.snapshot.callLifecycleSnapshot.state == .active && store.snapshot.canToggleRecording)
+        await store.send(.activeCall(.view(.recordButtonTapped))).finish()
+        store.send(.activeCall(.view(.keypadButtonTapped)))
+        await store.send(.activeCall(.keypad(.presented(.view(.digitTapped("7")))))).finish()
+        #expect(store.activeCall.keypad?.digits == "7")
+        await store.send(.activeCall(.view(.endButtonTapped))).finish()
+        #expect(store.activeCall.call == nil && store.activeCall.keypad == nil)
+        #expect(store.snapshot.callLifecycleSnapshot == .idle && !store.snapshot.audioActive)
+        #expect(!store.snapshot.isRecording && !store.snapshot.canToggleRecording)
+    }
+
+    @Test func standalonePreviewCanRestartAfterDecline() async throws {
+        let store = AirSIMPreviewFixtures.store(callState: "incoming")
+        let host = try #require(AirSIMPreviewFixtures.activeCall(store) as? ObservingViewController)
+        host.loadViewIfNeeded()
+        #expect(host.children.count == 1)
+        await store.send(.activeCall(.view(.declineButtonTapped))).finish()
+        host.render()
+        #expect(host.children.isEmpty && store.activeCall.call == nil)
+        let reset = try #require(find(UIButton.self, in: host.view) { $0.accessibilityIdentifier == "restartPreviewCall" })
+        reset.sendActions(for: .touchUpInside)
+        host.render()
+        #expect(host.children.count == 1 && store.activeCall.content?.isIncoming == true)
+        #expect(!store.snapshot.isMuted && !store.snapshot.isRecording)
+    }
+
+    @Test(arguments: [CGSize(width: 352, height: 512), CGSize(width: 390, height: 844), CGSize(width: 744, height: 900)])
+    func keypadMatchesCallControlsAndSurvivesReversal(size: CGSize) async throws {
+        let store = AirSIMPreviewFixtures.store(callState: "active", callNumber: "114")
+        let screen = ActiveCallViewController(store: store.scope(state: \.activeCall, action: \.activeCall))
+        screen.isPresentationPreview = true
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        window.rootViewController = screen
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        screen.view.layoutIfNeeded()
+        let more = try #require(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callMoreControl" })
+        let end = try #require(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callEndControl" })
+        let endFrame = end.convert(end.bounds, to: screen.view)
+        #expect(more.showsMenuAsPrimaryAction && more.menu?.preferredElementSize == .large)
+        store.send(.activeCall(.view(.keypadButtonTapped)))
+        screen.render()
+        store.send(.activeCall(.view(.keypadHideTapped)))
+        screen.render()
+        store.send(.activeCall(.view(.keypadButtonTapped)))
+        screen.render()
+        try await Task.sleep(for: .milliseconds(500))
+        let keypads = screen.children.compactMap { $0 as? DTMFKeypadViewController }
+        #expect(keypads.count == 1 && keypads.first?.view.alpha == 1)
+        #expect(find(UIButton.self, in: screen.view) { $0.accessibilityIdentifier == "callEndControl" } === end)
+        #expect(end.convert(end.bounds, to: screen.view) == endFrame)
+        #expect(find(UIButton.self, in: keypads[0].view) { $0.accessibilityLabel == "End" } == nil)
+        #expect(keypads[0].view.convert(keypads[0].view.bounds, to: screen.view).maxY <= endFrame.minY)
+        screen.view.layoutIfNeeded()
+        let pad = try #require(keypads.first)
+        for digit in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"] {
+            let key = try #require(find(UIButton.self, in: pad.view) { $0.accessibilityIdentifier == "dtmfKey_\(digit)" })
+            #expect(abs(key.bounds.width - end.bounds.width) < 1)
+            let frame = key.convert(key.bounds, to: screen.view)
+            #expect(screen.view.bounds.contains(frame) && frame.maxY < endFrame.minY)
+        }
+        let two = try #require(find(UIButton.self, in: pad.view) { $0.accessibilityIdentifier == "dtmfKey_2" })
+        #expect(abs(two.convert(two.bounds, to: screen.view).midX - endFrame.midX) < 1)
+        let one = try #require(find(UIButton.self, in: pad.view) { $0.accessibilityIdentifier == "dtmfKey_1" })
+        #expect(abs(one.convert(one.bounds, to: screen.view).midX - more.convert(more.bounds, to: screen.view).midX) < 1)
+        store.send(.activeCall(.view(.keypadHideTapped)))
+        screen.render()
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(screen.children.isEmpty)
+        #expect(more.superview?.superview?.alpha == 1)
+    }
+
+    private func find<T: UIView>(_ type: T.Type, in view: UIView, matching: (T) -> Bool = { _ in true }) -> T? {
+        if let result = view as? T, matching(result) { return result }
+        return view.subviews.compactMap { find(type, in: $0, matching: matching) }.first
     }
 }

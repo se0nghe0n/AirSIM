@@ -88,6 +88,10 @@ Reconnection uses current advertisements and authentication checks rather than a
 
 ## Build and test
 
+The app and its Previews can build with the iOS 27.1 SDK. Siri `ToolIntent` conformances require the iOS 27.3 SDK (AppIntents module version 301.2.7.2 or newer) and are conditionally compiled; ordinary App Intents and App Shortcuts remain available with the older SDK. Running on iOS 27.3 alone does not enable Siri tools in an app built with the older SDK. The separate `AirSIMSiriEvaluations` target requires the newer SDK as well.
+
+If multiple Xcode versions are installed, the Xcode app opened for Previews determines their SDK; `xcode-select -p` only identifies the command-line default. Set `DEVELOPER_DIR` explicitly when comparing command-line builds with Canvas results.
+
 ```sh
 xcodebuild -project iOS/AirSIM.xcodeproj \
   -scheme AirSIM \
@@ -280,6 +284,17 @@ The adversarial-review record also covers transition cancellation, modal ownersh
 independent contact queries, trace command ordering and stable lazy list content.
 
 ## UIKit previews
+
+Use Canvas's **Live** mode for the active-call previews. Mute, speaker, recording,
+answer, decline, and end update an isolated in-memory call through the normal
+root snapshot action. More uses a native `UIButton.menu`, so UIKit supplies the
+Liquid Glass button-to-menu transition, dismissal, and accessibility. The DTMF keys
+share the call controls’ diameter and column spacing;
+the keypad replaces the upper call content while the same End button stays in place.
+The Keypad control becomes Hide. Reduce Motion disables the spatial transitions.
+After ending or declining a standalone preview call, **Restart Preview Call**
+restores that preview's initial state. These controls never contact a device,
+change an audio session, or write a recording.
 
 Each concrete main-app controller and reusable custom view has a named `#Preview`
 at the end of its owning Swift file, under `#if DEBUG`. UIKit controllers are
