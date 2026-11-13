@@ -4,18 +4,23 @@ import android.media.AudioAttributes;
 import android.media.AudioDeviceInfo;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioProfile;
 import android.media.AudioRecord;
 import android.media.AudioTrack;
 import android.os.Process;
+import android.os.Build;
 import java.io.Closeable;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
+import org.webrtc.audio.PcmFormat;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Privileged, in-process carrier device. Never opens a microphone/speaker or an audio socket. */
 final class TelephonyAudioDevice implements Closeable {
-    private static final int RATE = 8000;
+    private final PcmFormat format;
     private static final int SOURCE_VOICE_DOWNLINK = 3;
     private final WebRTCPcmBuffer capture;
     private final WebRTCPcmBuffer playback;
@@ -27,44 +32,69 @@ final class TelephonyAudioDevice implements Closeable {
     private volatile Thread worker;
     private volatile Thread uplink;
     private volatile String failureReason = "carrier_media_unavailable";
+    private volatile boolean unpublishedReleaseFailed;
     private boolean failing; // Guarded by this.
     private final CloudAudioSetupTimeline setup = new CloudAudioSetupTimeline(
             CloudAudioSetupTimeline.Scope.CARRIER, System::nanoTime, BridgeLog::info);
 
     TelephonyAudioDevice(WebRTCPcmBuffer capture, WebRTCPcmBuffer playback, Runnable ready, Runnable failed) {
         this.capture = capture; this.playback = playback; this.ready = ready; this.failed = failed;
+        this.format = capture.format();
+        if (playback.format() != format) throw new IllegalArgumentException("carrier PCM format mismatch");
     }
 
-    void start() {
+    synchronized void start() {
+        if (closed.get()) return;
+        // Close must never join an assigned but not-yet-started worker and then reuse its resources.
         worker = new Thread(this::run, "airsim-carrier-device");
         worker.start();
     }
 
     private void run() {
         audioPriority();
-        byte[] frame = new byte[WebRTCPcmBuffer.FRAME_BYTES];
+        byte[] frame = new byte[format.frameBytes()];
         try {
             if (!PrivilegedBridgeProtocol.supportsUid(Process.myUid())) throw new SecurityException("privilege required");
-            int recordBytes = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-            int trackBytes = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            int recordBytes = AudioRecord.getMinBufferSize(format.rate(), AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            int trackBytes = AudioTrack.getMinBufferSize(format.rate(), AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
+            if (recordBytes == AudioRecord.ERROR_BAD_VALUE || trackBytes == AudioTrack.ERROR_BAD_VALUE)
+                throw new IOException("carrier format init failed");
             if (recordBytes <= 0 || trackBytes <= 0) throw new IOException("device format unavailable");
             AudioAttributes.Builder attributes = new AudioAttributes.Builder()
                     .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH);
             boolean vendorRoute = addVoiceTxTag(attributes);
-            AudioDeviceInfo sink = findTelephonySink();
-            if (!vendorRoute && sink == null) throw new IOException("carrier route unavailable");
-            AudioRecord input = new AudioRecord(SOURCE_VOICE_DOWNLINK, RATE, AudioFormat.CHANNEL_IN_MONO,
-                    AudioFormat.ENCODING_PCM_16BIT, Math.max(recordBytes, 1280));
+            AudioDeviceInfo sink = findTelephonyDevice(false, format);
+            AudioDeviceInfo captureSource = format == PcmFormat.WIDEBAND ? findTelephonyDevice(true, format) : null;
+            if ((!vendorRoute && sink == null)
+                    || (format == PcmFormat.WIDEBAND && (sink == null || captureSource == null)))
+                throw new IOException("carrier route unavailable");
+            AudioRecord input;
+            try {
+                input = new AudioRecord(SOURCE_VOICE_DOWNLINK, format.rate(), AudioFormat.CHANNEL_IN_MONO,
+                        AudioFormat.ENCODING_PCM_16BIT, Math.max(recordBytes, format.bufferBytes(80)));
+            } catch (IllegalArgumentException unsupported) { throw new IOException("carrier format init failed"); }
             synchronized (this) {
-                if (closed.get()) { input.release(); return; }
+                if (closed.get()) {
+                    try { input.release(); }
+                    catch (RuntimeException | LinkageError error) { unpublishedReleaseFailed = true; }
+                    return;
+                }
                 recorder = input;
             }
-            AudioTrack output = new AudioTrack.Builder().setAudioAttributes(attributes.build())
-                    .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-                    .setBufferSizeInBytes(Math.max(trackBytes, 1280)).setTransferMode(AudioTrack.MODE_STREAM).build();
+            AudioTrack output;
+            try {
+                output = new AudioTrack.Builder().setAudioAttributes(attributes.build())
+                        .setAudioFormat(new AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(format.rate()).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                        .setBufferSizeInBytes(Math.max(trackBytes, format.bufferBytes(80)))
+                        .setTransferMode(AudioTrack.MODE_STREAM).build();
+            } catch (IllegalArgumentException unsupported) { throw new IOException("carrier format init failed"); }
             synchronized (this) {
-                if (closed.get()) { output.release(); return; }
+                if (closed.get()) {
+                    try { output.release(); }
+                    catch (RuntimeException | LinkageError error) { unpublishedReleaseFailed = true; }
+                    return;
+                }
                 track = output;
             }
             synchronized (this) {
@@ -72,7 +102,16 @@ final class TelephonyAudioDevice implements Closeable {
                 if (closed.get()) return;
                 if (input.getState() != AudioRecord.STATE_INITIALIZED || output.getState() != AudioTrack.STATE_INITIALIZED)
                     throw new IOException("carrier device initialization failed");
+                if (input.getSampleRate() != format.rate() || output.getSampleRate() != format.rate()
+                        || input.getAudioFormat() != AudioFormat.ENCODING_PCM_16BIT
+                        || output.getAudioFormat() != AudioFormat.ENCODING_PCM_16BIT
+                        || input.getChannelCount() != 1 || output.getChannelCount() != 1)
+                    throw new IOException("carrier format init failed");
                 if (sink != null && !output.setPreferredDevice(sink)) throw new IOException("carrier route rejected");
+                if (captureSource != null && !input.setPreferredDevice(captureSource)) throw new IOException("carrier route rejected");
+                BridgeLog.info("standalone_carrier_pcm_format selected_rate_hz=" + format.rate()
+                        + " capture_api_rate_hz=" + input.getSampleRate() + " playback_api_rate_hz=" + output.getSampleRate()
+                        + " channels=1 frame_bytes=" + format.frameBytes());
                 input.startRecording(); output.play();
             }
             if (input.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IOException("carrier capture unavailable");
@@ -85,7 +124,10 @@ final class TelephonyAudioDevice implements Closeable {
                     (bytes, offset, length) -> output.write(bytes, offset, length, AudioTrack.WRITE_NON_BLOCKING),
                     () -> {
                         AudioDeviceInfo routed = output.getRoutedDevice();
-                        return routed != null && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY && routed.isSink();
+                        AudioDeviceInfo captured = captureSource == null ? null : input.getRoutedDevice();
+                        return routed != null && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY && routed.isSink()
+                                && (captureSource == null || (captured != null
+                                && captured.getType() == AudioDeviceInfo.TYPE_TELEPHONY && captured.isSource()));
                     })) return;
             setup.mark(CloudAudioSetupTimeline.Phase.ROUTE_VERIFIED);
             // Fill the carrier buffer with silence so the carrier clock paces NetEq from the first
@@ -114,8 +156,13 @@ final class TelephonyAudioDevice implements Closeable {
             }
             while (!closed.get()) {
                 int count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
-                if (count < 0) throw new IOException("carrier capture stopped");
-                if (count > 0) capture.offer(frame, 0, count & ~1);
+                if (count < 0 || count > frame.length || (count & 1) != 0) throw new IOException("carrier capture stopped");
+                if (captureSource != null) {
+                    AudioDeviceInfo captured = input.getRoutedDevice();
+                    if (captured == null || captured.getType() != AudioDeviceInfo.TYPE_TELEPHONY || !captured.isSource())
+                        throw new IOException("carrier route lost");
+                }
+                if (count > 0) capture.offer(frame, 0, count);
             }
         } catch (Exception | LinkageError error) {
             if (!closed.get()) fail(error); // Never log SDK/native or private audio data.
@@ -185,13 +232,51 @@ final class TelephonyAudioDevice implements Closeable {
         } catch (ReflectiveOperationException | RuntimeException error) { return false; }
     }
 
-    private static AudioDeviceInfo findTelephonySink() {
+    /** Profiles are inspected without opening an AudioRecord, AudioTrack or audio route. */
+    static PcmFormat preferredFormat() {
+        if (Build.VERSION.SDK_INT < 31) return PcmFormat.NARROWBAND;
         try {
-            Method get = AudioManager.class.getMethod("getDevicesStatic", int.class);
-            AudioDeviceInfo[] devices = (AudioDeviceInfo[]) get.invoke(null, AudioManager.GET_DEVICES_OUTPUTS);
-            if (devices != null) for (AudioDeviceInfo device : devices)
-                if (device.isSink() && device.getType() == AudioDeviceInfo.TYPE_TELEPHONY) return device;
-        } catch (ReflectiveOperationException | RuntimeException error) { /* Fail closed below. */ }
+            List<CarrierAudioFormatPolicy.Endpoint> profiles = new ArrayList<>();
+            for (AudioDeviceInfo device : telephonyDevices()) profiles.addAll(profiles(device));
+            return CarrierAudioFormatPolicy.select(profiles.toArray(new CarrierAudioFormatPolicy.Endpoint[0]));
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError error) {
+            return PcmFormat.NARROWBAND; // Unknown capabilities cannot authorize a wider format.
+        }
+    }
+
+    private static AudioDeviceInfo[] telephonyDevices() throws ReflectiveOperationException {
+        Method get = AudioManager.class.getMethod("getDevicesStatic", int.class);
+        AudioDeviceInfo[] devices = (AudioDeviceInfo[]) get.invoke(null, AudioManager.GET_DEVICES_ALL);
+        return devices == null ? new AudioDeviceInfo[0] : devices;
+    }
+
+    private static List<CarrierAudioFormatPolicy.Endpoint> profiles(AudioDeviceInfo device) {
+        List<CarrierAudioFormatPolicy.Endpoint> result = new ArrayList<>();
+        if (Build.VERSION.SDK_INT < 31 || device.getType() != AudioDeviceInfo.TYPE_TELEPHONY) return result;
+        // Never combine AudioDeviceInfo's union of formats/rates/masks across different profiles.
+        for (AudioProfile profile : device.getAudioProfiles()) {
+            boolean mono = false;
+            for (int mask : profile.getChannelMasks()) {
+                mono |= (device.isSource() && mask == AudioFormat.CHANNEL_IN_MONO)
+                        || (device.isSink() && mask == AudioFormat.CHANNEL_OUT_MONO);
+            }
+            for (int mask : profile.getChannelIndexMasks()) mono |= mask == 1;
+            result.add(new CarrierAudioFormatPolicy.Endpoint(true, device.isSource(), device.isSink(),
+                    new int[]{profile.getFormat()}, profile.getSampleRates(), mono ? new int[]{1} : new int[0]));
+        }
+        return result;
+    }
+
+    private static AudioDeviceInfo findTelephonyDevice(boolean source, PcmFormat format) {
+        try {
+            for (AudioDeviceInfo device : telephonyDevices()) {
+                if (device.getType() != AudioDeviceInfo.TYPE_TELEPHONY
+                        || (source ? !device.isSource() : !device.isSink())) continue;
+                if (format == PcmFormat.NARROWBAND) return device;
+                for (CarrierAudioFormatPolicy.Endpoint profile : profiles(device))
+                    if (CarrierAudioFormatPolicy.supportsWideband(profile)) return device;
+            }
+        } catch (ReflectiveOperationException | RuntimeException | LinkageError error) { /* Fail closed below. */ }
         return null;
     }
 
@@ -209,7 +294,7 @@ final class TelephonyAudioDevice implements Closeable {
         }
         boolean captureStopped = join(worker);
         boolean playbackStopped = join(uplink);
-        boolean released = captureStopped && playbackStopped;
+        boolean released = captureStopped && playbackStopped && !unpublishedReleaseFailed;
         // A timed-out worker may still use its native handles. Quarantine, never release under it.
         try { if (captureStopped && input != null) input.release(); }
         catch (RuntimeException | LinkageError error) { released = false; }

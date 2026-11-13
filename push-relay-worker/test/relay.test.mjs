@@ -56,7 +56,10 @@ class MemoryDurableStorage {
     this.values = new Map();
     this.alarmAt = null;
   }
-  async get(key) { return this.values.get(key); }
+  async get(key) {
+    if (Array.isArray(key)) return new Map(key.filter(item => this.values.has(item)).map(item => [item, this.values.get(item)]));
+    return this.values.get(key);
+  }
   async put(key, value) { this.values.set(key, value); }
   async delete(key) { this.values.delete(key); }
   async list({ prefix = "" } = {}) {
@@ -219,6 +222,67 @@ function mediaUnitEnvironment() {
   }));
   return env;
 }
+
+async function registryMediaUnitEnvironment() {
+  const env = mediaUnitEnvironment();
+  env.STATUS = new MemoryStatusNamespace();
+  for (const [key, value] of env.DEVICES.values) await env.STATUS.storage.put(key, JSON.parse(value));
+  return env;
+}
+
+function mediaAdmissionSession(env, agentConnected = true) {
+  const iphone = new MemoryMediaSocket("iphone");
+  Object.assign(iphone.attachment, { callID: "preflight-call", callUUID: webRTCCallUUID, generation: 1 });
+  const agent = new MemoryMediaSocket("agent");
+  const state = new MemoryMediaState(agentConnected ? [iphone, agent] : [iphone]);
+  return { iphone, agent, state, relay: new CallMediaSession(state, env) };
+}
+
+test("dial enqueue returns its durable call before deferred dashboard telemetry with an execution context", async () => {
+  for (const withContext of [true, false]) for (const telemetryFails of [false, true]) {
+    const env = testEnvironment();
+    env.STATUS = new MemoryStatusNamespace();
+    env.COMMANDS = new MemoryCommandNamespace(env);
+    await enableReadyMedia(env);
+    const agent = env.COMMANDS.addAgent(registration.device_id);
+    let started;
+    const telemetryStarted = new Promise(resolve => { started = resolve; });
+    let finish;
+    const delayed = new Promise(resolve => { finish = resolve; });
+    const originalGet = env.STATUS.get.bind(env.STATUS);
+    env.STATUS.get = id => ({ fetch: async (request, options) => {
+      if (new URL(request instanceof Request ? request.url : request).pathname === "/events") {
+        started();
+        await delayed;
+        if (telemetryFails) throw new Error("dashboard persistence unavailable");
+      }
+      return originalGet(id).fetch(request, options);
+    } });
+    const background = [];
+    let returned = false;
+    const responseTask = worker.fetch(dialRequest(), env,
+      withContext ? { waitUntil: promise => background.push(promise) } : undefined)
+      .then(response => { returned = true; return response; });
+    await telemetryStarted;
+    await new Promise(resolve => setImmediate(resolve));
+    try {
+      assert.equal(returned, withContext, "only execution-context telemetry may outlive the HTTP response");
+      assert.equal(background.length, withContext ? 1 : 0);
+      assert.equal(agent.sent.length, 1, "durable dispatch must complete before returning the call");
+      const command = JSON.parse(agent.sent[0]);
+      const record = await env.COMMANDS.session(registration.device_id).storage.get(`command:${command.command_id}`);
+      assert.equal(record.status, "delivered");
+      assert.ok(await env.STATUS.storage.get(`call:${command.call.call_uuid}`), "call authorization is already durable");
+      assert.ok(env.COMMANDS.session(registration.device_id).storage.alarmAt, "retry scheduling remains awaited");
+    } finally {
+      finish();
+    }
+    const response = await responseTask;
+    assert.equal(response.status, 202);
+    assert.ok((await response.json()).call.call_uuid);
+    await Promise.all(background); // Telemetry rejection remains handled, including after response delivery.
+  }
+});
 
 test("health and registration persist without returning credentials", async () => {
   const env = testEnvironment();
@@ -2875,6 +2939,201 @@ test("WebSocket answer cannot claim ownership or flush a queued answer after rea
   assert.equal(agent.sent.length, 0);
   assert.equal(iphone.attachment.owner, false);
   assert.equal(iphone.attachment.pendingControl, "");
+});
+
+test("owner admission and pending-control flush each use one fresh STATUS snapshot RPC", async () => {
+  const env = await registryMediaUnitEnvironment();
+  const { relay, iphone, agent, state } = mediaAdmissionSession(env, false);
+  await relay.ready;
+  const reads = [];
+  const originalGet = env.STATUS.storage.get.bind(env.STATUS.storage);
+  env.STATUS.storage.get = async keys => { reads.push(keys); return originalGet(keys); };
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  assert.equal(env.STATUS.fetchCount, 1);
+  assert.deepEqual(reads, [[`device:${registration.device_id}`, `heartbeat:${registration.device_id}`]]);
+  assert.equal(iphone.attachment.owner, true);
+  assert.ok(iphone.attachment.pendingControl);
+  state.sockets.push(agent);
+  await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now(), agent_media_ready: false });
+  await relay.flushPendingControls(agent);
+  assert.equal(env.STATUS.fetchCount, 2, "queued answers must read current admission, not reuse the first snapshot");
+  assert.equal(iphone.attachment.owner, false);
+  assert.equal(iphone.attachment.pendingControl, "");
+  assert.equal(agent.sent.length, 0);
+  await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now() });
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  assert.equal(env.STATUS.fetchCount, 3);
+  assert.equal(iphone.attachment.owner, true);
+  assert.equal(agent.sent.filter(value => JSON.parse(value).action === "answer").length, 1);
+});
+
+test("fresh owner-admission snapshots retain readiness revision freshness registration and rollout gates", async () => {
+  const cases = [
+    ["revoked", "heartbeat", { agent_media_ready: false }, "agent_media_unavailable"],
+    ["old revision", "heartbeat", { media_capability_revision: 1 }, "agent_upgrade_required"],
+    ["future revision", "heartbeat", { media_capability_revision: 3 }, "agent_upgrade_required"],
+    ["missing revision", "heartbeat", { media_capability_revision: undefined }, "agent_upgrade_required"],
+    ["missing readiness", "heartbeat", { agent_media_ready: undefined }, "agent_media_unavailable"],
+    ["invalid readiness", "heartbeat", { agent_media_ready: "true" }, "agent_media_unavailable"],
+    ["missing capability", "heartbeat", { agent_media_capabilities: [] }, "agent_media_unavailable"],
+    ["stale", "heartbeat", { received_at_ms: Date.now() - 91_000 }, "agent_unavailable"],
+    ["future", "heartbeat", { received_at_ms: Date.now() + 60_000 }, "agent_unavailable"],
+    ["missing timestamp", "heartbeat", { received_at_ms: undefined }, "agent_unavailable"],
+    ["disabled", "device", { remote_audio_disabled: true }, "media_disabled"],
+    ["old disabled", "device", { force_legacy_pcm: true }, "media_disabled"],
+    ["unsupported app", "device", { app_media_capabilities: [] }, "app_upgrade_required"],
+    ["rollout off", "env", { WEBRTC_ROLLOUT_PERCENT: "0" }, "relay_media_unavailable"],
+    ["relay unavailable", "env", { WEBRTC_TRANSPORT_READY: "false" }, "relay_media_unavailable"],
+  ];
+  for (const [label, target, change, reason] of cases) {
+    const env = await registryMediaUnitEnvironment();
+    const { relay, iphone, agent } = mediaAdmissionSession(env);
+    await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    assert.equal(iphone.attachment.owner, true, label);
+    if (target === "heartbeat") {
+      // Neither a ready KV mirror nor an older ready agent in the roster may override the latest record.
+      await env.STATUS.storage.put(`heartbeat:${registration.device_id}:agent:older-ready`,
+        { ...readyHeartbeat(), received_at_ms: Date.now() });
+      await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now(), ...change });
+    } else if (target === "device") await putRegisteredDevice(env, change);
+    else Object.assign(env, change);
+    iphone.sent = []; agent.sent = [];
+    await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    assert.equal(env.STATUS.fetchCount, 2, label);
+    assert.equal(agent.sent.length, 0, label);
+    const rejected = JSON.parse(iphone.sent.at(-1));
+    assert.equal(rejected.status, "action_rejected", label);
+    assert.equal(rejected.remote_audio_reason, reason, label);
+  }
+});
+
+test("partial durable admission data keeps only the existing device mirror fallback", async () => {
+  for (const missing of ["device", "device-everywhere", "heartbeat", "both", "wrong-device", "malformed-device"]) {
+    const env = await registryMediaUnitEnvironment();
+    const deviceKey = `device:${registration.device_id}`;
+    const heartbeatKey = `heartbeat:${registration.device_id}`;
+    if (["device", "device-everywhere", "both"].includes(missing)) await env.STATUS.storage.delete(deviceKey);
+    if (missing === "device-everywhere") await env.DEVICES.delete(deviceKey);
+    if (["heartbeat", "both"].includes(missing)) await env.STATUS.storage.delete(heartbeatKey);
+    if (missing === "wrong-device") await putRegisteredDevice(env, { device_id: "other-device" });
+    if (missing === "malformed-device") await env.STATUS.storage.put(deviceKey, "not a registration");
+    // This roster entry and ready KV heartbeat must not replace an absent latest authoritative heartbeat.
+    await env.STATUS.storage.put(`${heartbeatKey}:agent:old-ready`, { ...readyHeartbeat(), received_at_ms: Date.now() });
+    const { relay, iphone, agent } = mediaAdmissionSession(env);
+    await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    assert.equal(env.STATUS.fetchCount, ["device", "both"].includes(missing) ? 2 : 1, missing);
+    const allowed = missing === "device";
+    assert.equal(iphone.attachment.owner, allowed, missing);
+    assert.equal(agent.sent.some(value => JSON.parse(value).action === "answer"), allowed, missing);
+    if (!allowed) assert.equal(JSON.parse(iphone.sent.at(-1)).status, "action_rejected", missing);
+  }
+});
+
+test("legacy device mirror wait cannot reuse readiness revoked after the first snapshot", async () => {
+  for (const registryUnavailable of [false, true]) {
+    const env = await registryMediaUnitEnvironment();
+    const deviceKey = `device:${registration.device_id}`;
+    await env.STATUS.storage.delete(deviceKey);
+    let started;
+    const mirrorStarted = new Promise(resolve => { started = resolve; });
+    let release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    const originalGet = env.DEVICES.get.bind(env.DEVICES);
+    env.DEVICES.get = async key => {
+      if (key === deviceKey) { started(); await delayed; }
+      return originalGet(key);
+    };
+    const { relay, iphone, agent } = mediaAdmissionSession(env);
+    const answering = relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    await mirrorStarted;
+    try {
+      assert.equal(env.STATUS.fetchCount, 1);
+      if (registryUnavailable) env.STATUS = new UnavailableStatusNamespace();
+      else await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now(), agent_media_ready: false });
+    } finally { release(); }
+    await answering;
+    assert.equal(iphone.attachment.owner, false);
+    assert.equal(agent.sent.length, 0);
+    assert.equal(JSON.parse(iphone.sent.at(-1)).status, "action_rejected");
+  }
+});
+
+test("failed or malformed admission snapshots fail closed despite a ready KV mirror", async () => {
+  const validDevice = JSON.parse(await mediaUnitEnvironment().DEVICES.get(`device:${registration.device_id}`));
+  const validHeartbeat = { ...readyHeartbeat(), received_at_ms: Date.now() };
+  const valid = { device_id: registration.device_id, device: validDevice, heartbeat: validHeartbeat };
+  const cases = [
+    ["unavailable", () => new Response("unavailable", { status: 503 })],
+    ["old endpoint missing", () => new Response("missing", { status: 404 })],
+    ["dependency throws", () => { throw new Error("registry read failed"); }],
+    ["malformed JSON", () => new Response("not JSON")],
+    ["null", () => Response.json(null)],
+    ["array", () => Response.json([])],
+    ["empty", () => Response.json({})],
+    ["missing heartbeat", () => Response.json({ device_id: registration.device_id, device: validDevice })],
+    ["missing device", () => Response.json({ device_id: registration.device_id, heartbeat: validHeartbeat })],
+    ["wrong snapshot identity", () => Response.json({ ...valid, device_id: "other-device" })],
+    ["wrong device identity", () => Response.json({ ...valid, device: { ...validDevice, device_id: "other-device" } })],
+    ["array heartbeat", () => Response.json({ ...valid, heartbeat: [] })],
+    ["string heartbeat", () => Response.json({ ...valid, heartbeat: "ready" })],
+  ];
+  for (const [label, response] of cases) {
+    const env = mediaUnitEnvironment();
+    let reads = 0;
+    env.STATUS = { idFromName: name => name, get: () => ({ fetch: async () => { reads++; return response(); } }) };
+    const { relay, iphone, agent } = mediaAdmissionSession(env);
+    await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    assert.equal(reads, 1, label);
+    assert.equal(iphone.attachment.owner, false, label);
+    assert.equal(iphone.attachment.pendingControl, "", label);
+    assert.equal(agent.sent.length, 0, label);
+    assert.equal(JSON.parse(iphone.sent.at(-1)).status, "action_rejected", label);
+  }
+  const env = await registryMediaUnitEnvironment();
+  env.STATUS.storage.get = async () => { throw new Error("durable storage read failed"); };
+  const { relay, iphone, agent } = mediaAdmissionSession(env);
+  await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+  assert.equal(iphone.attachment.owner, false);
+  assert.equal(agent.sent.length, 0);
+});
+
+test("cancellation and replacement win during fresh admission and pending-control flush", async () => {
+  for (const flushing of [false, true]) for (const cancellation of ["reject", "end", "terminal", "replacement", "revocation"]) {
+    const env = await registryMediaUnitEnvironment();
+    const { relay, iphone, agent, state } = mediaAdmissionSession(env, !flushing);
+    await relay.ready;
+    if (flushing) {
+      await relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+      state.sockets.push(agent);
+    }
+    let started;
+    const readStarted = new Promise(resolve => { started = resolve; });
+    let release;
+    const delayed = new Promise(resolve => { release = resolve; });
+    const originalGet = env.STATUS.get.bind(env.STATUS);
+    env.STATUS.get = id => ({ fetch: async (request, options) => {
+      if (new URL(request instanceof Request ? request.url : request).pathname.startsWith("/media-admission/")) {
+        started(); await delayed;
+      }
+      return originalGet(id).fetch(request, options);
+    } });
+    const answering = flushing ? relay.flushPendingControls(agent)
+      : relay.webSocketMessage(iphone, JSON.stringify({ action: "answer" }));
+    await readStarted;
+    try {
+      if (cancellation === "reject" || cancellation === "end") {
+        await relay.webSocketMessage(iphone, JSON.stringify({ action: cancellation }));
+      } else if (cancellation === "terminal") {
+        await relay.receiveTerminal({ status: "remote_ended", call_id: "preflight-call", call_uuid: webRTCCallUUID, generation: 1 });
+      } else if (cancellation === "replacement") {
+        iphone.close(); state.sockets.push(new MemoryMediaSocket("iphone"));
+      } else await putHeartbeatRecord(env, { ...readyHeartbeat(), received_at_ms: Date.now(), agent_media_ready: false });
+    } finally { release(); }
+    await answering;
+    assert.equal(agent.sent.some(value => JSON.parse(value).action === "answer"), false, `${flushing}: ${cancellation}`);
+    if (!flushing) assert.equal(iphone.attachment.owner, false, cancellation);
+    if (flushing && cancellation === "revocation") assert.equal(iphone.attachment.pendingControl, "");
+  }
 });
 
 test("cancel or terminal state wins while WebSocket answer is awaiting readiness", async () => {

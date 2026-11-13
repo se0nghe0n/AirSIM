@@ -35,6 +35,7 @@ export class AgentStatusRegistry {
     const rateMatch = url.pathname.match(/^\/rate\/([^/]+)$/);
     const quotaMatch = url.pathname.match(/^\/quota\/([^/]+)$/);
     const deviceMatch = url.pathname.match(/^\/device\/([^/]+)$/);
+    const mediaAdmissionMatch = url.pathname.match(/^\/media-admission\/([^/]+)$/);
     const stateMatch = url.pathname.match(/^\/state\/([^/]+)$/);
 
     if (url.pathname === "/authenticated-heartbeat" && request.method === "POST") {
@@ -125,6 +126,16 @@ export class AgentStatusRegistry {
     if (url.pathname === "/devices" && request.method === "GET") {
       const entries = await this.storage.list({ prefix: DEVICE_PREFIX });
       return Response.json([...entries.values()]);
+    }
+
+    if (mediaAdmissionMatch && request.method === "GET") {
+      const deviceID = decodeURIComponent(mediaAdmissionMatch[1]);
+      const deviceKey = `${DEVICE_PREFIX}${deviceID}`;
+      const heartbeatKey = `${HEARTBEAT_PREFIX}${deviceID}`;
+      // A fresh multi-key read, not an admission cache or a historical agent roster.
+      const records = await this.storage.get([deviceKey, heartbeatKey]);
+      return Response.json({ device_id: deviceID,
+        device: records.get(deviceKey) ?? null, heartbeat: records.get(heartbeatKey) ?? null });
     }
 
     if (deviceMatch) {
@@ -339,6 +350,36 @@ export async function readCurrentAgentHeartbeat(env, deviceID) {
   } catch {
     return null;
   }
+}
+
+// The owner-join path needs both records. Read them in one authoritative RPC without extending the
+// readiness lease. A missing legacy device may use the existing device mirror fallback, but a missing
+// or unavailable authoritative heartbeat must never fall back to an older ready KV claim.
+export async function readMediaAdmissionSnapshot(env, deviceID) {
+  const stub = registryStub(env);
+  if (!stub) {
+    const device = await readDeviceRecord(env, deviceID);
+    return { device, heartbeat: device ? await readCurrentAgentHeartbeat(env, device.device_id) : null };
+  }
+  const response = await stub.fetch(`https://status.internal/media-admission/${encodeURIComponent(deviceID)}`);
+  if (!response.ok) throw new Error(`media admission registry returned HTTP ${response.status}`);
+  const snapshot = await response.json();
+  const nullableRecord = value => value === null || (typeof value === "object" && !Array.isArray(value));
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+      snapshot.device_id !== deviceID ||
+      !Object.hasOwn(snapshot, "device") || !Object.hasOwn(snapshot, "heartbeat") ||
+      !nullableRecord(snapshot.device) || !nullableRecord(snapshot.heartbeat)) {
+    throw new Error("invalid media admission snapshot");
+  }
+  if (snapshot.device) {
+    if (snapshot.device.device_id !== deviceID) throw new Error("media admission device identity mismatch");
+    return { device: snapshot.device, heartbeat: snapshot.heartbeat };
+  }
+  const device = await readKVRecord(env.DEVICES, `${DEVICE_PREFIX}${deviceID}`);
+  if (device && device.device_id !== deviceID) throw new Error("media admission device identity mismatch");
+  // The exceptional legacy mirror read can take time. Preserve the previous read ordering: any
+  // readiness revocation during that await must win, even if the first snapshot was still ready.
+  return { device, heartbeat: device ? await readCurrentAgentHeartbeat(env, deviceID) : null };
 }
 
 export async function readAgentHeartbeat(env, deviceID) {

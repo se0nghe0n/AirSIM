@@ -33,6 +33,10 @@ TEST="$ROOT/test/peer-disposal/com/airsim/phonecontrol"
   "$TEST/BridgeLog.java" \
   "$SOURCE/CloudAudioSetupTimeline.java" \
   "$SOURCE/PrivilegedBridgeProtocol.java" \
+  "$ROOT/src/org/webrtc/audio/PcmFormat.java" \
+  "$SOURCE/CarrierAudioFormatPolicy.java" \
+  "$SOURCE/CarrierFormatFallback.java" \
+  "$SOURCE/WebRTCPcmContract.java" \
   "$SOURCE/WebRTCPcmBuffer.java" \
   "$SOURCE/WebRTCCaptureClock.java" \
   "$SOURCE/WebRTCPlayoutClock.java" \

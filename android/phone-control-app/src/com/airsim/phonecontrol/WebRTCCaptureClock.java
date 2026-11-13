@@ -38,7 +38,7 @@ final class WebRTCCaptureClock {
             deviceClocked = false;
         }
         pace();
-        return carrierReady ? source.conceal() : new byte[WebRTCPcmBuffer.FRAME_BYTES];
+        return carrierReady ? source.conceal() : new byte[source.frameBytes()];
     }
 
     boolean deviceClocked() { return deviceClocked; }

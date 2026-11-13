@@ -5,10 +5,10 @@ SDK=${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}
 JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home}
 SERIAL=${AIRSIM_TEST_SERIAL:?set AIRSIM_TEST_SERIAL to the dedicated emulator serial}
 case "$SERIAL" in emulator-*) ;; *) echo 'Native tests require an emulator, never a physical phone' >&2; exit 1;; esac
-OUT="$ROOT/build/native-test"
+OUT=${AIRSIM_NATIVE_TEST_OUT:-"$ROOT/build/native-test/$(date -u +%Y%m%dT%H%M%SZ)-$$"}
 APP="$ROOT/../../android-standalone/build/android/AirSIM-Android-Standalone-debug.apk"
 TOOLS="$SDK/build-tools/35.0.0"
-rm -rf "$OUT"
+printf 'Native test artifacts: %s\n' "$OUT"
 mkdir -p "$OUT/classes" "$OUT/dex"
 "$JAVA_HOME/bin/javac" --release 17 -cp "$SDK/platforms/android-35/android.jar:$ROOT/build/dependencies/webrtc.jar:$ROOT/../../android-standalone/build/android/classes" -d "$OUT/classes" "$ROOT/test-native/com/airsim/phonecontrol/WebRTCNativeTests.java"
 "$TOOLS/d8" --lib "$SDK/platforms/android-35/android.jar" --classpath "$ROOT/build/dependencies/webrtc.jar" --min-api 29 --output "$OUT/dex" "$OUT"/classes/com/airsim/phonecontrol/*.class
@@ -32,10 +32,14 @@ adb, serial, *arguments = sys.argv[1:]
 try:
     subprocess.run([adb, '-s', serial, 'shell', 'am', 'instrument', '-w', *arguments,
                     'com.airsim.webrtctest/com.airsim.phonecontrol.WebRTCNativeTests'],
-                   timeout=90, check=True)
+                   timeout=180, check=True)
 except subprocess.TimeoutExpired:
     subprocess.run([adb, '-s', serial, 'shell', 'am', 'force-stop',
                     'com.airsim.phonecontrol.pixel8pro'], timeout=10, check=False)
     raise SystemExit('FAIL: native loopback timed out')
 NATIVE_TEST
-grep -q 'PASS native JNI bidirectional Opus' "$OUT/result.txt"
+grep -q 'PASS native JNI bidirectional Opus: legacy, wideband, mixed' "$OUT/result.txt"
+for case_name in legacy-8k wideband-48k mixed-48k-8k; do
+    grep -q "PASS $case_name" "$OUT/result.txt"
+done
+! grep -q 'FAIL' "$OUT/result.txt"

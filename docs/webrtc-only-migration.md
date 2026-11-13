@@ -14,7 +14,9 @@ accepted SDP, or service-ready heartbeat.
   injection in the same process. No audio bytes cross Binder, pipes, TCP, WebSocket,
   or DataChannel. The application process is a signaling proxy only.
 - The pinned SDK stays at 144.7559.15. Its external audio callbacks exchange bounded,
-  in-process 8 kHz mono samples with VOICE_DOWNLINK and the telephony uplink device.
+  in-process PCM16 mono samples with VOICE_DOWNLINK and the telephony uplink device.
+  Explicit matching telephony profiles select 48 kHz for cloud calls; other devices
+  and host-only local calls retain 8 kHz.
   This is an OS/audio-device boundary, not a competing media transport or jitter engine.
 - iPhone uses native WebRTC for cloud and host-only local calls. Watch is an iPhone
   companion controller, not an independent microphone/speaker endpoint.
@@ -98,7 +100,8 @@ UUID rather than a transport label; existing protected local files are preserved
 The historical `android/phone-audio-bridge` source, tests and scripts are removed. Its former implementation remains in Git history; [carrier-route validation](carrier-route-validation.md) records the unperformed device acceptance. Package-scoped old-daemon eviction still recognizes the historical class/port so an upgrade can stop a stale bridge without killing unrelated processes. Removal of the reference implementation does not establish physical call quality.
 
 The Shizuku UserService retains the legacy `airsim-pcm-v1` tag as its persistent
-upgrade identity. Shizuku matches services by package and tag. Version 12 loads the
+upgrade identity. Shizuku matches services by package and tag. Version 13 loads the
+adaptive carrier-format and sample-framing implementation. Version 12 loads the
 partial-write sample-preservation and voice-SDP fixes. Version 11 loads the
 outgoing startup timing diagnostics after an in-place upgrade. Version 10 replaces
 older bridge instances so the bounded carrier-startup implementation is loaded

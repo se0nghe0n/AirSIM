@@ -1,6 +1,7 @@
 package com.airsim.phonecontrol;
 
 import java.io.Closeable;
+import org.webrtc.audio.PcmFormat;
 import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -9,6 +10,7 @@ final class TelephonyAudioDevice implements Closeable {
     /** Tests opt in explicitly; by default a native route start is a test failure. */
     static volatile Consumer<TelephonyAudioDevice> onStart =
             device -> { throw new AssertionError("This suite must never start a native audio route"); };
+    static PcmFormat preferredFormat() { return PcmFormat.WIDEBAND; }
     final AtomicInteger closeCalls = new AtomicInteger();
     Runnable duringClose = () -> {};
     final Runnable ready;

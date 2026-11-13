@@ -19,6 +19,7 @@ final class PrivilegedMediaService implements Closeable {
     private final Runnable acquireOutput;
     private final ArrayDeque<JSONObject> events = new ArrayDeque<>();
     private final Map<String, Long> terminal = new LinkedHashMap<>();
+    private final CarrierFormatFallback formats = new CarrierFormatFallback();
     private final ScheduledExecutorService leases = Executors.newSingleThreadScheduledExecutor();
     private TelephonyWebRTCPeer peer;
     // A closing peer still occupies the process until every native resource is disposed.
@@ -79,7 +80,7 @@ final class PrivilegedMediaService implements Closeable {
             JSONArray ice = request.getJSONArray("ice_servers");
             owner = key; callUUID = call; generation = gen; lastPoll = now(); events.clear();
             peer = new TelephonyWebRTCPeer(context, call, gen, ice,
-                    message -> enqueue(key, message), () -> fail(key), hostOnly);
+                    message -> enqueue(key, message), () -> fail(key), hostOnly, formats.useNarrowband(call, gen));
             disposal = new CompletableFuture<>();
             try {
                 acquireOutput.run();
@@ -153,6 +154,12 @@ final class PrivilegedMediaService implements Closeable {
         try { restoreOutput.run(); }
         catch (RuntimeException | LinkageError restoreError) { error = restoreError; }
         if (error == null) {
+            // No fallback becomes usable until carrier workers, ADM and native peer all stopped.
+            // A route/security failure never changes format; a new call gets a fresh selection.
+            if (formats.recordDisposedFailure(callUUID, generation, active.sampleRate(), active.failureReason())) {
+                try { BridgeLog.info("standalone_carrier_pcm_fallback from_rate_hz=48000 to_rate_hz=8000 reason=format_init_failed"); }
+                catch (RuntimeException | LinkageError ignored) { /* Diagnostics cannot prevent completed disposal. */ }
+            }
             peer = null;
             closing = false;
             completion.complete(null);

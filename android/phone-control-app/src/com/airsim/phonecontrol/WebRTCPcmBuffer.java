@@ -2,13 +2,15 @@ package com.airsim.phonecontrol;
 
 import java.util.ArrayDeque;
 import java.util.Arrays;
+import org.webrtc.audio.PcmFormat;
 
 /**
- * Bounded in-process 8 kHz queue between the carrier device clock and WebRTC. Never serialized or
+ * Bounded in-process PCM16 mono queue between the carrier device clock and WebRTC. Never serialized or
  * sent across IPC. Frames the queue has to discard or invent are joined with short ramps, so a lost
  * 10 ms frame is not a step in the waveform the caller hears as a pop.
  */
 final class WebRTCPcmBuffer {
+    // Legacy 8 kHz fixture constants. Production framing is always derived from the instance format.
     static final int FRAME_BYTES = 160;
     static final int FRAME_SAMPLES = FRAME_BYTES / 2;
     static final int MAX_FRAMES = 6;
@@ -21,24 +23,40 @@ final class WebRTCPcmBuffer {
     static final long NO_AGE_LIMIT = Long.MAX_VALUE;
     /** 5 ms at 8 kHz: removes a waveform step without audibly fading speech. */
     static final int RAMP_SAMPLES = 40;
+    private final PcmFormat format;
+    private final int frameBytes, frameSamples, rampSamples;
     private final long maxAgeNanos;
     private final ArrayDeque<Frame> frames = new ArrayDeque<>();
-    private final byte[] partial = new byte[FRAME_BYTES];
+    private final byte[] partial;
     private int partialSize;
     private boolean closed;
     private long drops;
     private long underruns;
     private long consumed;
     // Consumer-side continuity. Only the most recent emitted 10 ms frame is retained.
-    private final byte[] tail = new byte[FRAME_BYTES];
+    private final byte[] tail;
     private boolean tailValid;
     private int lastSample;
     private boolean discontinuity;
     private boolean concealing;
 
-    WebRTCPcmBuffer() { this(MAX_AGE_NANOS); }
+    WebRTCPcmBuffer() { this(PcmFormat.NARROWBAND, MAX_AGE_NANOS); }
 
-    WebRTCPcmBuffer(long maxAgeNanos) { this.maxAgeNanos = maxAgeNanos; }
+    WebRTCPcmBuffer(long maxAgeNanos) { this(PcmFormat.NARROWBAND, maxAgeNanos); }
+
+    WebRTCPcmBuffer(PcmFormat format) { this(format, MAX_AGE_NANOS); }
+
+    WebRTCPcmBuffer(PcmFormat format, long maxAgeNanos) {
+        this.format = java.util.Objects.requireNonNull(format);
+        this.frameBytes = format.frameBytes(); this.frameSamples = format.frameSamples();
+        this.rampSamples = format.rampSamples(); this.maxAgeNanos = maxAgeNanos;
+        partial = new byte[frameBytes]; tail = new byte[frameBytes];
+    }
+
+    PcmFormat format() { return format; }
+    int frameBytes() { return frameBytes; }
+    int frameSamples() { return frameSamples; }
+    int rampSamples() { return rampSamples; }
 
     synchronized void offer(byte[] bytes, int offset, int length) {
         offer(bytes, offset, length, System.nanoTime());
@@ -48,12 +66,12 @@ final class WebRTCPcmBuffer {
         if (closed) return;
         if (offset < 0 || length < 0 || offset > bytes.length - length) throw new IndexOutOfBoundsException();
         while (length > 0) {
-            int count = Math.min(length, FRAME_BYTES - partialSize);
+            int count = Math.min(length, frameBytes - partialSize);
             System.arraycopy(bytes, offset, partial, partialSize, count);
             partialSize += count; offset += count; length -= count;
-            if (partialSize == FRAME_BYTES) {
+            if (partialSize == frameBytes) {
                 if (frames.size() == MAX_FRAMES) drop();
-                frames.addLast(new Frame(Arrays.copyOf(partial, FRAME_BYTES), nowNanos));
+                frames.addLast(new Frame(Arrays.copyOf(partial, frameBytes), nowNanos));
                 partialSize = 0;
                 notifyAll();
             }
@@ -124,11 +142,11 @@ final class WebRTCPcmBuffer {
      */
     synchronized byte[] conceal() {
         underruns++;
-        byte[] output = new byte[FRAME_BYTES];
+        byte[] output = new byte[frameBytes];
         if (!concealing && tailValid) {
-            for (int i = 0; i < FRAME_SAMPLES; i++) {
-                int fade = FRAME_SAMPLES - 1 - i;
-                write(output, i, sample(tail, FRAME_SAMPLES - 1 - i) * fade / FRAME_SAMPLES);
+            for (int i = 0; i < frameSamples; i++) {
+                int fade = frameSamples - 1 - i;
+                write(output, i, sample(tail, frameSamples - 1 - i) * fade / frameSamples);
             }
         }
         concealing = true;
@@ -157,9 +175,9 @@ final class WebRTCPcmBuffer {
     private byte[] emit(byte[] pcm) {
         if (discontinuity && tailValid) {
             // Cross-fade from the last emitted sample into the new frame.
-            for (int i = 0; i < RAMP_SAMPLES; i++) {
+            for (int i = 0; i < rampSamples; i++) {
                 int weight = i + 1;
-                write(pcm, i, (lastSample * (RAMP_SAMPLES + 1 - weight) + sample(pcm, i) * weight) / (RAMP_SAMPLES + 1));
+                write(pcm, i, (lastSample * (rampSamples + 1 - weight) + sample(pcm, i) * weight) / (rampSamples + 1));
             }
         }
         concealing = false;
@@ -170,9 +188,9 @@ final class WebRTCPcmBuffer {
     }
 
     private void remember(byte[] pcm) {
-        System.arraycopy(pcm, 0, tail, 0, FRAME_BYTES);
+        System.arraycopy(pcm, 0, tail, 0, frameBytes);
         tailValid = true;
-        lastSample = sample(pcm, FRAME_SAMPLES - 1);
+        lastSample = sample(pcm, frameSamples - 1);
     }
 
     private void forget() {

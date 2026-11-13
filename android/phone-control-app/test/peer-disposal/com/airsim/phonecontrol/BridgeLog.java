@@ -4,4 +4,5 @@ package com.airsim.phonecontrol;
 final class BridgeLog {
     private BridgeLog() {}
     static void info(String ignored) {}
+    static void error(String ignored, Throwable error) {}
 }

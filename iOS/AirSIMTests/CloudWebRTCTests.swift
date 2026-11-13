@@ -980,6 +980,75 @@ struct CloudWebRTCTests {
         try await runLoopback(servers: [], relayOnly: false)
     }
 
+    @Test func `Native Opus preserves above 4 kHz in both directions with a lower band control`() async throws {
+        // Distinct, non-harmonically related tones distinguish the remote decoder from local capture,
+        // and the low-only encode/decode control detects leakage or harmonics masquerading as HD audio.
+        let control = try await runLoopback(
+            servers: [],
+            relayOnly: false,
+            frequenciesA: [700],
+            frequenciesB: [1100],
+            collectSpectrum: true
+        )
+        let wideband = try await runLoopback(
+            servers: [],
+            relayOnly: false,
+            frequenciesA: [700, 5100],
+            frequenciesB: [1100, 5700],
+            collectSpectrum: true
+        )
+        for (direction, decoded, baseline, low, high, localHigh) in [
+            ("A-to-B", wideband.b, control.b, 700.0, 5100.0, 5700.0),
+            ("B-to-A", wideband.a, control.a, 1100.0, 5700.0, 5100.0),
+        ] {
+            let lowRMS = SyntheticToneSpectrum.rms(decoded, frequency: low)
+            let highRMS = SyntheticToneSpectrum.rms(decoded, frequency: high)
+            let controlLowRMS = SyntheticToneSpectrum.rms(baseline, frequency: low)
+            let controlHighRMS = SyntheticToneSpectrum.rms(baseline, frequency: high)
+            let localHighRMS = SyntheticToneSpectrum.rms(decoded, frequency: localHigh)
+            #expect(lowRMS > 100, "\(direction): remote in-band tone must survive native Opus")
+            #expect(controlLowRMS > 100, "\(direction): the lower-band control must decode real audio")
+            #expect(
+                controlHighRMS < controlLowRMS * 0.05,
+                "\(direction): lower-band input must not be classified as a >4 kHz signal"
+            )
+            #expect(highRMS > 100, "\(direction): measurable remote >4 kHz PCM is required, not a 48 kHz clock")
+            #expect(highRMS > lowRMS * 0.15, "\(direction): the high tone must retain material spectral energy")
+            #expect(highRMS > controlHighRMS * 10, "\(direction): high tone must exceed codec leakage by 20 dB")
+            #expect(
+                highRMS > localHighRMS * 10,
+                "\(direction): detected tone must come from the other peer, not this device's capture buffer"
+            )
+            print(
+                String(
+                    format:
+                        "Synthetic native Opus %@: %.0f Hz RMS %.1f, %.0f Hz RMS %.1f, low-only control %.1f, local tone %.1f",
+                    direction,
+                    low,
+                    lowRMS,
+                    high,
+                    highRMS,
+                    controlHighRMS,
+                    localHighRMS
+                )
+            )
+        }
+    }
+
+    @Test func `Spectral probe rejects a narrowband fixture even at a 48 kHz sample rate`() {
+        let lowOnly = (0..<48_000).map { sample in
+            Int16(sin(Double(sample) * 2 * .pi * 700 / 48_000) * 8000)
+        }
+        let highOnly = (0..<48_000).map { sample in
+            Int16(sin(Double(sample) * 2 * .pi * 5100 / 48_000) * 4000)
+        }
+        #expect(SyntheticToneSpectrum.rms(lowOnly, frequency: 700) > 5600)
+        #expect(SyntheticToneSpectrum.rms(lowOnly, frequency: 5100) < 1)
+        #expect(SyntheticToneSpectrum.rms(highOnly, frequency: 5100) > 2800)
+        #expect(SyntheticToneSpectrum.rms(highOnly, frequency: 700) < 1)
+        #expect(SyntheticToneSpectrum.rms([Int16](repeating: 0, count: 48_000), frequency: 5100) == 0)
+    }
+
     @Test func `Native peers negotiate Opus through TURN`() async throws {
         guard let path = ProcessInfo.processInfo.environment["AIRSIM_WEBRTC_TURN_CONFIG"] else {
             try Test.cancel("Set AIRSIM_WEBRTC_TURN_CONFIG to a private ephemeral TURN test configuration")
@@ -996,11 +1065,19 @@ struct CloudWebRTCTests {
         )
     }
 
-    private func runLoopback(servers: [RTCIceServer], relayOnly: Bool) async throws {
+    @discardableResult
+    private func runLoopback(
+        servers: [RTCIceServer],
+        relayOnly: Bool,
+        frequenciesA: [Double] = [440],
+        frequenciesB: [Double] = [440],
+        collectSpectrum: Bool = false
+    ) async throws -> (a: [Int16], b: [Int16]) {
         RTCInitializeSSL()
         let queue = DispatchQueue(label: "airsim.webrtc.loopback")
         let id = UUID(), session = UUID()
-        let outputA = SyntheticWebRTCAudioDevice(), outputB = SyntheticWebRTCAudioDevice()
+        let outputA = SyntheticWebRTCAudioDevice(frequencies: frequenciesA, collectSpectrum: collectSpectrum)
+        let outputB = SyntheticWebRTCAudioDevice(frequencies: frequenciesB, collectSpectrum: collectSpectrum)
         let factoryA = InspectablePeerFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputA)
         let factoryB = InspectablePeerFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputB)
         var offerer: CloudWebRTCPeer!
@@ -1080,10 +1157,14 @@ struct CloudWebRTCTests {
                 }
                 // Bounded stand-in for the former shared 20 s fulfillment timeout.
                 let deadline = Date().addingTimeInterval(20)
-                while queue.sync(execute: { reported.count < 2 || connectedCount < 2 }) {
+                while queue.sync(execute: { reported.count < 2 || connectedCount < 2 })
+                    || (collectSpectrum && (!outputA.hasSpectrumSamples || !outputB.hasSpectrumSamples))
+                {
                     guard Date() < deadline else {
                         struct LoopbackTimeout: Error {}
-                        Issue.record("Native peers did not both connect and report Opus RTP within 20 seconds")
+                        Issue.record(
+                            "Native peers did not both connect, report Opus RTP and provide requested PCM within 20 seconds"
+                        )
                         throw LoopbackTimeout()
                     }
                     try await Task.sleep(for: .milliseconds(20))
@@ -1096,6 +1177,8 @@ struct CloudWebRTCTests {
         if relayOnly { #expect(observed.1, "Force-relay test must gather TURN candidates") }
         #expect(outputA.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer A")
         #expect(outputB.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer B")
+        #expect(outputA.playoutErrors == 0)
+        #expect(outputB.playoutErrors == 0)
         // Read the native objects after setLocalDescription/setRemoteDescription completed, not just the strings
         // emitted by our signaling callback. Native SDP normalization must preserve the requested voice policy.
         let descriptions = queue.sync {
@@ -1128,6 +1211,7 @@ struct CloudWebRTCTests {
         } else {
             Issue.record("Both synthetic directions must capture and decode audio")
         }
+        return (outputA.spectrumSamples, outputB.spectrumSamples)
     }
 
     @Test func `Cloud call rejects legacy PCM`() throws {
@@ -1173,7 +1257,32 @@ private final class InspectablePeerFactory: RTCPeerConnectionFactory {
     }
 }
 
-/// Deterministic native ADM boundary: 440 Hz PCM goes into the real Opus encoder,
+/// Phase-independent tone power averaged across 20 ms Hann windows. Short windows tolerate
+/// NetEq timing adjustments; averaging a full second avoids relying on one render callback.
+private enum SyntheticToneSpectrum {
+    static func rms(_ samples: [Int16], frequency: Double) -> Double {
+        let count = 960
+        guard samples.count >= count else { return 0 }
+        let weights = (0..<count).map { 0.5 - 0.5 * cos(2 * .pi * Double($0) / Double(count - 1)) }
+        let cosine = (0..<count).map { weights[$0] * cos(2 * .pi * frequency * Double($0) / 48_000) }
+        let sine = (0..<count).map { weights[$0] * sin(2 * .pi * frequency * Double($0) / 48_000) }
+        let normalization = 2 / pow(weights.reduce(0, +), 2)
+        let windows = samples.count / count
+        var power = 0.0
+        for window in 0..<windows {
+            var real = 0.0, imaginary = 0.0
+            for i in 0..<count {
+                let sample = Double(samples[window * count + i])
+                real += sample * cosine[i]
+                imaginary += sample * sine[i]
+            }
+            power += (real * real + imaginary * imaginary) * normalization
+        }
+        return sqrt(power / Double(windows))
+    }
+}
+
+/// Deterministic native ADM boundary: generated PCM goes into the real Opus encoder,
 /// decoded PCM is measured here instead of touching a simulator microphone/speaker.
 private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
     let deviceInputSampleRate = 48_000.0
@@ -1203,6 +1312,31 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
     var receivedAudibleFrames: Int {
         lock.withLock { audibleFrames }
     }
+
+    private let frequencies: [Double]
+    private let collectSpectrum: Bool
+    // Skip 500 ms after first audible playout, then retain exactly one second of decoded PCM.
+    private static let warmupSamples = 24_000
+    private static let analysisSamples = 48_000
+    private var decodedSamples: [Int16] = []
+    private var failedPlayouts = 0
+
+    init(frequencies: [Double] = [440], collectSpectrum: Bool = false) {
+        precondition(!frequencies.isEmpty)
+        self.frequencies = frequencies
+        self.collectSpectrum = collectSpectrum
+        super.init()
+    }
+
+    var hasSpectrumSamples: Bool {
+        lock.withLock { decodedSamples.count == Self.warmupSamples + Self.analysisSamples }
+    }
+
+    var spectrumSamples: [Int16] {
+        lock.withLock { Array(decodedSamples.dropFirst(Self.warmupSamples)) }
+    }
+
+    var playoutErrors: Int { lock.withLock { failedPlayouts } }
 
     private let lock = NSLock()
     private var deviceDelegate: RTCAudioDeviceDelegate?
@@ -1277,7 +1411,10 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
                     if captureTime == nil { captureTime = ProcessInfo.processInfo.systemUptime }
                 }
                 for i in samples.indices {
-                    samples[i] = Int16(sin(Double(position + i) * 2 * .pi * 440 / 48_000) * 8000)
+                    let phase = Double(position + i) * 2 * .pi / 48_000
+                    samples[i] = Int16(
+                        frequencies.reduce(0) { $0 + sin(phase * $1) } * 8000 / Double(frequencies.count)
+                    )
                 }
                 position += 480
                 samples.withUnsafeMutableBytes { bytes in
@@ -1289,17 +1426,28 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
                 }
             }
             if state.1 {
-                samples.withUnsafeMutableBytes { bytes in
+                // Never mistake untouched local capture samples for remote decoded audio.
+                samples = [Int16](repeating: 0, count: 480)
+                let status = samples.withUnsafeMutableBytes { bytes in
                     var list = AudioBufferList(
                         mNumberBuffers: 1,
                         mBuffers: AudioBuffer(mNumberChannels: 1, mDataByteSize: 960, mData: bytes.baseAddress)
                     )
-                    _ = delegate.getPlayoutData(&flags, &timestamp, 0, 480, &list)
+                    return delegate.getPlayoutData(&flags, &timestamp, 0, 480, &list)
                 }
-                if samples.contains(where: { abs(Int($0)) > 100 }) {
-                    lock.withLock {
-                        audibleFrames += 1
-                        if audibleTime == nil { audibleTime = ProcessInfo.processInfo.systemUptime }
+                lock.withLock {
+                    if status != noErr {
+                        failedPlayouts += 1
+                    } else {
+                        if samples.contains(where: { abs(Int($0)) > 100 }) {
+                            audibleFrames += 1
+                            if audibleTime == nil { audibleTime = ProcessInfo.processInfo.systemUptime }
+                        }
+                        if collectSpectrum, audibleTime != nil,
+                            decodedSamples.count < Self.warmupSamples + Self.analysisSamples
+                        {
+                            decodedSamples.append(contentsOf: samples)
+                        }
                     }
                 }
             }

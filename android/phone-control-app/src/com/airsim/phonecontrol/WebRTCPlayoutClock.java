@@ -35,6 +35,7 @@ final class WebRTCPlayoutClock implements ExternalPlayoutClock {
 
     /** Queues decoded audio only while the carrier is attached. */
     void accept(byte[] pcm) {
+        if (pcm == null || pcm.length != sink.frameBytes()) throw new IllegalArgumentException("playout PCM frame mismatch");
         if (attached.getAsBoolean()) sink.offer(pcm, 0, pcm.length);
     }
 }
