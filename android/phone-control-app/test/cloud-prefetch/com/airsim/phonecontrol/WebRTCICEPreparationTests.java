@@ -8,7 +8,10 @@ import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import org.json.JSONArray;
+import org.json.JSONObject;
 
 /** Real HTTP and production signaling proxy; only privileged/native media is replaced. */
 public final class WebRTCICEPreparationTests {
@@ -25,6 +28,8 @@ public final class WebRTCICEPreparationTests {
         volatile String failureReason;
         final CountDownLatch requested = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
+        final CopyOnWriteArrayList<JSONObject> signals = new CopyOnWriteArrayList<>();
+        volatile Consumer<JSONObject> onSignal = value -> {};
         final ShizukuBridgeManager bridge = new ShizukuBridgeManager();
         final HttpServer server;
         final WebRTCCloudPeer peer;
@@ -49,7 +54,8 @@ public final class WebRTCICEPreparationTests {
             server.start();
             peer = new WebRTCCloudPeer(new Context(), UUID.randomUUID().toString(), 1,
                     "http://127.0.0.1:" + server.getAddress().getPort(), "fixture-secret",
-                    signal -> {}, reason -> { failureReason = reason; failures.incrementAndGet(); failed.countDown(); });
+                    signal -> { signals.add(signal); onSignal.accept(signal); },
+                    reason -> { failureReason = reason; failures.incrementAndGet(); failed.countDown(); });
         }
 
         public void close() {
@@ -145,6 +151,40 @@ public final class WebRTCICEPreparationTests {
             check(f.failed.await(3, TimeUnit.SECONDS));
             check("carrier_route_inactive".equals(f.failureReason));
             check(f.failures.get() == 1);
+        }
+        // Actual proxy: the bounded burst preserves every signal's order and deferred-carrier state.
+        try (Fixture f = new Fixture()) {
+            CountDownLatch delivered = new CountDownLatch(12);
+            f.onSignal = signal -> delivered.countDown();
+            for (int i = 0; i < 12; i++) f.bridge.events.add(new JSONObject().put("fixture_sequence", i));
+            f.peer.start(true);
+            check(delivered.await(3, TimeUnit.SECONDS));
+            for (int i = 0; i < 12; i++) check(f.signals.get(i).getInt("fixture_sequence") == i);
+            check(f.bridge.carrierDeferred && f.bridge.activations.get() == 0);
+            check(f.failures.get() == 0);
+        }
+        // A terminal event ends the burst immediately; later queued events cannot escape.
+        try (Fixture f = new Fixture()) {
+            f.bridge.events.add(new JSONObject().put("fixture_sequence", 1));
+            f.bridge.events.add(new JSONObject().put("status", "webrtc_failed").put("reason", "carrier_route_inactive"));
+            f.bridge.events.add(new JSONObject().put("fixture_sequence", 3));
+            f.peer.start(true);
+            check(f.failed.await(3, TimeUnit.SECONDS));
+            check(f.signals.size() == 2 && f.signals.get(0).getInt("fixture_sequence") == 1);
+            check("agent_media_failed".equals(f.signals.get(1).getString("status")));
+            check("carrier_route_inactive".equals(f.signals.get(1).getString("message")));
+            check(f.bridge.events.size() == 1 && f.bridge.events.peek().getInt("fixture_sequence") == 3);
+            check(f.failures.get() == 1);
+        }
+        // Hangup from the first signal delivery stops this batch without draining another event.
+        try (Fixture f = new Fixture()) {
+            CountDownLatch closed = new CountDownLatch(1);
+            f.onSignal = signal -> { f.peer.close(); closed.countDown(); };
+            for (int i = 0; i < 3; i++) f.bridge.events.add(new JSONObject().put("fixture_sequence", i));
+            f.peer.start(true);
+            check(closed.await(3, TimeUnit.SECONDS));
+            check(f.signals.size() == 1 && f.bridge.events.size() == 2);
+            check(f.failures.get() == 0);
         }
         System.out.println("WebRTC ICE preparation tests passed (" + checks + " checks)");
     }

@@ -1,6 +1,7 @@
 package com.airsim.phonecontrol;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -29,16 +30,17 @@ public final class CarrierUplinkTests {
         Runnable afterWrite = () -> {};
 
         @Override public int routedType() { routeQueries++; return route; }
-        @Override public void write(byte[] frame) {
-            written.add(frame.clone());
+        @Override public int write(byte[] frame, int offset, int length) {
+            written.add(Arrays.copyOfRange(frame, offset, offset + length));
             nanos.addAndGet(CarrierUplink.FRAME_NANOS);
             afterWrite.run();
+            return length;
         }
-        @Override public int writeNow(byte[] frame) {
-            unrouted.add(frame.clone());
+        @Override public int writeNow(byte[] frame, int offset, int length) {
+            unrouted.add(Arrays.copyOfRange(frame, offset, offset + length));
             nanos.addAndGet(CarrierUplink.FRAME_NANOS);
             afterWrite.run();
-            return frame.length;
+            return length;
         }
         CarrierUplink uplink(WebRTCPcmBuffer playback) {
             return new CarrierUplink(playback, this, TELEPHONY, closed::get, nanos::get, log::add);
@@ -54,6 +56,10 @@ public final class CarrierUplinkTests {
         missingRouteThatReturnsKeepsTheCall();
         trackThatTakesNoDataStillFailsInTime();
         otherDeviceFailsAtOnce();
+        partialWritesPreserveEverySample();
+        partialWritesRecheckTheRoute();
+        partialWritesRespectClose();
+        invalidWritesFailClosed();
         closeDuringGapExitsCleanly();
         silenceLogIsRateLimited();
         System.out.println("Carrier uplink tests passed");
@@ -198,8 +204,8 @@ public final class CarrierUplinkTests {
         WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
         AtomicInteger attempts = new AtomicInteger();
         Track track = new Track() {
-            @Override public void write(byte[] frame) { throw new AssertionError("waited on a track without a route"); }
-            @Override public int writeNow(byte[] frame) {
+            @Override public int write(byte[] frame, int offset, int length) { throw new AssertionError("waited on a track without a route"); }
+            @Override public int writeNow(byte[] frame, int offset, int length) {
                 attempts.incrementAndGet();
                 nanos.addAndGet(100_000_000L);
                 return 0;
@@ -233,6 +239,119 @@ public final class CarrierUplinkTests {
 
         String longest = TelephonyAudioDevice.reason(new IOException("carrier route changed type " + Integer.MAX_VALUE));
         require(longest.equals("carrier_route_changed_type_2147483647") && longest.length() <= 48, "reason fits the 48 character limit");
+    }
+
+    /** Partial/zero writes never skip or repeat samples, including after the route returns. */
+    private static void partialWritesPreserveEverySample() throws Exception {
+        for (boolean beginsRouted : new boolean[]{false, true}) {
+            WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+            byte[] audio = new byte[320];
+            for (int i = 0; i < 160; i++) {
+                int tone = (int) (12000 * Math.sin(2 * Math.PI * 400 * i / 8000));
+                audio[i * 2] = (byte) tone; audio[i * 2 + 1] = (byte) (tone >> 8);
+            }
+            playback.offer(audio, 0, audio.length);
+            ByteArrayOutputStream accepted = new ByteArrayOutputStream();
+            AtomicInteger calls = new AtomicInteger();
+            Track track = new Track() {
+                private int accept(byte[] frame, int offset, int length, boolean blocking) {
+                    int call = calls.incrementAndGet();
+                    int count = blocking ? Math.min(24, length) : call == 1 ? 0 : Math.min(42, length);
+                    accepted.write(frame, offset, count);
+                    nanos.addAndGet(CarrierUplink.FRAME_NANOS);
+                    if (call == 3) route = TELEPHONY;
+                    if (accepted.size() == audio.length) closed.set(true);
+                    return count;
+                }
+                @Override public int write(byte[] frame, int offset, int length) { return accept(frame, offset, length, true); }
+                @Override public int writeNow(byte[] frame, int offset, int length) { return accept(frame, offset, length, false); }
+            };
+            track.route = beginsRouted ? TELEPHONY : CarrierUplink.ROUTE_NONE;
+            track.uplink(playback).run();
+            require(Arrays.equals(audio, accepted.toByteArray()), "partial writes preserve the synthetic waveform byte for byte");
+            require(track.routeQueries == calls.get(), "every partial write has its own route check");
+            require(playback.consumed() == 2 && playback.drops() == 0 && playback.underruns() == 0,
+                    "partial writes neither discard decoded frames nor insert silence");
+        }
+    }
+
+    private static void partialWritesRecheckTheRoute() throws Exception {
+        for (boolean beginsRouted : new boolean[]{false, true}) {
+            WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+            playback.offer(frame(1000), 0, 160);
+            AtomicInteger accepted = new AtomicInteger();
+            Track track = new Track() {
+                private int partial() { accepted.addAndGet(20); route = SPEAKER; return 20; }
+                @Override public int write(byte[] frame, int offset, int length) { return partial(); }
+                @Override public int writeNow(byte[] frame, int offset, int length) { return partial(); }
+            };
+            track.route = beginsRouted ? TELEPHONY : CarrierUplink.ROUTE_NONE;
+            IOException failure = failure(track.uplink(playback));
+            require(failure != null && "carrier route changed type 2".equals(failure.getMessage()),
+                    "a route change during a partial frame fails closed");
+            require(accepted.get() == 20 && track.routeQueries == 2, "no tail is written to a non-carrier device");
+        }
+
+        // Progress inside a frame must not restart the absence deadline.
+        WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+        playback.offer(frame(1000), 0, 160);
+        AtomicInteger attempts = new AtomicInteger();
+        Track stalled = new Track() {
+            @Override public int writeNow(byte[] frame, int offset, int length) {
+                attempts.incrementAndGet(); nanos.addAndGet(100_000_000L); return 2;
+            }
+        };
+        stalled.route = CarrierUplink.ROUTE_NONE;
+        IOException failure = failure(stalled.uplink(playback));
+        require(failure != null && "carrier route inactive".equals(failure.getMessage()) && attempts.get() == 3,
+                "partial progress preserves the original 300 ms absence budget");
+    }
+
+    private static void partialWritesRespectClose() throws Exception {
+        for (boolean deviceFirst : new boolean[]{false, true}) {
+            WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+            playback.offer(frame(1000), 0, 160);
+            AtomicInteger attempts = new AtomicInteger();
+            Track track = new Track() {
+                @Override public int writeNow(byte[] frame, int offset, int length) {
+                    attempts.incrementAndGet();
+                    if (deviceFirst) closed.set(true); else playback.close();
+                    return 20;
+                }
+            };
+            track.route = CarrierUplink.ROUTE_NONE;
+            track.uplink(playback).run();
+            require(attempts.get() == 1, "close discards the pending tail without another write");
+        }
+        WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+        playback.offer(frame(1000), 0, 160);
+        AtomicInteger attempts = new AtomicInteger();
+        Track interrupted = new Track() {
+            @Override public int writeNow(byte[] frame, int offset, int length) {
+                attempts.incrementAndGet(); Thread.currentThread().interrupt(); return 20;
+            }
+        };
+        interrupted.route = CarrierUplink.ROUTE_NONE;
+        try { interrupted.uplink(playback).run(); throw new AssertionError("partial write ignored cancellation"); }
+        catch (InterruptedException expected) { require(attempts.get() == 1, "interrupt cancels the pending tail"); }
+        finally { Thread.interrupted(); }
+    }
+
+    private static void invalidWritesFailClosed() throws Exception {
+        for (int count : new int[]{-1, 1, 162}) {
+            for (boolean routed : new boolean[]{false, true}) {
+                WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+                playback.offer(frame(1000), 0, 160);
+                Track track = new Track() {
+                    @Override public int write(byte[] frame, int offset, int length) { return count; }
+                    @Override public int writeNow(byte[] frame, int offset, int length) { return count; }
+                };
+                track.route = routed ? TELEPHONY : CarrierUplink.ROUTE_NONE;
+                IOException failure = failure(track.uplink(playback));
+                require(failure != null && "carrier playback stopped".equals(failure.getMessage()),
+                        "invalid sample count fails closed: " + count);
+            }
+        }
     }
 
     /** Closing while only silence flows: the loop returns, reports nothing and writes nothing more. */

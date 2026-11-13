@@ -105,19 +105,29 @@ final class WebRTCCloudPeer implements Closeable {
             worker.scheduleWithFixedDelay(() -> {
                 if (closed.get()) return;
                 try {
-                    JSONObject response = request(identity("poll"));
-                    JSONObject event = response.optJSONObject("event");
-                    if (event != null) {
-                        if ("webrtc_failed".equals(event.optString("status"))) {
-                            fail(event.optString("reason", "carrier_media_unavailable"));
-                            return;
-                        }
-                        signals.send(event);
-                    }
-                    if (!response.optBoolean("active")) fail("privileged_peer_inactive");
+                    WebRTCSignalDrain.run(this::forwardOneSignal, closed::get, System::nanoTime);
                 } catch (Exception | LinkageError error) { fail("privileged_request_failed"); }
-            }, 0, 40, TimeUnit.MILLISECONDS);
+            }, 0, WebRTCSignalDrain.POLL_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
         });
+    }
+
+    private boolean forwardOneSignal() throws Exception {
+        // Each response retains the existing framing, request identity and ownership checks.
+        // Do not combine SDP/ICE into a potentially oversized IPC response.
+        JSONObject response = request(identity("poll"));
+        JSONObject event = response.optJSONObject("event");
+        if (event != null) {
+            if ("webrtc_failed".equals(event.optString("status"))) {
+                fail(event.optString("reason", "carrier_media_unavailable"));
+                return false;
+            }
+            signals.send(event);
+        }
+        if (!response.optBoolean("active")) {
+            fail("privileged_peer_inactive");
+            return false;
+        }
+        return event != null;
     }
 
     void activateCarrierAudio() {

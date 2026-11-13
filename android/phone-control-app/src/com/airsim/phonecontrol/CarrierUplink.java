@@ -23,10 +23,10 @@ final class CarrierUplink {
     interface Sink {
         /** {@code AudioDeviceInfo} type of the routed device, or {@link #ROUTE_NONE}. */
         int routedType();
-        /** Writes the whole frame, waiting for the carrier clock. */
-        void write(byte[] frame) throws IOException;
+        /** Writes up to length bytes, waiting for the carrier clock. Returns the byte count. */
+        int write(byte[] frame, int offset, int length) throws IOException;
         /** Writes what fits without waiting and returns the byte count. Restarts a starved track. */
-        int writeNow(byte[] frame) throws IOException;
+        int writeNow(byte[] frame, int offset, int length) throws IOException;
     }
 
     static final int ROUTE_NONE = -1;
@@ -114,23 +114,35 @@ final class CarrierUplink {
         }
     }
 
-    private void feed(byte[] frame, long now) throws IOException {
-        int type = sink.routedType();
-        if (type == carrierType) {
-            routeMissing = false;
-            sink.write(frame);
-            return;
+    private void feed(byte[] frame, long now) throws IOException, InterruptedException {
+        int offset = 0;
+        while (offset < frame.length && !closed.getAsBoolean() && !playback.isClosed()) {
+            if (Thread.interrupted()) throw new InterruptedException();
+            int type = sink.routedType();
+            int remaining = frame.length - offset;
+            int count;
+            if (type == carrierType) {
+                routeMissing = false;
+                count = sink.write(frame, offset, remaining);
+                if (count == 0) throw new IOException("carrier playback stopped");
+            } else {
+                // Recheck before every partial retry, never write to a reported non-carrier device.
+                if (type != ROUTE_NONE) throw new IOException("carrier route changed type " + type);
+                if (!routeMissing) {
+                    routeMissing = true;
+                    routeMissingSince = now;
+                } else if (now - routeMissingSince >= ROUTE_GRACE_NANOS) {
+                    throw new IOException("carrier route inactive");
+                }
+                // Only nonblocking writes may restart a route. Retain an unwritten tail rather
+                // than dropping those samples and splicing the next decoded frame into them.
+                count = sink.writeNow(frame, offset, remaining);
+            }
+            if (count < 0 || count > remaining || (count & 1) != 0)
+                throw new IOException("carrier playback stopped");
+            offset += count;
+            if (type == ROUTE_NONE && count < remaining) LockSupport.parkNanos(FRAME_NANOS);
+            now = clock.getAsLong();
         }
-        // A reported device that is not the carrier is never written to, not even once.
-        if (type != ROUTE_NONE) throw new IOException("carrier route changed type " + type);
-        if (!routeMissing) {
-            routeMissing = true;
-            routeMissingSince = now;
-        } else if (now - routeMissingSince >= ROUTE_GRACE_NANOS) {
-            throw new IOException("carrier route inactive");
-        }
-        // The write is what restarts a starved track. Never wait on a track without a route: a
-        // track that does not restart would hold this thread and the failure above would not come.
-        if (sink.writeNow(frame) < frame.length) LockSupport.parkNanos(FRAME_NANOS);
     }
 }

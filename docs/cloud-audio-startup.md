@@ -51,6 +51,12 @@ Answer startup joins the same in-flight request or reuses its still-valid result
 
 The Android event `webrtc_ice_ready` reports `prefetched` and `wait_ms`. A ready prefetch removes credential-fetch waiting from the post-answer path. This does not remove ICE connectivity checks, native initialization, carrier routing, or the need for physical latency measurement.
 
+## Bounded native signaling bursts
+
+The app previously requested and forwarded only one native SDP/ICE/status event per 40 ms poll. An already-queued burst therefore accumulated an extra 40 ms between every event, even though its native work had finished. The app now drains at most eight events in one worker turn and checks an 8 ms time budget between operations. It stops immediately on an empty queue, terminal failure or close. The unchanged 40 ms interval still applies between turns, so idle polling is not faster, and queued activation/stop work is not starved by an unbounded drain. A single IPC/network operation can itself exceed the budget; it is not forcibly interrupted.
+
+Each event still uses its own bounded IPC response with the existing request ID, owner and call identity checks. SDP and ICE are not combined into an oversized message. Native event order and the carrier-activation gates are unchanged. A deterministic model of twelve already-ready events with zero transport cost delivers the last event after 40 ms instead of 440 ms of polling gaps. This measures removed scheduling delay in that fixture, not a real call's setup improvement.
+
 ## Carrier attach and setup recovery
 
 Android attaches carrier audio as soon as `AirSIMInCallService` sees Telecom ACTIVE, instead of waiting for the 2-second agent loop and its Relay HTTP work. The loop still publishes the lifecycle; `active` is sent to the owner once per media socket.

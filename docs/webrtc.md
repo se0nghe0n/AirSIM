@@ -132,6 +132,16 @@ paces NetEq. Silence adds no delay beyond the AudioTrack buffer that steady
 state already keeps full. The first silence frame fades the last speech out and
 the next decoded frame fades in.
 
+## Sample preservation and voice negotiation
+
+The carrier uplink now retains the unwritten tail of a decoded PCM frame when Android accepts only part of a write. Previously a partial nonblocking write during a temporarily missing route could discard the tail and splice the next frame directly onto it. A generated 400 Hz fixture reproduced 320 expected bytes becoming 240 bytes, a missing 5 ms at the current 8 kHz PCM16 rate. The corrected path preserves the sequence byte-for-byte. It validates returned sample counts, checks the route again before every retry, retains the existing 300 ms missing-route limit, and stops on device or queue closure. A reported non-telephony route remains forbidden. No buffer size or route-verification threshold was relaxed.
+
+Voice SDP policy is applied within each active audio section, using that section's offered Opus payload. Missing `fmtp` now receives the intended mono, FEC and DTX parameters; whitespace/case variants of the parameters the app owns cannot leave conflicting values behind. Unrelated codec limits and non-audio sections are preserved. These changes make the existing policy reliable; they do not raise bitrate, change the 20 ms packet duration or reduce NetEq's jitter tolerance. Negotiating in-band FEC is not proof that any particular lost packet was repaired.
+
+Android carrier capture and injection remain 8 kHz mono. Raising the WebRTC rate or bitrate alone cannot restore frequency content already absent from that carrier path. Wider-band carrier routing needs physical OEM support and route verification before it can be enabled. The iPhone-to-carrier partial-write fix addresses a demonstrated sample-loss path; no new evidence justified changing the carrier-to-iPhone queue, clock, or concealment limits.
+
+The installed Android 86 version was verified before this work, but no post-update call timing or quality samples remained in logcat. Tests use generated samples and synthetic/native local peers, never private recordings. Physical first-speech delay, loss recovery, network handover and subjective speech quality remain separate acceptance checks.
+
 ## Validation
 
 Recorded local validation on 2026-10-17:
