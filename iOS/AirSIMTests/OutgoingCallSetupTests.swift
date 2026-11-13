@@ -1174,6 +1174,36 @@ struct CloudPreDialGateTests {
         return try #require(message)
     }
 
+    @Test(arguments: ["pre_dial_timeout", "preparation_timeout", "agent_preparation_failed", "peer_disconnected"])
+    func `Relay failure preserves only known pre-dial reasons`(_ reason: String) throws {
+        let call = try outgoingCall()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "status": "pre_dial_aborted", "reason": reason, "call_id": call.callID,
+            "call_uuid": call.uuid.uuidString, "generation": call.generation,
+        ])
+        let decoded = try #require(try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self)))
+        var gate = CloudPreDialGate()
+        gate.receive(decoded, call: call)
+        #expect(gate.failure == "relay_pre_dial_aborted:\(reason)")
+        #expect(decoded.traceFields["reason"] == reason)
+        #expect(!gate.canCommit)
+    }
+
+    @Test(arguments: ["", "unrecognized_code", "Bearer private-test-value", "pre_dial_timeout\nprivate-test-value"])
+    func `Arbitrary relay reasons never reach pre-dial diagnostics`(_ reason: String) throws {
+        let call = try outgoingCall()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "status": "pre_dial_aborted", "reason": reason, "call_id": call.callID,
+            "call_uuid": call.uuid.uuidString, "generation": call.generation,
+        ])
+        let decoded = try #require(try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self)))
+        var gate = CloudPreDialGate()
+        gate.receive(decoded, call: call)
+        #expect(gate.failure == "relay_pre_dial_aborted")
+        #expect(decoded.reason == nil)
+        #expect(decoded.traceFields["reason"] == nil)
+    }
+
     @Test func `Both native proofs precede exactly one commit`() throws {
         let call = try outgoingCall()
         let session = UUID()

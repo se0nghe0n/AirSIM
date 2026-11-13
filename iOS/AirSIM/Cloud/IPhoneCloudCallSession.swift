@@ -271,6 +271,7 @@ struct CloudCallControlMessage: Equatable, Sendable {
     let sessionID: UUID?
     let message: String?
     var error: String? = nil
+    var reason: String? = nil
     let action: String?
     let callID: String?
     let callUUID: String?
@@ -285,6 +286,7 @@ struct CloudCallControlMessage: Equatable, Sendable {
         let event: String?
         let message: String?
         let error: String?
+        let reason: String?
         let action: String?
         let callID: String?
         let callUUID: String?
@@ -293,7 +295,7 @@ struct CloudCallControlMessage: Equatable, Sendable {
         let traceID: String?
 
         enum CodingKeys: String, CodingKey {
-            case status, event, message, role, error
+            case status, event, message, role, error, reason
             case sessionID = "session_id"
             case action, generation
             case callID = "call_id"
@@ -313,6 +315,7 @@ struct CloudCallControlMessage: Equatable, Sendable {
             sessionID: payload.sessionID,
             message: payload.message,
             error: payload.error,
+            reason: payload.reason.flatMap { preDialFailureReasons.contains($0) ? $0 : nil },
             action: payload.action,
             callID: payload.callID,
             callUUID: payload.callUUID,
@@ -322,9 +325,18 @@ struct CloudCallControlMessage: Equatable, Sendable {
         )
     }
 
+    /// Only protocol-owned codes are safe for diagnostics; never surface arbitrary server text or identifiers.
+    private static let preDialFailureReasons: Set<String> = [
+        "preparation_cancelled", "socket_replaced", "remote_ended", "preparation_timeout",
+        "agent_preparation_failed", "media_unavailable", "commit_invalidated", "peer_disconnected",
+        "telecom_interrupted", "pre_dial_timeout", "pre_dial_disconnected", "pre_dial_cancelled",
+        "pre_dial_session_replaced", "pre_dial_transport_failed", "pre_dial_commit_failed",
+    ]
+
     var traceFields: [String: String] {
         var fields: [String: String] = [:]
         if let role { fields["role"] = role }
+        if let reason { fields["reason"] = reason }
         if let action { fields["action"] = action }
         if let callID { fields["call_id"] = callID }
         if let callUUID { fields["call_uuid"] = callUUID }
@@ -1715,7 +1727,19 @@ private struct CloudCallControlOperationIdentity {
     let traceID: String
 }
 
-private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
+/// The production WebSocket boundary can be replaced with an in-memory socket in native transport tests.
+protocol CloudCallSignalingSocket: AnyObject, Sendable {
+    var priority: Float { get set }
+    func resume()
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void)
+    func send(_ message: URLSessionWebSocketTask.Message, completionHandler: @escaping @Sendable (Error?) -> Void)
+    func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+}
+
+extension URLSessionWebSocketTask: CloudCallSignalingSocket {}
+
+final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     var onWebRTCState: ((_ connected: Bool, _ connection: UUID, _ negotiation: UUID) -> Void)?
     var onWebRTCRecovering: ((_ connection: UUID, _ negotiation: UUID) -> Void)?
     private var webRTCSessionID: UUID?
@@ -1733,7 +1757,17 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     var onOwnerJoinSent: ((IncomingVoIPCall, UUID, TimeInterval) -> Void)?
 
     private let queue = DispatchQueue(label: "com.example.airsim.iphone-cloud-media", qos: .userInteractive)
-    private var webSocket: URLSessionWebSocketTask?
+    private var webSocket: (any CloudCallSignalingSocket)?
+    private let makeWebSocket: (URLSession, URLRequest) -> any CloudCallSignalingSocket
+
+    init(
+        makeWebSocket: @escaping (URLSession, URLRequest) -> any CloudCallSignalingSocket = {
+            $0.webSocketTask(with: $1)
+        }
+    ) {
+        self.makeWebSocket = makeWebSocket
+    }
+
     private var networkSession: URLSession?
     private var connectionID = UUID()
     private var pendingConnection: CloudSignalingConnectionGate?
@@ -1797,7 +1831,12 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    func startWebRTC(call: IncomingVoIPCall, servers: [RTCIceServer], transportOnly: Bool = false) throws -> UUID {
+    func startWebRTC(
+        call: IncomingVoIPCall,
+        servers: [RTCIceServer],
+        transportOnly: Bool = false,
+        factory: RTCPeerConnectionFactory? = nil
+    ) throws -> UUID {
         try queue.sync {
             guard !stopped, let socket = webSocket else { throw IPhoneCloudCallError.connectionClosed }
             webRTCPeer?.close()
@@ -1805,6 +1844,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             let negotiation = UUID()
             webRTCSessionID = negotiation
             webRTCCall = call
+            // SDP/ICE belongs to the peer, not CallKit audio preparation. A fresh pre-dial peer must
+            // consume its answer and candidates before answer() ever calls prepareForCallKit().
+            webRTCMode = true
             webRTCAudioEnabled = !transportOnly
             let peer = try CloudWebRTCPeer(
                 callUUID: call.uuid,
@@ -1812,6 +1854,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 sessionID: negotiation,
                 servers: servers,
                 queue: queue,
+                factory: factory,
                 audioEnabled: !transportOnly,
                 signal: { [weak self, weak socket] signal in
                     guard let self,
@@ -1888,7 +1931,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                     var request = URLRequest(url: url)
                     request.networkServiceType = .voice
                     request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-                    let socket = session.webSocketTask(with: request)
+                    let socket = makeWebSocket(session, request)
                     socket.priority = URLSessionTask.highPriority
                     webSocket = socket
                     socket.resume()
@@ -2066,7 +2109,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    private func receiveNext(_ socket: URLSessionWebSocketTask) {
+    private func receiveNext(_ socket: any CloudCallSignalingSocket) {
         socket.receive { [weak self, weak socket] result in
             guard let self, let socket else { return }
             queue.async {
