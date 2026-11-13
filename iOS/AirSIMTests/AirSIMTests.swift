@@ -4496,6 +4496,92 @@ struct ActiveCallFeatureTests {
         )
     }
 
+    @Test(arguments: [
+        CGSize(width: 352, height: 512), CGSize(width: 390, height: 844),
+    ])
+    func timerTicksPreserveCallTypographyAndFrames(size: CGSize) throws {
+        var snapshot = AirSIMSnapshot()
+        let startedAt = Date().addingTimeInterval(-65)
+        snapshot.inAppPresentedCall = CallRecord(
+            id: "timer-layout",
+            index: 0,
+            direction: "incoming",
+            state: "active",
+            number: "114",
+            startedAt: startedAt,
+            updatedAt: startedAt,
+            endedAt: nil,
+            missed: false
+        )
+        let store = Store(initialState: ActiveCallFeature.State(snapshot: SharedReader(value: snapshot))) {
+            ActiveCallFeature()
+        } withDependencies: {
+            $0.airSIM = client(commands: LockIsolated([]))
+        }
+        let screen = ActiveCallViewController(store: store)
+        screen.isPresentationPreview = true
+        let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+        window.rootViewController = screen
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        screen.view.layoutIfNeeded()
+
+        func find<T: UIView>(_ type: T.Type, in view: UIView, matching predicate: @escaping (T) -> Bool) -> T? {
+            if let match = view as? T, predicate(match) { return match }
+            return view.subviews.lazy.compactMap { find(type, in: $0, matching: predicate) }.first
+        }
+        let timer = try #require(
+            find(UILabel.self, in: screen.view) { $0.accessibilityIdentifier == "callStatusOrTimer" }
+        )
+        let name = try #require(find(UILabel.self, in: screen.view) { $0.accessibilityIdentifier == "callCallerName" })
+        let avatar = try #require(find(CallHeroAvatarView.self, in: screen.view) { _ in true })
+        let end = try #require(button("End", in: screen.view))
+        let tracked: [UIView] = [timer, name, avatar, end]
+        func frames() -> [CGRect] { tracked.map { $0.convert($0.bounds, to: screen.view) } }
+
+        // Full renders and second/minute transitions must use the same layout-specific font.
+        var standardFontSize: CGFloat?
+        for category in [UIContentSizeCategory.large, .extraExtraLarge] {
+            screen.traitOverrides.preferredContentSizeCategory = category
+            screen.traitCollection.performAsCurrent { screen.render() }
+            screen.view.layoutIfNeeded()
+            let expectedFont = timer.font
+            if let standardFontSize {
+                #expect(expectedFont!.pointSize > standardFontSize)
+            } else {
+                standardFontSize = expectedFont!.pointSize
+            }
+            let expectedFrames = frames()
+            for second in [0, 1, 9, 10, 13, 14, 59, 60, 61, 119, 120, 599, 600] {
+                screen.tick(at: startedAt.addingTimeInterval(TimeInterval(second)))
+                screen.view.layoutIfNeeded()
+                #expect(timer.text == String(format: "%02d:%02d", second / 60, second % 60))
+                #expect(timer.font == expectedFont)
+                #expect(frames() == expectedFrames)
+                screen.traitCollection.performAsCurrent { screen.render() }
+                screen.view.layoutIfNeeded()
+                #expect(timer.font == expectedFont)
+                #expect(frames() == expectedFrames)
+            }
+        }
+
+        // Resizing must still update typography rather than freezing the first layout's font.
+        screen.traitOverrides.preferredContentSizeCategory = .large
+        screen.render()
+        screen.view.layoutIfNeeded()
+        let previousFontSize = timer.font.pointSize
+        let resized = CGSize(width: size.width, height: size.height < 580 ? 844 : 512)
+        window.frame = CGRect(origin: .zero, size: resized)
+        screen.view.frame = window.bounds
+        screen.view.setNeedsLayout()
+        screen.view.layoutIfNeeded()
+        let resizedFont = timer.font
+        #expect(resizedFont!.pointSize != previousFontSize)
+        screen.tick(at: startedAt.addingTimeInterval(66))
+        screen.view.layoutIfNeeded()
+        #expect(timer.font == resizedFont)
+    }
+
     @Test func `Folded iPhone Duo layout keeps header and recording controls away from the top-right corner`() throws {
         var snapshot = AirSIMSnapshot()
         snapshot.contacts = ContactDirectory(

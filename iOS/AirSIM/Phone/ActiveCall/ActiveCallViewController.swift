@@ -272,8 +272,8 @@ final class ActiveCallViewController: ObservingViewController {
         numberLabel.isHidden = !content.showsNumber
     }
 
-    private func renderDuration(_ content: ActiveCallContent, layout: CallLayout? = nil) {
-        let fontSize = layout?.durationFontSize ?? (content.showsDuration ? 20 : 16)
+    private func renderDuration(_ content: ActiveCallContent, layout: CallLayout) {
+        let fontSize = layout.durationFontSize
         if content.isIncoming {
             durationLabel.text = content.header
             durationLabel.font = UIFontMetrics(forTextStyle: .subheadline)
@@ -715,9 +715,10 @@ final class ActiveCallViewController: ObservingViewController {
         }
     }
 
-    private func tick() {
-        guard let content = store.content else { return }
-        renderDuration(content)
+    /// A timer tick must not replace the typography chosen for the current layout.
+    func tick(at now: Date = Date()) {
+        guard let content = store.content, content.showsDuration else { return }
+        durationLabel.text = content.duration(at: now)
     }
 }
 
