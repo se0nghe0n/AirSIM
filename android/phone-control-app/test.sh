@@ -200,6 +200,7 @@ UPLINK_OUT="$OUT/carrier-uplink"
 mkdir -p "$UPLINK_OUT"
 compile_test "$UPLINK_OUT" "$ANDROID_JAR" \
   "$ROOT"/test/peer-disposal/com/airsim/phonecontrol/BridgeLog.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudAudioSetupTimeline.java \
   "$ROOT"/src/com/airsim/phonecontrol/PrivilegedBridgeProtocol.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayoutClock.java \
@@ -310,7 +311,10 @@ compile_test "$RECOVERY_OUT" "$JSON_JAR" \
   "$ROOT"/test/cloud-recovery/android/telecom/Call.java \
   "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/MediaRecoveryFixtures.java \
   "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/CloudCarrierRecoveryTests.java \
+  "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/OutgoingDialAcceptanceTests.java \
   "$ROOT"/src/com/airsim/phonecontrol/StandaloneCloudMediaManager.java \
+  "$ROOT"/src/com/airsim/phonecontrol/OutgoingDialAcceptance.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CloudAudioSetupTimeline.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudCarrierRecovery.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudCallMedia.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudCallTarget.java \
@@ -318,6 +322,8 @@ compile_test "$RECOVERY_OUT" "$JSON_JAR" \
   "$ROOT"/src/com/airsim/phonecontrol/CallLifecycleConflict.java \
   "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java
 "$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$JSON_JAR")" com.airsim.phonecontrol.CloudCarrierRecoveryTests
+"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$JSON_JAR")" com.airsim.phonecontrol.OutgoingDialAcceptanceTests \
+  "$ROOT/src/com/airsim/phonecontrol/StandaloneAgentService.java"
 
 # Nonblocking carrier startup deadlines use a fake monotonic clock, never a physical call.
 compile_test "$OUT/carrier-startup" "" \

@@ -53,6 +53,8 @@ final class TelephonyWebRTCPeer implements Closeable {
     private final Set<String> previousSessions = new HashSet<>();
     private final List<IceCandidate> pendingICE = new ArrayList<>();
     private final WebRTCReadiness readiness = new WebRTCReadiness();
+    private final CloudAudioSetupTimeline setup = new CloudAudioSetupTimeline(
+            CloudAudioSetupTimeline.Scope.NATIVE, System::nanoTime, BridgeLog::info);
     private boolean remoteSet;
     private List<PeerConnection.IceServer> iceServers;
     private final boolean hostOnly;
@@ -132,10 +134,12 @@ final class TelephonyWebRTCPeer implements Closeable {
 
     private void startCarrierAudio() {
         if (closed.get() || device != null) return;
+        setup.mark(CloudAudioSetupTimeline.Phase.CARRIER_ACTIVATION);
         carrierAttempts++;
         TelephonyAudioDevice[] attempt = new TelephonyAudioDevice[1];
         attempt[0] = new TelephonyAudioDevice(capture, playback, () -> {
             deviceReady = true;
+            setup.mark(CloudAudioSetupTimeline.Phase.CARRIER_READY);
             submit(() -> { readiness.deviceReady(); maybeEmitReady(); });
         }, () -> carrierFailed(attempt[0]));
         device = attempt[0];
@@ -326,6 +330,9 @@ final class TelephonyWebRTCPeer implements Closeable {
             }
             public void onConnectionChange(PeerConnection.PeerConnectionState state) {
                 submit(() -> {
+                    if (id.equals(sessionID) && state == PeerConnection.PeerConnectionState.CONNECTED) {
+                        setup.mark(CloudAudioSetupTimeline.Phase.NATIVE_CONNECTED);
+                    }
                     readiness.connectionChanged(id, state == PeerConnection.PeerConnectionState.CONNECTED);
                     maybeEmitReady();
                 });

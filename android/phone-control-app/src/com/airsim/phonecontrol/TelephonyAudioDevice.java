@@ -28,6 +28,8 @@ final class TelephonyAudioDevice implements Closeable {
     private volatile Thread uplink;
     private volatile String failureReason = "carrier_media_unavailable";
     private boolean failing; // Guarded by this.
+    private final CloudAudioSetupTimeline setup = new CloudAudioSetupTimeline(
+            CloudAudioSetupTimeline.Scope.CARRIER, System::nanoTime, BridgeLog::info);
 
     TelephonyAudioDevice(WebRTCPcmBuffer capture, WebRTCPcmBuffer playback, Runnable ready, Runnable failed) {
         this.capture = capture; this.playback = playback; this.ready = ready; this.failed = failed;
@@ -85,6 +87,7 @@ final class TelephonyAudioDevice implements Closeable {
                         AudioDeviceInfo routed = output.getRoutedDevice();
                         return routed != null && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY && routed.isSink();
                     })) return;
+            setup.mark(CloudAudioSetupTimeline.Phase.ROUTE_VERIFIED);
             // Fill the carrier buffer with silence so the carrier clock paces NetEq from the first
             // frame instead of decoding a burst faster than real time.
             for (int i = 0; i < 64; i++) {
@@ -101,6 +104,7 @@ final class TelephonyAudioDevice implements Closeable {
             if (!startup.firstCapture(frame,
                     (bytes, offset, length) -> input.read(bytes, offset, length, AudioRecord.READ_NON_BLOCKING))) return;
             if (input.getAudioSource() != SOURCE_VOICE_DOWNLINK) throw new IOException("carrier capture failed");
+            setup.mark(CloudAudioSetupTimeline.Phase.FIRST_CAPTURE);
             capture.offer(frame, 0, frame.length);
             synchronized (this) {
                 // The uplink is already running. A device it has failed must not report ready

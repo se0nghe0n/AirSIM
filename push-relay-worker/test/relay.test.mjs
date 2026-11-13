@@ -1811,6 +1811,28 @@ test("WebRTC relays bounded offer, answer and early ICE only between owning iPho
   assert.match(agent.sent.at(-1), /session already answered/);
 });
 
+test("outgoing dial acceptance reaches a silent iPhone without claiming media ownership", async () => {
+  const iphone = new MemoryMediaSocket("iphone");
+  const agent = new MemoryMediaSocket("agent");
+  const state = new MemoryMediaState([iphone, agent]);
+  const relay = new CallMediaSession(state, mediaUnitEnvironment());
+  const accepted = JSON.stringify({ status: "outgoing_dial_accepted", call_id: "dial-call",
+    call_uuid: webRTCCallUUID, generation: 3 });
+
+  await relay.webSocketMessage(agent, accepted);
+  assert.equal(iphone.sent.at(-1), accepted);
+  assert.equal(relay.ownerRole(), "");
+  assert.equal(iphone.attachment.owner, false);
+  assert.equal(iphone.attachment.pendingControl, "");
+  assert.equal(iphone.attachment.negotiation, undefined);
+  assert.equal(agent.sent.length, 0);
+
+  // Acceptance confirms only the dial command. A regular owner join is still required.
+  await relay.webSocketMessage(iphone, signaling("webrtc_offer"));
+  assert.match(iphone.sent.at(-1), /invalid WebRTC owner or transport/);
+  assert.equal(agent.sent.length, 0);
+});
+
 test("outgoing preparation and carrier answer preserve the same WebRTC negotiation", async () => {
   const { relay, iphone, agent, watch } = await webRTCSession();
   const prepared = JSON.stringify({ status: "media_prepared", call_uuid: webRTCCallUUID, generation: 3 });

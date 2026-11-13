@@ -275,6 +275,8 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile boolean mediaStarted;
         private boolean carrierActive;
         private StandaloneWebSocket activeAnnounced;
+        private final CloudAudioSetupTimeline setup = new CloudAudioSetupTimeline(
+                CloudAudioSetupTimeline.Scope.APP, System::nanoTime, BridgeLog::info);
         // Survives socket/peer replacement, but never carries into another call or generation.
         private final CloudCarrierRecovery carrierRecovery = new CloudCarrierRecovery();
 
@@ -298,7 +300,10 @@ final class StandaloneCloudMediaManager implements Closeable {
                     // still starts only after Telecom confirms the answer below.
                     prepareWebRTC(owner);
                     synchronized (this) {
-                        if (!sendCarrierRecoveryRequired(owner)) owner.writeText(status("agent_ready", ""));
+                        if (!sendCarrierRecoveryRequired(owner)) {
+                            announceOutgoingDialAccepted(owner);
+                            owner.writeText(status("agent_ready", ""));
+                        }
                     }
                     BridgeLog.info("standalone_cloud_media_connected call_uuid="
                             + DebugRedactor.safeIdentifier(descriptor.callUUID));
@@ -332,6 +337,13 @@ final class StandaloneCloudMediaManager implements Closeable {
                 if (control.has("call_uuid") && !descriptor.callUUID.equalsIgnoreCase(control.optString("call_uuid"))) continue;
                 if (control.has("generation") && descriptor.generation != control.optLong("generation", -1)) continue;
                 String action = control.optString("action", "");
+                // The iPhone may connect after the initial acceptance was sent. The Relay does
+                // not retain arbitrary statuses, but announces each newly connected peer.
+                if (OutgoingDialAcceptance.replayFor(control.optString("status", control.optString("event", "")),
+                        control.optString("role", ""), action)) {
+                    announceOutgoingDialAccepted(owner);
+                    continue;
+                }
                 if (action.startsWith("webrtc_")) {
                     if (carrierRecovery.isBlocked()) continue;
                     WebRTCCloudPeer peer = webRTC;
@@ -340,6 +352,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                 }
                 if (!"answer".equals(action) && !"reject".equals(action) && !"end".equals(action)) continue;
                 if ("answer".equals(action)) {
+                    setup.mark(CloudAudioSetupTimeline.Phase.OWNER_JOIN_RECEIVED);
                     synchronized (this) {
                         if (sendCarrierRecoveryRequired(owner)) continue;
                     }
@@ -382,6 +395,15 @@ final class StandaloneCloudMediaManager implements Closeable {
             }
         }
 
+        private synchronized void announceOutgoingDialAccepted(StandaloneWebSocket owner) throws Exception {
+            if (!OutgoingDialAcceptance.mayAnnounce(descriptor.direction, running,
+                    owner != null && webSocket == owner, carrierRecovery.isBlocked())) return;
+            // This session exists only after successful dial execution. Match the HTTP result's
+            // meaning; binding, owner join and carrier activation retain their separate gates.
+            owner.writeText(status(OutgoingDialAcceptance.STATUS, ""));
+            setup.mark(CloudAudioSetupTimeline.Phase.DIAL_ACCEPTED);
+        }
+
         private synchronized void prepareOutgoingMedia(StandaloneWebSocket owner) throws Exception {
             if (!running || webSocket != owner || sendCarrierRecoveryRequired(owner)) return;
             if (!CallRepository.canPrepareOutgoingMedia(descriptor.androidID)) {
@@ -398,6 +420,8 @@ final class StandaloneCloudMediaManager implements Closeable {
             if (!running || webSocket != owner || mediaStarted || carrierRecovery.isBlocked()) return;
             StandaloneAgentStore.startCloudCallMedia(mediaTransport, () -> {
                 mediaStarted = true;
+                setup.mark(deferCarrierAudio ? CloudAudioSetupTimeline.Phase.MEDIA_START_DEFERRED
+                        : CloudAudioSetupTimeline.Phase.MEDIA_START_ACTIVE);
                 BridgeLog.info("standalone_webrtc_starting call_uuid="
                         + DebugRedactor.safeIdentifier(descriptor.callUUID));
                 startWebRTC(owner, deferCarrierAudio);

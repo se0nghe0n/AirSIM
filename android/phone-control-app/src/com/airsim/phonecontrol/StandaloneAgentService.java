@@ -216,7 +216,7 @@ public final class StandaloneAgentService extends Service {
                     if (!isCurrentCommandRegistration(generation)) return;
                     result = StandaloneAgentGateway.get(this).executeCloudCommand(command);
                     if (!isCurrentCommandRegistration(generation)) return;
-                    if (result.optString("status").equals("completed") && "dial".equals(command.optString("type"))) {
+                    if (OutgoingDialAcceptance.completed(command.optString("type"), result.optString("status"))) {
                         StandaloneCloudMediaManager.get(this).startOutgoing(command.optJSONObject("call"));
                     }
                 }
@@ -275,8 +275,7 @@ public final class StandaloneAgentService extends Service {
                         if (!isCurrentCommandRegistration(generation)) break;
                         JSONObject result = StandaloneAgentGateway.get(this).executeCloudCommand(command);
                         if (!isCurrentCommandRegistration(generation)) break;
-                        if (result.optString("status").equals("completed")
-                                && "dial".equals(command.optString("type"))) {
+                        if (OutgoingDialAcceptance.completed(command.optString("type"), result.optString("status"))) {
                             StandaloneCloudMediaManager.get(this).startOutgoing(command.optJSONObject("call"));
                         }
                         if (!isCurrentCommandRegistration(generation)) break;

@@ -31,6 +31,7 @@ TEST="$ROOT/test/peer-disposal/com/airsim/phonecontrol"
 # Compile the actual peer and carrier implementation. Only Android logging is stubbed here.
 "$JAVAC" --release 17 -sourcepath '' -cp "$CLASSPATH" -d "$OUT/production" \
   "$TEST/BridgeLog.java" \
+  "$SOURCE/CloudAudioSetupTimeline.java" \
   "$SOURCE/PrivilegedBridgeProtocol.java" \
   "$SOURCE/WebRTCPcmBuffer.java" \
   "$SOURCE/WebRTCCaptureClock.java" \
