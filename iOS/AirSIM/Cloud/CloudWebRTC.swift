@@ -682,48 +682,68 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         config.audioJitterBufferFastAccelerate = true
     }
 
-    /// Keep Opus mono at 20 ms; no SDP or credentials enter trace output.
+    /// Apply the voice policy separately to each offered audio section. Payload numbers are local to a media
+    /// section, and Opus fmtp is optional: omitting it must not silently turn off FEC, DTX or mono reception.
+    /// No SDP or credentials enter trace output.
     static func voiceSDP(_ sdp: String) -> String {
-        let lines = sdp.components(separatedBy: "\r\n")
-        let opus = lines.first(where: { $0.hasPrefix("a=rtpmap:") && $0.lowercased().contains("opus/48000") })?
-            .dropFirst("a=rtpmap:".count).split(separator: " ").first.map(String.init)
-        guard let opus else { return sdp }
-        var inAudio = false
-        var result: [String] = []
+        let separator = sdp.contains("\r\n") ? "\r\n" : "\n"
+        let lines = sdp.components(separatedBy: separator)
+        var sections: [[String]] = [[]]
         for line in lines {
-            if line.hasPrefix("m=") { inAudio = line.hasPrefix("m=audio ") }
-            if inAudio {
-                if line.hasPrefix("m=audio ") {
-                    result.append(line.split(separator: " ").prefix(3).joined(separator: " ") + " " + opus)
-                    continue
+            if line.hasPrefix("m=") { sections.append([]) }
+            sections[sections.count - 1].append(line)
+        }
+        return sections.flatMap(voiceAudioSection).joined(separator: separator)
+    }
+
+    private static func voiceAudioSection(_ lines: [String]) -> [String] {
+        guard let media = lines.first, media.hasPrefix("m=audio ") else { return lines }
+        let mediaFields = media.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Rejected sections and audio without a supported offered Opus payload are left untouched.
+        guard mediaFields.count > 3, mediaFields[1] != "0" else { return lines }
+        let payloads = Set(mediaFields.dropFirst(3))
+        let mapping = lines.first { line in
+            guard line.hasPrefix("a=rtpmap:") else { return false }
+            let fields = line.dropFirst("a=rtpmap:".count).split(whereSeparator: \.isWhitespace)
+            return fields.count >= 2 && payloads.contains(String(fields[0]))
+                && fields[1].lowercased() == "opus/48000/2"
+        }
+        guard let mapping,
+            let opus = mapping.dropFirst("a=rtpmap:".count).split(whereSeparator: \.isWhitespace).first.map(String.init)
+        else { return lines }
+
+        func payload(in line: String, prefix: String) -> String? {
+            line.dropFirst(prefix.count).split(whereSeparator: \.isWhitespace).first.map(String.init)
+        }
+        let ownedKeys: Set<String> = ["stereo", "sprop-stereo", "useinbandfec", "usedtx", "minptime"]
+        var parameters: [String] = []
+        for line in lines where line.hasPrefix("a=fmtp:") && payload(in: line, prefix: "a=fmtp:") == opus {
+            let fields = line.dropFirst("a=fmtp:".count).split(maxSplits: 1, whereSeparator: \.isWhitespace)
+            guard fields.count == 2 else { continue }
+            parameters += fields[1].split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { parameter in
+                    let key =
+                        parameter.split(separator: "=", maxSplits: 1).first?
+                        .trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+                    return !parameter.isEmpty && !ownedKeys.contains(key)
                 }
-                if line.hasPrefix("a=ptime:") || line.hasPrefix("a=maxptime:") { continue }
-                let codecPrefix = ["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"].first { line.hasPrefix($0) }
-                if let codecPrefix {
-                    let payload = line.dropFirst(codecPrefix.count).split(separator: " ").first.map(String.init)
-                    if payload != opus && payload != "*" { continue }
-                }
+        }
+        parameters += ["minptime=20", "useinbandfec=1", "usedtx=1", "stereo=0", "sprop-stereo=0"]
+        var result = [mediaFields.prefix(3).joined(separator: " ") + " " + opus]
+        for line in lines.dropFirst() {
+            if line.hasPrefix("a=ptime:") || line.hasPrefix("a=maxptime:") { continue }
+            if let prefix = ["a=rtpmap:", "a=fmtp:", "a=rtcp-fb:"].first(where: { line.hasPrefix($0) }) {
+                let id = payload(in: line, prefix: prefix)
+                if id != opus && id != "*" { continue }
+                if prefix == "a=fmtp:", id == opus { continue }
             }
             result.append(line)
+            if line == mapping {
+                result.append("a=fmtp:\(opus) " + parameters.joined(separator: ";"))
+                result.append(contentsOf: ["a=ptime:20", "a=maxptime:20"])
+            }
         }
-        if let index = result.firstIndex(where: { $0.hasPrefix("a=fmtp:\(opus) ") }) {
-            let prefix = "a=fmtp:\(opus) "
-            let other = result[index].dropFirst(prefix.count).split(separator: ";").map(String.init)
-                .filter {
-                    !["stereo", "sprop-stereo", "useinbandfec", "usedtx", "minptime"].contains(
-                        $0.split(separator: "=").first.map(String.init) ?? ""
-                    )
-                }
-            result[index] =
-                prefix
-                + (other + ["minptime=20", "useinbandfec=1", "usedtx=1", "stereo=0", "sprop-stereo=0"]).joined(
-                    separator: ";"
-                )
-        }
-        if let index = result.firstIndex(where: { $0.hasPrefix("a=rtpmap:\(opus) ") }) {
-            result.insert(contentsOf: ["a=ptime:20", "a=maxptime:20"], at: index)
-        }
-        return result.joined(separator: "\r\n")
+        return result
     }
 
     private func setLocal(_ description: RTCSessionDescription, action: CloudWebRTCSignal.Action) {

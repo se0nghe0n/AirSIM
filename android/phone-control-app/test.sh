@@ -299,9 +299,15 @@ compile_test "$PREFETCH_OUT" "$OUT:$JSON_JAR" \
   "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/BridgeLog.java \
   "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/ShizukuBridgeManager.java \
   "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaProtocol.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCSignalDrain.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCCloudPeer.java \
   "$ROOT"/test/cloud-prefetch/com/airsim/phonecontrol/WebRTCICEPreparationTests.java
 "$JAVA" -cp "$(with_stdlib "$PREFETCH_OUT:$OUT:$JSON_JAR")" com.airsim.phonecontrol.WebRTCICEPreparationTests
+
+compile_test "$OUT/signal-drain" "" \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCSignalDrain.java \
+  "$ROOT"/test/com/airsim/phonecontrol/WebRTCSignalDrainTests.java
+"$JAVA" -cp "$(with_stdlib "$OUT/signal-drain")" com.airsim.phonecontrol.WebRTCSignalDrainTests
 
 # Run the real cloud-session reconnect loop against fake transport/native boundaries. Never dial.
 RECOVERY_OUT="$OUT/cloud-recovery"

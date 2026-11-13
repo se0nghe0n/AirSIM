@@ -98,7 +98,8 @@ UUID rather than a transport label; existing protected local files are preserved
 The historical `android/phone-audio-bridge` source, tests and scripts are removed. Its former implementation remains in Git history; [carrier-route validation](carrier-route-validation.md) records the unperformed device acceptance. Package-scoped old-daemon eviction still recognizes the historical class/port so an upgrade can stop a stale bridge without killing unrelated processes. Removal of the reference implementation does not establish physical call quality.
 
 The Shizuku UserService retains the legacy `airsim-pcm-v1` tag as its persistent
-upgrade identity. Shizuku matches services by package and tag. Version 11 loads the
+upgrade identity. Shizuku matches services by package and tag. Version 12 loads the
+partial-write sample-preservation and voice-SDP fixes. Version 11 loads the
 outgoing startup timing diagnostics after an in-place upgrade. Version 10 replaces
 older bridge instances so the bounded carrier-startup implementation is loaded
 after an in-place APK update. Version 9 originally replaced the version-8 daemon

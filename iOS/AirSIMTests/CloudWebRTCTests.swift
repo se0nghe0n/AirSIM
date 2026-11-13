@@ -6,28 +6,65 @@ import AudioToolbox
 
 struct CloudWebRTCTests {
     @Test func `Accepted incoming audio can arm while Android confirmation is pending`() {
-        #expect(CloudCallAudioStartupPolicy.shouldStart(
-            answered: true, mediaPrepared: true, lifecycleState: .connecting, isOutgoing: false,
-            managedByCallKit: true, callKitAudioSessionActive: true))
+        #expect(
+            CloudCallAudioStartupPolicy.shouldStart(
+                answered: true,
+                mediaPrepared: true,
+                lifecycleState: .connecting,
+                isOutgoing: false,
+                managedByCallKit: true,
+                callKitAudioSessionActive: true
+            )
+        )
         for state in [CallLifecycleState.idle, .ringing, .ending, .ended, .failed] {
-            #expect(!CloudCallAudioStartupPolicy.shouldStart(
-                answered: true, mediaPrepared: true, lifecycleState: state, isOutgoing: false,
-                managedByCallKit: true, callKitAudioSessionActive: true))
+            #expect(
+                !CloudCallAudioStartupPolicy.shouldStart(
+                    answered: true,
+                    mediaPrepared: true,
+                    lifecycleState: state,
+                    isOutgoing: false,
+                    managedByCallKit: true,
+                    callKitAudioSessionActive: true
+                )
+            )
         }
-        #expect(!CloudCallAudioStartupPolicy.shouldStart(
-            answered: false, mediaPrepared: true, lifecycleState: .connecting, isOutgoing: false,
-            managedByCallKit: true, callKitAudioSessionActive: true))
-        #expect(!CloudCallAudioStartupPolicy.shouldStart(
-            answered: true, mediaPrepared: false, lifecycleState: .connecting, isOutgoing: false,
-            managedByCallKit: true, callKitAudioSessionActive: true))
-        #expect(!CloudCallAudioStartupPolicy.shouldStart(
-            answered: true, mediaPrepared: true, lifecycleState: .connecting, isOutgoing: false,
-            managedByCallKit: true, callKitAudioSessionActive: false))
+        #expect(
+            !CloudCallAudioStartupPolicy.shouldStart(
+                answered: false,
+                mediaPrepared: true,
+                lifecycleState: .connecting,
+                isOutgoing: false,
+                managedByCallKit: true,
+                callKitAudioSessionActive: true
+            )
+        )
+        #expect(
+            !CloudCallAudioStartupPolicy.shouldStart(
+                answered: true,
+                mediaPrepared: false,
+                lifecycleState: .connecting,
+                isOutgoing: false,
+                managedByCallKit: true,
+                callKitAudioSessionActive: true
+            )
+        )
+        #expect(
+            !CloudCallAudioStartupPolicy.shouldStart(
+                answered: true,
+                mediaPrepared: true,
+                lifecycleState: .connecting,
+                isOutgoing: false,
+                managedByCallKit: true,
+                callKitAudioSessionActive: false
+            )
+        )
     }
 
     @Test @MainActor func `Cold launch startup is order independent and still requires answer acknowledgement`() {
-        for order in [["activation", "prepared", "confirmed"], ["prepared", "confirmed", "activation"],
-                      ["prepared", "activation", "confirmed"], ["confirmed", "activation", "prepared"]] {
+        for order in [
+            ["activation", "prepared", "confirmed"], ["prepared", "confirmed", "activation"],
+            ["prepared", "activation", "confirmed"], ["confirmed", "activation", "prepared"],
+        ] {
             let handshake = CloudWebRTCAnswerHandshake()
             var activated = false, prepared = false, permitted = false, starts = 0
             func tryStart() {
@@ -40,8 +77,13 @@ struct CloudWebRTCTests {
                 default: handshake.confirm(status: "answer_ok", isOutgoing: false) { tryStart() }
                 }
                 if CloudCallAudioStartupPolicy.shouldStart(
-                    answered: true, mediaPrepared: prepared, lifecycleState: .connecting, isOutgoing: false,
-                    managedByCallKit: true, callKitAudioSessionActive: activated) {
+                    answered: true,
+                    mediaPrepared: prepared,
+                    lifecycleState: .connecting,
+                    isOutgoing: false,
+                    managedByCallKit: true,
+                    callKitAudioSessionActive: activated
+                ) {
                     permitted = true
                     tryStart()
                 }
@@ -615,6 +657,76 @@ struct CloudWebRTCTests {
         #expect(output.contains("usedtx=1"))
     }
 
+    @Test func `Voice SDP adds missing Opus parameters and is idempotent`() {
+        let input = [
+            "v=0", "m=audio 9 UDP/TLS/RTP/SAVPF 111 0", "a=rtpmap:111 opus/48000/2",
+            "a=rtpmap:0 PCMU/8000", "a=rtcp-fb:111 transport-cc", "a=rtcp-fb:* nack", "",
+        ].joined(separator: "\r\n")
+        let output = CloudWebRTCPeer.voiceSDP(input)
+        #expect(output.contains("a=fmtp:111 minptime=20;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0\r\n"))
+        #expect(output.contains("a=rtcp-fb:111 transport-cc\r\na=rtcp-fb:* nack"))
+        #expect(CloudWebRTCPeer.voiceSDP(output) == output)
+    }
+
+    @Test func `Voice SDP replaces spaced duplicate policy keys and preserves codec limits`() {
+        let input = [
+            "v=0", "m=audio 9 UDP/TLS/RTP/SAVPF 111", "a=rtpmap:111 opus/48000/2",
+            "a=fmtp:111 minptime=10; useinbandfec = 0; usedtx=0; stereo=1; maxaveragebitrate=24000",
+            "a=fmtp:111\tUSEINBANDFEC=0; sprop-stereo=1; maxplaybackrate=16000",
+            "a=ptime:60", "a=maxptime:120", "",
+        ].joined(separator: "\r\n")
+        let output = CloudWebRTCPeer.voiceSDP(input)
+        let fmtp = output.components(separatedBy: "\r\n").filter { $0.hasPrefix("a=fmtp:111 ") }
+        #expect(
+            fmtp == [
+                "a=fmtp:111 maxaveragebitrate=24000;maxplaybackrate=16000;minptime=20;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0"
+            ]
+        )
+        #expect(output.components(separatedBy: "a=ptime:20").count == 2)
+        #expect(output.components(separatedBy: "a=maxptime:20").count == 2)
+        #expect(!output.contains("a=ptime:60"))
+        #expect(!output.contains("a=maxptime:120"))
+        #expect(CloudWebRTCPeer.voiceSDP(output) == output)
+    }
+
+    @Test func `Voice SDP scopes payloads and leaves other media unchanged`() {
+        let video = [
+            "m=video 9 UDP/TLS/RTP/SAVPF 111", "a=rtpmap:111 VP8/90000", "a=fmtp:111 stereo=1",
+            "a=rtcp-fb:111 nack", "a=ptime:33",
+        ]
+        let application = ["m=application 9 UDP/DTLS/SCTP webrtc-datachannel", "a=sctp-port:5000", ""]
+        let input =
+            ["v=0", "a=group:BUNDLE 0 1 2 3"] + video + [
+                "m=audio 9 UDP/TLS/RTP/SAVPF 109 0", "a=mid:1", "a=rtpmap:109 OPUS/48000/2",
+                "a=rtpmap:0 PCMU/8000", "m=audio 9 UDP/TLS/RTP/SAVPF 112 8", "a=mid:2",
+                "a=rtpmap:112 opus/48000/2", "a=fmtp:112 maxaveragebitrate=32000", "a=rtpmap:8 PCMA/8000",
+            ] + application
+        let output = CloudWebRTCPeer.voiceSDP(input.joined(separator: "\r\n"))
+        #expect(output.contains(video.joined(separator: "\r\n")))
+        #expect(output.hasSuffix(application.joined(separator: "\r\n")))
+        #expect(output.contains("m=audio 9 UDP/TLS/RTP/SAVPF 109\r\n"))
+        #expect(output.contains("m=audio 9 UDP/TLS/RTP/SAVPF 112\r\n"))
+        #expect(output.contains("a=fmtp:109 minptime=20;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0"))
+        #expect(
+            output.contains(
+                "a=fmtp:112 maxaveragebitrate=32000;minptime=20;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0"
+            )
+        )
+        #expect(!output.contains("PCMU"))
+        #expect(!output.contains("PCMA"))
+        #expect(CloudWebRTCPeer.voiceSDP(output) == output)
+    }
+
+    @Test(arguments: [
+        "m=audio 0 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n",
+        "m=audio 9 UDP/TLS/RTP/SAVPF 0\r\na=rtpmap:0 PCMU/8000\r\n",
+        "m=audio 9 UDP/TLS/RTP/SAVPF 0\r\na=rtpmap:111 opus/48000/2\r\n",
+        "m=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/480000/2\r\n",
+    ])
+    func `Voice SDP leaves rejected or unsupported audio untouched`(_ input: String) {
+        #expect(CloudWebRTCPeer.voiceSDP(input) == input)
+    }
+
     @Test func `ICE request keeps secret out of URL`() throws {
         let id = UUID()
         let call = try IncomingVoIPCall(
@@ -889,8 +1001,8 @@ struct CloudWebRTCTests {
         let queue = DispatchQueue(label: "airsim.webrtc.loopback")
         let id = UUID(), session = UUID()
         let outputA = SyntheticWebRTCAudioDevice(), outputB = SyntheticWebRTCAudioDevice()
-        let factoryA = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputA)
-        let factoryB = RTCPeerConnectionFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputB)
+        let factoryA = InspectablePeerFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputA)
+        let factoryB = InspectablePeerFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: outputB)
         var offerer: CloudWebRTCPeer!
         var answerer: CloudWebRTCPeer!
         // Close the peers even when the wait times out, so the audio pump
@@ -984,6 +1096,38 @@ struct CloudWebRTCTests {
         if relayOnly { #expect(observed.1, "Force-relay test must gather TURN candidates") }
         #expect(outputA.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer A")
         #expect(outputB.receivedAudibleFrames > 0, "Real Opus decode must deliver audible PCM to peer B")
+        // Read the native objects after setLocalDescription/setRemoteDescription completed, not just the strings
+        // emitted by our signaling callback. Native SDP normalization must preserve the requested voice policy.
+        let descriptions = queue.sync {
+            [
+                factoryA.connection?.localDescription, factoryA.connection?.remoteDescription,
+                factoryB.connection?.localDescription, factoryB.connection?.remoteDescription,
+            ]
+        }
+        for description in descriptions {
+            let sdp = try #require(description).sdp
+            let lines = sdp.components(separatedBy: "\r\n")
+            let opus = try #require(lines.first { $0.hasPrefix("a=rtpmap:") && $0.contains("opus/48000/2") })
+                .dropFirst("a=rtpmap:".count).split(separator: " ")[0]
+            let fmtp = try #require(lines.first { $0.hasPrefix("a=fmtp:\(opus) ") })
+            let parameters = Set(fmtp.dropFirst("a=fmtp:\(opus) ".count).split(separator: ";").map(String.init))
+            #expect(parameters.isSuperset(of: ["useinbandfec=1", "usedtx=1", "stereo=0", "sprop-stereo=0"]))
+            #expect(lines.contains("a=ptime:20"))
+            #expect(lines.contains("a=maxptime:20"))
+        }
+        if let sentA = outputA.firstCaptureTime, let heardB = outputB.firstAudibleTime,
+            let sentB = outputB.firstCaptureTime, let heardA = outputA.firstAudibleTime
+        {
+            print(
+                String(
+                    format: "Synthetic native Opus first-audio delay: A-to-B %.1f ms, B-to-A %.1f ms",
+                    (heardB - sentA) * 1_000,
+                    (heardA - sentB) * 1_000
+                )
+            )
+        } else {
+            Issue.record("Both synthetic directions must capture and decode audio")
+        }
     }
 
     @Test func `Cloud call rejects legacy PCM`() throws {
@@ -1011,6 +1155,21 @@ struct CloudWebRTCTests {
             mediaTransport: .legacyPCM
         )
         #expect(call.requestedMediaTransport == .webRTC)
+    }
+}
+
+/// Keeps native peers observable in tests without changing the production peer API.
+private final class InspectablePeerFactory: RTCPeerConnectionFactory {
+    private(set) weak var connection: RTCPeerConnection?
+
+    override func peerConnection(
+        with configuration: RTCConfiguration,
+        constraints: RTCMediaConstraints,
+        delegate: (any RTCPeerConnectionDelegate)?
+    ) -> RTCPeerConnection? {
+        let peer = super.peerConnection(with: configuration, constraints: constraints, delegate: delegate)
+        connection = peer
+        return peer
     }
 }
 
@@ -1050,6 +1209,11 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
     private var playing = false
     private var recording = false
     private var audibleFrames = 0
+    private var captureTime: TimeInterval?
+    private var audibleTime: TimeInterval?
+
+    var firstCaptureTime: TimeInterval? { lock.withLock { captureTime } }
+    var firstAudibleTime: TimeInterval? { lock.withLock { audibleTime } }
     private var thread: Thread?
     private let threadStopped = DispatchSemaphore(value: 0)
 
@@ -1109,6 +1273,9 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
             var timestamp = AudioTimeStamp()
             var samples = [Int16](repeating: 0, count: 480)
             if state.2 {
+                lock.withLock {
+                    if captureTime == nil { captureTime = ProcessInfo.processInfo.systemUptime }
+                }
                 for i in samples.indices {
                     samples[i] = Int16(sin(Double(position + i) * 2 * .pi * 440 / 48_000) * 8000)
                 }
@@ -1130,7 +1297,10 @@ private final class SyntheticWebRTCAudioDevice: NSObject, RTCAudioDevice, @unche
                     _ = delegate.getPlayoutData(&flags, &timestamp, 0, 480, &list)
                 }
                 if samples.contains(where: { abs(Int($0)) > 100 }) {
-                    lock.withLock { audibleFrames += 1 }
+                    lock.withLock {
+                        audibleFrames += 1
+                        if audibleTime == nil { audibleTime = ProcessInfo.processInfo.systemUptime }
+                    }
                 }
             }
             Thread.sleep(forTimeInterval: 0.01)

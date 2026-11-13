@@ -76,7 +76,56 @@ public final class WebRTCMediaTests {
         require(tuned.contains("a=sendrecv"), "SDP direction retained");
         require(WebRTCOpusSDP.configure(tuned).equals(tuned), "SDP tuning idempotent");
         try { WebRTCOpusSDP.configure("v=0\r\n"); throw new AssertionError("missingOpus accepted"); } catch (IllegalArgumentException expected) {}
+        opusSectionTests();
         System.out.println("WebRTC media tests passed");
+    }
+
+    private static void opusSectionTests() {
+        String audio = "m=audio 9 UDP/TLS/RTP/SAVPF 111 0\r\n"
+                + "a=rtpmap:111 OpUs/48000/2\r\n"
+                + "a=fmtp:111 minptime = 60; useINbandFEC = 0;usedtx=0; stereo = 1; sprop-stereo=1;maxaveragebitrate=24000\r\n"
+                + "a=fmtp:111 useinbandfec=0;maxplaybackrate=16000;cbr=1\r\n"
+                + "a=rtpmap:0 PCMU/8000\r\na=rtcp-fb:111 transport-cc\r\na=rtcp-fb:* nack\r\n"
+                + "a=ptime:60\r\na=maxptime:120\r\na=ptime:40\r\n";
+        String second = "m=audio 9 UDP/TLS/RTP/SAVPF 112\r\na=rtpmap:112 opus/48000/2\r\na=sendrecv\r\n";
+        String video = "m=video 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 VP8/90000\r\na=fmtp:111 max-fr=30\r\n"
+                + "a=ptime:99\r\n";
+        String rejected = "m=audio 0 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\na=fmtp:111 stereo=1\r\na=ptime:60\r\n";
+        String nonOpus = "m=audio 9 UDP/TLS/RTP/SAVPF 0\r\na=rtpmap:0 PCMU/8000\r\na=ptime:40\r\n";
+        String application = "m=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=sctp-port:5000\r\n";
+        String tuned = WebRTCOpusSDP.configure("v=0\r\n" + audio + video + second + rejected + nonOpus + application);
+        require(tuned.contains("a=fmtp:111 minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxaveragebitrate=24000;maxplaybackrate=16000;cbr=1\r\n"),
+                "unowned native codec constraints survive and owned parameters are canonical");
+        require(tuned.contains("a=fmtp:112 minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0\r\n"),
+                "each audio section gets FEC/DTX even if native fmtp was absent");
+        require(tuned.contains(video) && tuned.contains(rejected) && tuned.contains(nonOpus) && tuned.contains(application),
+                "video, rejected audio, non-Opus audio and data sections are unchanged");
+        require(tuned.contains("a=rtpmap:0 PCMU/8000\r\na=rtcp-fb:111 transport-cc\r\na=rtcp-fb:* nack\r\n"),
+                "codec preferences remain native and feedback is preserved");
+        require(occurrences(tuned, "a=ptime:20\r\n") == 2 && occurrences(tuned, "a=maxptime:20\r\n") == 2,
+                "packetization is emitted once per tuned audio section");
+        require(WebRTCOpusSDP.configure(tuned).equals(tuned), "multi-section tuning is idempotent");
+
+        String multiple = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111 112\r\n"
+                + "a=rtpmap:111 opus/48000/2\r\na=rtpmap:112 OPUS/48000/2\r\na=fmtp:112 stereo=1\r\n";
+        tuned = WebRTCOpusSDP.configure(multiple);
+        require(occurrences(tuned, "useinbandfec=1") == 2 && occurrences(tuned, "a=ptime:20\r\n") == 1,
+                "multiple offered Opus mappings have independent fmtp and one packetization attribute");
+        require(WebRTCOpusSDP.configure(tuned).equals(tuned), "multiple-payload tuning is idempotent");
+
+        for (String invalid : new String[]{"v=0\r\n" + rejected,
+                "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 0\r\na=rtpmap:111 opus/48000/2\r\n",
+                "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/2\r\n",
+                "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=rtpmap:111 opus/48000/1\r\n"}) {
+            try { WebRTCOpusSDP.configure(invalid); throw new AssertionError("unnegotiated Opus accepted"); }
+            catch (IllegalArgumentException expected) {}
+        }
+    }
+
+    private static int occurrences(String text, String value) {
+        int count = 0;
+        for (int offset = 0; (offset = text.indexOf(value, offset)) >= 0; offset += value.length()) count++;
+        return count;
     }
 
     /** The carrier, not a 10 ms timer, clocks capture: drift in either direction loses nothing. */

@@ -133,13 +133,11 @@ final class TelephonyAudioDevice implements Closeable {
                 AudioDeviceInfo route = output.getRoutedDevice();
                 return route == null ? CarrierUplink.ROUTE_NONE : route.getType();
             }
-            @Override public void write(byte[] frame) throws IOException {
-                TelephonyAudioDevice.this.write(output, frame);
+            @Override public int write(byte[] frame, int offset, int length) {
+                return output.write(frame, offset, length, AudioTrack.WRITE_BLOCKING);
             }
-            @Override public int writeNow(byte[] frame) throws IOException {
-                int count = output.write(frame, 0, frame.length, AudioTrack.WRITE_NON_BLOCKING);
-                if (count < 0) throw new IOException("carrier playback stopped");
-                return count;
+            @Override public int writeNow(byte[] frame, int offset, int length) {
+                return output.write(frame, offset, length, AudioTrack.WRITE_NON_BLOCKING);
             }
         };
         // The route check, the silence that keeps the track active and their limits are in CarrierUplink.
@@ -178,15 +176,6 @@ final class TelephonyAudioDevice implements Closeable {
                 ? "carrier permission denied" : "carrier " + error.getClass().getSimpleName();
         value = value.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]+", "_");
         return value.length() > 48 ? value.substring(0, 48) : value;
-    }
-
-    private void write(AudioTrack output, byte[] frame) throws IOException {
-        int offset = 0;
-        while (!closed.get() && offset < frame.length) {
-            int count = output.write(frame, offset, frame.length - offset, AudioTrack.WRITE_BLOCKING);
-            if (count <= 0) throw new IOException("carrier playback stopped");
-            offset += count;
-        }
     }
 
     private static boolean addVoiceTxTag(AudioAttributes.Builder builder) {
