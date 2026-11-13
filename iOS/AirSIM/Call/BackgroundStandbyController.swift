@@ -118,6 +118,7 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
             pushedCall.authenticatedMediaURL != nil
         {
             try await IPhoneCloudCallSession.shared.answer(pushedCall)
+            startCloudAudioIfReady()
         } else if let api = await availableSamsungAPI() {
             try await api.answerCall()
         } else {
@@ -179,8 +180,24 @@ final class ColdLaunchCallKitHandler: CallKitActionHandling {
     func callKitAudioSessionDidActivate() async {
         if VirtualCallTTSController.shared.isPrepared {
             VirtualCallTTSController.shared.start()
-        } else if IPhoneCloudCallSession.shared.hasActiveCall {
-            IPhoneCloudCallSession.shared.startAudioWithRetry()
+        } else {
+            startCloudAudioIfReady()
+        }
+    }
+
+    /// Either CallKit activation or signaling preparation may finish first during a cold launch.
+    /// Arm startup from both paths; Android answer confirmation remains the peer-start gate.
+    private func startCloudAudioIfReady() {
+        let session = IPhoneCloudCallSession.shared
+        if CloudCallAudioStartupPolicy.shouldStart(
+            answered: session.answered,
+            mediaPrepared: session.isPrepared,
+            lifecycleState: session.lifecycleState,
+            isOutgoing: session.call?.isOutgoing == true,
+            managedByCallKit: CallKitController.shared.managesCurrentCall,
+            callKitAudioSessionActive: CallKitController.shared.audioSessionIsActive
+        ) {
+            session.startAudioWithRetry()
         }
     }
 

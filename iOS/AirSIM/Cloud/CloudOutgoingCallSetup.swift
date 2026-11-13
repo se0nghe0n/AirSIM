@@ -80,7 +80,8 @@ final class CloudOutgoingPrewarm {
         connect: @escaping @MainActor () async throws -> Void,
         expired: @escaping @MainActor (IncomingVoIPCall) -> Void
     ) -> Bool {
-        guard !sessionHasCall, !isAdopting, entry?.call.uuid != call.uuid else { return false }
+        guard !sessionHasCall, !isAdopting else { return false }
+        if let entry, Self.matches(entry.call, call) { return false }
         clear()
         release()
         let id = UUID()
@@ -107,8 +108,8 @@ final class CloudOutgoingPrewarm {
     /// The dial failed, timed out, was cancelled or superseded. Releases this call's prewarm only: a newer
     /// prewarm, or a call that was answered meanwhile, is left alone.
     @discardableResult
-    func discard(callUUID: UUID, release: () -> Void) -> Bool {
-        guard let entry, entry.call.uuid == callUUID, !isAdopting else { return false }
+    func discard(call: IncomingVoIPCall, release: () -> Void) -> Bool {
+        guard let entry, Self.matches(entry.call, call), !isAdopting else { return false }
         clear()
         release()
         return true
@@ -118,7 +119,7 @@ final class CloudOutgoingPrewarm {
     /// `finishAdoption`. An entry for any other call is dropped; the caller replaces its media as for any new call.
     func beginAdoption(for call: IncomingVoIPCall) -> Entry? {
         guard let entry else { return nil }
-        guard entry.call.uuid == call.uuid, entry.call.generation == call.generation else {
+        guard Self.matches(entry.call, call) else {
             clear()
             return nil
         }
@@ -138,6 +139,13 @@ final class CloudOutgoingPrewarm {
     /// The session stopped and already released its media.
     func reset() {
         clear()
+    }
+
+    /// Never reuse a socket after the call generation, Relay endpoint or bearer credential changed.
+    static func matches(_ left: IncomingVoIPCall, _ right: IncomingVoIPCall) -> Bool {
+        left.uuid == right.uuid && left.generation == right.generation && left.callID == right.callID
+            && left.isOutgoing == right.isOutgoing && left.authenticatedMediaURL == right.authenticatedMediaURL
+            && left.mediaSecret == right.mediaSecret
     }
 
     private func clear() {

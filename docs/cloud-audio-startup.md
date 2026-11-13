@@ -3,9 +3,9 @@
 > Current branch migration: native WebRTC and carrier capture/injection share the privileged Android process. There is no supported PCM network/IPC fallback. The AVF runtime is retired; Watch is an iPhone audio companion. Legacy bridge source/build instructions below are historical reference, not the current APK workflow. Physical-route and privileged-security gates remain unverified. See [the migration contract](webrtc-only-migration.md).
 
 
-The iPhone prepares the current call's TURN credentials and shared native WebRTC factory while its control WebSocket connects. Android also prefetches call-scoped credentials. Outgoing calls can then negotiate WebRTC during dialing/ringback, before the remote party answers. This requires matching iOS and Android builds; no Relay protocol deployment is required.
+The iPhone prepares the current call's TURN credentials and native WebRTC initialization while its control WebSocket connects. Incoming calls prepare only TURN credentials and native initialization after CallKit reports the ringing call; their socket still waits for explicit acceptance. Outgoing calls begin after the Relay accepts the dial. Android also prefetches call-scoped credentials. Outgoing calls can then negotiate WebRTC during dialing/ringback, before the remote party answers. This requires matching iOS and Android builds; no Relay protocol deployment is required.
 
-Credential prefetch alone does not create a peer or start audio. Outgoing `media_prepared` acknowledgement permits SDP and ICE after CallKit activation and microphone permission. The Android carrier device stays closed until Telecom reports active. Incoming calls retain successful answer confirmation as their startup gate. Current call identity and native/agent readiness checks still control usable audio. Codec, packet duration, jitter buffering, and playback behavior are unchanged.
+Credential prefetch alone does not create a peer or start audio. Outgoing `media_prepared` acknowledgement permits SDP and ICE after CallKit activation and microphone permission. The Android carrier device stays closed until Telecom reports active. Incoming calls retain successful answer confirmation as their peer/audio startup gate. Their ringing preparation opens no signaling socket, sends no answer or ownership claim, creates no peer, requests no microphone permission and opens no audio. Accepting the same call reuses its credentials; rejection, CallKit teardown, replacement, VoWLAN selection or 45 seconds without acceptance releases preparation. Call identity, generation, Relay endpoint and bearer credential must all match. A normal Relay socket may replace another socket for the same role, so incoming prewarm must not open one before acceptance. Current call identity and native/agent readiness checks still control usable audio. Codec, packet duration, jitter buffering, and playback behavior are unchanged.
 
 TURN requests are shared only within the same call UUID, generation, Relay endpoint, and bearer credential. Hangup cancels preparation and discards credentials. A temporary audio interruption keeps the shared request available for the same call. Expired credentials are refreshed with a safety margin, and a failed prefetch can retry once when needed. Credentials remain in memory and are never included in diagnostics.
 
@@ -25,6 +25,12 @@ The iPhone trace recorder logs `setup_started`, `signaling_connected`, `media_pr
 
 Control-message handling does not await file-backed trace persistence. Answer confirmation and media-readiness updates proceed independently of diagnostic disk writes.
 
+## Incoming activation ordering
+
+CallKit audio activation and cloud signaling preparation may finish in either order during a cold launch. Both callbacks now arm startup for a user-accepted, prepared call while Android answer confirmation is pending. Peer creation still waits for `answer_ok` (or valid `active`) and the active CallKit audio session. Previously the cold-launch handler checked for an already-active call only during `didActivate`, so an earlier activation could leave audio startup unarmed even after Android confirmed the answer.
+
+This fixes the callback ordering; it does not claim physical call latency or eliminate Android's post-ACTIVE carrier attachment. Carrier ringback audio is still not captured before ACTIVE.
+
 ## Android credential preparation
 
 As soon as the call's Agent signaling socket connects, Android starts a call-scoped ICE/TURN credential request. This overlaps ringing and answer confirmation. Prefetch does not invoke the privileged media service or capture/inject carrier audio. The outgoing owner can start its native peer during dialing; carrier capture/injection still waits for Telecom's active state.
@@ -36,6 +42,8 @@ The Android event `webrtc_ice_ready` reports `prefetched` and `wait_ms`. A ready
 ## Carrier attach and setup recovery
 
 Android attaches carrier audio as soon as `AirSIMInCallService` sees Telecom ACTIVE, instead of waiting for the 2-second agent loop and its Relay HTTP work. The loop still publishes the lifecycle; `active` is sent to the owner once per media socket.
+
+Route verification uses nonblocking silence priming with its existing 2-second deadline; initial downlink capture has a separate 2-second deadline. Partial progress does not restart either budget, and cancellation stops both loops. This prevents a blocked startup write or first read from silently bypassing recovery. It does not relax TYPE_TELEPHONY verification or move carrier audio before ACTIVE.
 
 If the carrier device fails before its TELEPHONY route is first verified, the native peer releases that device and attaches a new one to the same peer: up to 4 attempts, 300 ms apart. ICE/DTLS and the call socket stay up, so the iPhone does not renegotiate. The first verification is unchanged: the routed device must be the TELEPHONY sink. Each failure has a non-sensitive reason code (for example `carrier_route_unverified`, `ice_failed`, `sdp_set_failed`, `owner_lease_expired`). The app logs it as `privileged_webrtc_unavailable reason=…` and sends the owner a diagnostic `agent_media_failed` status before rebuilding its media socket. The iPhone keeps that status only in its trace.
 

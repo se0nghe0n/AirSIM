@@ -2767,6 +2767,7 @@ extension AppModel: CallKitActionHandling {
                 guard let (vowlanAPI, webRTCRoute) = vowlanRoute else {
                     throw CallKitBridgeError.noReachableTransport
                 }
+                if let pushedCall { IPhoneCloudCallSession.shared.discardIncomingPrewarm(pushedCall) }
                 try audio.prepareForCallKit()
                 try await vowlanAPI.answerCall(callID: activeCall?.id)
                 lockLocalTransport(.vowlan, api: vowlanAPI, webRTCRoute: webRTCRoute)
