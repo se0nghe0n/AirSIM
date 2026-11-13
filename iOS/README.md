@@ -233,6 +233,12 @@ Placing a cloud call does not change the wire contract; the iPhone only stops wa
 - When the Relay accepts the dial command it names the call. The iPhone then requests TURN credentials, initializes native WebRTC and opens the call's signaling socket while the Android phone starts dialing. Nothing is sent on that socket: `answer`, the owner join, still follows the completed dial. Until then the session has no call, is not answered and starts no peer. A dial that fails, times out, is cancelled or is superseded closes the socket and drops the credentials; so does a terminal status on that socket, a call answered in the meantime, or 45 seconds without a result.
 - For an outgoing call the first resend after `answer_pending` comes after 300 ms and the second completes the regular second, so the join is never confirmed later than with one-second resends. Incoming calls keep one second.
 
+### Incoming cloud preparation
+
+After CallKit successfully reports an incoming call, the iPhone prepares TURN credentials and native initialization while the phone rings. The signaling socket waits for explicit acceptance because a normal Relay socket can replace an existing same-role owner. It sends no answer/ownership control, starts no WebRTC peer, and does not access the microphone or recording. Answering adopts that exact credential preparation; rejection, expiry, CallKit teardown, another call or a VoWLAN answer releases it. A changed generation, Relay endpoint or bearer credential cannot reuse old preparation.
+
+Cold-launch startup also handles CallKit activation arriving before cloud answer confirmation: either completion order can arm startup, but the peer still waits for Android's answer acknowledgement and CallKit activation. These changes do not open the Android carrier path before ACTIVE; real ringback capture and physical startup latency remain separate device acceptance gates.
+
 ### Measuring setup time
 
 Each outgoing dial writes its phases to the unified log, with milliseconds since the dial started:

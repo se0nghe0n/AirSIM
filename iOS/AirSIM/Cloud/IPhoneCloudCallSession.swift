@@ -88,7 +88,9 @@ enum CloudCallAudioStartupPolicy {
         callKitAudioSessionActive: Bool
     ) -> Bool {
         guard answered, mediaPrepared else { return false }
-        guard lifecycleState == .active || (isOutgoing && lifecycleState == .connecting) else {
+        // Acceptance permits arming startup before Android confirms ACTIVE. The session still
+        // requires answerAcknowledged and CallKit activation before creating a peer.
+        guard lifecycleState == .active || lifecycleState == .connecting else {
             return false
         }
         return !managedByCallKit || callKitAudioSessionActive
@@ -581,6 +583,8 @@ final class IPhoneCloudCallSession {
     private var quickAnswerReplayTask: Task<Void, Never>?
     private var outgoingPendingReplays = 0
     private let outgoingPrewarm = CloudOutgoingPrewarm()
+    private var incomingPreparation: IncomingVoIPCall?
+    private var incomingPreparationExpiry: Task<Void, Never>?
     private var setupTimeline: OutgoingCallSetupTimeline?
     private let icePreparation = CloudICEPreparation()
     private let answerHandshake = CloudWebRTCAnswerHandshake()
@@ -771,7 +775,13 @@ final class IPhoneCloudCallSession {
             webRTCStartTask = nil
         }
         try media.prepareForCallKit(webRTC: true)
-        // A socket prewarmed for this call while it was dialing is adopted below; one for any other call is dropped.
+        // Keep exact incoming credentials but retire their ringing-only expiry before adopting the call.
+        if let prepared = incomingPreparation, CloudOutgoingPrewarm.matches(prepared, incoming) {
+            clearIncomingPreparation(cancelICE: false)
+        } else {
+            clearIncomingPreparation(cancelICE: true)
+        }
+        // An outgoing socket for this exact call is adopted; another call's socket is dropped.
         let prewarmed = outgoingPrewarm.beginAdoption(for: incoming)
         call = incoming
         if callChanged { outgoingPendingReplays = 0 }
@@ -792,7 +802,7 @@ final class IPhoneCloudCallSession {
             mediaHealthTracker?.recordRoute(media.audioRouteDescription)
             publishMediaHealth()
         }
-        var signalingPrewarmed = false
+        var outgoingPrewarmed = false
         if let prewarmed {
             let connected = await prewarmed.connection.value
             // `stop()` or a newer call during the wait already released the prewarm.
@@ -800,9 +810,9 @@ final class IPhoneCloudCallSession {
                 call?.generation == incoming.generation, answered
             else { return }
             outgoingPrewarm.finishAdoption(prewarmed)
-            signalingPrewarmed = connected && media.isConnected
+            outgoingPrewarmed = connected && media.isConnected
         }
-        if !signalingPrewarmed, callChanged || !media.isConnected {
+        if !outgoingPrewarmed, callChanged || !media.isConnected {
             media.stop()
             do {
                 try await media.connect(to: url, secret: secret)
@@ -824,9 +834,9 @@ final class IPhoneCloudCallSession {
         traceAudio(
             phase: "signaling_connected",
             title: "Cloud Signaling Connected",
-            additionalFields: ["prewarmed": String(signalingPrewarmed)]
+            additionalFields: ["prewarmed": String(outgoingPrewarmed)]
         )
-        markSetup(.signalingConnected, signalingPrewarmed ? .prewarmed : .notPrewarmed)
+        markSetup(.signalingConnected, outgoingPrewarmed ? .prewarmed : .notPrewarmed)
         scheduleAnswerConfirmation(for: incoming)
     }
 
@@ -837,8 +847,10 @@ final class IPhoneCloudCallSession {
     func prewarmOutgoing(_ outgoing: IncomingVoIPCall, timeline: OutgoingCallSetupTimeline? = nil) {
         guard outgoing.isOutgoing,
             let url = outgoing.authenticatedMediaURL,
-            let secret = outgoing.mediaSecret
+            let secret = outgoing.mediaSecret,
+            call == nil
         else { return }
+        clearIncomingPreparation(cancelICE: true)
         if let timeline { setupTimeline = timeline }
         let media = media
         let started = outgoingPrewarm.begin(
@@ -856,11 +868,42 @@ final class IPhoneCloudCallSession {
         Task.detached(priority: .userInitiated) { CloudWebRTCPeer.prepareFactory() }
     }
 
-    /// The dial failed, timed out, was cancelled or superseded. Closes the socket and drops the TURN preparation
-    /// of exactly this call; a newer prewarm or an answered call is left untouched.
+    /// Ringing may prepare credentials/native initialization only. A normal Relay socket can replace
+    /// another iPhone's owner, so incoming signaling must still wait for the user's answer.
+    func prewarmIncoming(_ incoming: IncomingVoIPCall) {
+        guard !incoming.isOutgoing, !incoming.isVirtual, incoming.authenticatedMediaURL != nil,
+            incoming.mediaSecret != nil, call == nil, outgoingPrewarm.entry == nil
+        else { return }
+        if let prepared = incomingPreparation, CloudOutgoingPrewarm.matches(prepared, incoming) { return }
+        clearIncomingPreparation(cancelICE: true)
+        incomingPreparation = incoming
+        icePreparation.prefetch(for: incoming)
+        Task.detached(priority: .userInitiated) { CloudWebRTCPeer.prepareFactory() }
+        incomingPreparationExpiry = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: CloudOutgoingPrewarm.maximumLifetime)
+            guard !Task.isCancelled else { return }
+            self?.discardIncomingPrewarm(incoming)
+        }
+    }
+
+    /// Failure, timeout, cancellation or replacement releases only the unadopted call's preparation.
     func discardOutgoingPrewarm(_ outgoing: IncomingVoIPCall) {
-        outgoingPrewarm.discard(callUUID: outgoing.uuid) { releaseOutgoingPrewarmMedia() }
+        guard outgoing.isOutgoing else { return }
+        outgoingPrewarm.discard(call: outgoing) { releaseOutgoingPrewarmMedia() }
         if setupTimeline?.covers(outgoing.uuid) == true, call?.uuid != outgoing.uuid { setupTimeline = nil }
+    }
+
+    func discardIncomingPrewarm(_ incoming: IncomingVoIPCall) {
+        guard let prepared = incomingPreparation, CloudOutgoingPrewarm.matches(prepared, incoming) else { return }
+        clearIncomingPreparation(cancelICE: true)
+    }
+
+    private func clearIncomingPreparation(cancelICE: Bool) {
+        guard incomingPreparation != nil else { return }
+        incomingPreparation = nil
+        incomingPreparationExpiry?.cancel()
+        incomingPreparationExpiry = nil
+        if cancelICE { icePreparation.cancel() }
     }
 
     /// Only reached while the session has no call: the bridge then holds nothing but the prewarmed socket.
@@ -1161,6 +1204,7 @@ final class IPhoneCloudCallSession {
         quickAnswerReplayTask = nil
         outgoingPendingReplays = 0
         outgoingPrewarm.reset()
+        clearIncomingPreparation(cancelICE: false)
         setupTimeline = nil
         reconnectID = UUID()
         reconnectTask?.cancel()

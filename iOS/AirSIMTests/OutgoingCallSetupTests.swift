@@ -39,6 +39,14 @@ private func outgoingCall(
     )
 }
 
+private func incomingCall(id: UUID = UUID(), generation: UInt64 = 1, host: String = "relay.test") throws -> IncomingVoIPCall {
+    try IncomingVoIPCall(userInfo: [
+        "event": "incoming_call", "call_id": "incoming-\(id.uuidString.lowercased())",
+        "call_uuid": id.uuidString, "generation": generation,
+        "media_url": "wss://\(host)/connect", "call_secret": String(repeating: "x", count: 32),
+    ])
+}
+
 struct CloudCommandPollScheduleTests {
     @Test func `Dial result is polled sooner at first and then at the steady interval`() {
         let intervals = (0..<6).map { CloudCommandPollSchedule.dial.interval(afterPoll: $0) }
@@ -199,7 +207,7 @@ struct CloudOutgoingPrewarmTests {
         let entry = try #require(prewarm.beginAdoption(for: call))
         #expect(prewarm.isAdopting)
         // While `answer()` waits for the socket, nothing else may release it.
-        #expect(!prewarm.discard(callUUID: call.uuid) { releases += 1 })
+        #expect(!prewarm.discard(call: call) { releases += 1 })
         #expect(await entry.connection.value)
         prewarm.finishAdoption(entry)
         #expect(connects == 1)
@@ -220,7 +228,7 @@ struct CloudOutgoingPrewarmTests {
             expired: { _ in }
         )
         let entry = try #require(prewarm.entry)
-        #expect(prewarm.discard(callUUID: call.uuid) { releases += 1 })
+        #expect(prewarm.discard(call: call) { releases += 1 })
         #expect(releases == 2)
         #expect(prewarm.entry == nil)
         #expect(prewarm.callUUID == nil)
@@ -228,7 +236,7 @@ struct CloudOutgoingPrewarmTests {
         // A later answer finds nothing to adopt and connects as it always did.
         #expect(prewarm.beginAdoption(for: call) == nil)
         // The discard hooks can run more than once for one dial.
-        #expect(!prewarm.discard(callUUID: call.uuid) { releases += 1 })
+        #expect(!prewarm.discard(call: call) { releases += 1 })
         #expect(releases == 2)
     }
 
@@ -253,7 +261,7 @@ struct CloudOutgoingPrewarmTests {
             expired: { _ in }
         )
         #expect(releases == 2)
-        #expect(!prewarm.discard(callUUID: old.uuid) { releases += 1 })
+        #expect(!prewarm.discard(call: old) { releases += 1 })
         #expect(releases == 2)
         #expect(prewarm.callUUID == new.uuid)
         let entry = try #require(prewarm.beginAdoption(for: new))
@@ -299,6 +307,27 @@ struct CloudOutgoingPrewarmTests {
         let id = UUID()
         prewarm.begin(try outgoingCall(id: id), sessionHasCall: false, release: {}, connect: {}, expired: { _ in })
         #expect(prewarm.beginAdoption(for: try outgoingCall(id: id, generation: 2)) == nil)
+        #expect(prewarm.entry == nil)
+    }
+
+    @Test func `New generation replaces preparation and a stale cancellation cannot release it`() throws {
+        let prewarm = CloudOutgoingPrewarm()
+        let id = UUID()
+        let first = try outgoingCall(id: id)
+        let next = try outgoingCall(id: id, generation: 2)
+        prewarm.begin(first, sessionHasCall: false, release: {}, connect: {}, expired: { _ in })
+        let replaced = prewarm.begin(next, sessionHasCall: false, release: {}, connect: {}, expired: { _ in })
+        #expect(replaced)
+        #expect(!prewarm.discard(call: first) { Issue.record("stale generation released the new socket") })
+        #expect(prewarm.beginAdoption(for: next) != nil)
+        prewarm.reset()
+    }
+
+    @Test func `Changed Relay endpoint is not adopted even for the same call generation`() throws {
+        let prewarm = CloudOutgoingPrewarm()
+        let id = UUID()
+        prewarm.begin(try outgoingCall(id: id), sessionHasCall: false, release: {}, connect: {}, expired: { _ in })
+        #expect(prewarm.beginAdoption(for: try outgoingCall(id: id, host: "replacement.test")) == nil)
         #expect(prewarm.entry == nil)
     }
 
@@ -393,24 +422,36 @@ struct CloudOutgoingPrewarmSessionTests {
         expectNoCall()
     }
 
-    @Test func `Incoming calls are never prewarmed`() async throws {
+    @Test func `Ringing prewarm never answers or starts audio and can be discarded`() async throws {
         let session = IPhoneCloudCallSession.shared
         session.stop()
         defer { session.stop() }
-        let incoming = try IncomingVoIPCall(
-            userInfo: [
-                "event": "incoming_call",
-                "call_id": "incoming",
-                "call_uuid": UUID().uuidString,
-                "media_url": "wss://127.0.0.1:9/connect",
-                "call_secret": String(repeating: "x", count: 32),
-            ]
-        )
-        #expect(!incoming.isOutgoing)
-        session.prewarmOutgoing(incoming)
+        let incoming = try incomingCall(host: "127.0.0.1:9")
+        session.prewarmIncoming(incoming)
+        session.startAudioWithRetry()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(session.call == nil)
+        #expect(!session.answered)
+        #expect(!session.isPrepared)
+        #expect(!session.hasActiveCall)
+        #expect(!session.isRecovering)
+        #expect(session.lifecycleState == .idle)
+        #expect(session.audioState == .idle)
+        #expect(session.recordingSource == nil)
+        session.discardIncomingPrewarm(incoming)
+        #expect(session.call == nil)
+        #expect(session.audioState == .idle)
+    }
+
+    @Test func `Outgoing entry point still rejects an incoming call`() throws {
+        let session = IPhoneCloudCallSession.shared
+        session.stop()
+        defer { session.stop() }
+        session.prewarmOutgoing(try incomingCall(host: "127.0.0.1:9"))
         #expect(session.call == nil)
         #expect(!session.isPrepared)
     }
+
 }
 
 struct VoWLANLocalPathPolicyTests {

@@ -41,6 +41,7 @@ TEST="$ROOT/test/peer-disposal/com/airsim/phonecontrol"
   "$SOURCE/WebRTCReadiness.java" \
   "$SOURCE/WebRTCStatistics.java" \
   "$SOURCE/CarrierUplink.java" \
+  "$SOURCE/CarrierStartup.java" \
   "$SOURCE/TelephonyAudioDevice.java" \
   "$SOURCE/TelephonyWebRTCPeer.java"
 
