@@ -27,6 +27,9 @@ final class TelephonyWebRTCPeer implements AutoCloseable {
         this.signals = signals; this.failed = failed; latest = this;
         rate = host || forceNarrowband ? 8000 : 48000;
     }
+    boolean carrierReady(String session) { return carrierActive && transportConnected(session); }
+    String connectedSession = "";
+    boolean transportConnected(String session) { return !closing && !session.isEmpty() && session.equals(connectedSession); }
     int sampleRate() { return rate; }
     static void initialize(android.content.Context context) {}
     void start(boolean activateCarrierAudio) {

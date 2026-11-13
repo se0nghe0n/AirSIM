@@ -171,6 +171,16 @@ final class StandaloneAgentGateway {
             }
         }
         String type = command.optString("type", "");
+        if ("prepare_dial".equals(type)) {
+            JSONObject output = new JSONObject().put("command_id", commandID);
+            try {
+                StandaloneCloudMediaManager.get(context).prepareOutgoing(command);
+                output.put("status", "completed").put("result", new JSONObject().put("prepared", true));
+            } catch (Exception error) {
+                output.put("status", "failed").put("error", "pre_dial_unavailable");
+            }
+            return rememberCommand(commandKey, output);
+        }
         if ("call_history".equals(type)) {
             JSONObject output = new JSONObject().put("command_id", commandID);
             try {
@@ -191,6 +201,11 @@ final class StandaloneAgentGateway {
                     ? "end" : command.optString("action", "");
             default -> "";
         };
+        if ("call_control".equals(type) && ("end".equals(action) || "reject".equals(action))
+                && StandaloneCloudMediaManager.get(context).cancelStrictOutgoing(command.optJSONObject("call"))) {
+            return rememberCommand(commandKey, new JSONObject().put("command_id", commandID).put("status", "completed")
+                    .put("result", new JSONObject().put("ended", true).put("android_confirmed", true)));
+        }
         String callID = "call_control".equals(type)
                 ? StandaloneCloudMediaManager.get(context).androidCallIDFor(command.optJSONObject("call"))
                 : "dial".equals(action) || "send_sms".equals(action)

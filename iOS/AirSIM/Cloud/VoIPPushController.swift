@@ -515,6 +515,7 @@ private struct CloudCommandEnqueueResponse: Decodable {
         let callSecret: String
         let mediaURL: String
         let mediaTransport: CloudMediaTransport?
+        let preDial: Bool?
 
         enum CodingKeys: String, CodingKey {
             case callID = "call_id"
@@ -523,6 +524,7 @@ private struct CloudCommandEnqueueResponse: Decodable {
             case callSecret = "call_secret"
             case mediaURL = "media_url"
             case mediaTransport = "media_transport"
+            case preDial = "pre_dial"
         }
     }
 
@@ -1315,8 +1317,8 @@ final class VoIPPushController: NSObject {
         return try JSONDecoder().decode(CloudAgentStatus.self, from: data)
     }
 
-    /// The dial command names its call as soon as the Relay accepts it. Media preparation for that call overlaps
-    /// the wait for the Android phone to start dialing; no control message is sent before the dial completed.
+    /// Reserve a call, connect both native transports silently, then commit carrier dialing exactly once.
+    /// Preparation failure is terminal: no legacy dial command or transport fallback is attempted.
     func startCloudOutgoingCall(
         number: String,
         mediaTransport: CloudMediaTransport? = nil,
@@ -1340,13 +1342,14 @@ final class VoIPPushController: NSObject {
             enqueue: {
                 let enqueue = try await self.enqueueCloudCommand(
                     commandID: commandID,
-                    type: "dial",
+                    type: "prepare_dial",
                     number: number,
                     message: nil,
                     mediaTransport: mediaTransport
                 )
                 guard enqueue.accepted,
                     let call = enqueue.call,
+                    call.preDial == true,
                     let uuid = UUID(uuidString: call.callUUID),
                     let mediaURL = URL(string: call.mediaURL)
                 else {
@@ -1354,6 +1357,7 @@ final class VoIPPushController: NSObject {
                 }
                 timeline.bind(to: uuid)
                 timeline.mark(.enqueueAccepted)
+                timeline.mark(.reservationAccepted)
                 // An identity the app cannot use still fails after the dial result, as before.
                 return (call: call, uuid: uuid, mediaURL: mediaURL, outgoing: try? makeCall(call, uuid, mediaURL))
             },
@@ -1363,6 +1367,8 @@ final class VoIPPushController: NSObject {
             },
             awaitDialing: { pending in
                 do {
+                    guard let outgoing = pending.outgoing else { throw CloudCommandError.invalidResponse }
+                    try await IPhoneCloudCallSession.shared.commitPreparedOutgoing(outgoing)
                     let acceptance = pending.outgoing.flatMap {
                         IPhoneCloudCallSession.shared.outgoingDialAcceptance(for: $0)
                     }
@@ -1385,7 +1391,7 @@ final class VoIPPushController: NSObject {
             },
             discardPrewarm: { pending in
                 guard let outgoing = pending.outgoing else { return }
-                IPhoneCloudCallSession.shared.discardOutgoingPrewarm(outgoing)
+                IPhoneCloudCallSession.shared.endUnadoptedOutgoing(outgoing)
             }
         )
         return try pending.outgoing ?? makeCall(pending.call, pending.uuid, pending.mediaURL)

@@ -50,8 +50,11 @@ final class WebRTCCloudPeer implements Closeable {
     final AtomicInteger signals = new AtomicInteger();
     WebRTCCloudPeer(Context context, String uuid, long generation, String relay, String secret,
                     Signals signal, Failure failure) { this.failure = failure; peers.add(this); }
+    volatile boolean connected = true;
+    boolean transportConnected(String session) { return connected && !closed; }
     void prepare() {}
     void start(boolean deferred) { this.deferred = deferred; started = true; }
+    void replayCarrierReady(String session) {}
     void activateCarrierAudio() { activations.incrementAndGet(); }
     void receive(JSONObject signal) { signals.incrementAndGet(); }
     void fail(String reason) { close(); failure.failed(reason); }
@@ -65,6 +68,10 @@ final class DebugRedactor { static String safeIdentifier(String value) { return 
 final class CallRepository {
     static volatile boolean preparable = true;
     static volatile int callState = android.telecom.Call.STATE_ACTIVE;
+    static void executeRemote(Context context, String request, String action, String id, String number) { StandaloneAgentGateway.actions.add(action + ":" + id); }
+    static volatile boolean live;
+    static boolean hasLiveCalls() { return live; }
+    static boolean belongsToReservation(String id, String reservation) { return id.equals(reservation); }
     static boolean contains(String id) { return false; }
     static boolean canPrepareOutgoingMedia(String id) { return preparable; }
     static int state(String id) { return callState; }

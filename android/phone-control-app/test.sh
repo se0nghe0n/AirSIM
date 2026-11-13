@@ -326,11 +326,13 @@ compile_test "$OUT/signal-drain" "" \
 # Run the real cloud-session reconnect loop against fake transport/native boundaries. Never dial.
 RECOVERY_OUT="$OUT/cloud-recovery"
 mkdir -p "$RECOVERY_OUT"
-compile_test "$RECOVERY_OUT" "$JSON_JAR" \
-  "$ROOT"/test/cloud-recovery/android/content/Context.java \
+compile_test "$RECOVERY_OUT" "$OUT:$JSON_JAR" \
+  "$ROOT"/test/cloud-recovery/android/app/role/RoleManager.java \
+  "$ROOT"/src/com/airsim/phonecontrol/TelecomInvocation.java \
   "$ROOT"/test/cloud-recovery/android/telecom/Call.java \
   "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/MediaRecoveryFixtures.java \
   "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/CloudCarrierRecoveryTests.java \
+  "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/StrictPreDialTests.java \
   "$ROOT"/test/cloud-recovery/com/airsim/phonecontrol/OutgoingDialAcceptanceTests.java \
   "$ROOT"/src/com/airsim/phonecontrol/StandaloneCloudMediaManager.java \
   "$ROOT"/src/com/airsim/phonecontrol/OutgoingDialAcceptance.java \
@@ -341,8 +343,9 @@ compile_test "$RECOVERY_OUT" "$JSON_JAR" \
   "$ROOT"/src/com/airsim/phonecontrol/CloudAnswerReplayPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallLifecycleConflict.java \
   "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java
-"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$JSON_JAR")" com.airsim.phonecontrol.CloudCarrierRecoveryTests
-"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$JSON_JAR")" com.airsim.phonecontrol.OutgoingDialAcceptanceTests \
+"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$OUT:$JSON_JAR")" com.airsim.phonecontrol.StrictPreDialTests
+"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$OUT:$JSON_JAR")" com.airsim.phonecontrol.CloudCarrierRecoveryTests
+"$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$OUT:$JSON_JAR")" com.airsim.phonecontrol.OutgoingDialAcceptanceTests \
   "$ROOT/src/com/airsim/phonecontrol/StandaloneAgentService.java"
 
 # Nonblocking carrier startup deadlines use a fake monotonic clock, never a physical call.

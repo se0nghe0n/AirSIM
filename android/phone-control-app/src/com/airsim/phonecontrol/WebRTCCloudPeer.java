@@ -130,6 +130,20 @@ final class WebRTCCloudPeer implements Closeable {
         return event != null;
     }
 
+    boolean transportConnected(String session) {
+        if (closed.get()) return false;
+        try { return request(identity("transport_connected").put("session_id", session)).optBoolean("connected"); }
+        catch (Exception error) { return false; }
+    }
+
+    void replayCarrierReady(String session) {
+        submit(() -> {
+            if (request(identity("transport_connected").put("session_id", session)).optBoolean("carrier_ready"))
+                signals.send(new JSONObject().put("status", "webrtc_ready").put("call_uuid", callUUID)
+                        .put("generation", generation).put("session_id", session));
+        });
+    }
+
     void activateCarrierAudio() {
         submit(() -> {
             if (!started || carrierAudioActive) return;
@@ -152,7 +166,7 @@ final class WebRTCCloudPeer implements Closeable {
                 .put("call_uuid", callUUID).put("generation", generation).put("owner_id", ownerID);
     }
 
-    private JSONObject request(JSONObject value) throws Exception {
+    private synchronized JSONObject request(JSONObject value) throws Exception {
         long id = ++requestID;
         value.put("request_id", id);
         JSONObject reply = new JSONObject(bridge.mediaRequest(value.toString()));

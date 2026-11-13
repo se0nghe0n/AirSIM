@@ -51,7 +51,14 @@ final class TelephonyWebRTCPeer implements Closeable {
     private AudioSource source;
     private AudioTrack track;
     private PeerConnection peer;
-    private String sessionID = "";
+    private volatile String sessionID = "";
+    private volatile String connectedSession = "";
+
+    boolean transportConnected(String session) {
+        return !closed.get() && !session.isEmpty() && session.equals(sessionID) && session.equals(connectedSession);
+    }
+    boolean carrierReady(String session) { return deviceReady && transportConnected(session); }
+
     private final Set<String> previousSessions = new HashSet<>();
     private final List<IceCandidate> pendingICE = new ArrayList<>();
     private final WebRTCReadiness readiness = new WebRTCReadiness();
@@ -229,6 +236,7 @@ final class TelephonyWebRTCPeer implements Closeable {
                 String sdp = message.optString("sdp");
                 if (sdp.isEmpty() || sdp.length() > 49152 || id.equals(sessionID) || previousSessions.contains(id)) return;
                 if (previousSessions.size() >= 64) throw new IOException("Too many WebRTC negotiations");
+                connectedSession = "";
                 previousSessions.add(id);
                 disposePeer();
                 sessionID = id; readiness.beginSession(id); remoteSet = false; pendingICE.clear();
@@ -352,15 +360,22 @@ final class TelephonyWebRTCPeer implements Closeable {
         return new PeerConnection.Observer() {
             public void onSignalingChange(PeerConnection.SignalingState state) {}
             public void onIceConnectionChange(PeerConnection.IceConnectionState state) {
+                if (id.equals(sessionID) && (state == PeerConnection.IceConnectionState.DISCONNECTED
+                        || state == PeerConnection.IceConnectionState.FAILED || state == PeerConnection.IceConnectionState.CLOSED)) connectedSession = "";
                 if (state == PeerConnection.IceConnectionState.FAILED) submit(() -> {
                     if (sessionID.equals(id)) throw new IOException("ICE failed");
                 });
             }
             public void onConnectionChange(PeerConnection.PeerConnectionState state) {
+                if (id.equals(sessionID)) connectedSession = state == PeerConnection.PeerConnectionState.CONNECTED ? id : "";
                 submit(() -> {
                     if (id.equals(sessionID) && state == PeerConnection.PeerConnectionState.CONNECTED) {
                         setup.mark(CloudAudioSetupTimeline.Phase.NATIVE_CONNECTED);
+                        signals.send(identity("webrtc_transport_ready", id));
                     }
+                    if (id.equals(sessionID) && (state == PeerConnection.PeerConnectionState.DISCONNECTED
+                            || state == PeerConnection.PeerConnectionState.FAILED || state == PeerConnection.PeerConnectionState.CLOSED))
+                        signals.send(identity("webrtc_transport_failed", id));
                     readiness.connectionChanged(id, state == PeerConnection.PeerConnectionState.CONNECTED);
                     maybeEmitReady();
                 });

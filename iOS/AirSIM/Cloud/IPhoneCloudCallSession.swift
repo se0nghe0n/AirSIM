@@ -583,6 +583,9 @@ final class IPhoneCloudCallSession {
     private var quickAnswerReplayTask: Task<Void, Never>?
     private var outgoingPendingReplays = 0
     private let outgoingPrewarm = CloudOutgoingPrewarm()
+    private var preDial = CloudPreDialGate()
+    private var preparedCarrierSession: UUID?
+
     private var incomingPreparation: IncomingVoIPCall?
     private var incomingPreparationExpiry: Task<Void, Never>?
     private var setupTimeline: OutgoingCallSetupTimeline?
@@ -611,6 +614,23 @@ final class IPhoneCloudCallSession {
         media.onWebRTCState = { connected, connection, negotiation in
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
+                if session.call == nil, let pending = session.outgoingPrewarm.entry?.call,
+                    session.media.isCurrentWebRTCSession(negotiation, connection: connection)
+                {
+                    if connected {
+                        session.preDial.nativeConnected(negotiation)
+                        session.tracePreDial("native_connected")
+                        session.markPreDial(.transportConnected)
+                        session.media.sendTransportControl(
+                            "webrtc_transport_ready",
+                            call: pending,
+                            sessionID: negotiation
+                        )
+                    } else {
+                        session.preDial.fail("native_transport_failed")
+                    }
+                    return
+                }
                 guard !session.carrierRouteRecovery.required, session.usesWebRTC,
                     session.media.isCurrentWebRTCSession(negotiation, connection: connection)
                 else { return }
@@ -618,7 +638,7 @@ final class IPhoneCloudCallSession {
                     session.webRTCReadiness.nativeConnected(negotiation)
                     session.traceAudio(phase: "native_connected", title: "WebRTC Connected")
                     session.markSetup(.nativeConnected)
-                    if session.webRTCReadiness.isReady, !session.audioState.isConnected {
+                    if session.webRTCReadiness.isReady, session.media.isAudioRunning, !session.audioState.isConnected {
                         session.audioState = .connected
                         session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
                         session.markSetup(.audioReady)
@@ -635,6 +655,10 @@ final class IPhoneCloudCallSession {
                 guard !session.carrierRouteRecovery.required,
                     session.media.isCurrentWebRTCSession(negotiation, connection: connection)
                 else { return }
+                if session.call == nil, session.outgoingPrewarm.entry != nil {
+                    session.preDial.fail("native_transport_disconnected")
+                    return
+                }
                 session.webRTCReadiness.nativeDisconnected(negotiation)
                 session.traceAudio(phase: "native_disconnected", title: "WebRTC Path Interrupted")
                 session.audioState = session.audioState.afterNativeDisconnect(
@@ -649,6 +673,10 @@ final class IPhoneCloudCallSession {
                 // during adoption `answer()` falls back to its own connect.
                 if session.media.isCurrentConnection(connection) {
                     session.outgoingPrewarm.entry?.acceptance.invalidate()
+                    if session.outgoingPrewarm.entry != nil {
+                        session.preDial.fail("signaling_lost")
+                        session.markPreDial(.preparationFailed)
+                    }
                 }
                 guard !session.carrierRouteRecovery.required, session.call != nil,
                     !session.outgoingPrewarm.isAdopting,
@@ -671,6 +699,27 @@ final class IPhoneCloudCallSession {
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
                 let status = control.status
+                if session.call == nil, let pending = session.outgoingPrewarm.entry?.call,
+                    session.media.isCurrentConnection(connection)
+                {
+                    session.preDial.receive(control, call: pending)
+                    if control.callID == pending.callID,
+                        control.callUUID?.lowercased() == pending.uuid.uuidString.lowercased(),
+                        control.generation == pending.generation
+                    {
+                        if status == "pre_dial_peer_ready" { session.markPreDial(.peerAdmissionReady) }
+                        if status == "pre_dial_ready", control.sessionID == session.preDial.sessionID {
+                            session.markPreDial(.transportsReady)
+                        }
+                        if session.preDial.failure != nil { session.markPreDial(.preparationFailed) }
+                    }
+                    if status == "webrtc_ready", let negotiation = control.sessionID,
+                        negotiation == session.preDial.sessionID,
+                        control.matches(callID: pending.callID, uuid: pending.uuid, generation: pending.generation)
+                    {
+                        session.preparedCarrierSession = negotiation
+                    }
+                }
                 let relayStatuses = ["action_queued", "action_forwarded", "peer_connected", "owner_claimed"]
                 // File-backed diagnostics must not delay answer/readiness handling.
                 Task {
@@ -747,7 +796,9 @@ final class IPhoneCloudCallSession {
                         guard session.webRTCReadiness.sessionID == negotiation else { break }
                         session.webRTCReadiness.agentConnected(negotiation)
                         session.traceAudio(phase: "carrier_ready", title: "Android Carrier Audio Ready")
-                        if session.webRTCReadiness.isReady, !session.audioState.isConnected {
+                        if session.webRTCReadiness.isReady, session.media.isAudioRunning,
+                            !session.audioState.isConnected
+                        {
                             session.audioState = .connected
                             session.traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
                             session.markSetup(.audioReady)
@@ -807,6 +858,10 @@ final class IPhoneCloudCallSession {
         }
         // An outgoing socket for this exact call is adopted; another call's socket is dropped.
         let prewarmed = outgoingPrewarm.beginAdoption(for: incoming)
+        if incoming.isOutgoing, callChanged, prewarmed == nil {
+            endUnadoptedOutgoing(incoming)
+            throw CloudCommandError.failed("Strict outgoing WebRTC reservation was lost before adoption")
+        }
         call = incoming
         if callChanged { outgoingPendingReplays = 0 }
         if callChanged || audioSetupStartedAt == nil {
@@ -836,6 +891,16 @@ final class IPhoneCloudCallSession {
             else { return }
             outgoingPrewarm.finishAdoption(prewarmed)
             outgoingPrewarmed = connected && media.isConnected
+            guard outgoingPrewarmed, preDial.committed, preDial.failure == nil, media.hasConnectedTransport else {
+                endUnadoptedOutgoing(incoming)
+                stop()
+                throw IPhoneCloudCallError.connectionClosed
+            }
+            if let negotiation = preDial.sessionID {
+                webRTCReadiness.begin(negotiation)
+                webRTCReadiness.nativeConnected(negotiation)
+                if preparedCarrierSession == negotiation { webRTCReadiness.agentConnected(negotiation) }
+            }
         }
         if !outgoingPrewarmed, callChanged || !media.isConnected {
             media.stop()
@@ -865,21 +930,66 @@ final class IPhoneCloudCallSession {
         scheduleAnswerConfirmation(for: incoming)
     }
 
+    private func markPreDial(_ phase: OutgoingCallSetupPhase) {
+        guard let pending = outgoingPrewarm.entry?.call, setupTimeline?.covers(pending.uuid) == true else { return }
+        setupTimeline?.mark(phase)
+    }
+
+    private func tracePreDial(_ phase: String, failed: Bool = false) {
+        Task {
+            await AgentVerboseTraceRecorder.shared.recordEvent(
+                source: "APP",
+                category: "cloud-pre-dial",
+                phase: phase,
+                title: "Strict Pre-dial WebRTC",
+                fields: [:],
+                isFailure: failed
+            )
+        }
+    }
+
+    /// No polling result or old peer can substitute for both native transport proofs.
+    func commitPreparedOutgoing(_ outgoing: IncomingVoIPCall) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+        while true {
+            try Task.checkCancellation()
+            guard let entry = outgoingPrewarm.entry, CloudOutgoingPrewarm.matches(entry.call, outgoing) else {
+                throw CloudCommandError.failed("Pre-dial WebRTC stopped before carrier dialing")
+            }
+            if let failure = preDial.failure { throw CloudCommandError.failed("Pre-dial WebRTC: \(failure)") }
+            if preDial.canCommit, let negotiation = preDial.sessionID {
+                preDial.commit()
+                tracePreDial("commit_sent")
+                markPreDial(.commitSent)
+                media.sendTransportControl("commit_dial", call: outgoing, sessionID: negotiation)
+                return
+            }
+            guard ContinuousClock.now < deadline else {
+                preDial.fail("transport_timeout_20s")
+                tracePreDial("transport_timeout_20s", failed: true)
+                markPreDial(.preparationTimedOut)
+                throw CloudCommandError.failed("Pre-dial WebRTC transport timed out (20s)")
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     func outgoingDialAcceptance(for outgoing: IncomingVoIPCall) -> CloudOutgoingDialAcceptance? {
         guard let entry = outgoingPrewarm.entry, CloudOutgoingPrewarm.matches(entry.call, outgoing) else { return nil }
         return entry.acceptance
     }
 
-    /// Prepares media for an outgoing call whose dial command the Relay accepted but the Android phone has not yet
-    /// confirmed: TURN credentials, the native WebRTC factory and the signaling socket. Nothing is sent on that
-    /// socket, so the Relay sees a silent client without ownership and the Agent is not asked to join. The session
-    /// keeps no `call`, stays unanswered and idle, and starts no peer. Ignored while a call is in the session.
+    /// Reserves the exact outgoing identity and connects native ICE/DTLS without audio or active call state.
+    /// Only both transport proofs permit commit; answer and microphone activation remain separate gates.
     func prewarmOutgoing(_ outgoing: IncomingVoIPCall, timeline: OutgoingCallSetupTimeline? = nil) {
         guard outgoing.isOutgoing,
             let url = outgoing.authenticatedMediaURL,
             let secret = outgoing.mediaSecret,
             call == nil
         else { return }
+        if let existing = outgoingPrewarm.entry?.call, !CloudOutgoingPrewarm.matches(existing, outgoing) {
+            endUnadoptedOutgoing(existing)
+        }
         clearIncomingPreparation(cancelICE: true)
         if let timeline { setupTimeline = timeline }
         let media = media
@@ -888,12 +998,49 @@ final class IPhoneCloudCallSession {
             sessionHasCall: call != nil,
             release: { releaseOutgoingPrewarmMedia() },
             connect: {
-                try await media.connect(to: url, secret: secret, outgoingDial: outgoing)
-                timeline?.mark(.prewarmSignalingConnected)
+                do {
+                    try await media.connect(to: url, secret: secret, outgoingDial: outgoing)
+                    try Task.checkCancellation()
+                    guard self.outgoingPrewarm.entry.map({ CloudOutgoingPrewarm.matches($0.call, outgoing) }) == true
+                    else { throw CancellationError() }
+                    media.sendControl("reserve_dial", call: outgoing)
+                    let config = try await self.icePreparation.configuration(for: outgoing)
+                    try Task.checkCancellation()
+                    guard self.outgoingPrewarm.entry.map({ CloudOutgoingPrewarm.matches($0.call, outgoing) }) == true
+                    else { throw CancellationError() }
+                    while !self.preDial.peerAvailable {
+                        try Task.checkCancellation()
+                        guard
+                            self.outgoingPrewarm.entry.map({ CloudOutgoingPrewarm.matches($0.call, outgoing) }) == true,
+                            self.preDial.failure == nil
+                        else { throw IPhoneCloudCallError.connectionClosed }
+                        try await Task.sleep(for: .milliseconds(50))
+                    }
+                    let rtc = RTCAudioSession.sharedInstance()
+                    WebRTCCallAudioSession.setTransportOnly(true)
+                    rtc.useManualAudio = true
+                    rtc.isAudioEnabled = false
+                    let negotiation = try media.startWebRTC(
+                        call: outgoing,
+                        servers: config.iceServers.map(\.native),
+                        transportOnly: true
+                    )
+                    self.preDial.begin(negotiation)
+                    self.tracePreDial("silent_peer_started")
+                    timeline?.mark(.prewarmSignalingConnected)
+                } catch {
+                    if self.outgoingPrewarm.entry.map({ CloudOutgoingPrewarm.matches($0.call, outgoing) }) == true {
+                        self.preDial.fail("transport_preparation_failed")
+                        self.markPreDial(.preparationFailed)
+                    }
+                    throw error
+                }
             },
-            expired: { [weak self] expired in self?.discardOutgoingPrewarm(expired) }
+            expired: { [weak self] expired in self?.endUnadoptedOutgoing(expired) }
         )
         guard started else { return }
+        preDial = CloudPreDialGate()
+        preparedCarrierSession = nil
         icePreparation.prefetch(for: outgoing)
         Task.detached(priority: .userInitiated) { CloudWebRTCPeer.prepareFactory() }
     }
@@ -919,6 +1066,9 @@ final class IPhoneCloudCallSession {
     /// Failure, timeout, cancellation or replacement releases only the unadopted call's preparation.
     func discardOutgoingPrewarm(_ outgoing: IncomingVoIPCall) {
         guard outgoing.isOutgoing else { return }
+        if let pending = outgoingPrewarm.entry?.call, CloudOutgoingPrewarm.matches(pending, outgoing) {
+            markPreDial(.preparationCancelled)
+        }
         outgoingPrewarm.discard(call: outgoing) { releaseOutgoingPrewarmMedia() }
         if setupTimeline?.covers(outgoing.uuid) == true, call?.uuid != outgoing.uuid { setupTimeline = nil }
     }
@@ -938,6 +1088,8 @@ final class IPhoneCloudCallSession {
 
     /// Only reached while the session has no call: the bridge then holds nothing but the prewarmed socket.
     private func releaseOutgoingPrewarmMedia() {
+        WebRTCCallAudioSession.setTransportOnly(false)
+        preDial.fail("preparation_released")
         icePreparation.cancel()
         media.stop()
     }
@@ -1220,6 +1372,9 @@ final class IPhoneCloudCallSession {
     }
 
     func stop() {
+        if let pending = outgoingPrewarm.entry?.call { endUnadoptedOutgoing(pending) }
+        WebRTCCallAudioSession.setTransportOnly(false)
+        preDial.fail("cancelled")
         icePreparation.cancel()
         webRTCReadiness.reset()
         releaseWebRTCAudioActivation()
@@ -1419,9 +1574,13 @@ final class IPhoneCloudCallSession {
                     try rtc.setActive(true)
                     ownsWebRTCAudioActivation = true
                 }
+                WebRTCCallAudioSession.setTransportOnly(false)
                 rtc.isAudioEnabled = true
-                let negotiation = try media.startWebRTC(call: call, servers: config.iceServers.map(\.native))
-                webRTCReadiness.begin(negotiation)
+                if !media.enablePreparedAudio(call: call) {
+                    let negotiation = try media.startWebRTC(call: call, servers: config.iceServers.map(\.native))
+                    webRTCReadiness.begin(negotiation)
+                }
+                if webRTCReadiness.isReady { audioState = .connected }
                 traceAudio(phase: "peer_started", title: "WebRTC Peer Started")
                 markSetup(.peerStarted)
             } catch {
@@ -1568,6 +1727,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var webRTCPeer: CloudWebRTCPeer?
     private var webRTCCall: IncomingVoIPCall?
     private var webRTCMode = false
+    private var webRTCAudioEnabled = false
     var onConnectionLost: ((UUID) -> Void)?
     var onControl: ((CloudCallControlMessage, UUID) -> Void)?
     var onOwnerJoinSent: ((IncomingVoIPCall, UUID, TimeInterval) -> Void)?
@@ -1590,8 +1750,10 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         queue.sync { webSocket != nil && !stopped }
     }
 
+    var hasConnectedTransport: Bool { queue.sync { webRTCPeer?.isConnected == true } }
+
     var isAudioRunning: Bool {
-        queue.sync { webRTCPeer != nil }
+        queue.sync { webRTCPeer != nil && webRTCAudioEnabled }
     }
 
     var audioRouteDescription: String {
@@ -1624,7 +1786,18 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    func startWebRTC(call: IncomingVoIPCall, servers: [RTCIceServer]) throws -> UUID {
+    func enablePreparedAudio(call: IncomingVoIPCall) -> Bool {
+        queue.sync {
+            guard let prepared = webRTCCall, CloudOutgoingPrewarm.matches(prepared, call), webRTCPeer != nil else {
+                return false
+            }
+            webRTCAudioEnabled = true
+            webRTCPeer?.setMuted(muted)
+            return true
+        }
+    }
+
+    func startWebRTC(call: IncomingVoIPCall, servers: [RTCIceServer], transportOnly: Bool = false) throws -> UUID {
         try queue.sync {
             guard !stopped, let socket = webSocket else { throw IPhoneCloudCallError.connectionClosed }
             webRTCPeer?.close()
@@ -1632,12 +1805,14 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             let negotiation = UUID()
             webRTCSessionID = negotiation
             webRTCCall = call
+            webRTCAudioEnabled = !transportOnly
             let peer = try CloudWebRTCPeer(
                 callUUID: call.uuid,
                 generation: call.generation,
                 sessionID: negotiation,
                 servers: servers,
                 queue: queue,
+                audioEnabled: !transportOnly,
                 signal: { [weak self, weak socket] signal in
                     guard let self,
                         let socket,
@@ -1677,7 +1852,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 }
             )
             webRTCPeer = peer
-            peer.setMuted(muted)
+            peer.setMuted(transportOnly || muted)
             peer.offer()
             return negotiation
         }
@@ -1743,6 +1918,29 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 self.networkSession?.invalidateAndCancel()
                 self.networkSession = nil
                 self.stopped = true
+            }
+        }
+    }
+
+    func sendTransportControl(_ action: String, call: IncomingVoIPCall, sessionID: UUID) {
+        queue.async { [weak self] in
+            guard let self, let socket = self.webSocket, self.webRTCSessionID == sessionID,
+                let prepared = self.webRTCCall, CloudOutgoingPrewarm.matches(prepared, call)
+            else { return }
+            let payload: [String: Any] = [
+                "action": action, "call_id": call.callID,
+                "call_uuid": call.uuid.uuidString.lowercased(), "generation": call.generation,
+                "session_id": sessionID.uuidString.lowercased(),
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: payload),
+                let text = String(data: data, encoding: .utf8)
+            else { return }
+            socket.send(.string(text)) { [weak self] error in
+                guard error != nil else { return }
+                self?.queue.async { [weak self] in
+                    guard let self, self.webSocket === socket else { return }
+                    self.onConnectionLost?(self.connectionID)
+                }
             }
         }
     }
@@ -1836,7 +2034,7 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         CallAudioRecorder.shared.setMuted(muted)
         queue.async { [weak self] in
             self?.muted = muted
-            self?.webRTCPeer?.setMuted(muted)
+            if let self { self.webRTCPeer?.setMuted(!self.webRTCAudioEnabled || muted) }
         }
     }
 

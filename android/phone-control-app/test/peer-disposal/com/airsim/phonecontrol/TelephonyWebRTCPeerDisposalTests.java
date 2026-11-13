@@ -41,8 +41,36 @@ public final class TelephonyWebRTCPeerDisposalTests {
         run("carrier failure after ready is not retried", TelephonyWebRTCPeerDisposalTests::carrierFailureAfterReadyFails);
         run("format rejection ends peer without same-format retry", TelephonyWebRTCPeerDisposalTests::formatFailureRequiresNewPeer);
         run("host-only remains narrowband and cloud can select wideband", TelephonyWebRTCPeerDisposalTests::formatIsImmutablePerPeer);
+        run("transport-only readiness uses exact live session and no carrier", TelephonyWebRTCPeerDisposalTests::transportOnlyReadiness);
         check(!(Boolean) field("initialized").get(null), "Native WebRTC must never be initialized");
         System.out.println("TelephonyWebRTCPeerDisposalTests: " + passed + " passed (production peer, no JNI)");
+    }
+
+    private static void transportOnlyReadiness() throws Exception {
+        List<org.json.JSONObject> events = new java.util.concurrent.CopyOnWriteArrayList<>();
+        TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null, java.util.UUID.randomUUID().toString(), 1,
+                new JSONArray(), events::add, () -> {}, true);
+        String session = java.util.UUID.randomUUID().toString();
+        try {
+            field("sessionID").set(owner, session);
+            Method method = TelephonyWebRTCPeer.class.getDeclaredMethod("observer", String.class);
+            method.setAccessible(true);
+            PeerConnection.Observer observer = (PeerConnection.Observer) method.invoke(owner, session);
+            observer.onConnectionChange(PeerConnection.PeerConnectionState.CONNECTED);
+            ScheduledExecutorService queue = (ScheduledExecutorService) field("signaling").get(owner);
+            queue.submit(() -> {}).get(5, TimeUnit.SECONDS);
+            check(owner.transportConnected(session), "Current native connection must satisfy exact query");
+            check(!owner.transportConnected(java.util.UUID.randomUUID().toString()), "Foreign session rejected");
+            check(events.stream().anyMatch(e -> "webrtc_transport_ready".equals(e.optString("action"))), "Transport proof emitted");
+            check(events.stream().noneMatch(e -> "webrtc_ready".equals(e.optString("status"))), "Carrier readiness cannot be forged");
+            check(field("device").get(owner) == null && !(Boolean) field("deviceReady").get(owner), "No carrier device or capture");
+            observer.onConnectionChange(PeerConnection.PeerConnectionState.DISCONNECTED);
+            check(!owner.transportConnected(session), "Native disconnect revokes proof synchronously before queued signal");
+            field("sessionID").set(owner, "replacement");
+            observer.onConnectionChange(PeerConnection.PeerConnectionState.CONNECTED);
+            check(!owner.transportConnected(session) && !owner.transportConnected("replacement"), "Late old connected callback cannot bless replacement");
+        } finally { get(owner.closeAsync()); }
+        check(!owner.transportConnected(session), "Close revokes transport proof");
     }
 
     private static void cancelledRingbackCannotActivateCarrier() throws Exception {

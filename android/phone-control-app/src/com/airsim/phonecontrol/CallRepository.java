@@ -32,6 +32,23 @@ public final class CallRepository {
         return IDS.getOrDefault(call, "");
     }
 
+    static boolean hasLiveCalls() {
+        for (Call call : CALLS.values()) {
+            if (call.getState() != Call.STATE_DISCONNECTED) return true;
+        }
+        return false;
+    }
+
+    static boolean belongsToReservation(String androidID, String reservation) {
+        Call call = CALLS.get(androidID);
+        if (call == null || call.getDetails() == null) return false;
+        android.os.Bundle extras = call.getDetails().getIntentExtras();
+        if (extras == null) return false;
+        if (reservation.equals(extras.getString("airsim_reservation"))) return true;
+        android.os.Bundle nested = extras.getBundle(TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS);
+        return nested != null && reservation.equals(nested.getString("airsim_reservation"));
+    }
+
     public static boolean contains(String callId) {
         return callId != null && !callId.isBlank() && CALLS.containsKey(callId);
     }
