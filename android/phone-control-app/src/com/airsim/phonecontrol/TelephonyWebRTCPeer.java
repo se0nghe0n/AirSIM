@@ -12,6 +12,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.webrtc.audio.ExternalPlayoutClock;
+import org.webrtc.audio.PcmFormat;
 
 /** Native peer and carrier audio share the privileged process. No audio crosses IPC. */
 final class TelephonyWebRTCPeer implements Closeable {
@@ -36,13 +37,14 @@ final class TelephonyWebRTCPeer implements Closeable {
     private volatile String failureReason = "webrtc_failed";
     private final AtomicBoolean closed = new AtomicBoolean();
     private final CompletableFuture<Void> disposal = new CompletableFuture<>();
-    private final WebRTCPcmBuffer capture = new WebRTCPcmBuffer();
+    private final PcmFormat pcmFormat;
+    private final WebRTCPcmBuffer capture;
     // Carrier backpressure bounds playback delay; see WebRTCPcmBuffer.NO_AGE_LIMIT.
-    private final WebRTCPcmBuffer playback = new WebRTCPcmBuffer(WebRTCPcmBuffer.NO_AGE_LIMIT);
+    private final WebRTCPcmBuffer playback;
     private volatile boolean deviceReady;
     // Each direction follows the carrier's device clock once it is attached.
-    private final WebRTCCaptureClock captureClock = new WebRTCCaptureClock(capture);
-    private final WebRTCPlayoutClock playoutClock = new WebRTCPlayoutClock(playback, () -> deviceReady && !closed.get());
+    private final WebRTCCaptureClock captureClock;
+    private final WebRTCPlayoutClock playoutClock;
     private TelephonyAudioDevice device;
     private PeerConnectionFactory factory;
     private JavaAudioDeviceModule adm;
@@ -65,17 +67,30 @@ final class TelephonyWebRTCPeer implements Closeable {
 
     TelephonyWebRTCPeer(Context context, String callUUID, long generation, JSONArray ice,
                         Signals signals, Runnable failed, boolean hostOnly) {
+        this(context, callUUID, generation, ice, signals, failed, hostOnly, false);
+    }
+
+    TelephonyWebRTCPeer(Context context, String callUUID, long generation, JSONArray ice,
+                        Signals signals, Runnable failed, boolean hostOnly, boolean forceNarrowband) {
         this.context = context; this.callUUID = callUUID;
         this.generation = generation; this.configuration = ice;
         this.signals = signals; this.failed = failed; this.hostOnly = hostOnly;
+        // Local host-only sessions do not yet have automatic whole-peer format recovery.
+        pcmFormat = hostOnly || forceNarrowband ? PcmFormat.NARROWBAND : TelephonyAudioDevice.preferredFormat();
+        capture = new WebRTCPcmBuffer(pcmFormat);
+        playback = new WebRTCPcmBuffer(pcmFormat, WebRTCPcmBuffer.NO_AGE_LIMIT);
+        captureClock = new WebRTCCaptureClock(capture);
+        playoutClock = new WebRTCPlayoutClock(playback, () -> deviceReady && !closed.get());
     }
+
+    int sampleRate() { return pcmFormat.rate(); }
 
     void start(boolean activateCarrierAudio) {
         submit(() -> {
             initialize(context);
             iceServers = parseICE(configuration, hostOnly);
             if (closed.get()) return;
-            adm = JavaAudioDeviceModule.builder(context).setSampleRate(8000)
+            adm = JavaAudioDeviceModule.builder(context).setSampleRate(pcmFormat.rate())
                     .setUseStereoInput(false).setUseStereoOutput(false)
                     .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
                     .setAudioRecordErrorCallback(new JavaAudioDeviceModule.AudioRecordErrorCallback() {
@@ -89,17 +104,20 @@ final class TelephonyWebRTCPeer implements Closeable {
                         public void onWebRtcAudioTrackError(String error) { fail("audio_playout_error"); }
                     })
                     .setAudioBufferCallback((buffer, format, channels, rate, count, time) -> {
-                        // With AudioRecord disabled this callback, not the SDK, owns the clock.
+                        // The pinned SDK passes count=0 for external capture and sends the entire
+                        // direct buffer after this callback. Validate its actual contract first.
+                        if (!WebRTCPcmContract.acceptsCapture(pcmFormat, buffer, format, channels, rate)) {
+                            WebRTCPcmContract.silence(buffer);
+                            submit(() -> fail("pcm_capture_format_mismatch"));
+                            return 0;
+                        }
                         byte[] bytes;
                         try { bytes = captureClock.next(deviceReady && !closed.get()); }
-                        catch (InterruptedException ignored) { bytes = new byte[WebRTCPcmBuffer.FRAME_BYTES]; }
-                        buffer.clear();
-                        if (buffer.remaining() == bytes.length && channels == 1 && rate == 8000) {
-                            buffer.put(bytes);
-                        } else {
-                            while (buffer.hasRemaining()) buffer.put((byte) 0);
+                        catch (InterruptedException ignored) { bytes = new byte[pcmFormat.frameBytes()]; }
+                        if (!WebRTCPcmContract.copyCapture(pcmFormat, buffer, format, channels, rate, bytes)) {
+                            WebRTCPcmContract.silence(buffer);
+                            submit(() -> fail("pcm_capture_format_mismatch"));
                         }
-                        buffer.position(0);
                         return 0; // External capture has no sample-accurate monotonic timestamp.
                     })
                     .setPlaybackSamplesReadyCallback(new CarrierPlayout()).createAudioDeviceModule();
@@ -128,7 +146,13 @@ final class TelephonyWebRTCPeer implements Closeable {
     private final class CarrierPlayout implements JavaAudioDeviceModule.PlaybackSamplesReadyCallback, ExternalPlayoutClock {
         @Override public boolean awaitPlayoutSlot() throws InterruptedException { return playoutClock.awaitPlayoutSlot(); }
         @Override public void onWebRtcAudioTrackSamplesReady(JavaAudioDeviceModule.AudioSamples samples) {
-            playoutClock.accept(samples.getData());
+            byte[] pcm = samples.getData();
+            if (!WebRTCPcmContract.acceptsPlayback(pcmFormat, samples.getAudioFormat(),
+                    samples.getChannelCount(), samples.getSampleRate(), pcm)) {
+                submit(() -> fail("pcm_playback_format_mismatch"));
+                return;
+            }
+            playoutClock.accept(pcm);
         }
     }
 
@@ -151,7 +175,10 @@ final class TelephonyWebRTCPeer implements Closeable {
         submit(() -> {
             if (device != failed) return;
             String reason = failed.failureReason();
-            if (deviceReady || carrierAttempts >= CARRIER_ATTACH_ATTEMPTS) {
+            // A format rejection requires a new ADM/factory and a fresh negotiation. Never
+            // reopen 8 kHz carrier queues underneath a still-running 48 kHz native peer.
+            if (CarrierFormatFallback.FORMAT_INIT_FAILED.equals(reason)
+                    || deviceReady || carrierAttempts >= CARRIER_ATTACH_ATTEMPTS) {
                 failureReason = reason;
                 throw new IOException(reason);
             }
@@ -302,6 +329,7 @@ final class TelephonyWebRTCPeer implements Closeable {
                             }
                             Map<String, Object> pcm = new LinkedHashMap<>();
                             // Frames the carrier loopback discarded or concealed, outside the RTP loss count.
+                            pcm.put("pcm_sample_rate_hz", pcmFormat.rate());
                             pcm.put("pcm_capture_drop_total", capture.drops());
                             pcm.put("pcm_capture_conceal_total", capture.underruns());
                             pcm.put("pcm_playback_drop_total", playback.drops());

@@ -2,7 +2,7 @@
 
 The retired `android/phone-audio-bridge` implementation is available in Git history at commit `90c06928b41530ef24e9255e645868af06dfeadf`. It is no longer a source, build, launch or recovery path in this tree.
 
-The current adapter is `TelephonyAudioDevice` beside the native WebRTC peer in the privileged Shizuku process. It captures `VOICE_DOWNLINK`, injects into the telephony uplink and exchanges bounded in-process 8 kHz mono samples with WebRTC. No samples cross Binder, a pipe or a separate network-PCM service.
+The current adapter is `TelephonyAudioDevice` beside the native WebRTC peer in the privileged Shizuku process. It captures `VOICE_DOWNLINK`, injects into the telephony uplink and exchanges bounded in-process PCM16 mono samples with WebRTC. Explicit matching input/output telephony profiles select 48 kHz for cloud calls; other profiles and host-only local calls retain 8 kHz. See [adaptive carrier wideband](webrtc.md#adaptive-carrier-wideband) for selection, fallback and physical acceptance limits. No samples cross Binder, a pipe or a separate network-PCM service.
 
 ## Cloud outgoing setup
 

@@ -200,6 +200,9 @@ UPLINK_OUT="$OUT/carrier-uplink"
 mkdir -p "$UPLINK_OUT"
 compile_test "$UPLINK_OUT" "$ANDROID_JAR" \
   "$ROOT"/test/peer-disposal/com/airsim/phonecontrol/BridgeLog.java \
+  "$ROOT"/src/org/webrtc/audio/PcmFormat.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierAudioFormatPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierFormatFallback.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudAudioSetupTimeline.java \
   "$ROOT"/src/com/airsim/phonecontrol/PrivilegedBridgeProtocol.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
@@ -213,6 +216,10 @@ compile_test "$UPLINK_OUT" "$ANDROID_JAR" \
 "$JAVA" -cp "$(with_stdlib "$UPLINK_OUT:$ANDROID_JAR")" com.airsim.phonecontrol.CarrierUplinkTests
 
 compile_test "$OUT" "$OUT" \
+  "$ROOT"/src/org/webrtc/audio/PcmFormat.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierAudioFormatPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierFormatFallback.java \
+  "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmContract.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPcmBuffer.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCCaptureClock.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayoutClock.java \
@@ -221,6 +228,10 @@ compile_test "$OUT" "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCOpusSDP.java \
   "$ROOT"/test/com/airsim/phonecontrol/WebRTCMediaTests.java
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.WebRTCMediaTests
+
+compile_test "$OUT" "$OUT" \
+  "$ROOT"/test/com/airsim/phonecontrol/WidebandAudioTests.java
+"$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.WidebandAudioTests
 
 compile_test "$OUT" "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCReadiness.java \
@@ -255,6 +266,9 @@ mkdir -p "$MEDIA_OUT"
 compile_test "$MEDIA_OUT" "$JSON_JAR" \
   "$ROOT"/test/media/android/content/Context.java \
   "$ROOT"/test/media/android/os/SystemClock.java \
+  "$ROOT"/test/peer-disposal/com/airsim/phonecontrol/BridgeLog.java \
+  "$ROOT"/src/org/webrtc/audio/PcmFormat.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierFormatFallback.java \
   "$ROOT"/test/media/com/airsim/phonecontrol/TelephonyWebRTCPeer.java \
   "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaProtocol.java \
   "$ROOT"/src/com/airsim/phonecontrol/PrivilegedMediaService.java \

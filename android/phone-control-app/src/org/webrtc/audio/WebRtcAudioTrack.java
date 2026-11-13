@@ -48,10 +48,10 @@ class WebRtcAudioTrack {
     @CalledByNative public void setNativeAudioTrack(long pointer) { nativeAudioTrack = pointer; }
 
     @CalledByNative private int initPlayout(int sampleRate, int channels, double bufferSizeFactor) {
-        if (sampleRate != 8000 || channels != 1 || thread != null || callback == null) return -1;
+        if ((sampleRate != 8000 && sampleRate != 48000) || channels != 1 || thread != null || callback == null) return -1;
         this.sampleRate = sampleRate;
         this.channels = channels;
-        buffer = ByteBuffer.allocateDirect(sampleRate / 100 * channels * 2);
+        buffer = ByteBuffer.allocateDirect(PcmFormat.atRate(sampleRate).frameBytes());
         nativeCacheDirectBufferAddress(nativeAudioTrack, buffer);
         return buffer.capacity();
     }

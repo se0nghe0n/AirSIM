@@ -39,6 +39,8 @@ public final class TelephonyWebRTCPeerDisposalTests {
         run("carrier attach retries in place before the route is ready", TelephonyWebRTCPeerDisposalTests::carrierAttachRetriesInPlace);
         run("carrier attach gives up after bounded attempts with a reason", TelephonyWebRTCPeerDisposalTests::carrierAttachIsBounded);
         run("carrier failure after ready is not retried", TelephonyWebRTCPeerDisposalTests::carrierFailureAfterReadyFails);
+        run("format rejection ends peer without same-format retry", TelephonyWebRTCPeerDisposalTests::formatFailureRequiresNewPeer);
+        run("host-only remains narrowband and cloud can select wideband", TelephonyWebRTCPeerDisposalTests::formatIsImmutablePerPeer);
         check(!(Boolean) field("initialized").get(null), "Native WebRTC must never be initialized");
         System.out.println("TelephonyWebRTCPeerDisposalTests: " + passed + " passed (production peer, no JNI)");
     }
@@ -125,6 +127,44 @@ public final class TelephonyWebRTCPeerDisposalTests {
         } finally {
             TelephonyAudioDevice.onStart = device -> { throw new AssertionError("native route start"); };
             owner.closeAsync();
+        }
+    }
+
+    private static void formatFailureRequiresNewPeer() throws Exception {
+        List<TelephonyAudioDevice> devices = java.util.Collections.synchronizedList(new ArrayList<>());
+        CountDownLatch failed = new CountDownLatch(1);
+        TelephonyAudioDevice.onStart = device -> {
+            devices.add(device);
+            device.failureReason = CarrierFormatFallback.FORMAT_INIT_FAILED;
+            device.failed.run();
+        };
+        TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null, java.util.UUID.randomUUID().toString(), 1,
+                new JSONArray(), signal -> {}, failed::countDown, false);
+        try {
+            check(owner.sampleRate() == 48000, "Cloud peer selects the advertised wideband format");
+            owner.activateCarrierAudio(); await(failed, "explicit format rejection");
+            get(owner.closeAsync());
+            check(devices.size() == 1, "A rejected PCM format must not use the four route retries");
+            check(devices.get(0).closeCalls.get() == 1, "Format-rejected carrier is fully disposed exactly once");
+            check(CarrierFormatFallback.FORMAT_INIT_FAILED.equals(owner.failureReason()), "Format reason preserved for scoped fallback");
+        } finally {
+            TelephonyAudioDevice.onStart = device -> { throw new AssertionError("native route start"); };
+            get(owner.closeAsync());
+        }
+    }
+
+    private static void formatIsImmutablePerPeer() throws Exception {
+        for (boolean host : new boolean[]{false, true}) for (boolean fallback : new boolean[]{false, true}) {
+            TelephonyWebRTCPeer owner = new TelephonyWebRTCPeer(null, java.util.UUID.randomUUID().toString(), 1,
+                    new JSONArray(), signal -> {}, () -> {}, host, fallback);
+            try {
+                int expected = host || fallback ? 8000 : 48000;
+                check(owner.sampleRate() == expected, "Host-only and explicit fallback stay narrowband");
+                WebRTCPcmBuffer capture = (WebRTCPcmBuffer) field("capture").get(owner);
+                WebRTCPcmBuffer playback = (WebRTCPcmBuffer) field("playback").get(owner);
+                check(capture.frameBytes() == expected / 50 && playback.frameBytes() == expected / 50,
+                        "Both queues share the immutable ADM format");
+            } finally { get(owner.closeAsync()); }
         }
     }
 

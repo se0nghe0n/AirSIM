@@ -60,6 +60,8 @@ public final class PrivilegedMediaTests {
         failedAcquisitionAndStart();
         failedRestore();
         prepareDuringRingback();
+        formatFallbackAfterDisposal();
+        formatFallbackQuarantine();
         System.out.println("Privileged media protocol/owner tests passed ("+checks+" checks)");
     }
 
@@ -200,6 +202,66 @@ public final class PrivilegedMediaTests {
             finishOffThread(TelephonyWebRTCPeer.latest);
             rejected("media_owner_busy", () -> service.request(start(UUID.randomUUID().toString())));
             check(service.closeAsync().isCompletedExceptionally());
+        }
+    }
+
+    static CarrierFormatFallback formats(PrivilegedMediaService service) throws Exception {
+        var field = PrivilegedMediaService.class.getDeclaredField("formats");
+        field.setAccessible(true);
+        return (CarrierFormatFallback) field.get(service);
+    }
+
+    static void formatFallbackAfterDisposal() throws Exception {
+        for (String reason : new String[]{CarrierFormatFallback.FORMAT_INIT_FAILED, "carrier_route_unverified",
+                "carrier_permission_denied", "carrier_capture_timeout", "carrier_playback_stopped"}) {
+            int[] restores = {0};
+            try (PrivilegedMediaService service = delayedService(restores)) {
+                service.request(start(OWNER));
+                TelephonyWebRTCPeer old = TelephonyWebRTCPeer.latest;
+                check(old.sampleRate() == 48000);
+                old.reason = reason; old.failed.run();
+                check(!service.available());
+                check(!formats(service).useNarrowband(CALL, 1)); // Pending cleanup must not enable fallback.
+                String next = UUID.randomUUID().toString();
+                rejected("media_owner_busy", () -> service.request(start(next)));
+                finishOffThread(old);
+                boolean downgrade = CarrierFormatFallback.FORMAT_INIT_FAILED.equals(reason);
+                check(formats(service).useNarrowband(CALL, 1) == downgrade);
+                service.request(start(next));
+                TelephonyWebRTCPeer replacement = TelephonyWebRTCPeer.latest;
+                check(replacement.sampleRate() == (downgrade ? 8000 : 48000));
+                // An obsolete failure cannot terminate or change the replacement's format.
+                old.failed.run(); old.completeDisposal(); old.signals.send(signal());
+                check(service.available() && !poll(service, next).has("event"));
+                service.request(message("stop", next).toString()); finishOffThread(replacement);
+                check(!formats(service).useNarrowband(CALL, 2));
+                String owner2 = UUID.randomUUID().toString();
+                service.request(message("start", owner2).put("generation", 2).put("ice_servers", new JSONArray()).toString());
+                check(TelephonyWebRTCPeer.latest.sampleRate() == 48000);
+                service.request(message("stop", owner2).put("generation", 2).toString()); finishOffThread(TelephonyWebRTCPeer.latest);
+                String another = UUID.randomUUID().toString(), owner3 = UUID.randomUUID().toString();
+                service.request(message("start", owner3).put("call_uuid", another).put("ice_servers", new JSONArray()).toString());
+                check(TelephonyWebRTCPeer.latest.sampleRate() == 48000);
+                service.request(message("stop", owner3).put("call_uuid", another).toString()); finishOffThread(TelephonyWebRTCPeer.latest);
+            }
+        }
+    }
+
+    static void formatFallbackQuarantine() throws Exception {
+        for (boolean restoreFailure : new boolean[]{false, true}) {
+            TelephonyWebRTCPeer.delayedDisposal = true;
+            try (PrivilegedMediaService service = new PrivilegedMediaService(new android.content.Context(), () -> {
+                if (restoreFailure) throw new IllegalStateException("fake_restore_failure");
+            }, () -> {})) {
+                service.initialize(); service.request(start(OWNER));
+                TelephonyWebRTCPeer old = TelephonyWebRTCPeer.latest;
+                old.reason = CarrierFormatFallback.FORMAT_INIT_FAILED; old.failed.run();
+                if (restoreFailure) old.completeDisposal(); else old.failDisposal();
+                check(!formats(service).useNarrowband(CALL, 1));
+                check(!service.available());
+                rejected("media_owner_busy", () -> service.request(start(UUID.randomUUID().toString())));
+                check(service.closeAsync().isCompletedExceptionally());
+            }
         }
     }
 

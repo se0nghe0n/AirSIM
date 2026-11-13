@@ -15,6 +15,7 @@ import {
   readAgentHeartbeatsFromKV,
   claimQuota,
   readDeviceRecord,
+  readMediaAdmissionSnapshot,
   readRelayState,
   writeAgentHeartbeat,
   writeDeviceRecord,
@@ -40,12 +41,12 @@ let cachedProviderTokenAt = 0;
 let cachedProviderTokenKey = "";
 
 export default {
-  async fetch(request, env) {
-    return handleRequest(request, env);
+  async fetch(request, env, context) {
+    return handleRequest(request, env, context);
   },
 };
 
-export async function handleRequest(request, env) {
+export async function handleRequest(request, env, context) {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/") {
     return Response.redirect(`${url.origin}/dashboard`, 302);
@@ -125,7 +126,7 @@ export async function handleRequest(request, env) {
       return await receiveDeviceStatus(request, env);
     }
     if (url.pathname === "/v1/commands/enqueue") {
-      return await enqueueDeviceCommand(request, env);
+      return await enqueueDeviceCommand(request, env, context);
     }
     if (url.pathname === "/v1/commands/result") {
       return await readDeviceCommandResult(request, env);
@@ -165,7 +166,7 @@ async function connectDeviceCommands(request, env, deviceID) {
   return stub.fetch(new Request("https://commands.internal/connect", { headers }));
 }
 
-async function enqueueDeviceCommand(request, env) {
+async function enqueueDeviceCommand(request, env, context) {
   if (!env.COMMANDS) return jsonResponse(503, { error: "device command relay unavailable" });
   const value = await readJSON(request);
   const authenticated = await authenticate(value, env);
@@ -235,7 +236,7 @@ async function enqueueDeviceCommand(request, env) {
         media_url: `${new URL(request.url).origin.replace(/^http/, "ws")}/v1/calls/${queuedCall.call_uuid}/connect` }
       : null;
   }
-  await recordDashboardEvent(env, {
+  const telemetry = recordDashboardEvent(env, {
     type: value.type === "dial" ? "call" : "sms",
     device_id: authenticated.device.device_id,
     status: !response.ok || ["failed", "expired"].includes(result.status)
@@ -243,6 +244,10 @@ async function enqueueDeviceCommand(request, env) {
     channel: "relay",
     environment: authenticated.device.environment,
   });
+  // The command and call are already durable. Do not hold the call identity needed for iPhone prewarm
+  // behind best-effort dashboard persistence. Keep that persistence alive after the HTTP response.
+  if (typeof context?.waitUntil === "function") context.waitUntil(telemetry);
+  else await telemetry;
   return jsonResponse(response.status, { ...result, ...(response.ok && call ? { call } : {}) });
 }
 
@@ -1179,8 +1184,10 @@ export class CallMediaSession {
     if (attachment.role === "watch") availability = unavailableMedia("iphone_audio_required");
     else if (attachment.mediaTransport === "webrtc" && attachment.deviceID) {
       try {
-        const device = await readDeviceRecord(this.env, attachment.deviceID);
-        if (device) availability = await remoteMediaAvailability(device, this.env, "webrtc");
+        const { device, heartbeat } = await readMediaAdmissionSnapshot(this.env, attachment.deviceID);
+        if (device?.device_id === attachment.deviceID) {
+          availability = await remoteMediaAvailability(device, this.env, "webrtc", heartbeat);
+        }
       } catch {
         availability = unavailableMedia("agent_unavailable");
       }
@@ -2143,7 +2150,7 @@ function unavailableMediaResponse(availability) {
   return jsonResponse(409, { error: unavailableMediaMessage(availability.remote_audio_reason), ...availability });
 }
 
-async function remoteMediaAvailability(device, env, requestedOverride = "") {
+async function remoteMediaAvailability(device, env, requestedOverride = "", heartbeatSnapshot = undefined) {
   if (device.remote_audio_disabled === true || device.force_legacy_pcm === true) {
     return unavailableMedia("media_disabled");
   }
@@ -2154,7 +2161,9 @@ async function remoteMediaAvailability(device, env, requestedOverride = "") {
   if (env.WEBRTC_TRANSPORT_READY !== "true" || !turnConfigured(env)) {
     return unavailableMedia("relay_media_unavailable");
   }
-  const heartbeat = await readCurrentAgentHeartbeat(env, device.device_id);
+  // An explicit null from a fresh admission snapshot means missing, never permission to retry a mirror.
+  const heartbeat = heartbeatSnapshot === undefined
+    ? await readCurrentAgentHeartbeat(env, device.device_id) : heartbeatSnapshot;
   const age = Date.now() - heartbeat?.received_at_ms;
   if (!Number.isFinite(heartbeat?.received_at_ms) || !Number.isFinite(age) || age < 0 || age > MEDIA_HEARTBEAT_MAX_AGE_MS) {
     return unavailableMedia("agent_unavailable");
