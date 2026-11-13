@@ -5,6 +5,52 @@ import AudioToolbox
 @testable import AirSIM
 
 struct CloudWebRTCTests {
+    @Test func `Accepted incoming audio can arm while Android confirmation is pending`() {
+        #expect(CloudCallAudioStartupPolicy.shouldStart(
+            answered: true, mediaPrepared: true, lifecycleState: .connecting, isOutgoing: false,
+            managedByCallKit: true, callKitAudioSessionActive: true))
+        for state in [CallLifecycleState.idle, .ringing, .ending, .ended, .failed] {
+            #expect(!CloudCallAudioStartupPolicy.shouldStart(
+                answered: true, mediaPrepared: true, lifecycleState: state, isOutgoing: false,
+                managedByCallKit: true, callKitAudioSessionActive: true))
+        }
+        #expect(!CloudCallAudioStartupPolicy.shouldStart(
+            answered: false, mediaPrepared: true, lifecycleState: .connecting, isOutgoing: false,
+            managedByCallKit: true, callKitAudioSessionActive: true))
+        #expect(!CloudCallAudioStartupPolicy.shouldStart(
+            answered: true, mediaPrepared: false, lifecycleState: .connecting, isOutgoing: false,
+            managedByCallKit: true, callKitAudioSessionActive: true))
+        #expect(!CloudCallAudioStartupPolicy.shouldStart(
+            answered: true, mediaPrepared: true, lifecycleState: .connecting, isOutgoing: false,
+            managedByCallKit: true, callKitAudioSessionActive: false))
+    }
+
+    @Test @MainActor func `Cold launch startup is order independent and still requires answer acknowledgement`() {
+        for order in [["activation", "prepared", "confirmed"], ["prepared", "confirmed", "activation"],
+                      ["prepared", "activation", "confirmed"], ["confirmed", "activation", "prepared"]] {
+            let handshake = CloudWebRTCAnswerHandshake()
+            var activated = false, prepared = false, permitted = false, starts = 0
+            func tryStart() {
+                if permitted && handshake.acknowledged && starts == 0 { starts += 1 }
+            }
+            for event in order {
+                switch event {
+                case "activation": activated = true
+                case "prepared": prepared = true
+                default: handshake.confirm(status: "answer_ok", isOutgoing: false) { tryStart() }
+                }
+                if CloudCallAudioStartupPolicy.shouldStart(
+                    answered: true, mediaPrepared: prepared, lifecycleState: .connecting, isOutgoing: false,
+                    managedByCallKit: true, callKitAudioSessionActive: activated) {
+                    permitted = true
+                    tryStart()
+                }
+                if !handshake.acknowledged || !activated || !prepared { #expect(starts == 0) }
+            }
+            #expect(starts == 1)
+        }
+    }
+
     @Test func `Local readiness is versioned and bound to the exact call negotiation`() throws {
         let session = VoWLANWebRTCSession(callUUID: UUID(), generation: 4, sessionID: UUID())
         let body = try JSONEncoder().encode(session)

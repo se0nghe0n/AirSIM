@@ -77,15 +77,14 @@ final class TelephonyAudioDevice implements Closeable {
             // Zero samples prime the output route, not a synthesized caller or fallback speaker.
             // A vendor tag alone is NOT evidence of a working route. Hidden OEM routes remain
             // unavailable until their native verification mechanism is implemented and device-tested.
-            long deadline = System.nanoTime() + 2_000_000_000L;
-            while (!closed.get()) {
-                write(output, frame);
-                AudioDeviceInfo routed = output.getRoutedDevice();
-                if (routed != null && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY && routed.isSink()) break;
-                if (System.nanoTime() >= deadline) throw new IOException("carrier route unverified");
-                Thread.sleep(10);
-            }
-            if (closed.get()) return;
+            CarrierStartup startup = new CarrierStartup(closed::get, System::nanoTime,
+                    nanos -> java.util.concurrent.TimeUnit.NANOSECONDS.sleep(nanos));
+            if (!startup.verifyRoute(frame,
+                    (bytes, offset, length) -> output.write(bytes, offset, length, AudioTrack.WRITE_NON_BLOCKING),
+                    () -> {
+                        AudioDeviceInfo routed = output.getRoutedDevice();
+                        return routed != null && routed.getType() == AudioDeviceInfo.TYPE_TELEPHONY && routed.isSink();
+                    })) return;
             // Fill the carrier buffer with silence so the carrier clock paces NetEq from the first
             // frame instead of decoding a burst faster than real time.
             for (int i = 0; i < 64; i++) {
@@ -99,9 +98,10 @@ final class TelephonyAudioDevice implements Closeable {
             for (int i = 0; i < 64; i++) {
                 if (input.read(frame, 0, frame.length, AudioRecord.READ_NON_BLOCKING) < frame.length) break;
             }
-            int count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
-            if (count <= 0 || input.getAudioSource() != SOURCE_VOICE_DOWNLINK) throw new IOException("carrier capture failed");
-            capture.offer(frame, 0, count & ~1);
+            if (!startup.firstCapture(frame,
+                    (bytes, offset, length) -> input.read(bytes, offset, length, AudioRecord.READ_NON_BLOCKING))) return;
+            if (input.getAudioSource() != SOURCE_VOICE_DOWNLINK) throw new IOException("carrier capture failed");
+            capture.offer(frame, 0, frame.length);
             synchronized (this) {
                 // The uplink is already running. A device it has failed must not report ready
                 // afterwards, or the peer would treat an unverified retry as a verified route.
@@ -109,7 +109,7 @@ final class TelephonyAudioDevice implements Closeable {
                 ready.run();
             }
             while (!closed.get()) {
-                count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
+                int count = input.read(frame, 0, frame.length, AudioRecord.READ_BLOCKING);
                 if (count < 0) throw new IOException("carrier capture stopped");
                 if (count > 0) capture.offer(frame, 0, count & ~1);
             }

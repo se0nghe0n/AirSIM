@@ -206,6 +206,7 @@ compile_test "$UPLINK_OUT" "$ANDROID_JAR" \
   "$ROOT"/src/org/webrtc/audio/ExternalPlayoutClock.java \
   "$ROOT"/src/com/airsim/phonecontrol/WebRTCPlayout.java \
   "$ROOT"/src/com/airsim/phonecontrol/CarrierUplink.java \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierStartup.java \
   "$ROOT"/src/com/airsim/phonecontrol/TelephonyAudioDevice.java \
   "$ROOT"/test/com/airsim/phonecontrol/CarrierUplinkTests.java
 "$JAVA" -cp "$(with_stdlib "$UPLINK_OUT:$ANDROID_JAR")" com.airsim.phonecontrol.CarrierUplinkTests
@@ -317,3 +318,9 @@ compile_test "$RECOVERY_OUT" "$JSON_JAR" \
   "$ROOT"/src/com/airsim/phonecontrol/CallLifecycleConflict.java \
   "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java
 "$JAVA" -cp "$(with_stdlib "$RECOVERY_OUT:$JSON_JAR")" com.airsim.phonecontrol.CloudCarrierRecoveryTests
+
+# Nonblocking carrier startup deadlines use a fake monotonic clock, never a physical call.
+compile_test "$OUT/carrier-startup" "" \
+  "$ROOT"/src/com/airsim/phonecontrol/CarrierStartup.java \
+  "$ROOT"/test/com/airsim/phonecontrol/CarrierStartupTests.java
+"$JAVA" -cp "$(with_stdlib "$OUT/carrier-startup")" com.airsim.phonecontrol.CarrierStartupTests

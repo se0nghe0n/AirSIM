@@ -322,6 +322,7 @@ final class CallKitController: NSObject {
             if disposition == .currentCallReported {
                 handler?.callKitDidReceiveIncoming(call)
                 completion(nil)
+                prepareIncomingCloudMediaIfNeeded()
                 return true
             }
             if disposition == .currentCallPlaceholder {
@@ -552,7 +553,7 @@ final class CallKitController: NSObject {
             update: update(number: number, callerName: callerName)
         ) { [weak self] error in
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.currentUUID == uuid else { return }
                 if let error {
                     let diagnosticError = error as NSError
                     self.debugLog(
@@ -574,9 +575,18 @@ final class CallKitController: NSObject {
                     self.debugLog("System incoming call reported successfully")
                     self.systemCallReported = true
                     self.finishIncomingReport(nil)
+                    self.prepareIncomingCloudMediaIfNeeded()
                 }
             }
         }
+    }
+
+    private func prepareIncomingCloudMediaIfNeeded() {
+        guard CloudModePreference.isEnabled(), systemCallReported,
+            currentDirection == "incoming", currentState == "incoming",
+            let incoming = currentIncomingPush, incoming.uuid == currentUUID
+        else { return }
+        IPhoneCloudCallSession.shared.prewarmIncoming(incoming)
     }
 
     private func finishIncomingReport(_ error: Error?) {
@@ -671,6 +681,9 @@ final class CallKitController: NSObject {
     }
 
     private func resetCurrentCall() {
+        if let incoming = currentIncomingPush {
+            IPhoneCloudCallSession.shared.discardIncomingPrewarm(incoming)
+        }
         if !incomingReportCompletions.isEmpty {
             finishIncomingReport(CallKitBridgeError.staleSystemCall)
         }
