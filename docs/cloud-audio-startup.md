@@ -13,6 +13,8 @@ There is no strict-protocol fallback. Missing support, invalid or stale proof, d
 
 After Android accepts the dial, the iPhone adopts the same native peer. Normal microphone permission, CallKit activation and outgoing media acknowledgement still gate iPhone audio. Android carrier capture/injection still waits for the exact Telecom call to become ACTIVE. Incoming and direct/local calls retain their existing control and media rules.
 
+The iPhone enables SDP/ICE reception when it creates the native peer, independently of CallKit audio preparation. A fresh process must accept the matching answer and ICE while that peer is still silent. Previously, the receive gate was enabled only by CallKit preparation, so the first strict pre-dial attempt could send an offer but discard its answer and candidates until the reservation expired. Regression coverage starts a fresh production media bridge, connects native peers through an in-memory signaling socket without preparing CallKit, and keeps the local audio track disabled. Pre-dial failures retain allowlisted protocol reason codes; arbitrary server text is not included in the error.
+
 Roll out the compatible Relay and Android first, then the new iPhone build. Older iPhones may continue using their separate legacy protocol during the upgrade; a new strict request never downgrades into it. New iPhones with old Relay or Android versions fail clearly rather than placing an unprepared call. Deployment does not prove the installed iPhone has updated. Native-loopback, unit and simulator tests do not establish physical carrier routing, real WAN latency or perceived call quality.
 
 ## Incoming credential preparation

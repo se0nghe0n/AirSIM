@@ -368,7 +368,8 @@ struct CloudPreDialGate {
             control.generation == call.generation
         else { return }
         if ["pre_dial_aborted", "ended", "ownership_lost", "action_error", "action_rejected"].contains(control.status) {
-            fail("relay_\(control.status)")
+            let detail = control.reason.map { ":\($0)" } ?? ""
+            fail("relay_\(control.status)\(detail)")
         } else if control.status == "pre_dial_peer_ready", failure == nil {
             peerAvailable = true
         } else if control.status == "pre_dial_ready", let sessionID,

@@ -976,6 +976,74 @@ struct CloudWebRTCTests {
         ]
     }
 
+    @Test(.serialized, arguments: [true, false])
+    func `Fresh media bridge routes exact native answers before CallKit preparation`(transportOnly: Bool) async throws {
+        let call = try IncomingVoIPCall(
+            outgoingCallID: "transport-only-test",
+            uuid: UUID(),
+            number: "1",
+            secret: String(repeating: "x", count: 32),
+            mediaURL: URL(string: "wss://relay.test/connect")!,
+            generation: 7,
+            mediaTransport: .webRTC
+        )
+        let socket = NativeLoopbackSignalingSocket()
+        let bridge = IPhoneCloudCallMediaBridge(makeWebSocket: { _, _ in socket })
+        let device = SyntheticWebRTCAudioDevice()
+        let factory = InspectablePeerFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: device)
+        defer {
+            bridge.stop()
+            bridge.stopWebRTC() // Drain queued teardown before disposing the native fixture.
+            socket.closePeer()
+        }
+        // Deliberately never prepareForCallKit(): the outgoing reservation precedes answer/audio activation.
+        try await bridge.connect(to: call.authenticatedMediaURL!, secret: call.mediaSecret!, outgoingDial: call)
+        let negotiation = try bridge.startWebRTC(
+            call: call,
+            servers: [],
+            transportOnly: transportOnly,
+            factory: factory
+        )
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while !bridge.hasConnectedTransport, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(bridge.hasConnectedTransport, "Fresh pre-dial bridge must apply the native answer and ICE")
+        let connection = try #require(factory.connection)
+        #expect(connection.remoteDescription?.type == .answer)
+        #expect(connection.localDescription?.type == .offer)
+        #expect(socket.sentActions.contains(.offer))
+        #expect(socket.sentActions.contains(.ice))
+        #expect(socket.injectedForeignSignals == 6)
+        #expect(connection.senders.compactMap(\.track).count == 1)
+        #expect(connection.senders.compactMap(\.track).allSatisfy { $0.isEnabled == !transportOnly })
+        #expect(bridge.isAudioRunning == !transportOnly)
+        bridge.setMuted(false)
+        #expect(bridge.hasConnectedTransport) // Drains the mute operation on the bridge queue.
+        #expect(connection.senders.compactMap(\.track).allSatisfy { $0.isEnabled == !transportOnly })
+        if transportOnly {
+            // Adoption opens the same peer's audio rather than creating a replacement negotiation.
+            #expect(bridge.enablePreparedAudio(call: call))
+            #expect(bridge.isAudioRunning)
+            #expect(connection.senders.compactMap(\.track).allSatisfy { $0.isEnabled })
+            #expect(bridge.hasConnectedTransport)
+        }
+        bridge.stop()
+        bridge.stopWebRTC()
+        socket.deliverAfterClose(
+            .init(
+                action: .answer,
+                callUUID: call.uuid,
+                generation: call.generation,
+                sessionID: negotiation,
+                sdp: "stale answer after stop"
+            )
+        )
+        #expect(!bridge.isConnected)
+        #expect(!bridge.hasConnectedTransport)
+        #expect(!bridge.isAudioRunning)
+    }
+
     @Test func `Native peers negotiate Opus over host ICE`() async throws {
         try await runLoopback(servers: [], relayOnly: false)
     }
@@ -1239,6 +1307,138 @@ struct CloudWebRTCTests {
             mediaTransport: .legacyPCM
         )
         #expect(call.requestedMediaTransport == .webRTC)
+    }
+}
+
+/// In-memory WebSocket boundary, with a real SDK peer on its remote side. No Relay or carrier is contacted.
+private final class NativeLoopbackSignalingSocket: CloudCallSignalingSocket, @unchecked Sendable {
+    typealias Receiver = @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "airsim.predial.remote-peer")
+    private var receiver: Receiver?
+    private var closedReceiver: Receiver?
+    private var buffered: [URLSessionWebSocketTask.Message] = []
+    private var actions: Set<CloudWebRTCSignal.Action> = []
+    private var foreignSignals = 0
+    private var taskPriority: Float = 0
+    private var peer: CloudWebRTCPeer?
+    private let device = SyntheticWebRTCAudioDevice()
+    private var factory: RTCPeerConnectionFactory?
+
+    var priority: Float {
+        get { lock.withLock { taskPriority } }
+        set { lock.withLock { taskPriority = newValue } }
+    }
+
+    var sentActions: Set<CloudWebRTCSignal.Action> { lock.withLock { actions } }
+    var injectedForeignSignals: Int { lock.withLock { foreignSignals } }
+    func resume() {}
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) { pongReceiveHandler(nil) }
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        lock.withLock {
+            closedReceiver = receiver
+            receiver = nil
+            buffered.removeAll()
+        }
+    }
+
+    func receive(completionHandler: @escaping Receiver) {
+        let message = lock.withLock { () -> URLSessionWebSocketTask.Message? in
+            guard !buffered.isEmpty else {
+                receiver = completionHandler
+                return nil
+            }
+            return buffered.removeFirst()
+        }
+        if let message { completionHandler(.success(message)) }
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message, completionHandler: @escaping @Sendable (Error?) -> Void) {
+        guard case let .string(text) = message,
+            let signal = try? JSONDecoder().decode(CloudWebRTCSignal.self, from: Data(text.utf8))
+        else {
+            completionHandler(nil)
+            return
+        }
+        lock.withLock { _ = actions.insert(signal.action) }
+        queue.async { [self] in
+            do {
+                if signal.action == .offer {
+                    let factory = RTCPeerConnectionFactory(
+                        encoderFactory: nil,
+                        decoderFactory: nil,
+                        audioDevice: self.device
+                    )
+                    self.factory = factory
+                    self.peer = try CloudWebRTCPeer(
+                        callUUID: signal.callUUID,
+                        generation: signal.generation,
+                        sessionID: signal.sessionID,
+                        servers: [],
+                        queue: self.queue,
+                        factory: factory,
+                        audioEnabled: false,
+                        signal: { [weak self] reply in self?.reply(reply) },
+                        connected: {},
+                        failure: { Issue.record("Remote native transport-only peer failed") },
+                        statistics: { _ in }
+                    )
+                }
+                self.peer?.receive(signal, answering: true)
+            } catch { Issue.record("Remote native peer creation failed") }
+        }
+        completionHandler(nil)
+    }
+
+    private func reply(_ signal: CloudWebRTCSignal) {
+        if signal.action == .answer {
+            // Each wrong identity carries unusable SDP/ICE: accepting one must fail the real native peer.
+            for (uuid, generation, session) in [
+                (UUID(), signal.generation, signal.sessionID),
+                (signal.callUUID, signal.generation + 1, signal.sessionID),
+                (signal.callUUID, signal.generation, UUID()),
+            ] {
+                deliver(
+                    .init(action: .answer, callUUID: uuid, generation: generation, sessionID: session, sdp: "invalid")
+                )
+                deliver(
+                    .init(
+                        action: .ice,
+                        callUUID: uuid,
+                        generation: generation,
+                        sessionID: session,
+                        candidate: .init(candidate: "invalid", sdpMid: "0", sdpMlineIndex: 0)
+                    )
+                )
+                lock.withLock { foreignSignals += 2 }
+            }
+        }
+        deliver(signal)
+    }
+
+    private func deliver(_ signal: CloudWebRTCSignal) {
+        guard let data = try? JSONEncoder().encode(signal) else { return }
+        let message = URLSessionWebSocketTask.Message.string(String(decoding: data, as: UTF8.self))
+        let waiting = lock.withLock { () -> Receiver? in
+            defer { receiver = nil }
+            if receiver == nil { buffered.append(message) }
+            return receiver
+        }
+        waiting?(.success(message))
+    }
+
+    func deliverAfterClose(_ signal: CloudWebRTCSignal) {
+        guard let data = try? JSONEncoder().encode(signal) else { return }
+        lock.withLock { closedReceiver }?(.success(.string(String(decoding: data, as: UTF8.self))))
+    }
+
+    func closePeer() {
+        queue.sync {
+            peer?.close()
+            peer = nil
+            factory = nil
+        }
     }
 }
 
