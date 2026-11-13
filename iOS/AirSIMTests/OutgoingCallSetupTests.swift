@@ -1161,3 +1161,91 @@ struct RelayHTTPClientTests {
         #expect(error?.code == .cancelled)
     }
 }
+
+struct CloudPreDialGateTests {
+    private func status(_ status: String, call: IncomingVoIPCall, session: UUID?) throws -> CloudCallControlMessage {
+        var fields: [String: Any] = [
+            "status": status, "call_id": call.callID,
+            "call_uuid": call.uuid.uuidString, "generation": call.generation,
+        ]
+        if let session { fields["session_id"] = session.uuidString }
+        let data = try JSONSerialization.data(withJSONObject: fields)
+        let message = try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self))
+        return try #require(message)
+    }
+
+    @Test func `Both native proofs precede exactly one commit`() throws {
+        let call = try outgoingCall()
+        let session = UUID()
+        var gate = CloudPreDialGate()
+        gate.begin(session)
+        gate.receive(try status("pre_dial_ready", call: call, session: session), call: call)
+        #expect(!gate.canCommit)
+        gate.nativeConnected(UUID())
+        #expect(!gate.canCommit)
+        gate.nativeConnected(session)
+        #expect(gate.canCommit)
+        gate.commit()
+        #expect(gate.committed)
+        #expect(!gate.canCommit)
+        gate.receive(try status("pre_dial_ready", call: call, session: session), call: call)
+        #expect(!gate.canCommit)
+    }
+
+    @Test func `Carrier readiness and foreign or missing transport identity never authorize dialing`() throws {
+        let call = try outgoingCall()
+        let session = UUID()
+        var gate = CloudPreDialGate()
+        gate.begin(session)
+        gate.nativeConnected(session)
+        for message in [
+            try status("webrtc_ready", call: call, session: session),
+            try status("pre_dial_ready", call: call, session: UUID()),
+            try status("pre_dial_ready", call: call, session: nil),
+            try status("pre_dial_ready", call: outgoingCall(), session: session),
+        ] {
+            gate.receive(message, call: call)
+            #expect(!gate.canCommit)
+        }
+    }
+
+    @Test func `Timeout cancellation socket replacement and failure are terminal`() throws {
+        let call = try outgoingCall()
+        let session = UUID()
+        for reason in ["transport_timeout_20s", "cancelled", "signaling_lost", "replaced", "native_transport_failed"] {
+            var gate = CloudPreDialGate()
+            gate.begin(session)
+            gate.fail(reason)
+            gate.nativeConnected(session)
+            gate.receive(try status("pre_dial_ready", call: call, session: session), call: call)
+            gate.commit()
+            #expect(!gate.canCommit)
+            #expect(!gate.committed)
+            #expect(gate.failure == reason)
+        }
+    }
+}
+
+struct CloudPreDialPeerAdmissionTests {
+    @Test func `Only exact relay peer admission unlocks initial offer`() throws {
+        let call = try outgoingCall()
+        var gate = CloudPreDialGate()
+        for status in ["peer_connected", "agent_ready", "dial_reserved"] {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "status": status, "call_id": call.callID,
+                "call_uuid": call.uuid.uuidString, "generation": call.generation,
+            ])
+            let decoded = try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self))
+            gate.receive(try #require(decoded), call: call)
+            #expect(!gate.peerAvailable)
+        }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "status": "pre_dial_peer_ready", "call_id": call.callID,
+            "call_uuid": call.uuid.uuidString, "generation": call.generation,
+        ])
+        let decoded = try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self))
+        gate.receive(try #require(decoded), call: call)
+        #expect(gate.peerAvailable)
+        #expect(!gate.canCommit)
+    }
+}

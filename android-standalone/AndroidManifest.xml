@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.airsim.phonecontrol.pixel8pro"
-    android:versionCode="88"
-    android:versionName="0.9.7.1-pixel8pro.8">
+    android:versionCode="89"
+    android:versionName="0.9.7.1-pixel8pro.9">
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
     </queries>

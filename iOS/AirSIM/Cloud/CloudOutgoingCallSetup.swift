@@ -191,9 +191,8 @@ enum CloudOutgoingDialCoordinator {
 
 /// The signaling socket opened for an outgoing call while its dial command is still pending.
 ///
-/// An entry is not a call. While it exists the session has no `call`, is not answered, owns nothing at the Relay
-/// and has sent no control message: `answer` is still sent only after the dial command completed. `answer()` for
-/// the same call adopts the socket; every other outcome releases it.
+/// An entry is not an active call. The strict outgoing path reserves ownership and connects a silent native peer,
+/// but sends no answer and enables no audio. `answer()` adopts that exact transport only after committed dialing.
 @MainActor
 final class CloudOutgoingPrewarm {
     struct Entry {
@@ -293,7 +292,7 @@ final class CloudOutgoingPrewarm {
     }
 
     /// Never reuse a socket after the call generation, Relay endpoint or bearer credential changed.
-    static func matches(_ left: IncomingVoIPCall, _ right: IncomingVoIPCall) -> Bool {
+    nonisolated static func matches(_ left: IncomingVoIPCall, _ right: IncomingVoIPCall) -> Bool {
         left.uuid == right.uuid && left.generation == right.generation && left.callID == right.callID
             && left.isOutgoing == right.isOutgoing && left.authenticatedMediaURL == right.authenticatedMediaURL
             && left.mediaSecret == right.mediaSecret
@@ -339,5 +338,54 @@ enum OutgoingRoutePreparation {
         } catch {
             return .failure(error)
         }
+    }
+}
+
+/// Transport proof is independent of carrier readiness and never authorizes microphone capture.
+struct CloudPreDialGate {
+    private(set) var sessionID: UUID?
+    private(set) var peerAvailable = false
+    private(set) var nativeReady = false
+    private(set) var relayReady = false
+    private(set) var committed = false
+    private(set) var failure: String?
+
+    var canCommit: Bool { sessionID != nil && nativeReady && relayReady && !committed && failure == nil }
+
+    mutating func begin(_ sessionID: UUID) {
+        guard self.sessionID == nil, failure == nil else { return }
+        self.sessionID = sessionID
+    }
+
+    mutating func nativeConnected(_ sessionID: UUID) {
+        guard self.sessionID == sessionID, failure == nil else { return }
+        nativeReady = true
+    }
+
+    mutating func receive(_ control: CloudCallControlMessage, call: IncomingVoIPCall) {
+        guard control.callID == call.callID,
+            control.callUUID?.lowercased() == call.uuid.uuidString.lowercased(),
+            control.generation == call.generation
+        else { return }
+        if ["pre_dial_aborted", "ended", "ownership_lost", "action_error", "action_rejected"].contains(control.status) {
+            fail("relay_\(control.status)")
+        } else if control.status == "pre_dial_peer_ready", failure == nil {
+            peerAvailable = true
+        } else if control.status == "pre_dial_ready", let sessionID,
+            control.sessionID == sessionID, failure == nil
+        {
+            relayReady = true
+        }
+    }
+
+    mutating func commit() {
+        guard canCommit else { return }
+        committed = true
+    }
+
+    mutating func fail(_ reason: String) {
+        failure = failure ?? reason
+        nativeReady = false
+        relayReady = false
     }
 }

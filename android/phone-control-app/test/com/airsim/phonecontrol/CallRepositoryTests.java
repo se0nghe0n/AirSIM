@@ -11,9 +11,26 @@ public final class CallRepositoryTests {
         pendingAnswerDoesNotPoisonCompletedReplay();
         outgoingDialingWaitsInsteadOfAnswering();
         outgoingMediaCanPrepareBeforeAnswer();
+        reservationBindingRequiresExactTelecomTag();
         endedCallAcceptsHangupAfterTelecomRemoval();
         stuckRelayCallYieldsToTheNextConnectingCall();
         System.out.println("call repository tests passed");
+    }
+
+    private static void reservationBindingRequiresExactTelecomTag() {
+        Call call = new Call(Call.STATE_DIALING);
+        String id = CallRepository.add(call);
+        try {
+            assertTrue(CallRepository.hasLiveCalls());
+            assertTrue(!CallRepository.belongsToReservation(id, "reservation"));
+            call.details.extras = new android.os.Bundle();
+            android.os.Bundle nested = new android.os.Bundle();
+            nested.putString("airsim_reservation", "reservation");
+            call.details.extras.putBundle(android.telecom.TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, nested);
+            assertTrue(CallRepository.belongsToReservation(id, "reservation"));
+            assertTrue(!CallRepository.belongsToReservation(id, "foreign"));
+            assertTrue(!CallRepository.belongsToReservation("missing", "reservation"));
+        } finally { CallRepository.remove(call); }
     }
 
     private static void answeredCallCanConfirmMediaWithoutAnsweringAgain() {

@@ -60,6 +60,7 @@ public final class PrivilegedMediaTests {
         failedAcquisitionAndStart();
         failedRestore();
         prepareDuringRingback();
+        queryTransportOnly();
         formatFallbackAfterDisposal();
         formatFallbackQuarantine();
         System.out.println("Privileged media protocol/owner tests passed ("+checks+" checks)");
@@ -262,6 +263,25 @@ public final class PrivilegedMediaTests {
                 rejected("media_owner_busy", () -> service.request(start(UUID.randomUUID().toString())));
                 check(service.closeAsync().isCompletedExceptionally());
             }
+        }
+    }
+
+    static void queryTransportOnly() throws Exception {
+        TelephonyWebRTCPeer.delayedDisposal = false;
+        int[] acquired = {0};
+        try (PrivilegedMediaService service = new PrivilegedMediaService(new android.content.Context(), () -> {}, () -> acquired[0]++)) {
+            service.initialize();
+            service.request(message("start", OWNER).put("ice_servers", new JSONArray()).put("defer_carrier_audio", true).toString());
+            check(acquired[0] == 0 && !TelephonyWebRTCPeer.latest.carrierActive);
+            String session = UUID.randomUUID().toString();
+            TelephonyWebRTCPeer.latest.connectedSession = session;
+            check(new JSONObject(service.request(message("transport_connected", OWNER).put("session_id", session).toString())).getBoolean("connected"));
+            check(!new JSONObject(service.request(message("transport_connected", OWNER).put("session_id", "old").toString())).getBoolean("connected"));
+            rejected("media_owner_mismatch", () -> service.request(message("transport_connected", UUID.randomUUID().toString()).put("session_id", session).toString()));
+            TelephonyWebRTCPeer.latest.connectedSession = "";
+            check(!new JSONObject(service.request(message("transport_connected", OWNER).put("session_id", session).toString())).getBoolean("connected"));
+            service.request(message("stop", OWNER).toString());
+            check(acquired[0] == 0);
         }
     }
 

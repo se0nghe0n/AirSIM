@@ -39,6 +39,8 @@ final class StandaloneCloudMediaManager implements Closeable {
      */
     private final Map<String, Descriptor> unannounced = new LinkedHashMap<>();
     private CloudSession active;
+    // A cancelled placeCall may report its tagged Telecom object after the active session changed.
+    private final Map<String, CloudSession> pendingCommitted = new java.util.concurrent.ConcurrentHashMap<>();
     private String pendingOutgoingTelecomID;
 
     private StandaloneCloudMediaManager(android.content.Context context) {
@@ -56,14 +58,68 @@ final class StandaloneCloudMediaManager implements Closeable {
 
     /** Bind a Telecom call as soon as it exists, before the iPhone answer arrives. */
     void attachTelecomCall(String androidID, String direction) {
-        if (androidID == null || androidID.isBlank() || !"outgoing".equals(direction)) return;
+        if (androidID == null || androidID.isBlank()) return;
+        for (CloudSession pending : pendingCommitted.values()) {
+            if ("outgoing".equals(direction) && CallRepository.belongsToReservation(androidID, pending.descriptor.callUUID)) {
+                synchronized (lock) {
+                    pending.descriptor.androidID = androidID;
+                    remember(pending.descriptor);
+                    pendingCommitted.remove(pending.descriptor.callUUID, pending);
+                    if (pending.cancelRequested) pending.cancelDial();
+                }
+                return;
+            }
+        }
+        synchronized (lock) {
+            if (active != null && active.descriptor.preDial && !active.dialCommitted) {
+                active.abortPreparation("telecom_interrupted");
+                return;
+            }
+        }
+        if (!"outgoing".equals(direction)) return;
         synchronized (lock) {
             pendingOutgoingTelecomID = androidID;
             if (active != null && active.descriptor.androidID.isEmpty()
-                    && "outgoing".equals(active.descriptor.direction)) {
+                    && "outgoing".equals(active.descriptor.direction)
+                    && (!active.descriptor.preDial || (active.dialCommitted
+                    && CallRepository.belongsToReservation(androidID, active.descriptor.callUUID)))) {
                 active.descriptor.androidID = androidID;
                 remember(active.descriptor);
+                if (active.cancelRequested) active.cancelDial();
             }
+        }
+    }
+
+    void prepareOutgoing(JSONObject command) throws Exception {
+        Descriptor descriptor = Descriptor.from(command.getJSONObject("call"));
+        descriptor.preDial = true;
+        descriptor.commandID = command.getString("command_id");
+        UUID.fromString(descriptor.commandID);
+        descriptor.number = command.optString("number");
+        Instant expires = Instant.parse(command.getJSONObject("call").getString("preparation_expires_at"));
+        long remaining = java.time.Duration.between(Instant.now(), expires).toMillis();
+        if (remaining <= 0 || remaining > 21_000 || descriptor.number.isBlank()
+                || !"outgoing".equals(descriptor.direction)) throw new IllegalStateException("invalid_preparation");
+        descriptor.deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.min(20_000, remaining));
+        android.app.role.RoleManager roles = context.getSystemService(android.app.role.RoleManager.class);
+        if (roles == null || !roles.isRoleHeld(android.app.role.RoleManager.ROLE_DIALER)
+                || !ShizukuBridgeManager.get(context).mediaAvailable()) throw new IllegalStateException("media_unavailable");
+        synchronized (lock) {
+            if (CallRepository.hasLiveCalls() || !pendingCommitted.isEmpty() || active != null && active.running) throw new IllegalStateException("call_busy");
+            android.content.SharedPreferences spent = context.getSharedPreferences("strict_predial", 0);
+            String key = descriptor.callUUID.toLowerCase(java.util.Locale.ROOT) + ":" + descriptor.generation;
+            // A crash/restart must not resurrect any previously accepted reservation.
+            if (spent.contains(key) || !spent.edit().putString(key, "reserved").commit())
+                throw new IllegalStateException("reservation_replayed");
+            start(descriptor);
+            CloudSession reserved = active;
+            sessions.execute(() -> {
+                try { Thread.sleep(Math.max(1, remaining)); }
+                catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                synchronized (reserved) {
+                    if (!reserved.dialCommitted) reserved.abortPreparation("pre_dial_timeout");
+                }
+            });
         }
     }
 
@@ -90,6 +146,24 @@ final class StandaloneCloudMediaManager implements Closeable {
         } catch (java.util.concurrent.RejectedExecutionException ignored) {}
     }
 
+    boolean cancelStrictOutgoing(JSONObject call) {
+        if (call == null) return false;
+        synchronized (lock) {
+            java.util.List<CloudSession> candidates = new java.util.ArrayList<>(pendingCommitted.values());
+            if (active != null) candidates.add(active);
+            for (CloudSession candidate : candidates) {
+                Descriptor descriptor = candidate.descriptor;
+                if (!descriptor.preDial || !descriptor.callID.equals(call.optString("call_id"))
+                        || !descriptor.callUUID.equalsIgnoreCase(call.optString("call_uuid"))
+                        || descriptor.generation != call.optLong("generation", -1)) continue;
+                candidate.cancelRequested = true;
+                candidate.cancelDial();
+                return true;
+            }
+            return false;
+        }
+    }
+
     String androidCallIDFor(JSONObject call) {
         if (call == null) return "";
         synchronized (lock) {
@@ -112,7 +186,7 @@ final class StandaloneCloudMediaManager implements Closeable {
             // An incoming call that ended before the Relay confirmed it: still end that identity,
             // in case the Relay recorded it before its push failed.
             if (descriptor == null && "ended".equals(state)) descriptor = unannounced.remove(androidID);
-            if (descriptor == null && active != null) descriptor = active.descriptor;
+            if (descriptor == null && active != null && active.running) descriptor = active.descriptor;
         }
         boolean sameTelecomCall = descriptor != null && androidID.equals(descriptor.androidID);
         if ("incoming".equals(direction) && "incoming".equals(state) && !sameTelecomCall
@@ -138,7 +212,8 @@ final class StandaloneCloudMediaManager implements Closeable {
             descriptor.mediaTransport = accepted.optString("media_transport", CloudCallMedia.WEBRTC);
             start(descriptor);
         } else if (descriptor != null && descriptor.androidID.isEmpty()
-                && "outgoing".equals(direction) && !"ended".equals(state)) {
+                && "outgoing".equals(direction) && !"ended".equals(state)
+                && (!descriptor.preDial || CallRepository.belongsToReservation(androidID, descriptor.callUUID))) {
             descriptor.androidID = androidID;
             synchronized (lock) { remember(descriptor); }
         }
@@ -240,7 +315,7 @@ final class StandaloneCloudMediaManager implements Closeable {
     private void start(Descriptor descriptor) {
         synchronized (lock) {
             if (active != null && active.descriptor.same(descriptor)) return;
-            if ("outgoing".equals(descriptor.direction) && descriptor.androidID.isEmpty()
+            if (!descriptor.preDial && "outgoing".equals(descriptor.direction) && descriptor.androidID.isEmpty()
                     && CallRepository.contains(pendingOutgoingTelecomID)) {
                 descriptor.androidID = pendingOutgoingTelecomID;
             }
@@ -273,7 +348,12 @@ final class StandaloneCloudMediaManager implements Closeable {
         volatile WebRTCCloudPeer webRTC;
         volatile String mediaTransport;
         volatile boolean mediaStarted;
+        private final long preparationStarted = System.nanoTime();
         private boolean carrierActive;
+        volatile boolean dialCommitted;
+        private boolean commitPending;
+        volatile boolean cancelRequested;
+        private String negotiation = "";
         private StandaloneWebSocket activeAnnounced;
         private final CloudAudioSetupTimeline setup = new CloudAudioSetupTimeline(
                 CloudAudioSetupTimeline.Scope.APP, System::nanoTime, BridgeLog::info);
@@ -283,6 +363,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         CloudSession(Descriptor descriptor) {
             this.descriptor = descriptor;
             this.mediaTransport = descriptor.mediaTransport;
+            tracePreparation("reserved", "");
         }
 
         @Override public void run() {
@@ -299,6 +380,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                     // Overlap call-scoped ICE retrieval with ringing/signaling. Carrier audio
                     // still starts only after Telecom confirms the answer below.
                     prepareWebRTC(owner);
+                    if (descriptor.preDial) beginMedia(owner, true);
                     synchronized (this) {
                         if (!sendCarrierRecoveryRequired(owner)) {
                             announceOutgoingDialAccepted(owner);
@@ -321,6 +403,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                         }
                     }
                 }
+                if (descriptor.preDial && !dialCommitted) { abortPreparation("pre_dial_disconnected"); return; }
                 if (running) {
                     try { Thread.sleep(1_000); }
                     catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
@@ -337,6 +420,33 @@ final class StandaloneCloudMediaManager implements Closeable {
                 if (control.has("call_uuid") && !descriptor.callUUID.equalsIgnoreCase(control.optString("call_uuid"))) continue;
                 if (control.has("generation") && descriptor.generation != control.optLong("generation", -1)) continue;
                 String action = control.optString("action", "");
+                if (descriptor.preDial && ("cancel_dial".equals(action) || "end".equals(action) || "reject".equals(action))) {
+                    cancelRequested = true;
+                    cancelDial(); return;
+                }
+                if (descriptor.preDial && !dialCommitted) {
+                    if ("pre_dial_aborted".equals(control.optString("status")) || "cancel_dial".equals(action)
+                            || "end".equals(action) || "reject".equals(action)) {
+                        abortPreparation("pre_dial_cancelled"); return;
+                    }
+                    if ("commit_dial".equals(action)) {
+                        final StandaloneWebSocket socket = owner;
+                        sessions.execute(() -> commitDial(socket, control));
+                        continue;
+                    }
+                    if ("answer".equals(action)) continue;
+                    if ("webrtc_offer".equals(action)) {
+                        synchronized (this) {
+                            String session = control.optString("session_id");
+                            if (!negotiation.isEmpty() && !negotiation.equals(session)) {
+                                abortPreparation("pre_dial_session_replaced"); return;
+                            }
+                            negotiation = session;
+                        }
+                    }
+                    if ("webrtc_transport_failed".equals(action)) { abortPreparation("pre_dial_transport_failed"); return; }
+                }
+
                 // The iPhone may connect after the initial acceptance was sent. The Relay does
                 // not retain arbitrary statuses, but announces each newly connected peer.
                 if (OutgoingDialAcceptance.replayFor(control.optString("status", control.optString("event", "")),
@@ -395,7 +505,95 @@ final class StandaloneCloudMediaManager implements Closeable {
             }
         }
 
+        private synchronized boolean validCommit(StandaloneWebSocket owner, JSONObject command) {
+            return running && !cancelRequested && webSocket == owner && !dialCommitted && System.nanoTime() < descriptor.deadline
+                    && descriptor.commandID.equalsIgnoreCase(command.optString("command_id"))
+                    && descriptor.callID.equals(command.optString("call_id"))
+                    && descriptor.callUUID.equalsIgnoreCase(command.optString("call_uuid"))
+                    && descriptor.generation == command.optLong("generation", -1)
+                    && !negotiation.isEmpty() && negotiation.equals(command.optString("session_id"))
+                    && !CallRepository.hasLiveCalls() && webRTC != null;
+        }
+
+        private void commitDial(StandaloneWebSocket owner, JSONObject command) {
+            synchronized (this) {
+                if (commitPending || !validCommit(owner, command)) return;
+                commitPending = true;
+                tracePreparation("commit_attempted", "");
+            }
+            java.util.concurrent.atomic.AtomicBoolean cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+            String error = TelecomInvocation.run(task -> new android.os.Handler(android.os.Looper.getMainLooper()).post(task), () -> {
+                synchronized (this) {
+                    if (cancelled.get() || !validCommit(owner, command)) throw new IllegalStateException("pre_dial_stale");
+                    android.os.Bundle extras = DefaultCallAccount.dialExtras(context);
+                    android.os.Bundle identity = new android.os.Bundle();
+                    identity.putString("airsim_reservation", descriptor.callUUID);
+                    extras.putBundle(android.telecom.TelecomManager.EXTRA_OUTGOING_CALL_EXTRAS, identity);
+                    android.content.SharedPreferences spent = context.getSharedPreferences("strict_predial", 0);
+                    String key = descriptor.callUUID.toLowerCase(java.util.Locale.ROOT) + ":" + descriptor.generation;
+                    if (!"reserved".equals(spent.getString(key, ""))
+                            || !spent.edit().putString(key, "spent").commit()) throw new IllegalStateException("pre_dial_replayed");
+                    // Query the privileged native peer here, not its previously received readiness event.
+                    if (cancelled.get() || !validCommit(owner, command) || !webRTC.transportConnected(negotiation) || cancelled.get())
+                        throw new IllegalStateException("pre_dial_transport_lost");
+                    dialCommitted = true;
+                    pendingCommitted.put(descriptor.callUUID, this);
+                    try {
+                        context.getSystemService(android.telecom.TelecomManager.class).placeCall(
+                                android.net.Uri.parse("tel:" + descriptor.number), extras);
+                    } catch (SecurityException | IllegalArgumentException rejected) {
+                        // These synchronous validation refusals did not submit a Telecom call.
+                        pendingCommitted.remove(descriptor.callUUID, this);
+                        dialCommitted = false;
+                        throw rejected;
+                    }
+                }
+            }, 2_000);
+            cancelled.set(true);
+            synchronized (this) {
+                try {
+                    if (error.isEmpty()) {
+                        tracePreparation("dial_accepted", "");
+                        owner.writeText(new JSONObject(status(OutgoingDialAcceptance.STATUS, "")).put("command_id", command.optString("command_id")).toString());
+                    } else {
+                        tracePreparation("commit_failed", "pre_dial_commit_failed");
+                        owner.writeText(new JSONObject(status("action_error", "pre_dial_commit_failed")).put("command_id", command.optString("command_id")).toString());
+                        if (!dialCommitted) abortPreparation("pre_dial_commit_failed");
+                    }
+                } catch (Exception ignored) { if (!dialCommitted) abortPreparation("pre_dial_disconnected"); }
+            }
+        }
+
+        private void tracePreparation(String phase, String reason) {
+            if (!descriptor.preDial) return;
+            String safeReason = reason != null && reason.matches("[a-z_]{1,80}") ? reason : "";
+            BridgeLog.info("strict_predial phase=" + phase + " elapsed_ms="
+                    + java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - preparationStarted)
+                    + (safeReason.isEmpty() ? "" : " reason=" + safeReason));
+        }
+
+        private synchronized void cancelDial() {
+            cancelRequested = true;
+            if (!dialCommitted) { abortPreparation("pre_dial_cancelled"); return; }
+            // If Telecom has not reported our tagged call yet, attachTelecomCall completes this
+            // exact cancellation later. Never use idForAction or disconnectAll here.
+            String androidID = descriptor.androidID;
+            if (!androidID.isEmpty() && CallRepository.belongsToReservation(androidID, descriptor.callUUID))
+                sessions.execute(() -> CallRepository.executeRemote(context, UUID.randomUUID().toString(), "end", androidID, ""));
+            close();
+        }
+
+        private synchronized void abortPreparation(String reason) {
+            if (!descriptor.preDial || dialCommitted || !running) return;
+            cancelRequested = true;
+            tracePreparation("aborted", reason);
+            try { if (webSocket != null) webSocket.writeText(new JSONObject(status("pre_dial_aborted", reason)).put("reason", reason).toString()); }
+            catch (Exception ignored) {}
+            close();
+        }
+
         private synchronized void announceOutgoingDialAccepted(StandaloneWebSocket owner) throws Exception {
+            if (descriptor.preDial && !dialCommitted) return;
             if (!OutgoingDialAcceptance.mayAnnounce(descriptor.direction, running,
                     owner != null && webSocket == owner, carrierRecovery.isBlocked())) return;
             // This session exists only after successful dial execution. Match the HTTP result's
@@ -414,6 +612,7 @@ final class StandaloneCloudMediaManager implements Closeable {
             owner.writeText(status(carrierActive ? "answer_ok" : "media_prepared", ""));
             beginMedia(owner, !carrierActive);
             if (carrierActive && webRTC != null) webRTC.activateCarrierAudio();
+            if (descriptor.preDial && dialCommitted && webRTC != null) webRTC.replayCarrierReady(negotiation);
         }
 
         private synchronized void beginMedia(StandaloneWebSocket owner, boolean deferCarrierAudio) {
@@ -458,7 +657,12 @@ final class StandaloneCloudMediaManager implements Closeable {
                 if (!running || webSocket != owner || webRTC != null || carrierRecovery.isBlocked()) return;
                 webRTC = new WebRTCCloudPeer(context, descriptor.callUUID, descriptor.generation,
                         descriptor.relayURL, descriptor.secret, signal -> {
-                    if (running && webSocket == owner) owner.writeText(signal.toString());
+                    if (running && webSocket == owner) {
+                        if ("webrtc_transport_ready".equals(signal.optString("action"))) tracePreparation("native_transport_ready", "");
+                        owner.writeText(signal.toString());
+                        if (descriptor.preDial && !dialCommitted && "webrtc_transport_failed".equals(signal.optString("action")))
+                            abortPreparation("pre_dial_transport_failed");
+                    }
                 }, reason -> mediaFailed(owner, reason));
                 webRTC.prepare();
             }
@@ -475,6 +679,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         private synchronized void mediaFailed(StandaloneWebSocket owner, String reason) {
             // A retired socket cannot spend the current call's retry budget or stop its new peer.
             if (!running || webSocket != owner) return;
+            if (descriptor.preDial && !dialCommitted) { abortPreparation(reason); return; }
             if (!carrierRecovery.recordFailure(reason)) {
                 closeSocket(owner);
                 return;
@@ -497,6 +702,7 @@ final class StandaloneCloudMediaManager implements Closeable {
         private String status(String value, String message) throws Exception {
             JSONObject result = new JSONObject().put("status", value).put("call_id", descriptor.callID)
                     .put("call_uuid", descriptor.callUUID).put("generation", descriptor.generation);
+            if (descriptor.preDial) result.put("command_id", descriptor.commandID);
             if (!message.isEmpty()) result.put("message", message);
             return result.toString();
         }
@@ -516,6 +722,10 @@ final class StandaloneCloudMediaManager implements Closeable {
         final String secret;
         final String relayURL;
         final String direction;
+        boolean preDial;
+        String commandID = "";
+        String number = "";
+        long deadline;
         String mediaTransport = CloudCallMedia.WEBRTC;
         volatile String androidID;
 

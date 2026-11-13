@@ -1,15 +1,20 @@
 import AVFoundation
 import Foundation
+import os
 @preconcurrency import WebRTC
 
 /// CallKit owns the system session for both local and cloud native peers.
 /// Forward each activation exactly once, even before a peer has been created.
 enum WebRTCCallAudioSession {
+    private static let transportOnly = OSAllocatedUnfairLock(initialState: false)
+
+    static func setTransportOnly(_ value: Bool) { transportOnly.withLock { $0 = value } }
+
     static func didActivate(_ session: AVAudioSession) {
         let rtc = RTCAudioSession.sharedInstance()
         rtc.useManualAudio = true
         rtc.audioSessionDidActivate(session)
-        rtc.isAudioEnabled = true
+        rtc.isAudioEnabled = !transportOnly.withLock { $0 }
     }
 
     static func didDeactivate(_ session: AVAudioSession) {
@@ -508,6 +513,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         factory factoryOverride: RTCPeerConnectionFactory? = nil,
         relayOnly: Bool = false,
         hostOnly: Bool = false,
+        audioEnabled: Bool = true,
         signal: @escaping (CloudWebRTCSignal) -> Void,
         connected: @escaping () -> Void,
         disconnected: @escaping () -> Void = {},
@@ -562,6 +568,7 @@ final class CloudWebRTCPeer: NSObject, RTCPeerConnectionDelegate, @unchecked Sen
         let source = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         let track = factory.audioTrack(with: source, trackId: "airsim-audio")
         self.track = track
+        track.isEnabled = audioEnabled
         peer.add(track, streamIds: ["airsim"])
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 5, repeating: 5)

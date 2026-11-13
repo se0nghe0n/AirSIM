@@ -3243,3 +3243,198 @@ test("duplicate dial reuses its durable call identity and failed retries never m
   assert.equal(failed.call, undefined);
   assert.equal((await env.DEVICES.list({ prefix: "call:" })).keys.length, 1);
 });
+
+async function strictPreDialSession() {
+  const ctx = await webRTCSession();
+  ctx.iphone.attachment.owner = false;
+  ctx.relay.preDial = { phase: "preparing", expiresAt: Date.now() + 20000,
+    callUUID: webRTCCallUUID, callID: "strict-call", generation: 3, commandID: crypto.randomUUID() };
+  await ctx.relay.state.storage.put("preDial", ctx.relay.preDial);
+  await ctx.relay.webSocketMessage(ctx.iphone, signaling("reserve_dial"));
+  assert.equal(ctx.iphone.attachment.owner, true);
+  assert.equal(ctx.agent.sent.some(x => JSON.parse(x).action === "answer"), false);
+  await ctx.relay.webSocketMessage(ctx.iphone, signaling("webrtc_offer"));
+  await ctx.relay.webSocketMessage(ctx.agent, signaling("webrtc_answer"));
+  return ctx;
+}
+const committedDials = socket => socket.sent.map(x => JSON.parse(x)).filter(x => x.action === "commit_dial");
+
+test("strict preparation only emits non-executable prepare_dial and preserves identity on replay", async () => {
+  const env = testEnvironment(); env.COMMANDS = new MemoryCommandNamespace(env);
+  await enableReadyMedia(env);
+  const agent = env.COMMANDS.addAgent(registration.device_id);
+  const body = { device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: crypto.randomUUID(), type: "prepare_dial", number: "10086", media_transport: "webrtc" };
+  const first = await (await worker.fetch(post("/v1/commands/enqueue", body), env)).json();
+  const second = await (await worker.fetch(post("/v1/commands/enqueue", body), env)).json();
+  assert.equal(first.call.pre_dial, true);
+  assert.equal(first.call.call_uuid, second.call.call_uuid);
+  assert.equal(first.call.preparation_expires_at, second.call.preparation_expires_at);
+  assert.ok(agent.sent.every(x => JSON.parse(x).type === "prepare_dial"));
+  assert.equal((await worker.fetch(post("/v1/commands/enqueue", {...body, number:"10010"}), env)).status, 409);
+});
+
+test("strict pre-dial requires both native proofs and explicit commit; duplicate commit is exactly once", async () => {
+  const {relay, iphone, agent} = await strictPreDialSession();
+  await relay.webSocketMessage(iphone, signaling("commit_dial"));
+  await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(iphone, signaling("commit_dial"));
+  assert.equal(committedDials(agent).length, 0);
+  await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+  assert.equal(committedDials(agent).length, 0);
+  assert.ok(iphone.sent.some(x=> JSON.parse(x).status === "pre_dial_ready"));
+  await Promise.all([relay.webSocketMessage(iphone, signaling("commit_dial")), relay.webSocketMessage(iphone, signaling("commit_dial"))]);
+  await relay.webSocketMessage(iphone, signaling("commit_dial"));
+  assert.equal(committedDials(agent).length, 1);
+  assert.equal(committedDials(agent)[0].command_id, relay.preDial.commandID);
+});
+
+for (const failure of ["timeout", "cancel", "disconnect", "foreign", "stale", "replaced", "revoked", "renegotiated"]) {
+  test(`strict pre-dial fails closed for ${failure}`, async () => {
+    const {relay, state, iphone, agent} = await strictPreDialSession();
+    await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+    await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+    if (failure === "timeout") { relay.preDial.expiresAt = Date.now()-1; await relay.alarm(); }
+    if (failure === "cancel") await relay.webSocketMessage(iphone, signaling("cancel_dial"));
+    if (failure === "disconnect") relay.webSocketClose(agent, 1000, "test");
+    if (failure === "replaced") { state.sockets = state.sockets.filter(s=>s!==iphone); state.sockets.push(new MemoryMediaSocket("iphone")); }
+    if (failure === "revoked") relay.env.WEBRTC_TRANSPORT_READY = "false";
+    if (failure === "renegotiated") await relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
+    await relay.webSocketMessage(iphone, signaling("commit_dial", failure === "stale" ? crypto.randomUUID() : undefined,
+      failure === "foreign" ? {call_uuid:crypto.randomUUID()} : {}));
+    assert.equal(committedDials(agent).length, 0);
+  });
+}
+
+test("cancellation during asynchronous commit admission wins without dial", async () => {
+  const {relay, iphone, agent} = await strictPreDialSession();
+  await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+  let resume; relay.canAnswer = () => new Promise(resolve => {resume=resolve;});
+  const commit = relay.webSocketMessage(iphone, signaling("commit_dial"));
+  await Promise.resolve(); await Promise.resolve();
+  await relay.webSocketMessage(iphone, signaling("cancel_dial"));
+  resume(true); await commit;
+  assert.equal(committedDials(agent).length, 0);
+});
+
+test("persisted committing or committed preparation never replays a carrier commit after hibernation", async () => {
+  for (const phase of ["committing", "committed", "aborted"]) {
+    const {relay, state, iphone, agent} = await strictPreDialSession();
+    await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+    await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+    await state.storage.put("preDial", {...relay.preDial, phase});
+    const restored = new CallMediaSession(state, relay.env); await restored.ready;
+    await restored.webSocketMessage(iphone, signaling("commit_dial"));
+    assert.equal(committedDials(agent).length, 0);
+  }
+});
+
+test("cancellation during commit persistence wins and never emits carrier commit", async () => {
+  const {relay, state, iphone, agent} = await strictPreDialSession();
+  await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+  const put = state.storage.put.bind(state.storage);
+  let reached, resume; const reachedStorage = new Promise(resolve => { reached=resolve; });
+  state.storage.put = async (key,value) => {
+    await put(key,value);
+    if (key === "preDial" && value.phase === "committing") {
+      reached(); await new Promise(resolve=>{resume=resolve;});
+    }
+  };
+  const commit = relay.webSocketMessage(iphone, signaling("commit_dial"));
+  await reachedStorage;
+  await relay.webSocketMessage(iphone, signaling("cancel_dial"));
+  resume(); await commit;
+  assert.equal(committedDials(agent).length, 0);
+});
+
+test("prepare ACK cannot report carrier dial completion", async () => {
+  const env = testEnvironment(); env.COMMANDS = new MemoryCommandNamespace(env);
+  await enableReadyMedia(env);
+  const commandID = crypto.randomUUID();
+  await worker.fetch(post("/v1/commands/enqueue", { device_id: registration.device_id,
+    device_secret: registration.device_secret, command_id: commandID, type: "prepare_dial",
+    number: "10086", media_transport: "webrtc" }), env);
+  const commands = env.COMMANDS.session(registration.device_id);
+  await commands.completeCommand({command_id:commandID,status:"completed",result:{prepared:true}});
+  const record = await commands.storage.get(`command:${commandID}`);
+  assert.equal(record.prepared, true);
+  assert.equal(record.status, "pending");
+});
+
+test("cancel after dispatched commit forwards carrier end instead of being swallowed", async () => {
+  const {relay, iphone, agent} = await strictPreDialSession();
+  await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(iphone, signaling("commit_dial"));
+  await relay.webSocketMessage(iphone, signaling("cancel_dial"));
+  assert.equal(committedDials(agent).length, 1);
+  assert.equal(JSON.parse(agent.sent.at(-1)).action, "end");
+});
+
+test("persisted incomplete commit expires safely after restart", async () => {
+  const {relay, iphone, agent} = await strictPreDialSession();
+  relay.preDial.phase = "committing"; relay.preDial.expiresAt = Date.now()-1;
+  await relay.alarm();
+  assert.equal(relay.preDial.phase,"aborted");
+  await relay.webSocketMessage(iphone, signaling("commit_dial"));
+  assert.equal(committedDials(agent).length,0);
+});
+
+test("pre-dial peer barrier covers both join orders and repeated reservation", async t => {
+  const NativeResponse = globalThis.Response;
+  t.mock.method(globalThis,"Response", function(body,init) {
+    return init?.status === 101 ? {status:101,webSocket:init.webSocket} : new NativeResponse(body,init);
+  });
+  globalThis.WebSocketPair = class { constructor() {this[0]=new MemoryMediaSocket("agent");this[1]=new MemoryMediaSocket("agent");} };
+  t.after(()=>{delete globalThis.WebSocketPair;});
+  for (const agentFirst of [true,false]) {
+    const iphone = new MemoryMediaSocket("iphone"), agent = new MemoryMediaSocket("agent");
+    for (const socket of [iphone,agent]) Object.assign(socket.attachment,{callID:"barrier",callUUID:webRTCCallUUID,generation:3});
+    const state = new MemoryMediaState(agentFirst ? [iphone,agent] : [iphone]);
+    const relay = new CallMediaSession(state,mediaUnitEnvironment()); await relay.ready;
+    relay.preDial = {phase:"preparing",expiresAt:Date.now()+20000,callID:"barrier",callUUID:webRTCCallUUID,generation:3};
+    await relay.webSocketMessage(iphone,signaling("reserve_dial"));
+    const ready = () => iphone.sent.map(x=>JSON.parse(x)).filter(x=>x.status==="pre_dial_peer_ready");
+    assert.equal(ready().length,agentFirst ? 1 : 0);
+    if (!agentFirst) await relay.fetch(new Request("https://media.internal/session",{headers:{
+      upgrade:"websocket","x-airsim-role":"agent","x-airsim-media-transport":"webrtc",
+      "x-airsim-call-id":"barrier","x-airsim-call-uuid":webRTCCallUUID,"x-airsim-generation":"3"}}));
+    assert.equal(ready().length,1);
+    assert.equal(ready()[0].call_id,"barrier");
+    assert.equal(ready()[0].call_uuid,webRTCCallUUID);
+    assert.equal(ready()[0].generation,3);
+    await relay.webSocketMessage(iphone,signaling("reserve_dial"));
+    assert.equal(ready().length,2);
+  }
+});
+
+test("HTTP cancellation persists before first media connection and blocks later preparation", async () => {
+  const env = testEnvironment(); env.COMMANDS = new MemoryCommandNamespace(env); env.MEDIA = new MemoryMediaNamespace();
+  await enableReadyMedia(env);
+  const response = await worker.fetch(post("/v1/commands/enqueue", { device_id:registration.device_id,
+    device_secret:registration.device_secret,command_id:crypto.randomUUID(),type:"prepare_dial",number:"10086",media_transport:"webrtc"}),env);
+  const {call} = await response.json();
+  const cancelled = await worker.fetch(post(`/v1/calls/${call.call_uuid}/actions`, {
+    device_id:registration.device_id,device_secret:registration.device_secret,
+    command_id:crypto.randomUUID(),call_id:call.call_id,call_uuid:call.call_uuid,
+    generation:call.generation,action:"end",owner:"iphone",trace_id:"test-cancel"}),env);
+  assert.equal(cancelled.status,202);
+  const {session} = env.MEDIA.entry(call.call_uuid);
+  assert.equal(session.preDial.phase,"aborted");
+  assert.equal(session.preDial.callUUID,call.call_uuid);
+});
+
+test("committed Android acceptance completes preparation with iOS-compatible result", async () => {
+  const {relay, iphone, agent} = await strictPreDialSession();
+  await relay.webSocketMessage(iphone,signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(agent,signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(iphone,signaling("commit_dial"));
+  let completion;
+  relay.preDial.deviceID = "iphone-air";
+  relay.env.COMMANDS = {idFromName:x=>x,get:()=>({fetch:async(_url,options)=>{completion=JSON.parse(options.body);return Response.json({});}})};
+  await relay.webSocketMessage(agent,JSON.stringify({status:"outgoing_dial_accepted",call_uuid:webRTCCallUUID,
+    generation:3,command_id:relay.preDial.commandID}));
+  assert.deepEqual(completion.result,{dialing:true,android_confirmed:true});
+});

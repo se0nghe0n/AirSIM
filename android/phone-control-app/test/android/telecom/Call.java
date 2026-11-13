@@ -8,6 +8,9 @@ public class Call {
     public static final int STATE_DISCONNECTING = 10;
     public static final int STATE_DISCONNECTED = 7;
 
+    public static class Details { public android.os.Bundle extras; public android.os.Bundle getIntentExtras() { return extras; } }
+    public final Details details = new Details();
+    public Details getDetails() { return details; }
     private int state;
 
     public Call(int state) { this.state = state; }

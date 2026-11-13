@@ -33,7 +33,7 @@ const TOKEN_PATTERN = /^[0-9a-f]{16,512}$/i;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const encoder = new TextEncoder();
 const MEDIA_CLIENT_ROLES = new Set(["watch", "iphone"]);
-const COMMAND_TYPES = new Set(["dial", "send_sms", "dtmf", "call_history"]);
+const COMMAND_TYPES = new Set(["dial", "prepare_dial", "send_sms", "dtmf", "call_history"]);
 const MEDIA_TRANSPORTS = new Set(["webrtc"]);
 
 let cachedProviderToken = "";
@@ -183,7 +183,7 @@ async function enqueueDeviceCommand(request, env, context) {
     ...(value.type === "send_sms" ? { message: value.message.trim() } : {}),
   };
   let call = null;
-  if (value.type === "dial") {
+  if (["dial", "prepare_dial"].includes(value.type)) {
     const callUUID = crypto.randomUUID().toLowerCase();
     const callSecret = randomToken(32);
     const callID = `outgoing-${command.command_id}`;
@@ -191,7 +191,11 @@ async function enqueueDeviceCommand(request, env, context) {
     const availability = await remoteMediaAvailability(authenticated.device, env, value.media_transport || "");
     if (!availability.remote_audio_available) return unavailableMediaResponse(availability);
     const mediaTransport = availability.media_transport;
+    const preparation = value.type === "prepare_dial" ? { pre_dial: true,
+      preparation_expires_at: new Date(Date.now() + 20_000).toISOString(), command_id: command.command_id } : {};
+    if (preparation.pre_dial) command.expires_at = preparation.preparation_expires_at;
     command.call = {
+      ...preparation,
       call_id: callID,
       call_uuid: callUUID,
       generation: 1,
@@ -201,6 +205,7 @@ async function enqueueDeviceCommand(request, env, context) {
       media_transport: mediaTransport,
     };
     await writeRelayState(env, `call:${callUUID}`, JSON.stringify({
+      ...preparation,
       device_id: authenticated.device.device_id,
       call_id: callID,
       call_uuid: callUUID,
@@ -212,6 +217,7 @@ async function enqueueDeviceCommand(request, env, context) {
       media_transport: mediaTransport,
     }), 5 * 60 * 60);
     call = {
+      ...preparation,
       call_id: callID,
       call_uuid: callUUID,
       generation: 1,
@@ -231,13 +237,13 @@ async function enqueueDeviceCommand(request, env, context) {
   if (call && (!response.ok || result.duplicate)) {
     await deleteRelayState(env, `call:${call.call_uuid}`);
     call = response.ok && queuedCall?.media_transport === "webrtc"
-      ? { call_id: queuedCall.call_id, call_uuid: queuedCall.call_uuid, generation: queuedCall.generation,
+      ? { ...(queuedCall.pre_dial ? { pre_dial: true, preparation_expires_at: queuedCall.preparation_expires_at, command_id: queuedCall.command_id } : {}), call_id: queuedCall.call_id, call_uuid: queuedCall.call_uuid, generation: queuedCall.generation,
         call_secret: queuedCall.call_secret, media_transport: "webrtc",
         media_url: `${new URL(request.url).origin.replace(/^http/, "ws")}/v1/calls/${queuedCall.call_uuid}/connect` }
       : null;
   }
   const telemetry = recordDashboardEvent(env, {
-    type: value.type === "dial" ? "call" : "sms",
+    type: ["dial", "prepare_dial"].includes(value.type) ? "call" : "sms",
     device_id: authenticated.device.device_id,
     status: !response.ok || ["failed", "expired"].includes(result.status)
       ? "failed" : result.status === "completed" ? "delivered" : "queued",
@@ -312,11 +318,22 @@ async function enqueueCallAction(request, env, pathCallUUID) {
   const validation = validateCallAction(value, call, callUUID, generation);
   if (validation.status) return jsonResponse(validation.status, { error: validation.error });
   if (value.action === "answer") {
+    if (call.pre_dial) return jsonResponse(409, { error: "outgoing preparation cannot answer" });
     const availability = call.media_transport === "webrtc"
       ? await remoteMediaAvailability(authenticated.device, env, "webrtc")
       : unavailableMedia("unsupported_call_media");
     if (value.owner === "watch") return unavailableMediaResponse(unavailableMedia("iphone_audio_required"));
     if (!availability.remote_audio_available) return unavailableMediaResponse(availability);
+  }
+
+  if (call.pre_dial && ["end", "reject"].includes(value.action) && env.MEDIA) {
+    const media = env.MEDIA.get(env.MEDIA.idFromName(callUUID));
+    const cancelled = await media.fetch("https://media.internal/cancel-preparation", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ callID: call.call_id, callUUID, generation,
+        commandID: call.command_id, deviceID: call.device_id,
+        expiresAt: Date.parse(call.preparation_expires_at) }) });
+    if (!cancelled.ok) return jsonResponse(503, { error: "preparation cancellation unavailable" });
   }
 
   const now = Date.now();
@@ -401,7 +418,7 @@ function validateDeviceCommand(value) {
     return "invalid device command";
   }
   if (value.media_transport !== undefined &&
-      (value.type !== "dial" || !MEDIA_TRANSPORTS.has(value.media_transport))) {
+      (!["dial", "prepare_dial"].includes(value.type) || !MEDIA_TRANSPORTS.has(value.media_transport))) {
     return "invalid media transport";
   }
   if (value.type === "call_history") {
@@ -491,7 +508,7 @@ export class DeviceCommandSession {
           status: existing.status,
           agent_connected: this.state.getWebSockets("agent").length > 0,
           duplicate: true,
-          ...(existing.command.type === "dial" && existing.command.call?.media_transport === "webrtc" &&
+          ...(["dial", "prepare_dial"].includes(existing.command.type) && existing.command.call?.media_transport === "webrtc" &&
             ["pending", "delivered", "completed"].includes(existing.status) ? { call: existing.command.call } : {}),
           ...(existing.rescue_command_id ? { rescue_command_id: existing.rescue_command_id } : {}),
           ...(existing.result ? { result: existing.result } : {}),
@@ -607,7 +624,11 @@ export class DeviceCommandSession {
 
   async mediaCommandAvailable(key, record) {
     const command = record.command;
-    if (command?.type !== "dial" && !(command?.type === "call_control" && command.action === "answer")) return true;
+    if (command?.type === "prepare_dial" && Date.parse(command.call?.preparation_expires_at) <= Date.now()) {
+      record.status = "expired"; record.error = "preparation_timeout";
+      await this.storage.put(key, record); return false;
+    }
+    if (!["dial", "prepare_dial"].includes(command?.type) && !(command?.type === "call_control" && command.action === "answer")) return true;
     let availability = unavailableMedia("unsupported_call_media");
     if (record.device_id && command.call?.media_transport === "webrtc" && command.owner !== "watch") {
       try {
@@ -635,6 +656,11 @@ export class DeviceCommandSession {
     if (!record) return false;
     if (record.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) return false;
     if (["completed", "failed", "expired"].includes(record.status)) return true;
+    if (record.command?.type === "prepare_dial" && value.status === "completed" && value.result?.prepared === true) {
+      record.prepared = true;
+      await this.storage.put(key, record);
+      return true;
+    }
     record.status = value.status;
     record.completed_at_ms = Date.now();
     record.completed_at = new Date().toISOString();
@@ -810,6 +836,7 @@ export class DeviceCommandSession {
 
 function sameCommandIntent(left, right) {
   if (left?.type !== right?.type) return false;
+  if (left?.type === "prepare_dial") return left.number === right.number;
   if (left?.type === "call_history") return left.limit === right.limit;
   if (left?.type !== "call_control") return true;
   return left.action === right.action &&
@@ -995,6 +1022,10 @@ async function connectCallMedia(request, env, callUUID) {
   headers.set("x-airsim-call-uuid", callUUID.toLowerCase());
   headers.set("x-airsim-generation", String(call.generation || 1));
   headers.set("x-airsim-media-transport", call.media_transport === "webrtc" ? "webrtc" : "");
+  if (call.pre_dial) {
+    headers.set("x-airsim-preparation-expires-at", call.preparation_expires_at || "");
+    headers.set("x-airsim-command-id", call.command_id || "");
+  }
   const forwarded = new Request("https://media.internal/session", { headers });
   return stub.fetch(forwarded);
 }
@@ -1004,8 +1035,10 @@ export class CallMediaSession {
     this.state = state;
     this.env = env;
     this.terminal = null;
+    this.preDial = null;
     this.ready = state.blockConcurrencyWhile(async () => {
       this.terminal = await state.storage.get("terminal") || null;
+      this.preDial = await state.storage.get("preDial") || null;
     });
   }
 
@@ -1013,6 +1046,20 @@ export class CallMediaSession {
     await this.ready;
     if (request.method === "POST" && new URL(request.url).pathname === "/terminal") {
       return this.receiveTerminal(await readJSON(request));
+    }
+    if (request.method === "POST" && new URL(request.url).pathname === "/cancel-preparation") {
+      const value = await readJSON(request);
+      if (!UUID_PATTERN.test(value.callUUID || "") || !nonEmpty(value.callID) ||
+          !Number.isSafeInteger(value.generation) || value.generation <= 0) {
+        return jsonResponse(400, { error: "invalid preparation identity" });
+      }
+      if (this.preDial && (this.preDial.callUUID !== value.callUUID ||
+          this.preDial.callID !== value.callID || this.preDial.generation !== value.generation)) {
+        return jsonResponse(409, { error: "preparation identity mismatch" });
+      }
+      if (!this.preDial) this.preDial = { ...value, phase: "preparing" };
+      await this.abortPreDial("preparation_cancelled");
+      return jsonResponse(202, { cancelled: true });
     }
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return jsonResponse(426, { error: "websocket upgrade required" });
@@ -1026,6 +1073,20 @@ export class CallMediaSession {
       callUUID: request.headers.get("x-airsim-call-uuid"),
       generation: Number(request.headers.get("x-airsim-generation")),
     })) return jsonResponse(409, { error: "terminal call identity mismatch" });
+    const preparationExpiry = request.headers.get("x-airsim-preparation-expires-at");
+    if (preparationExpiry && !this.preDial) {
+      this.preDial = { phase: "preparing", expiresAt: Date.parse(preparationExpiry),
+        commandID: request.headers.get("x-airsim-command-id"),
+        deviceID: request.headers.get("x-airsim-device-id"),
+        callUUID: request.headers.get("x-airsim-call-uuid"),
+        callID: request.headers.get("x-airsim-call-id"),
+        generation: Number(request.headers.get("x-airsim-generation")) };
+      await this.state.storage.put("preDial", this.preDial);
+      await this.state.storage.setAlarm(this.preDial.expiresAt);
+    }
+    if (["preparing", "committing"].includes(this.preDial?.phase) && this.state.getWebSockets(role).length) {
+      await this.abortPreDial("socket_replaced");
+    }
     const currentOwner = this.ownerRole();
     let inheritsOwnership = false;
     let inheritedPendingControl = "";
@@ -1062,6 +1123,7 @@ export class CallMediaSession {
     }
     if (role === "agent") await this.flushPendingControls(server);
     this.broadcastStatus("peer_connected", role);
+    this.sendPreDialPeerReady();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -1092,6 +1154,7 @@ export class CallMediaSession {
     // Persist before acknowledging, including when no client is currently connected.
     await this.state.storage.put("terminal", terminal);
     this.terminal = terminal;
+    await this.abortPreDial("remote_ended");
     this.clearNegotiation();
     let deliveryFailed = false;
     for (const socket of this.state.getWebSockets()) {
@@ -1127,6 +1190,8 @@ export class CallMediaSession {
     }
     let value;
     try { value = JSON.parse(message); } catch { return; }
+    if (!this.isCurrentSocket(socket)) return;
+    if (this.preDial && await this.handlePreDial(socket, value)) return;
     if (typeof value?.action === "string" && value.action.startsWith("webrtc_")) {
       this.relayWebRTC(socket, value);
       return;
@@ -1171,6 +1236,137 @@ export class CallMediaSession {
     }
   }
 
+  async abortPreDial(reason) {
+    if (!this.preDial || this.preDial.phase === "committed" || this.preDial.phase === "aborted") return;
+    this.preDial = { ...this.preDial, phase: "aborted", reason };
+    this.clearNegotiation();
+    await this.state.storage.put("preDial", this.preDial);
+    this.sendPreDialStatus("pre_dial_aborted", { reason });
+    if (this.env.COMMANDS && this.preDial.deviceID) {
+      const stub = this.env.COMMANDS.get(this.env.COMMANDS.idFromName(this.preDial.deviceID));
+      await stub.fetch("https://commands.internal/complete", { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({
+          command_id: this.preDial.commandID, status: "failed", error: reason }) });
+    }
+  }
+
+  sendPreDialPeerReady() {
+    if (this.preDial?.phase !== "preparing" || Date.now() >= this.preDial.expiresAt ||
+        this.ownerRole() !== "iphone") return;
+    const iphone = this.state.getWebSockets("iphone").find(peer => peer.deserializeAttachment()?.owner === true);
+    const agents = this.state.getWebSockets("agent");
+    if (!iphone || agents.length !== 1) return;
+    for (const peer of [iphone, agents[0]]) {
+      const identity = peer.deserializeAttachment() || {};
+      if (identity.callUUID !== this.preDial.callUUID || identity.generation !== this.preDial.generation ||
+          identity.mediaTransport !== "webrtc") return;
+    }
+    this.sendPreDialStatus("pre_dial_peer_ready");
+  }
+
+  sendPreDialStatus(status, extra = {}) {
+    for (const peer of this.state.getWebSockets()) {
+      try { peer.send(JSON.stringify({ status, call_id: this.preDial.callID, call_uuid: this.preDial.callUUID,
+        generation: this.preDial.generation, command_id: this.preDial.commandID, ...extra })); } catch {}
+    }
+  }
+
+  async alarm() {
+    await this.ready;
+    if (["preparing", "committing"].includes(this.preDial?.phase) && Date.now() >= this.preDial.expiresAt) {
+      await this.abortPreDial("preparation_timeout");
+    }
+  }
+
+  async handlePreDial(socket, value) {
+    const preparation = this.preDial;
+    if (preparation.phase === "committed") {
+      const attachment = socket.deserializeAttachment() || {};
+      if (value.action === "cancel_dial" && attachment.role === "iphone" && attachment.owner &&
+          value.call_uuid === preparation.callUUID && value.generation === preparation.generation) {
+        for (const peer of this.mediaPeers("iphone")) {
+          try { peer.send(JSON.stringify({ ...value, action: "end", owner: "iphone", call_id: preparation.callID })); } catch {}
+        }
+        return true;
+      }
+      if (attachment.role === "agent" && ["dial_accepted", "outgoing_dial_accepted"].includes(value.status) &&
+          value.command_id === preparation.commandID && value.call_uuid === preparation.callUUID &&
+          value.generation === preparation.generation && this.env.COMMANDS && preparation.deviceID) {
+        const stub = this.env.COMMANDS.get(this.env.COMMANDS.idFromName(preparation.deviceID));
+        await stub.fetch("https://commands.internal/complete", { method: "POST",
+          headers: { "content-type": "application/json" }, body: JSON.stringify({
+            command_id: preparation.commandID, status: "completed", result: { dialing: true, android_confirmed: true } }) });
+      }
+      return ["reserve_dial", "commit_dial", "webrtc_transport_ready"].includes(value.action);
+    }
+    if (preparation.phase === "aborted") {
+      this.sendPreDialStatus("pre_dial_aborted", { reason: preparation.reason });
+      return true;
+    }
+    if (!Number.isFinite(preparation.expiresAt) || Date.now() >= preparation.expiresAt) {
+      await this.abortPreDial("preparation_timeout");
+      return true;
+    }
+    const attachment = socket.deserializeAttachment() || {};
+    const identityMatches = value.call_uuid === preparation.callUUID && value.generation === preparation.generation;
+    if (["cancel_dial", "end", "reject", "webrtc_transport_failed"].includes(value.action)) {
+      if (identityMatches && (attachment.role === "agent" || attachment.role === "iphone")) await this.abortPreDial("preparation_cancelled");
+      return true;
+    }
+    if (preparation.phase === "committing") return true;
+    if (attachment.role === "agent" && ["action_error", "webrtc_failed"].includes(value.status)) {
+      await this.abortPreDial("agent_preparation_failed"); return true;
+    }
+    if (value.action === "answer") return true; // A reservation must never answer a carrier call.
+    if (value.action === "reserve_dial") {
+      if (identityMatches && attachment.role === "iphone" && (!this.ownerRole() || attachment.owner)) {
+        this.claimOwner(socket, "iphone");
+        socket.send(JSON.stringify({ status: "dial_reserved", call_id: preparation.callID, call_uuid: preparation.callUUID, generation: preparation.generation }));
+        this.sendPreDialPeerReady();
+      }
+      return true;
+    }
+    if (!["webrtc_transport_ready", "commit_dial"].includes(value.action)) return false;
+    const peer = this.mediaPeers(attachment.role)[0];
+    const other = peer?.deserializeAttachment() || {};
+    const sessionID = value.session_id;
+    if (!identityMatches || !UUID_PATTERN.test(sessionID || "") ||
+        !["iphone", "agent"].includes(attachment.role) || this.ownerRole() !== "iphone" ||
+        attachment.negotiation?.sessionID !== sessionID || !attachment.negotiation?.answered ||
+        other.negotiation?.sessionID !== sessionID || !other.negotiation?.answered ||
+        !this.isCurrentSocket(peer)) return true;
+    if (value.action === "webrtc_transport_ready") {
+      socket.serializeAttachment({ ...attachment, transportReady: sessionID });
+      if (other.transportReady === sessionID) this.sendPreDialStatus("pre_dial_ready", { session_id: sessionID });
+      return true;
+    }
+    if (attachment.role !== "iphone" || !attachment.owner ||
+        attachment.transportReady !== sessionID || other.transportReady !== sessionID) return true;
+    // Fresh authoritative admission read; cancellation/replacement/timeout wins its await.
+    if (!await this.canAnswer(socket, value)) { await this.abortPreDial("media_unavailable"); return true; }
+    if (this.preDial !== preparation || this.terminal || Date.now() >= preparation.expiresAt ||
+        !this.isCurrentSocket(socket) || !this.isCurrentSocket(peer) ||
+        socket.deserializeAttachment()?.transportReady !== sessionID ||
+        peer.deserializeAttachment()?.transportReady !== sessionID) return true;
+    this.preDial = { ...preparation, phase: "committing", sessionID };
+    await this.state.storage.put("preDial", this.preDial);
+    if (this.preDial.phase !== "committing" || this.terminal || Date.now() >= preparation.expiresAt ||
+        !this.isCurrentSocket(socket) || !this.isCurrentSocket(peer)) {
+      await this.abortPreDial("commit_invalidated"); return true;
+    }
+    // Persist before delivery. An ambiguous send is never replayed: Android independently
+    // checks current native connectivity and durable command dedup at Telecom's boundary.
+    this.preDial = { ...this.preDial, phase: "committed" };
+    if (this.terminal || !this.isCurrentSocket(socket) || !this.isCurrentSocket(peer) ||
+        Date.now() >= preparation.expiresAt || socket.deserializeAttachment()?.transportReady !== sessionID ||
+        peer.deserializeAttachment()?.transportReady !== sessionID) return true;
+    try { peer.send(JSON.stringify({ action: "commit_dial", call_id: preparation.callID,
+      call_uuid: preparation.callUUID, generation: preparation.generation,
+      command_id: preparation.commandID, session_id: sessionID })); } catch {}
+    await this.state.storage.put("preDial", this.preDial);
+    return true;
+  }
+
   isCurrentSocket(socket) {
     const attachment = socket.deserializeAttachment() || {};
     const key = attachment.connectionKey || attachment.pcmTraceKey;
@@ -1202,7 +1398,7 @@ export class CallMediaSession {
   clearNegotiation() {
     for (const peer of this.state.getWebSockets()) {
       const attachment = peer.deserializeAttachment() || {};
-      const { negotiation, ...rest } = attachment;
+      const { negotiation, transportReady, ...rest } = attachment;
       peer.serializeAttachment(rest);
     }
   }
@@ -1256,8 +1452,8 @@ export class CallMediaSession {
       if (usedSessions.length >= 24) return reject("negotiation limit reached; reconnect both peers");
       usedSessions.push(sessionID);
       const negotiation = { sessionID, answered: false };
-      socket.serializeAttachment({ ...attachment, negotiation, usedSessions });
-      peer.serializeAttachment({ ...peerAttachment, negotiation, usedSessions });
+      socket.serializeAttachment({ ...attachment, transportReady: null, negotiation, usedSessions });
+      peer.serializeAttachment({ ...peerAttachment, transportReady: null, negotiation, usedSessions });
     } else if (attachment.negotiation?.sessionID !== sessionID ||
                peerAttachment.negotiation?.sessionID !== sessionID) {
       return reject("stale signaling session");
@@ -1358,6 +1554,7 @@ export class CallMediaSession {
 
   webSocketClose(socket, code, reason) {
     const role = socket.deserializeAttachment()?.role || "unknown";
+    if (this.preDial && ["iphone", "agent"].includes(role)) void this.abortPreDial("peer_disconnected");
     try { socket.close(code, reason); } catch {}
     if (this.terminal) return;
     const sessionID = socket.deserializeAttachment()?.negotiation?.sessionID;
@@ -1377,6 +1574,7 @@ export class CallMediaSession {
 
   webSocketError(socket) {
     const role = socket.deserializeAttachment()?.role || "unknown";
+    if (this.preDial && ["iphone", "agent"].includes(role)) void this.abortPreDial("peer_disconnected");
     try { socket.close(1011, "media relay error"); } catch {}
     if (this.terminal) return;
     const sessionID = socket.deserializeAttachment()?.negotiation?.sessionID;
