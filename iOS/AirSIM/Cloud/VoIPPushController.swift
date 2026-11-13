@@ -1361,16 +1361,22 @@ final class VoIPPushController: NSObject {
                 guard let outgoing = pending.outgoing else { return }
                 IPhoneCloudCallSession.shared.prewarmOutgoing(outgoing, timeline: timeline)
             },
-            awaitDialing: { _ in
+            awaitDialing: { pending in
                 do {
-                    let outcome = try await self.waitForCloudCommand(
-                        commandID: commandID,
-                        timeout: timeout,
-                        schedule: .dial
-                    )
-                    guard outcome.status == "completed", outcome.result?.dialing == true else {
-                        throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
+                    let acceptance = pending.outgoing.flatMap {
+                        IPhoneCloudCallSession.shared.outgoingDialAcceptance(for: $0)
                     }
+                    let source = try await CloudOutgoingDialAcceptanceRace.wait(signaling: acceptance) {
+                        let outcome = try await self.waitForCloudCommand(
+                            commandID: commandID,
+                            timeout: timeout,
+                            schedule: .dial
+                        )
+                        guard outcome.status == "completed", outcome.result?.dialing == true else {
+                            throw CloudCommandError.failed(outcome.error ?? "Module could not start dialing")
+                        }
+                    }
+                    timeline.mark(.dialAcceptance, source == .signaling ? .acceptanceSignaling : .acceptanceHTTP)
                     timeline.mark(.dialCompleted, .routeCloud)
                 } catch {
                     timeline.mark(.dialFailed, .routeCloud)

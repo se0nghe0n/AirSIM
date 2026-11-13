@@ -33,7 +33,10 @@ final class StandaloneWebSocket implements Closeable {
         return value;
     }
     void receive(String action) throws Exception {
-        received.add(new Message(1, new JSONObject().put("action", action).toString().getBytes(StandardCharsets.UTF_8)));
+        receive(new JSONObject().put("action", action));
+    }
+    void receive(JSONObject value) {
+        received.add(new Message(1, value.toString().getBytes(StandardCharsets.UTF_8)));
     }
     public void close() { closed = true; received.offer(new Message(8, new byte[0])); }
 }
@@ -42,13 +45,13 @@ final class WebRTCCloudPeer implements Closeable {
     interface Failure { void failed(String reason); }
     static final List<WebRTCCloudPeer> peers = new CopyOnWriteArrayList<>();
     final Failure failure;
-    volatile boolean started, closed;
+    volatile boolean started, closed, deferred;
     final AtomicInteger activations = new AtomicInteger();
     final AtomicInteger signals = new AtomicInteger();
     WebRTCCloudPeer(Context context, String uuid, long generation, String relay, String secret,
                     Signals signal, Failure failure) { this.failure = failure; peers.add(this); }
     void prepare() {}
-    void start(boolean deferred) { started = true; }
+    void start(boolean deferred) { this.deferred = deferred; started = true; }
     void activateCarrierAudio() { activations.incrementAndGet(); }
     void receive(JSONObject signal) { signals.incrementAndGet(); }
     void fail(String reason) { close(); failure.failed(reason); }
@@ -60,9 +63,11 @@ final class BridgeLog {
 }
 final class DebugRedactor { static String safeIdentifier(String value) { return "fixture"; } }
 final class CallRepository {
+    static volatile boolean preparable = true;
+    static volatile int callState = android.telecom.Call.STATE_ACTIVE;
     static boolean contains(String id) { return false; }
-    static boolean canPrepareOutgoingMedia(String id) { return true; }
-    static int state(String id) { return android.telecom.Call.STATE_ACTIVE; }
+    static boolean canPrepareOutgoingMedia(String id) { return preparable; }
+    static int state(String id) { return callState; }
 }
 final class ShizukuBridgeManager {
     static ShizukuBridgeManager get(Context context) { return new ShizukuBridgeManager(); }

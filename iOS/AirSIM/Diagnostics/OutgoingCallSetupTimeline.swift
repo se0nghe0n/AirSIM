@@ -8,6 +8,9 @@ enum OutgoingCallSetupPhase: String, CaseIterable, Sendable {
     case cloudStatusDone = "cloud_status_done"
     case enqueueAccepted = "enqueue_accepted"
     case prewarmSignalingConnected = "prewarm_signaling_connected"
+    case dialAcceptance = "dial_acceptance"
+    case signalingAdoptionStarted = "signaling_adoption_started"
+    case ownerJoinSent = "owner_join_sent"
     case dialCompleted = "dial_completed"
     case dialFailed = "dial_failed"
     case signalingConnected = "signaling_connected"
@@ -37,6 +40,8 @@ enum OutgoingCallSetupDetail: String, Sendable {
     case routeCloud = "route=cloud"
     case prewarmed = "prewarmed=true"
     case notPrewarmed = "prewarmed=false"
+    case acceptanceSignaling = "source=signaling"
+    case acceptanceHTTP = "source=http"
 }
 
 /// Monotonic elapsed time since an outgoing dial started, written to the unified log so a device call can be
@@ -83,9 +88,10 @@ final class OutgoingCallSetupTimeline {
         self.callUUID == callUUID
     }
 
-    func mark(_ phase: OutgoingCallSetupPhase, _ detail: OutgoingCallSetupDetail? = nil) {
+    func mark(_ phase: OutgoingCallSetupPhase, _ detail: OutgoingCallSetupDetail? = nil, at uptime: TimeInterval? = nil)
+    {
         guard phase.repeats || logged.insert(phase).inserted else { return }
-        let elapsed = Int((max(0, now() - startedAt) * 1_000).rounded())
+        let elapsed = Int((max(0, (uptime ?? now()) - startedAt) * 1_000).rounded())
         sink(Self.line(dial: dial, phase: phase, elapsedMilliseconds: elapsed, detail: detail))
     }
 

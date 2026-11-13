@@ -117,7 +117,7 @@ final class ShizukuBridgeManager {
                 .tag("airsim-pcm-v1")
                 // Bump when the embedded bridge or its lifecycle changes so an
                 // APK update cannot keep Vivo/Samsung running an old daemon.
-                .version(10);
+                .version(11);
         Shizuku.addBinderReceivedListenerSticky(binderReceived);
         Shizuku.addBinderDeadListener(binderDead);
         Shizuku.addRequestPermissionResultListener(permissionResult);

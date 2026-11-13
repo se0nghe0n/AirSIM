@@ -39,7 +39,9 @@ private func outgoingCall(
     )
 }
 
-private func incomingCall(id: UUID = UUID(), generation: UInt64 = 1, host: String = "relay.test") throws -> IncomingVoIPCall {
+private func incomingCall(id: UUID = UUID(), generation: UInt64 = 1, host: String = "relay.test") throws
+    -> IncomingVoIPCall
+{
     try IncomingVoIPCall(userInfo: [
         "event": "incoming_call", "call_id": "incoming-\(id.uuidString.lowercased())",
         "call_uuid": id.uuidString, "generation": generation,
@@ -69,6 +71,285 @@ struct CloudCommandPollScheduleTests {
             #expect(CloudCommandPollSchedule.steady.interval(afterPoll: poll) == .milliseconds(500))
         }
         #expect(CloudCommandPollSchedule.dial.interval(afterPoll: 600) == .milliseconds(500))
+    }
+}
+
+private func dialAcceptanceControl(
+    for call: IncomingVoIPCall,
+    overrides: [String: Any] = [:],
+    omitting: String? = nil
+) throws -> CloudCallControlMessage {
+    var payload: [String: Any] = [
+        "status": "outgoing_dial_accepted", "call_id": call.callID,
+        "call_uuid": call.uuid.uuidString, "generation": call.generation,
+    ]
+    payload.merge(overrides) { _, new in new }
+    if let omitting { payload.removeValue(forKey: omitting) }
+    let data = try JSONSerialization.data(withJSONObject: payload)
+    let control = try CloudCallControlMessage.decode(String(decoding: data, as: UTF8.self))
+    return try #require(control)
+}
+
+struct CloudOutgoingDialAcceptancePolicyTests {
+    @Test func `Only exact current outgoing dial proof is accepted`() throws {
+        let call = try outgoingCall()
+        let proof = try dialAcceptanceControl(for: call)
+        #expect(CloudOutgoingDialAcceptancePolicy.accepts(proof, for: call, currentConnection: true))
+        #expect(!CloudOutgoingDialAcceptancePolicy.accepts(proof, for: call, currentConnection: false))
+        for field in ["call_id", "call_uuid", "generation"] {
+            #expect(
+                !CloudOutgoingDialAcceptancePolicy.accepts(
+                    try dialAcceptanceControl(for: call, omitting: field),
+                    for: call,
+                    currentConnection: true
+                )
+            )
+        }
+        for overrides: [String: Any] in [
+            ["call_id": "other"], ["call_uuid": UUID().uuidString], ["generation": 0],
+            ["generation": 2], ["status": "agent_ready"], ["status": "media_prepared"], ["status": "active"],
+        ] {
+            #expect(
+                !CloudOutgoingDialAcceptancePolicy.accepts(
+                    try dialAcceptanceControl(for: call, overrides: overrides),
+                    for: call,
+                    currentConnection: true
+                )
+            )
+        }
+        let incoming = try incomingCall()
+        #expect(
+            !CloudOutgoingDialAcceptancePolicy.accepts(
+                try dialAcceptanceControl(for: incoming),
+                for: incoming,
+                currentConnection: true
+            )
+        )
+    }
+
+    @Test @MainActor func `Dial proof is not answer acknowledgement or audio permission`() {
+        #expect(!CloudCallAnswerPolicy.isAcknowledged(status: "outgoing_dial_accepted"))
+        let handshake = CloudWebRTCAnswerHandshake()
+        handshake.confirm(
+            status: "outgoing_dial_accepted",
+            isOutgoing: true,
+            callConnected: { Issue.record("Dial invocation cannot report remote answer") }
+        ) { Issue.record("Dial invocation cannot start WebRTC") }
+        #expect(!handshake.acknowledged)
+    }
+}
+
+@MainActor
+struct CloudOutgoingDialAcceptanceRaceTests {
+    @Test func `Proof before waiting is latched`() async {
+        let latch = CloudOutgoingDialAcceptance()
+        latch.accept()
+        #expect(await latch.wait())
+        #expect(latch.waiterCount == 0)
+    }
+
+    @Test func `Latched proof wins a race whose HTTP result is still pending`() async throws {
+        let latch = CloudOutgoingDialAcceptance()
+        latch.accept()
+        #expect(
+            try await CloudOutgoingDialAcceptanceRace.wait(signaling: latch) {
+                try await Task.sleep(for: .seconds(30))
+            } == .signaling
+        )
+        #expect(latch.waiterCount == 0)
+    }
+
+    @Test func `Proof wins and cancels HTTP polling without releasing preparation`() async throws {
+        let latch = CloudOutgoingDialAcceptance()
+        var httpStarted = false
+        var httpCancelled = false
+        let race = Task {
+            try await CloudOutgoingDialAcceptanceRace.wait(signaling: latch) {
+                httpStarted = true
+                do { try await Task.sleep(for: .seconds(30)) } catch {
+                    httpCancelled = true
+                    throw error
+                }
+            }
+        }
+        try await waitUntil({ httpStarted && latch.waiterCount == 1 }, "race did not start")
+        latch.accept()
+        #expect(try await race.value == .signaling)
+        #expect(httpCancelled)
+        #expect(latch.waiterCount == 0)
+        #expect(await latch.wait())
+    }
+
+    @Test func `HTTP completion cancels only its proof waiter`() async throws {
+        let latch = CloudOutgoingDialAcceptance()
+        #expect(try await CloudOutgoingDialAcceptanceRace.wait(signaling: latch, http: {}) == .http)
+        #expect(latch.waiterCount == 0)
+        latch.accept()
+        #expect(await latch.wait())
+    }
+
+    @Test func `Old Android without proof uses HTTP`() async throws {
+        #expect(try await CloudOutgoingDialAcceptanceRace.wait(signaling: nil, http: {}) == .http)
+    }
+
+    @Test func `HTTP failure remains a failure and releases proof waiter`() async {
+        let latch = CloudOutgoingDialAcceptance()
+        await #expect(throws: DialFailure.self) {
+            try await CloudOutgoingDialAcceptanceRace.wait(signaling: latch) { throw DialFailure() }
+        }
+        #expect(latch.waiterCount == 0)
+    }
+
+    @Test func `Cancellation promptly drains both pending lanes`() async throws {
+        let latch = CloudOutgoingDialAcceptance()
+        var httpStarted = false
+        var httpCancelled = false
+        let race = Task {
+            try await CloudOutgoingDialAcceptanceRace.wait(signaling: latch) {
+                httpStarted = true
+                do { try await Task.sleep(for: .seconds(30)) } catch {
+                    httpCancelled = true
+                    throw error
+                }
+            }
+        }
+        try await waitUntil({ httpStarted && latch.waiterCount == 1 }, "race did not start")
+        race.cancel()
+        await #expect(throws: CancellationError.self) { try await race.value }
+        #expect(httpCancelled)
+        #expect(latch.waiterCount == 0)
+    }
+
+    @Test func `Cancellation before waiter registration does not leak`() async {
+        let latch = CloudOutgoingDialAcceptance()
+        let waiter = Task { await latch.wait() }
+        waiter.cancel()
+        #expect(!(await waiter.value))
+        #expect(latch.waiterCount == 0)
+    }
+
+    @Test func `Socket loss disables proof but leaves HTTP fallback running`() async throws {
+        let signaling = CloudOutgoingDialAcceptance()
+        let http = CloudOutgoingDialAcceptance()
+        var finished = false
+        let race = Task {
+            let result = try await CloudOutgoingDialAcceptanceRace.wait(signaling: signaling) {
+                _ = await http.wait()
+                try Task.checkCancellation()
+            }
+            finished = true
+            return result
+        }
+        try await waitUntil({ signaling.waiterCount == 1 && http.waiterCount == 1 }, "race did not start")
+        signaling.invalidate()
+        signaling.accept() // A stale receive callback cannot resurrect this socket's proof.
+        #expect(!(await signaling.wait()))
+        #expect(!finished)
+        http.accept()
+        #expect(try await race.value == .http)
+        #expect(signaling.waiterCount == 0 && http.waiterCount == 0)
+    }
+
+    @Test func `Replacing or discarding prewarm invalidates only the old proof`() async throws {
+        let prewarm = CloudOutgoingPrewarm()
+        let first = try outgoingCall()
+        prewarm.begin(first, sessionHasCall: false, release: {}, connect: {}, expired: { _ in })
+        let old = try #require(prewarm.entry?.acceptance)
+        old.accept()
+        let next = try outgoingCall()
+        prewarm.begin(next, sessionHasCall: false, release: {}, connect: {}, expired: { _ in })
+        #expect(!(await old.wait()))
+        let current = try #require(prewarm.entry?.acceptance)
+        #expect(!prewarm.discard(call: first, release: {}))
+        current.accept()
+        #expect(await current.wait())
+        #expect(prewarm.discard(call: next, release: {}))
+        #expect(!(await current.wait()))
+    }
+}
+
+struct CloudSignalingConnectionGateTests {
+    @Test func `Queued pong cannot steal cancellation cleanup ownership`() {
+        let connection = UUID()
+        let gate = CloudSignalingConnectionGate(connection: connection)
+        var pending: CloudSignalingConnectionGate? = gate
+        var socketOpen = true
+        // The cancellation handler runs before an already queued pong, while its queue cleanup is still pending.
+        #expect(gate.finish(.failure(CancellationError())))
+        gate.finishPong(.success(()), pending: &pending)
+        #expect(pending === gate)
+        if gate.ownsConnection(connection) {
+            pending = nil
+            socketOpen = false
+        }
+        #expect(!socketOpen && pending == nil)
+    }
+
+    @Test func `Cancellation cleanup uses socket identity after pending marker is cleared`() {
+        let connection = UUID()
+        let gate = CloudSignalingConnectionGate(connection: connection)
+        #expect(gate.finish(.failure(CancellationError())))
+        // Receive failure can clear the pending marker before cancellation cleanup reaches the bridge queue.
+        var pending: CloudSignalingConnectionGate?
+        gate.finishPong(.failure(IPhoneCloudCallError.connectionClosed), pending: &pending)
+        #expect(gate.ownsConnection(connection))
+        let replacement = CloudSignalingConnectionGate(connection: UUID())
+        pending = replacement
+        gate.finishPong(.success(()), pending: &pending)
+        #expect(pending === replacement)
+        #expect(!gate.ownsConnection(replacement.connection))
+    }
+
+    @Test func `Exact outgoing proof resolves pending connection before pong only once`() throws {
+        let call = try outgoingCall()
+        let connection = UUID()
+        let gate = CloudSignalingConnectionGate(connection: connection, outgoing: call)
+        let results = OSAllocatedUnfairLock(initialState: [Bool]())
+        gate.install { result in results.withLock { $0.append((try? result.get()) != nil) } }
+        #expect(gate.accept(try dialAcceptanceControl(for: call), connection: connection))
+        #expect(!gate.isPending)
+        #expect(!gate.finish(.success(())))
+        #expect(!gate.finish(.failure(DialFailure())))
+        #expect(results.withLock { $0 } == [true])
+    }
+
+    @Test func `Wrong socket or incomplete proof cannot bypass pong`() throws {
+        let call = try outgoingCall()
+        let connection = UUID()
+        let gate = CloudSignalingConnectionGate(connection: connection, outgoing: call)
+        #expect(!gate.accept(try dialAcceptanceControl(for: call), connection: UUID()))
+        for field in ["call_id", "call_uuid", "generation"] {
+            #expect(!gate.accept(try dialAcceptanceControl(for: call, omitting: field), connection: connection))
+        }
+        #expect(gate.isPending)
+        #expect(gate.finish(.success(())))
+    }
+
+    @Test func `Incoming and ordinary connections still require pong`() throws {
+        let incoming = try incomingCall()
+        let connection = UUID()
+        for gate in [
+            CloudSignalingConnectionGate(connection: connection),
+            CloudSignalingConnectionGate(connection: connection, outgoing: incoming),
+        ] {
+            #expect(!gate.accept(try dialAcceptanceControl(for: incoming), connection: connection))
+            #expect(gate.isPending)
+            #expect(gate.finish(.success(())))
+        }
+    }
+
+    @Test func `Stop socket loss or cancellation wins once even before continuation installation`() throws {
+        for error: Error in [CancellationError(), IPhoneCloudCallError.connectionClosed, DialFailure()] {
+            let call = try outgoingCall()
+            let connection = UUID()
+            let gate = CloudSignalingConnectionGate(connection: connection, outgoing: call)
+            #expect(gate.finish(.failure(error)))
+            let results = OSAllocatedUnfairLock(initialState: [Bool]())
+            gate.install { result in results.withLock { $0.append((try? result.get()) != nil) } }
+            #expect(!gate.finish(.success(())))
+            #expect(!gate.accept(try dialAcceptanceControl(for: call), connection: connection))
+            #expect(results.withLock { $0 } == [false])
+        }
     }
 }
 
@@ -392,6 +673,21 @@ struct CloudOutgoingPrewarmTests {
 @MainActor
 @Suite(.serialized)
 struct CloudOutgoingPrewarmSessionTests {
+    @Test func `Dial acceptance alone leaves outgoing prewarm without call peer or audio`() async throws {
+        let session = IPhoneCloudCallSession.shared
+        session.stop()
+        defer { session.stop() }
+        let call = try outgoingCall(host: "127.0.0.1:9")
+        session.prewarmOutgoing(call)
+        let acceptance = try #require(session.outgoingDialAcceptance(for: call))
+        acceptance.accept()
+        #expect(await acceptance.wait())
+        session.startAudioWithRetry()
+        #expect(session.call == nil && !session.answered && !session.isPrepared)
+        #expect(!session.hasActiveCall && session.lifecycleState == .idle)
+        #expect(session.audioState == .idle && session.recordingSource == nil)
+    }
+
     /// Uses the loopback discard port: nothing answers, and nothing leaves the test host.
     @Test func `Prewarm leaves the session without a call and discard leaves it idle`() async throws {
         let session = IPhoneCloudCallSession.shared
@@ -614,6 +910,26 @@ struct OutgoingRoutePreparationTests {
 
 @MainActor
 struct OutgoingCallSetupTimelineTests {
+    @Test func `Acceptance source and captured socket send time distinguish startup gates`() {
+        var time: TimeInterval = 10
+        var lines: [String] = []
+        let timeline = OutgoingCallSetupTimeline(now: { time }, sink: { lines.append($0) })
+        time = 10.4
+        timeline.mark(.dialAcceptance, .acceptanceSignaling)
+        time = 10.5
+        timeline.mark(.signalingAdoptionStarted)
+        time = 12
+        timeline.mark(.ownerJoinSent, at: 10.6)
+        #expect(
+            lines == [
+                "dial=\(timeline.dial) phase=dial_acceptance elapsed_ms=400 source=signaling",
+                "dial=\(timeline.dial) phase=signaling_adoption_started elapsed_ms=500",
+                "dial=\(timeline.dial) phase=owner_join_sent elapsed_ms=600",
+            ]
+        )
+        #expect(OutgoingCallSetupDetail.acceptanceHTTP.rawValue == "source=http")
+    }
+
     @Test func `Lines carry only a dial counter, phase, elapsed milliseconds and a fixed detail`() {
         var time: TimeInterval = 100
         var lines: [String] = []

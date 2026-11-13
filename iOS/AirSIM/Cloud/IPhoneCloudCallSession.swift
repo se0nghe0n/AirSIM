@@ -647,12 +647,24 @@ final class IPhoneCloudCallSession {
                 let session = IPhoneCloudCallSession.shared
                 // A prewarmed socket that drops is not a media failure: before `answer()` there is no call, and
                 // during adoption `answer()` falls back to its own connect.
+                if session.media.isCurrentConnection(connection) {
+                    session.outgoingPrewarm.entry?.acceptance.invalidate()
+                }
                 guard !session.carrierRouteRecovery.required, session.call != nil,
                     !session.outgoingPrewarm.isAdopting,
                     session.media.isCurrentConnection(connection)
                 else { return }
                 session.answerHandshake.invalidate()
                 session.requestMediaRebuild(.connectionLost)
+            }
+        }
+        media.onOwnerJoinSent = { call, connection, sentAt in
+            Task { @MainActor in
+                let session = IPhoneCloudCallSession.shared
+                guard call.isOutgoing, session.call?.uuid == call.uuid, session.call?.generation == call.generation,
+                    session.media.isCurrentConnection(connection), session.setupTimeline?.covers(call.uuid) == true
+                else { return }
+                session.setupTimeline?.mark(.ownerJoinSent, at: sentAt)
             }
         }
         media.onControl = { control, connection in
@@ -673,7 +685,19 @@ final class IPhoneCloudCallSession {
                             .contains(status)
                     )
                 }
-                // Before `answer()` a prewarmed socket has no call: its statuses change nothing here. The Agent
+                // Only successful outgoing dial invocation can bypass HTTP result polling. This does not accept
+                // or activate a call, and the normal answer/adoption and audio gates still run afterward.
+                if session.call == nil, let prewarmed = session.outgoingPrewarm.entry,
+                    CloudOutgoingDialAcceptancePolicy.accepts(
+                        control,
+                        for: prewarmed.call,
+                        currentConnection: session.media.isCurrentConnection(connection)
+                    )
+                {
+                    prewarmed.acceptance.accept()
+                    return
+                }
+                // Before `answer()` a prewarmed socket has no call. The Agent
                 // and Relay send `agent_ready` and `peer_connected` only to prompt an `answer` that has not been
                 // sent yet, and `answer()` sends it once the dial completed.
                 if session.call == nil,
@@ -804,6 +828,7 @@ final class IPhoneCloudCallSession {
         }
         var outgoingPrewarmed = false
         if let prewarmed {
+            markSetup(.signalingAdoptionStarted)
             let connected = await prewarmed.connection.value
             // `stop()` or a newer call during the wait already released the prewarm.
             guard !carrierRouteRecovery.required, call?.uuid == incoming.uuid,
@@ -840,6 +865,11 @@ final class IPhoneCloudCallSession {
         scheduleAnswerConfirmation(for: incoming)
     }
 
+    func outgoingDialAcceptance(for outgoing: IncomingVoIPCall) -> CloudOutgoingDialAcceptance? {
+        guard let entry = outgoingPrewarm.entry, CloudOutgoingPrewarm.matches(entry.call, outgoing) else { return nil }
+        return entry.acceptance
+    }
+
     /// Prepares media for an outgoing call whose dial command the Relay accepted but the Android phone has not yet
     /// confirmed: TURN credentials, the native WebRTC factory and the signaling socket. Nothing is sent on that
     /// socket, so the Relay sees a silent client without ownership and the Agent is not asked to join. The session
@@ -858,7 +888,7 @@ final class IPhoneCloudCallSession {
             sessionHasCall: call != nil,
             release: { releaseOutgoingPrewarmMedia() },
             connect: {
-                try await media.connect(to: url, secret: secret)
+                try await media.connect(to: url, secret: secret, outgoingDial: outgoing)
                 timeline?.mark(.prewarmSignalingConnected)
             },
             expired: { [weak self] expired in self?.discardOutgoingPrewarm(expired) }
@@ -1540,11 +1570,13 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     private var webRTCMode = false
     var onConnectionLost: ((UUID) -> Void)?
     var onControl: ((CloudCallControlMessage, UUID) -> Void)?
+    var onOwnerJoinSent: ((IncomingVoIPCall, UUID, TimeInterval) -> Void)?
 
     private let queue = DispatchQueue(label: "com.example.airsim.iphone-cloud-media", qos: .userInteractive)
     private var webSocket: URLSessionWebSocketTask?
     private var networkSession: URLSession?
     private var connectionID = UUID()
+    private var pendingConnection: CloudSignalingConnectionGate?
 
     func isCurrentConnection(_ id: UUID) -> Bool {
         queue.sync { connectionID == id }
@@ -1651,49 +1683,66 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         }
     }
 
-    func connect(to url: URL, secret: String) async throws {
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            queue.async { [weak self] in
-                guard let self else {
-                    continuation.resume(throwing: IPhoneCloudCallError.connectionClosed)
-                    return
-                }
-                stopped = false
-                connectionID = UUID()
-                let configuration = URLSessionConfiguration.ephemeral
-                configuration.networkServiceType = .voice
-                let deliveryQueue = OperationQueue()
-                deliveryQueue.name = "com.example.airsim.iphone-cloud-receive"
-                deliveryQueue.qualityOfService = .userInteractive
-                deliveryQueue.maxConcurrentOperationCount = 1
-                let session = URLSession(
-                    configuration: configuration,
-                    delegate: nil,
-                    delegateQueue: deliveryQueue
-                )
-                networkSession = session
-                var request = URLRequest(url: url)
-                request.networkServiceType = .voice
-                request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
-                let socket = session.webSocketTask(with: request)
-                socket.priority = URLSessionTask.highPriority
-                webSocket = socket
-                socket.resume()
-                receiveNext(socket)
-                socket.sendPing { error in
-                    self.queue.async {
-                        guard !self.stopped, self.webSocket === socket else {
-                            continuation.resume(throwing: IPhoneCloudCallError.connectionClosed)
-                            return
-                        }
-                        if let error {
-                            continuation.resume(throwing: error)
-                        } else {
-                            continuation.resume()
+    func connect(to url: URL, secret: String, outgoingDial: IncomingVoIPCall? = nil) async throws {
+        let gate = CloudSignalingConnectionGate(connection: UUID(), outgoing: outgoingDial)
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                gate.install { continuation.resume(with: $0) }
+                queue.async { [weak self] in
+                    guard let self else {
+                        gate.finish(.failure(IPhoneCloudCallError.connectionClosed))
+                        return
+                    }
+                    guard gate.isPending else { return }
+                    pendingConnection?.finish(.failure(IPhoneCloudCallError.connectionClosed))
+                    pendingConnection = gate
+                    stopped = false
+                    connectionID = gate.connection
+                    let configuration = URLSessionConfiguration.ephemeral
+                    configuration.networkServiceType = .voice
+                    let deliveryQueue = OperationQueue()
+                    deliveryQueue.name = "com.example.airsim.iphone-cloud-receive"
+                    deliveryQueue.qualityOfService = .userInteractive
+                    deliveryQueue.maxConcurrentOperationCount = 1
+                    let session = URLSession(
+                        configuration: configuration,
+                        delegate: nil,
+                        delegateQueue: deliveryQueue
+                    )
+                    networkSession = session
+                    var request = URLRequest(url: url)
+                    request.networkServiceType = .voice
+                    request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
+                    let socket = session.webSocketTask(with: request)
+                    socket.priority = URLSessionTask.highPriority
+                    webSocket = socket
+                    socket.resume()
+                    receiveNext(socket)
+                    socket.sendPing { error in
+                        self.queue.async {
+                            guard !self.stopped, self.webSocket === socket else {
+                                gate.finish(.failure(IPhoneCloudCallError.connectionClosed))
+                                return
+                            }
+                            gate.finishPong(
+                                error.map { .failure($0) } ?? .success(()),
+                                pending: &self.pendingConnection
+                            )
                         }
                     }
                 }
+            }
+        } onCancel: { [weak self] in
+            // Complete synchronously even if cancellation precedes the queue's socket creation.
+            guard gate.finish(.failure(CancellationError())) else { return }
+            self?.queue.async { [weak self] in
+                guard let self, gate.ownsConnection(self.connectionID) else { return }
+                self.pendingConnection = nil
+                self.webSocket?.cancel(with: .goingAway, reason: nil)
+                self.webSocket = nil
+                self.networkSession?.invalidateAndCancel()
+                self.networkSession = nil
+                self.stopped = true
             }
         }
     }
@@ -1708,6 +1757,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             socket.send(.string(text)) { [weak self] error in
                 guard let error else { return }
                 self?.traceControl(envelope, phase: "send_failed", detail: error.localizedDescription, isFailure: true)
+            }
+            if action == "answer", call.isOutgoing {
+                onOwnerJoinSent?(call, connectionID, ProcessInfo.processInfo.systemUptime)
             }
         }
     }
@@ -1804,6 +1856,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             stopped = true
+            pendingConnection?.finish(.failure(IPhoneCloudCallError.connectionClosed))
+            pendingConnection = nil
             connectionID = UUID()
             webSocket?.cancel(with: .normalClosure, reason: nil)
             webSocket = nil
@@ -1827,6 +1881,8 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                 case .success:
                     break
                 case .failure:
+                    self.pendingConnection?.finish(.failure(IPhoneCloudCallError.connectionClosed))
+                    self.pendingConnection = nil
                     self.webSocket = nil
                     self.stopped = true
                     self.onConnectionLost?(self.connectionID)
@@ -1851,6 +1907,9 @@ private final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
             return
         }
         guard let control = try? CloudCallControlMessage.decode(text) else { return }
+        // A strict proof received on this authenticated outgoing socket establishes it without an extra pong RTT.
+        // Other statuses and incoming sockets retain the existing ping completion behavior.
+        if pendingConnection?.accept(control, connection: connectionID) == true { pendingConnection = nil }
         onControl?(control, connectionID)
     }
 }

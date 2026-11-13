@@ -1,4 +1,153 @@
 import Foundation
+import os
+
+/// A successful dial invocation is not an answer, media acknowledgement or permission to open audio.
+enum CloudOutgoingDialAcceptancePolicy {
+    static func accepts(_ control: CloudCallControlMessage, for call: IncomingVoIPCall, currentConnection: Bool) -> Bool
+    {
+        currentConnection && call.isOutgoing && control.status == "outgoing_dial_accepted"
+            && control.callID == call.callID
+            && control.callUUID?.lowercased() == call.uuid.uuidString.lowercased()
+            && control.generation == call.generation
+    }
+}
+
+/// Call-scoped proof, including proof received before polling starts. Cancelling one waiter leaves the socket alone.
+@MainActor
+final class CloudOutgoingDialAcceptance {
+    private var accepted = false
+    private var invalidated = false
+    private var waiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
+
+    var waiterCount: Int { waiters.count }
+
+    func accept() {
+        guard !invalidated else { return }
+        accepted = true
+        finishWaiters(true)
+    }
+
+    func invalidate() {
+        invalidated = true
+        accepted = false
+        finishWaiters(false)
+    }
+
+    func wait() async -> Bool {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                if Task.isCancelled || invalidated {
+                    continuation.resume(returning: false)
+                } else if accepted {
+                    continuation.resume(returning: true)
+                } else {
+                    waiters[id] = continuation
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.waiters.removeValue(forKey: id)?.resume(returning: false)
+            }
+        }
+    }
+
+    private func finishWaiters(_ value: Bool) {
+        let pending = Array(waiters.values)
+        waiters.removeAll()
+        for waiter in pending { waiter.resume(returning: value) }
+    }
+}
+
+enum CloudOutgoingDialAcceptanceSource: Sendable {
+    case signaling
+    case http
+}
+
+@MainActor
+enum CloudOutgoingDialAcceptanceRace {
+    static func wait(
+        signaling: CloudOutgoingDialAcceptance?,
+        http: @escaping @MainActor @Sendable () async throws -> Void
+    ) async throws -> CloudOutgoingDialAcceptanceSource {
+        try await withThrowingTaskGroup(of: CloudOutgoingDialAcceptanceSource?.self) { group in
+            defer { group.cancelAll() }
+            group.addTask {
+                try await http()
+                return .http
+            }
+            if let signaling {
+                group.addTask { await signaling.wait() ? .signaling : nil }
+            }
+            while let result = try await group.next() {
+                try Task.checkCancellation()
+                if let result { return result }
+            }
+            throw CancellationError()
+        }
+    }
+}
+
+/// A connection has one completion, whether pong, authenticated outgoing proof, cancellation or socket loss wins.
+/// The lock also covers cancellation before the bridge queue installs the continuation/socket.
+final class CloudSignalingConnectionGate: Sendable {
+    private struct State {
+        var result: Result<Void, Error>?
+        var completion: (@Sendable (Result<Void, Error>) -> Void)?
+    }
+
+    let connection: UUID
+    private let outgoing: IncomingVoIPCall?
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    init(connection: UUID, outgoing: IncomingVoIPCall? = nil) {
+        self.connection = connection
+        self.outgoing = outgoing
+    }
+
+    var isPending: Bool { state.withLock { $0.result == nil } }
+
+    func install(_ completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
+        let result = state.withLock { state -> Result<Void, Error>? in
+            if let result = state.result { return result }
+            state.completion = completion
+            return nil
+        }
+        if let result { completion(result) }
+    }
+
+    @discardableResult
+    func finish(_ result: Result<Void, Error>) -> Bool {
+        let outcome = state.withLock { state -> (Bool, (@Sendable (Result<Void, Error>) -> Void)?) in
+            guard state.result == nil else { return (false, nil) }
+            state.result = result
+            let completion = state.completion
+            state.completion = nil
+            return (true, completion)
+        }
+        outcome.1?(result)
+        return outcome.0
+    }
+
+    @discardableResult
+    func accept(_ control: CloudCallControlMessage, connection: UUID) -> Bool {
+        guard let outgoing,
+            CloudOutgoingDialAcceptancePolicy.accepts(
+                control,
+                for: outgoing,
+                currentConnection: connection == self.connection
+            )
+        else { return false }
+        return finish(.success(()))
+    }
+
+    /// Called on the bridge queue. A late pong must not steal the pending marker from cancellation cleanup.
+    func finishPong(_ result: Result<Void, Error>, pending: inout CloudSignalingConnectionGate?) {
+        if finish(result), pending === self { pending = nil }
+    }
+
+    func ownsConnection(_ currentConnection: UUID) -> Bool { currentConnection == connection }
+}
 
 /// How often the result of a queued Relay command is polled.
 enum CloudCommandPollSchedule: Equatable, Sendable {
@@ -52,6 +201,7 @@ final class CloudOutgoingPrewarm {
         let call: IncomingVoIPCall
         /// Whether the socket connected. Never throws, so adoption can simply wait for it.
         let connection: Task<Bool, Never>
+        let acceptance: CloudOutgoingDialAcceptance
     }
 
     /// Longer than any dial wait. A prewarm that was neither adopted nor discarded by then is released.
@@ -95,7 +245,7 @@ final class CloudOutgoingPrewarm {
                 return false
             }
         }
-        entry = Entry(id: id, call: call, connection: connection)
+        entry = Entry(id: id, call: call, connection: connection, acceptance: CloudOutgoingDialAcceptance())
         let lifetime = lifetime
         expiry = Task { @MainActor [weak self] in
             try? await Task.sleep(for: lifetime)
@@ -132,6 +282,7 @@ final class CloudOutgoingPrewarm {
     /// Adoption ended, with or without a usable socket. From here the session treats the socket as its own.
     func finishAdoption(_ adopted: Entry) {
         guard entry?.id == adopted.id else { return }
+        entry?.acceptance.invalidate()
         entry = nil
         isAdopting = false
     }
@@ -149,6 +300,7 @@ final class CloudOutgoingPrewarm {
     }
 
     private func clear() {
+        entry?.acceptance.invalidate()
         entry?.connection.cancel()
         entry = nil
         isAdopting = false
