@@ -331,6 +331,15 @@ struct CloudCallControlMessage: Equatable, Sendable {
         "agent_preparation_failed", "media_unavailable", "commit_invalidated", "peer_disconnected",
         "telecom_interrupted", "pre_dial_timeout", "pre_dial_disconnected", "pre_dial_cancelled",
         "pre_dial_session_replaced", "pre_dial_transport_failed", "pre_dial_commit_failed",
+        "call_busy", "default_dialer_required", "invalid_preparation", "reservation_replayed",
+        "reservation_storage_failed", "pre_dial_unavailable", "agent_unavailable", "agent_media_unavailable",
+        "audio_record_init_error", "audio_record_start_error", "audio_record_error",
+        "audio_playout_init_error", "audio_playout_start_error", "audio_playout_error",
+        "pcm_capture_format_mismatch", "pcm_playback_format_mismatch",
+        "sdp_create_failed", "sdp_set_failed", "carrier_route_inactive", "webrtc_failed",
+        "ice_configuration_unavailable", "webrtc_ice_prefetch_unavailable", "privileged_request_failed",
+        "privileged_media_unavailable", "privileged_peer_inactive", "carrier_media_unavailable",
+        "agent_media_failed", "carrier_cleanup_failed", "media_cleanup_failed", "webrtc_transport_failed",
     ]
 
     var traceFields: [String: String] {
@@ -968,7 +977,7 @@ final class IPhoneCloudCallSession {
             guard let entry = outgoingPrewarm.entry, CloudOutgoingPrewarm.matches(entry.call, outgoing) else {
                 throw CloudCommandError.failed("Pre-dial WebRTC stopped before carrier dialing")
             }
-            if let failure = preDial.failure { throw CloudCommandError.failed("Pre-dial WebRTC: \(failure)") }
+            if let failure = preDial.failure { throw CloudCommandError.failed(CloudPreDialFailurePresentation.message(for: failure)) }
             if preDial.canCommit, let negotiation = preDial.sessionID {
                 preDial.commit()
                 tracePreDial("commit_sent")
@@ -980,7 +989,7 @@ final class IPhoneCloudCallSession {
                 preDial.fail("transport_timeout_20s")
                 tracePreDial("transport_timeout_20s", failed: true)
                 markPreDial(.preparationTimedOut)
-                throw CloudCommandError.failed("Pre-dial WebRTC transport timed out (20s)")
+                throw CloudCommandError.failed(CloudPreDialFailurePresentation.message(for: "transport_timeout_20s"))
             }
             try await Task.sleep(for: .milliseconds(50))
         }

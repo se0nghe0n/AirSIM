@@ -1174,7 +1174,12 @@ struct CloudPreDialGateTests {
         return try #require(message)
     }
 
-    @Test(arguments: ["pre_dial_timeout", "preparation_timeout", "agent_preparation_failed", "peer_disconnected"])
+    @Test(arguments: ["pre_dial_timeout", "preparation_timeout", "agent_preparation_failed", "peer_disconnected",
+        "call_busy", "default_dialer_required", "media_unavailable", "invalid_preparation", "reservation_replayed",
+        "reservation_storage_failed", "pre_dial_unavailable", "agent_unavailable", "agent_media_unavailable",
+        "audio_record_init_error", "audio_playout_error", "pcm_capture_format_mismatch", "carrier_route_inactive",
+        "ice_configuration_unavailable", "privileged_request_failed", "privileged_media_unavailable",
+        "privileged_peer_inactive", "carrier_media_unavailable", "sdp_set_failed"])
     func `Relay failure preserves only known pre-dial reasons`(_ reason: String) throws {
         let call = try outgoingCall()
         let data = try JSONSerialization.data(withJSONObject: [
@@ -1277,5 +1282,23 @@ struct CloudPreDialPeerAdmissionTests {
         gate.receive(try #require(decoded), call: call)
         #expect(gate.peerAvailable)
         #expect(!gate.canCommit)
+    }
+}
+
+struct CloudPreDialFailurePresentationTests {
+    @Test func `Busy and audio failures give distinct actionable guidance`() {
+        #expect(CloudPreDialFailurePresentation.message(for: "relay_pre_dial_aborted:call_busy")
+            .contains("End that call"))
+        #expect(CloudPreDialFailurePresentation.message(for: "relay_pre_dial_aborted:audio_record_init_error")
+            .contains("permissions"))
+        #expect(CloudPreDialFailurePresentation.message(for: "relay_pre_dial_aborted:reservation_replayed")
+            .contains("Start a new call"))
+    }
+
+    @Test(arguments: ["secret-token", "https://private.example/call", "unknown_native_error"])
+    func `Unknown failure details never appear in user copy`(_ reason: String) {
+        let message = CloudPreDialFailurePresentation.message(for: reason)
+        #expect(!message.contains(reason))
+        #expect(message.contains("try again"))
     }
 }

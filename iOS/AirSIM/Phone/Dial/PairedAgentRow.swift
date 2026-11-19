@@ -32,6 +32,8 @@ extension AndroidAgentPresentation {
     var vowlanStatus: String { "VoWLAN \(vowlanOnline ? "Online" : "Offline")" }
 
     func cloudStatus(cloudModeEnabled: Bool) -> String {
-        "Cloud \(!cloudModeEnabled ? "Off" : (cloudOnline ? "Online" : "Offline"))"
+        guard cloudModeEnabled else { return "Cloud Off" }
+        guard cloudStatusIsFresh else { return "Cloud Status unavailable" }
+        return "Cloud \(cloudOnline ? "Online" : "Offline")"
     }
 }

@@ -145,6 +145,7 @@ struct AndroidAgentPresentation: Equatable, Identifiable, Sendable {
     let cloudOnline: Bool
     let vowlanOnline: Bool
     let isCurrent: Bool
+    var cloudStatusIsFresh: Bool = true
 
     /// localization.md: user-visible copy carried by models uses LocalizedStringResource
     /// so locale resolution is deferred until presentation.
