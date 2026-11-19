@@ -356,3 +356,11 @@ compile_test "$OUT/carrier-startup" "" \
   "$ROOT"/src/com/airsim/phonecontrol/CarrierStartup.java \
   "$ROOT"/test/com/airsim/phonecontrol/CarrierStartupTests.java
 "$JAVA" -cp "$(with_stdlib "$OUT/carrier-startup")" com.airsim.phonecontrol.CarrierStartupTests
+
+compile_test "$OUT/relay-lanes" "" \
+  "$ROOT"/src/com/airsim/phonecontrol/RetryPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/RelayHTTPException.java \
+  "$ROOT"/src/com/airsim/phonecontrol/RelayRetryPolicy.java \
+  "$ROOT"/src/com/airsim/phonecontrol/RelayLane.java \
+  "$ROOT"/test/com/airsim/phonecontrol/RelayLaneTests.java
+"$JAVA" -cp "$(with_stdlib "$OUT/relay-lanes")" com.airsim.phonecontrol.RelayLaneTests
