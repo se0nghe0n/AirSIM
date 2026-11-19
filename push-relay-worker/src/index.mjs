@@ -636,7 +636,10 @@ export class DeviceCommandSession {
     const command = record.command;
     if (command?.type === "prepare_dial" && Date.parse(command.call?.preparation_expires_at) <= Date.now()) {
       record.status = "expired"; record.error = "preparation_timeout";
-      await this.storage.put(key, record); return false;
+      this.markPreparationFailure(record);
+      await this.storage.put(key, record);
+      await this.deliverPreparationFailure(key, record);
+      return false;
     }
     if (!["dial", "prepare_dial"].includes(command?.type) && !(command?.type === "call_control" && command.action === "answer")) return true;
     let availability = unavailableMedia("unsupported_call_media");
@@ -657,6 +660,7 @@ export class DeviceCommandSession {
       : "Remote call audio is unavailable; use the Android phone for this call.";
     record.completed_at_ms = Date.now();
     record.completed_at = new Date(record.completed_at_ms).toISOString();
+    this.markPreparationFailure(record);
     await this.storage.put(key, record);
     await this.deliverPreparationFailure(key, record);
     return false;
@@ -693,6 +697,7 @@ export class DeviceCommandSession {
     } else {
       record.error = stringValue(value.error).slice(0, 1_024) || "Agent command failed";
     }
+    this.markPreparationFailure(record);
     await this.storage.put(key, record);
     await this.deliverPreparationFailure(key, record);
     await this.propagateLinkedCompletion(record);
@@ -700,11 +705,30 @@ export class DeviceCommandSession {
     return true;
   }
 
-  async deliverPreparationFailure(key, record) {
-    if (record.command?.type !== "prepare_dial" || record.status !== "failed" || record.preparation_failure_delivered) return;
+  markPreparationFailure(record) {
+    if (record.command?.type !== "prepare_dial" || !["failed", "expired"].includes(record.status) ||
+        record.preparation_failure_delivered || record.preparation_failure_stopped) return;
+    if (record.status === "expired" || record.error === "Cloud command expired") record.error = "preparation_timeout";
     record.preparation_failure_pending = true;
+    record.preparation_failure_deadline ??= (record.completed_at_ms || Date.now()) + 30_000;
+  }
+
+  async preserveEarlierAlarm(when) {
+    const current = await this.storage.getAlarm();
+    await this.storage.setAlarm(current && current > Date.now() ? Math.min(current, when) : when);
+  }
+
+  async deliverPreparationFailure(key, record) {
+    this.markPreparationFailure(record);
+    if (!record.preparation_failure_pending) return;
+    if (!this.env.MEDIA || Date.now() >= record.preparation_failure_deadline) {
+      record.preparation_failure_stopped = true;
+      delete record.preparation_failure_pending;
+      await this.storage.put(key, record);
+      return;
+    }
     await this.storage.put(key, record);
-    await this.storage.setAlarm(Date.now() + 1000);
+    await this.preserveEarlierAlarm(Math.min(Date.now() + 1000, record.preparation_failure_deadline));
     try {
       const call = record.command.call;
       const stub = this.env.MEDIA.get(this.env.MEDIA.idFromName(call.call_uuid.toLowerCase()));
@@ -713,7 +737,14 @@ export class DeviceCommandSession {
           callUUID: call.call_uuid, callID: call.call_id, generation: call.generation,
           commandID: record.command.command_id, deviceID: record.device_id,
           reason: record.error }) });
-      if (!response.ok) return;
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500 && ![408, 429].includes(response.status)) {
+          record.preparation_failure_stopped = true;
+          delete record.preparation_failure_pending;
+          await this.storage.put(key, record);
+        }
+        return;
+      }
       record.preparation_failure_delivered = true;
       delete record.preparation_failure_pending;
       await this.storage.put(key, record);
@@ -753,7 +784,9 @@ export class DeviceCommandSession {
           record.error = "Cloud command expired";
           record.completed_at_ms = now;
           record.completed_at = new Date(now).toISOString();
+          this.markPreparationFailure(record);
           await this.storage.put(key, record);
+          await this.deliverPreparationFailure(key, record);
         } else if (!record.preparation_failure_pending && now - (record.completed_at_ms || now) > 10 * 60_000) {
           await this.storage.delete(key);
         }
@@ -773,6 +806,7 @@ export class DeviceCommandSession {
   }
 
   async alarm() {
+    await this.storage.deleteAlarm();
     const records = await this.storage.list({ prefix: "command:" });
     const now = Date.now();
     const agents = this.state.getWebSockets("agent");
@@ -784,7 +818,9 @@ export class DeviceCommandSession {
         record.error = "Cloud command expired";
         record.completed_at_ms = now;
         record.completed_at = new Date(now).toISOString();
+        this.markPreparationFailure(record);
         await this.storage.put(key, record);
+        await this.deliverPreparationFailure(key, record);
         continue;
       }
       if (!await this.mediaCommandAvailable(key, record)) continue;
@@ -851,7 +887,7 @@ export class DeviceCommandSession {
     const delays = [1_000, 2_000, 4_000, 8_000];
     const delay = delays[Math.min(retries, delays.length - 1)];
     const when = Math.min(Date.now() + delay, record.expires_at_ms);
-    await this.storage.setAlarm(when);
+    await this.preserveEarlierAlarm(when);
   }
 
   async scheduleNextPendingAlarm() {
@@ -864,7 +900,7 @@ export class DeviceCommandSession {
       return;
     }
     const next = pending.reduce((minimum, record) => {
-      if (record.preparation_failure_pending) return Math.min(minimum, Date.now() + 1000);
+      if (record.preparation_failure_pending) return Math.min(minimum, Date.now() + 1000, record.preparation_failure_deadline);
       const retries = Math.max(0, Number(record.retry_count || 0));
       const delays = [1_000, 2_000, 4_000, 8_000];
       const candidate = Math.min(
@@ -876,7 +912,7 @@ export class DeviceCommandSession {
       );
       return Math.min(minimum, candidate);
     }, Number.POSITIVE_INFINITY);
-    if (Number.isFinite(next)) await this.storage.setAlarm(next);
+    if (Number.isFinite(next)) await this.preserveEarlierAlarm(next);
   }
 }
 
