@@ -25,15 +25,18 @@ import java.util.concurrent.Executors;
 public final class StandaloneAgentService extends Service {
     private static final ConcurrentLinkedQueue<String> CALL_EVENTS = new ConcurrentLinkedQueue<>();
     private static final Object SMS_SIGNAL = new Object();
+    private static final Object CALL_EVENT_DELIVERY_LOCK = new Object();
     private static boolean smsDeliveryRequested;
     private static boolean smsScanRequested;
-    private final ExecutorService worker = Executors.newFixedThreadPool(3);
+    private final ExecutorService worker = Executors.newFixedThreadPool(5);
     private final Set<String> completedCommands = new LinkedHashSet<>();
     private final NotificationUpdateGate notificationGate = new NotificationUpdateGate();
     private volatile boolean running;
     private StandaloneAgentStore store;
     private StandaloneRelayClient relay;
     private int syncedRegistrationHash;
+    private long heartbeatGeneration = -1;
+    private long pollingGeneration = -1;
     private long lastHeartbeat;
     private boolean lastHeartbeatMediaReady;
     private long lastCommandPoll;
@@ -89,7 +92,11 @@ public final class StandaloneAgentService extends Service {
         running = true;
         ShizukuBridgeManager.get(this).ensureStarted();
         VoWLANGatewayService.start(this);
-        worker.execute(this::loop);
+        worker.execute(() -> relayLoop("heartbeat", this::heartbeatCycle));
+        worker.execute(() -> relayLoop("call_events", current -> {
+            if (current.value() != null) flushCallEvents(current.value(), current.generation());
+        }));
+        worker.execute(() -> relayLoop("command_poll", this::commandPollCycle));
         worker.execute(this::commandLoop);
         worker.execute(this::smsLoop);
         BridgeLog.info("standalone_agent_created");
@@ -123,39 +130,53 @@ public final class StandaloneAgentService extends Service {
     }
     @Override public IBinder onBind(Intent intent) { return null; }
 
-    private void loop() {
-        int failures = 0;
-        while (running) {
-            try {
-                CommandRegistration current = refreshCommandRegistration();
-                JSONObject registration = current.value();
-                if (registration == null) {
-                    update(store.registration() == null ? "Built-in Agent online · Waiting for iPhone pairing" : "Built-in Agent online · Cloud disabled");
-                    Thread.sleep(2_000);
-                    continue;
-                }
-                syncRegistration(registration);
-                long now = System.currentTimeMillis();
-                if (now - lastHeartbeat >= 30_000 || heartbeatMediaRecovered()) sendHeartbeat(registration);
-                flushCallEvents(registration);
-                if (CommandPollingPolicy.shouldPoll(commandChannelConnected, lastCommandPoll, now)) {
-                    lastCommandPoll = now;
-                    pollCommands(registration, current.generation());
-                }
-                failures = 0;
-                update("Built-in Agent online · Relay connected");
-                Thread.sleep(2_000);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (Exception error) {
-                failures++;
-                store.recordError(error.getClass().getSimpleName() + ": " + error.getMessage());
-                BridgeLog.error("standalone_agent_cycle_failed failures=" + failures, error);
-                update("Built-in Agent reconnecting · " + failures);
-                try { Thread.sleep(RelayRetryPolicy.delayMillis(failures, error)); }
-                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return; }
-            }
+    private interface RelayCycle { void run(CommandRegistration current) throws Exception; }
+
+    private void relayLoop(String lane, RelayCycle cycle) {
+        new RelayLane().run(() -> running, () -> refreshCommandRegistration().generation(),
+                generation -> {
+                    CommandRegistration current = refreshCommandRegistration();
+                    if (current.generation() == generation && running) cycle.run(current);
+                }, this::awaitCommandRetry, (error, failures) -> {
+                    store.recordError(error.getClass().getSimpleName() + ": " + error.getMessage());
+                    BridgeLog.error("standalone_" + lane + "_failed failures=" + failures, error);
+                });
+    }
+
+    private void heartbeatCycle(CommandRegistration current) throws Exception {
+        if (heartbeatGeneration != current.generation()) {
+            heartbeatGeneration = current.generation();
+            lastHeartbeat = 0;
+            syncedRegistrationHash = 0;
+        }
+        JSONObject registration = current.value();
+        if (registration == null) {
+            update(store.registration() == null ? "Built-in Agent online · Waiting for iPhone pairing"
+                    : "Built-in Agent online · Cloud disabled");
+            return;
+        }
+        if (!isCurrentCommandRegistration(current.generation())) return;
+        syncRegistration(registration);
+        if (!isCurrentCommandRegistration(current.generation())) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (lastHeartbeat == 0 || now - lastHeartbeat >= 30_000 || heartbeatMediaRecovered()) {
+            sendHeartbeat(registration);
+        }
+        if (isCurrentCommandRegistration(current.generation())) {
+            update("Built-in Agent online · Relay connected");
+        }
+    }
+
+    private void commandPollCycle(CommandRegistration current) throws Exception {
+        if (pollingGeneration != current.generation()) {
+            pollingGeneration = current.generation();
+            lastCommandPoll = 0;
+        }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (current.value() != null
+                && CommandPollingPolicy.shouldPoll(commandChannelConnected, lastCommandPoll, now)) {
+            lastCommandPoll = now;
+            pollCommands(current.value(), current.generation());
         }
     }
 
@@ -182,7 +203,7 @@ public final class StandaloneAgentService extends Service {
                 .put("cellular_registration", "Android Telecom")
                 .put("cellular_recovery", "not_required").put("ecm_carrier", "android-default");
         relay.postJSON(registration, "/v1/events/heartbeat", heartbeat, 12_000);
-        lastHeartbeat = System.currentTimeMillis();
+        lastHeartbeat = android.os.SystemClock.elapsedRealtime();
         lastHeartbeatMediaReady = mediaReady;
         store.recordSuccess();
     }
@@ -327,9 +348,15 @@ public final class StandaloneAgentService extends Service {
      * short grace period: before, it was retried forever and blocked every later call event and,
      * until the SMS lane, all incoming SMS behind it.
      */
-    private void flushCallEvents(JSONObject registration) throws Exception {
+    private void flushCallEvents(JSONObject registration, long generation) throws Exception {
+        synchronized (CALL_EVENT_DELIVERY_LOCK) {
+            drainCallEvents(registration, generation);
+        }
+    }
+
+    private void drainCallEvents(JSONObject registration, long generation) throws Exception {
         String encoded;
-        while ((encoded = CALL_EVENTS.peek()) != null) {
+        while (isCurrentCommandRegistration(generation) && (encoded = CALL_EVENTS.peek()) != null) {
             JSONObject event;
             try {
                 event = new JSONObject(encoded);
