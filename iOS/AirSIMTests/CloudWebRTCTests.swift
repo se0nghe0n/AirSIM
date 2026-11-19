@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import WebRTC
 import AudioToolbox
+import os
 @testable import AirSIM
 
 struct CloudWebRTCTests {
@@ -989,6 +990,11 @@ struct CloudWebRTCTests {
         )
         let socket = NativeLoopbackSignalingSocket()
         let bridge = IPhoneCloudCallMediaBridge(makeWebSocket: { _, _ in socket })
+        let offers = OSAllocatedUnfairLock(initialState: [(UUID, UInt64, UUID, UUID, TimeInterval)]())
+        bridge.onWebRTCOfferSent = { sentCall, owner, session, uptime in
+            offers.withLock { $0.append((sentCall.uuid, sentCall.generation, owner, session, uptime)) }
+        }
+
         let device = SyntheticWebRTCAudioDevice()
         let factory = InspectablePeerFactory(encoderFactory: nil, decoderFactory: nil, audioDevice: device)
         defer {
@@ -998,6 +1004,7 @@ struct CloudWebRTCTests {
         }
         // Deliberately never prepareForCallKit(): the outgoing reservation precedes answer/audio activation.
         try await bridge.connect(to: call.authenticatedMediaURL!, secret: call.mediaSecret!, outgoingDial: call)
+        let peerStartTime = ProcessInfo.processInfo.systemUptime
         let negotiation = try bridge.startWebRTC(
             call: call,
             servers: [],
@@ -1013,6 +1020,14 @@ struct CloudWebRTCTests {
         #expect(connection.remoteDescription?.type == .answer)
         #expect(connection.localDescription?.type == .offer)
         #expect(socket.sentActions.contains(.offer))
+        let offerEvents = offers.withLock { $0 }
+        #expect(offerEvents.count == 1)
+        let offerEvent = try #require(offerEvents.first)
+        #expect(offerEvent.0 == call.uuid && offerEvent.1 == call.generation)
+        #expect(offerEvent.3 == negotiation)
+        #expect(bridge.isCurrentWebRTCSession(offerEvent.3, connection: offerEvent.2))
+        #expect(offerEvent.4 >= peerStartTime && offerEvent.4 <= ProcessInfo.processInfo.systemUptime)
+
         #expect(socket.sentActions.contains(.ice))
         #expect(socket.injectedForeignSignals == 6)
         #expect(connection.senders.compactMap(\.track).count == 1)
@@ -1042,6 +1057,8 @@ struct CloudWebRTCTests {
         #expect(!bridge.isConnected)
         #expect(!bridge.hasConnectedTransport)
         #expect(!bridge.isAudioRunning)
+        #expect(offers.withLock { $0.count } == 1)
+        #expect(!bridge.isCurrentWebRTCSession(offerEvent.3, connection: offerEvent.2))
     }
 
     @Test func `Native peers negotiate Opus over host ICE`() async throws {

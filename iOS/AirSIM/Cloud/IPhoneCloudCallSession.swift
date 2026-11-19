@@ -707,6 +707,17 @@ final class IPhoneCloudCallSession {
                 session.requestMediaRebuild(.connectionLost)
             }
         }
+        media.onWebRTCOfferSent = { call, connection, negotiation, sentAt in
+            Task { @MainActor in
+                let session = IPhoneCloudCallSession.shared
+                let current = session.call ?? session.outgoingPrewarm.entry?.call
+                guard call.isOutgoing, let current, CloudOutgoingPrewarm.matches(current, call),
+                    session.media.isCurrentWebRTCSession(negotiation, connection: connection),
+                    session.setupTimeline?.covers(call.uuid) == true
+                else { return }
+                session.setupTimeline?.mark(.offerSent, at: sentAt)
+            }
+        }
         media.onOwnerJoinSent = { call, connection, sentAt in
             Task { @MainActor in
                 let session = IPhoneCloudCallSession.shared
@@ -1024,6 +1035,7 @@ final class IPhoneCloudCallSession {
                     try Task.checkCancellation()
                     guard self.outgoingPrewarm.entry.map({ CloudOutgoingPrewarm.matches($0.call, outgoing) }) == true
                     else { throw CancellationError() }
+                    timeline?.mark(.prewarmSignalingConnected)
                     media.sendControl("reserve_dial", call: outgoing)
                     let config = try await self.icePreparation.configuration(for: outgoing)
                     try Task.checkCancellation()
@@ -1048,7 +1060,7 @@ final class IPhoneCloudCallSession {
                     )
                     self.preDial.begin(negotiation)
                     self.tracePreDial("silent_peer_started")
-                    timeline?.mark(.prewarmSignalingConnected)
+                    timeline?.mark(.peerStarted)
                 } catch {
                     if self.outgoingPrewarm.entry.map({ CloudOutgoingPrewarm.matches($0.call, outgoing) }) == true {
                         self.preDial.fail("transport_preparation_failed")
@@ -1601,7 +1613,13 @@ final class IPhoneCloudCallSession {
                     let negotiation = try media.startWebRTC(call: call, servers: config.iceServers.map(\.native))
                     webRTCReadiness.begin(negotiation)
                 }
-                if webRTCReadiness.isReady { audioState = .connected }
+                if webRTCReadiness.isReady {
+                    audioState = .connected
+                    // A retained peer can become carrier-ready before iPhone audio is enabled.
+                    // No new native/readiness callback is guaranteed after activation.
+                    traceAudio(phase: "audio_ready", title: "Cloud Audio Ready")
+                    markSetup(.audioReady)
+                }
                 traceAudio(phase: "peer_started", title: "WebRTC Peer Started")
                 markSetup(.peerStarted)
             } catch {
@@ -1764,6 +1782,7 @@ final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
     var onConnectionLost: ((UUID) -> Void)?
     var onControl: ((CloudCallControlMessage, UUID) -> Void)?
     var onOwnerJoinSent: ((IncomingVoIPCall, UUID, TimeInterval) -> Void)?
+    var onWebRTCOfferSent: ((IncomingVoIPCall, UUID, UUID, TimeInterval) -> Void)?
 
     private let queue = DispatchQueue(label: "com.example.airsim.iphone-cloud-media", qos: .userInteractive)
     private var webSocket: (any CloudCallSignalingSocket)?
@@ -1874,6 +1893,7 @@ final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                         let data = try? JSONEncoder().encode(signal),
                         let text = String(data: data, encoding: .utf8)
                     else { return }
+                    let sentAt = ProcessInfo.processInfo.systemUptime
                     socket.send(.string(text)) { [weak self] error in
                         guard error != nil else { return }
                         self?.queue.async { [weak self] in
@@ -1882,6 +1902,10 @@ final class IPhoneCloudCallMediaBridge: @unchecked Sendable {
                             }
                             self.onConnectionLost?(owner)
                         }
+                    }
+                    // This is the socket-send invocation, not server receipt or a successful write.
+                    if signal.action == .offer {
+                        self.onWebRTCOfferSent?(call, owner, negotiation, sentAt)
                     }
                 },
                 connected: { [weak self] in self?.onWebRTCState?(true, owner, negotiation) },

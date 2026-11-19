@@ -9,6 +9,7 @@ enum OutgoingCallSetupPhase: String, CaseIterable, Sendable {
     case enqueueAccepted = "enqueue_accepted"
     case reservationAccepted = "reservation_accepted"
     case peerAdmissionReady = "peer_admission_ready"
+    case offerSent = "offer_sent"
     case transportConnected = "transport_connected"
     case transportsReady = "both_transports_ready"
     case commitSent = "commit_sent"
