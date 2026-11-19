@@ -17,6 +17,43 @@ The iPhone enables SDP/ICE reception when it creates the native peer, independen
 
 Roll out the compatible Relay and Android first, then the new iPhone build. Older iPhones may continue using their separate legacy protocol during the upgrade; a new strict request never downgrades into it. New iPhones with old Relay or Android versions fail clearly rather than placing an unprepared call. Deployment does not prove the installed iPhone has updated. Native-loopback, unit and simulator tests do not establish physical carrier routing, real WAN latency or perceived call quality.
 
+## What outgoing timing does and does not measure
+
+Use the existing always-on outgoing timeline before adding higher-volume telemetry. Its clock starts in
+`AppModel.callKitStart`, after the app's dial request and the CallKit start callback. `dial_started` therefore
+measures backend setup, not the original button tap or all CallKit scheduling delay. System/Siri starts may
+have no in-app tap at all.
+
+For strict outgoing setup, `prewarm_signaling_connected` is recorded immediately after the authenticated
+socket connection completes, before waiting for ICE configuration or the Android peer-admission event.
+`peer_started` records silent native-peer creation. `offer_sent` records the first current peer's socket-send
+invocation using the time captured on the bridge queue, not the later main-actor callback. It does not prove
+server receipt, successful delivery, or answer receipt. Stale sockets, another call/generation, and retired
+negotiations cannot add a phase to the current call. Later renegotiations do not overwrite the first setup.
+
+Within one iPhone process and dial counter, subtract `dial_started` from `offer_sent` to measure backend-to-offer
+setup, then subtract `offer_sent` from `transport_connected` to measure the remaining native transport
+establishment interval. `both_transports_ready` and `commit_sent` identify the additional proof/commit delay.
+`dial_acceptance` means Android accepted the dial invocation, not remote ringing or answer. Its difference
+from `commit_sent` includes control delivery and the acceptance response. Android's own `strict_predial`
+`commit_attempted` and `dial_accepted` markers isolate its local commit operation; `active` is a separate
+Telecom/lifecycle event. Do not subtract monotonic timestamps from different devices.
+
+`audio_ready` is the readiness gate (native transport, carrier-ready acknowledgement, and enabled iPhone
+audio), not a first-audible-sample measurement. If both readiness proofs arrive before iPhone audio is enabled,
+the retained peer's activation also records this phase; it does not wait for an unnecessary second callback.
+Android `first_capture` is its first post-route-verification
+carrier capture buffer, which can contain silence. Five-second WebRTC statistics are too coarse to establish
+first audio at the iPhone. The native synthetic-audio regression prints capture-to-first-nonzero-decoded-audio
+delay in each direction, but this is a local test fixture, not WAN/carrier or acoustic playback latency.
+
+A physical acceptance run still needs the matching installed iPhone build, a user-initiated authorized call,
+and narrowly filtered logs. Record installation, network route, process start and which event is being timed.
+Keep phone numbers, call IDs, credentials, SDP, ICE addresses and audio out of timing reports. Do not label
+readiness or a synthetic loopback result as measured tap-to-heard latency. Exact tap-to-first-playout would
+require separately scoped request-boundary and renderer instrumentation; this diagnostic-only change adds
+neither audio capture nor a new call/deployment action.
+
 ## Incoming credential preparation
 
 Incoming calls prepare only TURN credentials and native initialization after CallKit reports the ringing call; their socket still waits for explicit acceptance. Ringing preparation creates no peer, claims no ownership and opens no audio. Rejection, CallKit teardown, replacement, VoWLAN selection or 45 seconds without acceptance releases preparation. Call identity, generation, Relay endpoint and bearer credential must all match.

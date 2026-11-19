@@ -910,6 +910,23 @@ struct OutgoingRoutePreparationTests {
 
 @MainActor
 struct OutgoingCallSetupTimelineTests {
+    @Test func `Offer timing uses the send boundary and keeps the first negotiation`() {
+        var time: TimeInterval = 10
+        var lines: [String] = []
+        let timeline = OutgoingCallSetupTimeline(now: { time }, sink: { lines.append($0) })
+        time = 11
+        timeline.mark(.prewarmSignalingConnected)
+        time = 14
+        timeline.mark(.offerSent, at: 12)
+        timeline.mark(.offerSent, at: 13)
+        #expect(
+            lines == [
+                "dial=\(timeline.dial) phase=prewarm_signaling_connected elapsed_ms=1000",
+                "dial=\(timeline.dial) phase=offer_sent elapsed_ms=2000",
+            ]
+        )
+    }
+
     @Test func `Acceptance source and captured socket send time distinguish startup gates`() {
         var time: TimeInterval = 10
         var lines: [String] = []
