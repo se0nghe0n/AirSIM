@@ -179,6 +179,49 @@ custom_domain = true
 
 Replace the example `pattern` with an AirSIM-specific hostname such as `airsim-push.remotepilot.site` or `airsim-push.example.com`. Cloudflare creates DNS records and issues a certificate for a Custom Domain; the hostname must not have a conflicting CNAME. Do not bind the AirSIM Worker to DJOneHub's active `push.remotepilot.site`, or reuse its KV, Durable Objects, or Dashboard token.
 
+### Environment-specific APNs keys
+
+Apple can restrict an APNs signing key to Sandbox or Production. Use keys from the
+same Apple Developer team as the app; an App Store Connect API key is not an APNs
+signing key. The device registration environment selects both the APNs endpoint
+and the credentials below. Never switch a production device token to the sandbox
+endpoint to work around a signing-key restriction.
+
+| Registration environment | Optional key ID variable | Matching Worker secret |
+| --- | --- | --- |
+| `production` | `APNS_PRODUCTION_KEY_ID` | `APNS_PRODUCTION_P8` |
+| `sandbox` | `APNS_SANDBOX_KEY_ID` | `APNS_SANDBOX_P8` |
+
+`APNS_TEAM_ID` is shared by both environments. If neither override name is set for
+an environment, it uses the existing `APNS_KEY_ID` / `APNS_P8` pair. If either
+override name is set, both must contain nonempty values: an incomplete override
+fails delivery without mixing it with fallback credentials. The other environment
+is unaffected. Configure each override pair together in one reviewed deployment;
+include the chosen secret names in `[secrets].required` for local loading and
+deployment validation. Keep `APNS_P8` required when either environment uses the
+fallback; otherwise replace it with both environment-specific secret names.
+
+For example, retain the existing fallback for sandbox and add a verified
+production-enabled key ID as `APNS_PRODUCTION_KEY_ID` in `[vars]`. Put its matching
+PEM only in the secret store as `APNS_PRODUCTION_P8`, then use:
+
+```toml
+[secrets]
+required = ["APNS_P8", "APNS_PRODUCTION_P8", "DASHBOARD_TOKEN"]
+```
+
+Stage the complete configuration and secrets together using the deployment flow
+below. Do not upload private keys as ordinary variables or commit secret files.
+Verify the key's APNs capability, environment, team and permitted topics in Apple
+Developer before deploying; key filenames alone cannot establish eligibility.
+
+APNs rejections log only HTTP status and an allowlisted Apple reason. Both
+`BadEnvironmentKeyInToken` and `BadEnvironmentKeyIdInToken` indicate a key/environment
+mismatch and are not retried. `InvalidProviderToken` requires checking the key,
+team and signature. Only `403 ExpiredProviderToken` triggers one JWT refresh and
+one retry with the same endpoint and payload. JWTs are cached independently by
+environment and signing material.
+
 ### 4.3 Add Secrets
 
 Ordinary variables can live in `wrangler.toml`, but these two values are **required Worker Secrets**:
@@ -252,7 +295,7 @@ APNS_P8="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
 DASHBOARD_TOKEN="replace-with-a-local-only-random-token"
 ```
 
-Do not mix `.env` with an existing `.dev.vars`. With `secrets.required`, only the two listed names load as Secrets, and missing values generate warnings. `.dev.vars*`, `.env*`, `wrangler.toml`, and all `.p8` files are excluded by `.gitignore`.
+Do not mix `.env` with an existing `.dev.vars`. With `secrets.required`, only the listed names load as Secrets, and missing values generate warnings. `.dev.vars*`, `.env*`, `wrangler.toml`, and all `.p8` files are excluded by `.gitignore`.
 
 ## 5. Validate and deploy
 

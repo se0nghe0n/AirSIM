@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, webcrypto } from "node:crypto";
+import { createPublicKey, generateKeyPairSync, verify, webcrypto } from "node:crypto";
 import test from "node:test";
 import { APNsDeliveryError, createProviderToken, sendAPNs } from "../src/index.mjs";
 globalThis.crypto ??= webcrypto;
@@ -15,6 +15,7 @@ test("APNs exposes only status and allowlisted reasons without automatic retries
   for (const [status, body, expected] of [
     [403, '{"reason":"InvalidProviderToken","extra":"private data"}', "InvalidProviderToken"],
     [403, '{"reason":"BadEnvironmentKeyIdInToken"}', "BadEnvironmentKeyIdInToken"],
+    [403, '{"reason":"BadEnvironmentKeyInToken"}', "BadEnvironmentKeyInToken"],
     [400, '{"reason":"BadDeviceToken"}', "BadDeviceToken"],
     [429, '{"reason":"TooManyRequests"}', "TooManyRequests"],
     [503, '{"reason":"ServiceUnavailable"}', "ServiceUnavailable"],
@@ -44,7 +45,7 @@ test("expired JWT refresh retries once with an identical push and environment", 
       : new Response(null, { status: 200 });
   });
   const env = environment();
-  const old = await createProviderToken(env, Date.now() - 60_000);
+  const old = await createProviderToken(env, Date.now() - 60_000, "sandbox");
   await sendAPNs(env, { environment: "sandbox" }, "device-token", options);
   assert.equal(requests.length, 2);
   assert.equal(requests[0].headers.authorization, `bearer ${old}`);
@@ -81,4 +82,89 @@ test("provider cache follows signing material and rejects future cached issue ti
   const earlier = await createProviderToken(rotated, now - 60_000);
   const claims = JSON.parse(Buffer.from(earlier.split(".")[1], "base64url"));
   assert.equal(claims.iat, Math.floor((now - 60_000) / 1000));
+});
+
+test("environment selects its complete signing pair and keeps separate cached JWTs", async t => {
+  const fallback = environment();
+  const production = environment();
+  const sandbox = environment();
+  const env = { ...fallback, APNS_PRODUCTION_KEY_ID: "PROD", APNS_PRODUCTION_P8: production.APNS_P8,
+    APNS_SANDBOX_KEY_ID: "SANDBOX", APNS_SANDBOX_P8: sandbox.APNS_P8 };
+  const captured = [];
+  t.mock.method(globalThis, "fetch", async (url, request) => {
+    captured.push({ url, token: request.headers.authorization.slice(7) });
+    return new Response(null, { status: 200 });
+  });
+  for (const environment of ["production", "sandbox", "production", "sandbox"]) {
+    await sendAPNs(env, { environment }, "token", options);
+  }
+  for (const [index, keyID, p8, origin] of [
+    [0, "PROD", production.APNS_P8, "https://api.push.apple.com/"],
+    [1, "SANDBOX", sandbox.APNS_P8, "https://api.sandbox.push.apple.com/"],
+  ]) {
+    const { token, url } = captured[index];
+    const [header, claims, signature] = token.split(".");
+    assert.equal(JSON.parse(Buffer.from(header, "base64url")).kid, keyID);
+    assert.equal(JSON.parse(Buffer.from(claims, "base64url")).iss, fallback.APNS_TEAM_ID);
+    assert.ok(url.startsWith(origin));
+    assert.ok(verify("sha256", Buffer.from(`${header}.${claims}`),
+      { key: createPublicKey(p8), dsaEncoding: "ieee-p1363" }, Buffer.from(signature, "base64url")));
+    assert.equal(captured[index + 2].token, token);
+  }
+});
+
+test("unset environment pair falls back without inheriting the other environment override", async () => {
+  const fallback = environment();
+  const env = { ...fallback, APNS_PRODUCTION_KEY_ID: "PROD", APNS_PRODUCTION_P8: environment().APNS_P8 };
+  const sandbox = await createProviderToken(env, Date.now(), "sandbox");
+  assert.equal(JSON.parse(Buffer.from(sandbox.split(".")[0], "base64url")).kid, fallback.APNS_KEY_ID);
+  const onlyScoped = { APNS_TEAM_ID: env.APNS_TEAM_ID,
+    APNS_PRODUCTION_KEY_ID: env.APNS_PRODUCTION_KEY_ID, APNS_PRODUCTION_P8: env.APNS_PRODUCTION_P8 };
+  assert.equal(JSON.parse(Buffer.from((await createProviderToken(onlyScoped)).split(".")[0], "base64url")).kid, "PROD");
+  await assert.rejects(createProviderToken(onlyScoped, Date.now(), "sandbox"), /credentials are incomplete/);
+});
+
+test("partial or empty environment override fails before sending instead of mixing credentials", async t => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 200 }));
+  for (const scope of ["PRODUCTION", "SANDBOX"]) {
+    for (const override of [
+      { [`APNS_${scope}_KEY_ID`]: "SCOPED" },
+      { [`APNS_${scope}_P8`]: environment().APNS_P8 },
+      { [`APNS_${scope}_KEY_ID`]: "", [`APNS_${scope}_P8`]: environment().APNS_P8 },
+      { [`APNS_${scope}_KEY_ID`]: "SCOPED", [`APNS_${scope}_P8`]: " " },
+    ]) {
+      await assert.rejects(sendAPNs({ ...environment(), ...override },
+        { environment: scope.toLowerCase() }, "token", options), /credentials are incomplete/);
+    }
+  }
+  assert.equal(fetch.mock.callCount(), 0);
+});
+
+test("concurrent token creation shares signing work while environments retain independent tokens", async () => {
+  const env = environment();
+  const now = Date.now();
+  const tokens = await Promise.all(Array.from({ length: 8 }, () => createProviderToken(env, now, "production")));
+  assert.equal(new Set(tokens).size, 1);
+  const sandbox = await createProviderToken(env, now, "sandbox");
+  assert.equal(await createProviderToken(env, now + 1000, "production"), tokens[0]);
+  assert.equal(await createProviderToken(env, now + 1000, "sandbox"), sandbox);
+});
+
+test("expired production override refresh preserves sandbox cache and production credential selection", async t => {
+  const env = { ...environment(), APNS_PRODUCTION_KEY_ID: "PROD", APNS_PRODUCTION_P8: environment().APNS_P8 };
+  const now = Date.now();
+  const sandbox = await createProviderToken(env, now - 60_000, "sandbox");
+  const production = await createProviderToken(env, now - 60_000, "production");
+  const tokens = [];
+  t.mock.method(globalThis, "fetch", async (_url, request) => {
+    tokens.push(request.headers.authorization.slice(7));
+    return tokens.length === 1 ? new Response('{"reason":"ExpiredProviderToken"}', { status: 403 })
+      : new Response(null, { status: 200 });
+  });
+  await sendAPNs(env, device, "token", options);
+  assert.equal(tokens.length, 2);
+  assert.equal(tokens[0], production);
+  assert.notEqual(tokens[1], production);
+  assert.equal(JSON.parse(Buffer.from(tokens[1].split(".")[0], "base64url")).kid, "PROD");
+  assert.equal(await createProviderToken(env, now, "sandbox"), sandbox);
 });

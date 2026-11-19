@@ -46,9 +46,7 @@ const AGENT_PRE_DIAL_ABORT_REASONS = new Set([
   "pcm_capture_format_mismatch", "pcm_playback_format_mismatch", "carrier_cleanup_failed", "media_cleanup_failed",
 ]);
 
-let cachedProviderToken = "";
-let cachedProviderTokenAt = 0;
-let cachedProviderTokenKey = "";
+const providerTokens = new Map();
 
 export default {
   async fetch(request, env, context) {
@@ -2536,7 +2534,7 @@ const APNS_ERROR_REASONS = new Set([
   "BadTopic", "DeviceTokenNotForTopic", "DuplicateHeaders", "IdleTimeout", "InvalidPushType",
   "MissingDeviceToken", "MissingTopic", "PayloadEmpty", "TopicDisallowed", "BadCertificate",
   "BadCertificateEnvironment", "ExpiredProviderToken", "Forbidden", "InvalidProviderToken",
-  "MissingProviderToken", "UnrelatedKeyIdInToken", "BadEnvironmentKeyIdInToken", "BadPath",
+  "MissingProviderToken", "UnrelatedKeyIdInToken", "BadEnvironmentKeyIdInToken", "BadEnvironmentKeyInToken", "BadPath",
   "MethodNotAllowed", "ExpiredToken", "Unregistered", "PayloadTooLarge",
   "TooManyProviderTokenUpdates", "TooManyRequests", "InternalServerError", "ServiceUnavailable",
   "Shutdown",
@@ -2561,7 +2559,7 @@ export async function sendAPNs(env, device, token, options) {
     : "https://api.push.apple.com";
   const collapseID = await boundedCollapseID(options.collapseID);
   for (let attempt = 0; attempt < 2; attempt++) {
-    const providerToken = await createProviderToken(env);
+    const providerToken = await createProviderToken(env, Date.now(), device.environment);
     const response = await fetch(`${origin}/3/device/${token}`, {
       method: "POST",
       headers: {
@@ -2584,23 +2582,44 @@ export async function sendAPNs(env, device, token, options) {
     // APNs explicitly rejected this request before delivery. Refresh only an expired JWT;
     // credentials, environment mismatches and ambiguous network failures need other remedies.
     if (attempt === 0 && error.status === 403 && error.reason === "ExpiredProviderToken") {
-      if (cachedProviderToken === providerToken) cachedProviderToken = "";
+      for (const [key, entry] of providerTokens) {
+        if (entry.token === providerToken) providerTokens.delete(key);
+      }
       continue;
     }
     throw error;
   }
 }
 
-export async function createProviderToken(env, now = Date.now()) {
-  if (!env.APNS_TEAM_ID || !env.APNS_KEY_ID || !env.APNS_P8) {
+export async function createProviderToken(env, now = Date.now(), environment = "production") {
+  const scope = environment === "sandbox" ? "SANDBOX" : "PRODUCTION";
+  const scopedKey = env[`APNS_${scope}_KEY_ID`];
+  const scopedP8 = env[`APNS_${scope}_P8`];
+  const hasOverride = scopedKey !== undefined || scopedP8 !== undefined;
+  const keyID = hasOverride ? scopedKey : env.APNS_KEY_ID;
+  const p8 = hasOverride ? scopedP8 : env.APNS_P8;
+  if (!nonEmpty(env.APNS_TEAM_ID) || !nonEmpty(keyID) || !nonEmpty(p8)) {
     throw new Error("APNs credentials are incomplete");
   }
-  const cacheKey = `${env.APNS_TEAM_ID}:${env.APNS_KEY_ID}:${await sha256Hex(env.APNS_P8)}`;
-  if (cachedProviderToken && cachedProviderTokenKey === cacheKey &&
-      now >= cachedProviderTokenAt && now - cachedProviderTokenAt < 50 * 60 * 1000) {
-    return cachedProviderToken;
-  }
+  const credentials = { APNS_TEAM_ID: env.APNS_TEAM_ID, APNS_KEY_ID: keyID, APNS_P8: p8 };
+  const cacheKey = `${scope}:${env.APNS_TEAM_ID}:${keyID}:${await sha256Hex(p8)}`;
+  const cached = providerTokens.get(cacheKey);
+  if (cached && now >= cached.at && now - cached.at < 50 * 60 * 1000) return cached.promise;
+  const entry = { at: now, token: "", promise: null };
+  entry.promise = signProviderToken(credentials, now).then(token => {
+    entry.token = token;
+    return token;
+  }).catch(error => {
+    if (providerTokens.get(cacheKey) === entry) providerTokens.delete(cacheKey);
+    throw error;
+  });
+  providerTokens.set(cacheKey, entry);
+  // Bound old entries after credential rotations while keeping both environments cached.
+  if (providerTokens.size > 16) providerTokens.delete(providerTokens.keys().next().value);
+  return entry.promise;
+}
 
+async function signProviderToken(env, now) {
   const header = base64url(encoder.encode(JSON.stringify({ alg: "ES256", kid: env.APNS_KEY_ID })));
   const claims = base64url(encoder.encode(JSON.stringify({
     iss: env.APNS_TEAM_ID,
@@ -2620,10 +2639,7 @@ export async function createProviderToken(env, now = Date.now()) {
     encoder.encode(unsigned),
   ));
   const signature = normalizeECDSASignature(generated);
-  cachedProviderToken = `${unsigned}.${base64url(signature)}`;
-  cachedProviderTokenAt = now;
-  cachedProviderTokenKey = cacheKey;
-  return cachedProviderToken;
+  return `${unsigned}.${base64url(signature)}`;
 }
 
 export function validateRegistration(device, allowedBundleID) {

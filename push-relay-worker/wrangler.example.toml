@@ -20,6 +20,13 @@ invocation_logs = false
 [vars]
 APNS_TEAM_ID = "REPLACE_WITH_APPLE_TEAM_ID"
 APNS_KEY_ID = "REPLACE_WITH_APNS_KEY_ID"
+# Optional complete environment overrides, using the same APNS_TEAM_ID:
+# APNS_PRODUCTION_KEY_ID = "REPLACE_WITH_PRODUCTION_APNS_KEY_ID"
+# APNS_SANDBOX_KEY_ID = "REPLACE_WITH_SANDBOX_APNS_KEY_ID"
+# Set the matching APNS_PRODUCTION_P8 / APNS_SANDBOX_P8 Worker secret in the same
+# deployment and include its name in [secrets].required below. Neither name set
+# for an environment uses APNS_KEY_ID + APNS_P8; a partial pair fails delivery.
+# Apple APNs keys may be environment-specific; ASC API keys are not substitutes.
 ALLOWED_BUNDLE_ID = "com.example.airsim"
 # Kill switch: disables new remote setup, never selects a fallback audio carrier.
 # Enabling also requires TURN and a <=90-second revision-2 native-service heartbeat.
@@ -74,6 +81,10 @@ TURN_TTL_SECONDS = "3600"
 #   DASHBOARD_TOKEN="replace-with-a-password-manager-generated-random-token"
 [secrets]
 required = ["APNS_P8", "DASHBOARD_TOKEN"]
+# With a production override and sandbox fallback, use instead:
+# required = ["APNS_P8", "APNS_PRODUCTION_P8", "DASHBOARD_TOKEN"]
+# With complete overrides for both environments, use instead:
+# required = ["APNS_PRODUCTION_P8", "APNS_SANDBOX_P8", "DASHBOARD_TOKEN"]
 
 [[kv_namespaces]]
 binding = "DEVICES"
