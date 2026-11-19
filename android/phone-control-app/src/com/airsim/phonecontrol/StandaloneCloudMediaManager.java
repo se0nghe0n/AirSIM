@@ -102,15 +102,18 @@ final class StandaloneCloudMediaManager implements Closeable {
                 || !"outgoing".equals(descriptor.direction)) throw new IllegalStateException("invalid_preparation");
         descriptor.deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.min(20_000, remaining));
         android.app.role.RoleManager roles = context.getSystemService(android.app.role.RoleManager.class);
-        if (roles == null || !roles.isRoleHeld(android.app.role.RoleManager.ROLE_DIALER)
-                || !ShizukuBridgeManager.get(context).mediaAvailable()) throw new IllegalStateException("media_unavailable");
+        if (CallRepository.hasLiveCalls()) throw new IllegalStateException("call_busy");
+        if (roles == null || !roles.isRoleHeld(android.app.role.RoleManager.ROLE_DIALER))
+            throw new IllegalStateException("default_dialer_required");
+        if (!ShizukuBridgeManager.get(context).mediaAvailable()) throw new IllegalStateException("media_unavailable");
         synchronized (lock) {
             if (CallRepository.hasLiveCalls() || !pendingCommitted.isEmpty() || active != null && active.running) throw new IllegalStateException("call_busy");
             android.content.SharedPreferences spent = context.getSharedPreferences("strict_predial", 0);
             String key = descriptor.callUUID.toLowerCase(java.util.Locale.ROOT) + ":" + descriptor.generation;
             // A crash/restart must not resurrect any previously accepted reservation.
-            if (spent.contains(key) || !spent.edit().putString(key, "reserved").commit())
-                throw new IllegalStateException("reservation_replayed");
+            if (spent.contains(key)) throw new IllegalStateException("reservation_replayed");
+            if (!spent.edit().putString(key, "reserved").commit())
+                throw new IllegalStateException("reservation_storage_failed");
             start(descriptor);
             CloudSession reserved = active;
             sessions.execute(() -> {
