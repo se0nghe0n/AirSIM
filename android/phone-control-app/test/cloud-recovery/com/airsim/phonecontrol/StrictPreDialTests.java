@@ -63,6 +63,25 @@ public final class StrictPreDialTests {
         }
     }
     public static void main(String[] args) throws Exception {
+        Instant now = Instant.EPOCH;
+        check(StandaloneCloudMediaManager.preparationBudgetMillis(now, now.plusSeconds(25)) == 20_000,
+                "Slow clock must not extend the 20 s local budget");
+        check(StandaloneCloudMediaManager.preparationBudgetMillis(now, now.plusMillis(350)) == 350,
+                "Short remaining lease must not be renewed");
+        for (long millis : new long[]{-1, 0, 30_001}) {
+            try {
+                StandaloneCloudMediaManager.preparationBudgetMillis(now, now.plusMillis(millis));
+                throw new AssertionError("Expired or unreasonable preparation admitted");
+            } catch (IllegalStateException expected) { checks++; }
+        }
+        try (Fixture f = new Fixture()) {
+            // A freshly issued 20 s lease when Android is 5 s behind the Relay.
+            Instant issued = Instant.now().plusSeconds(5);
+            String expiry = issued.plusSeconds(20).toString();
+            f.command.put("issued_at", issued.toString()).put("expires_at", expiry);
+            f.call.put("preparation_expires_at", expiry);
+            f.prepare(); f.socket.receive(f.commit()); await(() -> f.telecom.dialCount == 1);
+        }
         try (Fixture f = new Fixture()) {
             f.prepare(); f.socket.receive(f.commit().put("session_id", "stale")); f.assertNoDial();
             f.socket.receive(f.commit().put("generation", 2)); f.assertNoDial();

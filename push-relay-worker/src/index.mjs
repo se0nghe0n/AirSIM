@@ -35,6 +35,16 @@ const encoder = new TextEncoder();
 const MEDIA_CLIENT_ROLES = new Set(["watch", "iphone"]);
 const COMMAND_TYPES = new Set(["dial", "prepare_dial", "send_sms", "dtmf", "call_history"]);
 const MEDIA_TRANSPORTS = new Set(["webrtc"]);
+const AGENT_PRE_DIAL_ABORT_REASONS = new Set([
+  "telecom_interrupted", "pre_dial_timeout", "pre_dial_disconnected", "pre_dial_cancelled",
+  "pre_dial_session_replaced", "pre_dial_transport_failed", "pre_dial_commit_failed",
+  "privileged_request_failed", "privileged_media_unavailable", "privileged_peer_inactive",
+  "ice_configuration_unavailable", "carrier_media_unavailable", "carrier_route_inactive",
+  "sdp_create_failed", "sdp_set_failed", "webrtc_failed",
+  "audio_record_init_error", "audio_record_start_error", "audio_record_error",
+  "audio_playout_init_error", "audio_playout_start_error", "audio_playout_error",
+  "pcm_capture_format_mismatch", "pcm_playback_format_mismatch", "carrier_cleanup_failed", "media_cleanup_failed",
+]);
 
 let cachedProviderToken = "";
 let cachedProviderTokenAt = 0;
@@ -1362,8 +1372,20 @@ export class CallMediaSession {
     }
     const attachment = socket.deserializeAttachment() || {};
     const identityMatches = value.call_uuid === preparation.callUUID && value.generation === preparation.generation;
+    if (value.status === "pre_dial_aborted") {
+      // The Agent reports its first failure just before closing. Bind that report to the
+      // reservation and keep only protocol reasons, never free-form media diagnostics.
+      if (attachment.role === "agent" && identityMatches && value.call_id === preparation.callID &&
+          value.command_id === preparation.commandID) {
+        const reason = AGENT_PRE_DIAL_ABORT_REASONS.has(value.reason) ? value.reason : "agent_preparation_failed";
+        await this.abortPreDial(reason);
+      }
+      return true;
+    }
     if (["cancel_dial", "end", "reject", "webrtc_transport_failed"].includes(value.action)) {
-      if (identityMatches && (attachment.role === "agent" || attachment.role === "iphone")) await this.abortPreDial("preparation_cancelled");
+      if (identityMatches && (attachment.role === "agent" || attachment.role === "iphone")) {
+        await this.abortPreDial(value.action === "webrtc_transport_failed" ? "pre_dial_transport_failed" : "preparation_cancelled");
+      }
       return true;
     }
     if (preparation.phase === "committing") return true;

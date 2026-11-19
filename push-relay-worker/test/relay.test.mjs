@@ -3264,12 +3264,13 @@ test("strict preparation only emits non-executable prepare_dial and preserves id
   await enableReadyMedia(env);
   const agent = env.COMMANDS.addAgent(registration.device_id);
   const body = { device_id: registration.device_id, device_secret: registration.device_secret,
-    command_id: crypto.randomUUID(), type: "prepare_dial", number: "10086", media_transport: "webrtc" };
+    command_id: crypto.randomUUID(), type: "prepare_dial", number: "070-0000-0000", media_transport: "webrtc" };
   const first = await (await worker.fetch(post("/v1/commands/enqueue", body), env)).json();
   const second = await (await worker.fetch(post("/v1/commands/enqueue", body), env)).json();
   assert.equal(first.call.pre_dial, true);
   assert.equal(first.call.call_uuid, second.call.call_uuid);
   assert.equal(first.call.preparation_expires_at, second.call.preparation_expires_at);
+  assert.equal(JSON.parse(agent.sent[0]).number, "07000000000");
   assert.ok(agent.sent.every(x => JSON.parse(x).type === "prepare_dial"));
   assert.equal((await worker.fetch(post("/v1/commands/enqueue", {...body, number:"10010"}), env)).status, 409);
 });
@@ -3302,6 +3303,43 @@ for (const failure of ["timeout", "cancel", "disconnect", "foreign", "stale", "r
     if (failure === "renegotiated") await relay.webSocketMessage(iphone, signaling("webrtc_offer", crypto.randomUUID()));
     await relay.webSocketMessage(iphone, signaling("commit_dial", failure === "stale" ? crypto.randomUUID() : undefined,
       failure === "foreign" ? {call_uuid:crypto.randomUUID()} : {}));
+    assert.equal(committedDials(agent).length, 0);
+  });
+}
+
+for (const [reported, expected] of [["pre_dial_transport_failed", "pre_dial_transport_failed"],
+  ["ice_configuration_unavailable", "ice_configuration_unavailable"],
+  ["privileged_request_failed", "privileged_request_failed"], ["sdp_set_failed", "sdp_set_failed"],
+  ["unstructured diagnostic", "agent_preparation_failed"]]) {
+  test(`strict pre-dial records the Agent abort before disconnect: ${expected}`, async () => {
+    const { relay, state, iphone, agent } = await strictPreDialSession();
+    const p = relay.preDial;
+    p.deviceID = registration.device_id;
+    relay.env.COMMANDS = new MemoryCommandNamespace(relay.env);
+    const commands = relay.env.COMMANDS.session(p.deviceID);
+    const key = `command:${p.commandID}`;
+    await commands.storage.put(key, { status: "pending", command: { type: "prepare_dial" } });
+    const status = { status: "pre_dial_aborted", command_id: p.commandID, call_id: p.callID,
+      call_uuid: p.callUUID, generation: p.generation };
+    const report = JSON.stringify({ ...status, reason: reported, message: "private diagnostic" });
+    const aborts = () => iphone.sent.map(x => JSON.parse(x)).filter(x => x.status === status.status);
+    await relay.webSocketMessage(iphone, report);
+    for (const mismatch of [{ call_id: "stale" }, { command_id: crypto.randomUUID() },
+      { call_uuid: crypto.randomUUID() }, { generation: p.generation + 1 }]) {
+      await relay.webSocketMessage(agent, JSON.stringify({ ...status, ...mismatch }));
+    }
+    assert.equal(relay.preDial.phase, "preparing");
+    assert.deepEqual(aborts(), []);
+    await relay.webSocketMessage(agent, report);
+    relay.webSocketClose(agent, 1000, "done");
+    assert.deepEqual(aborts(), [{ ...status, reason: expected }]);
+    const saved = await state.storage.get("preDial");
+    assert.equal(saved.phase, "aborted");
+    assert.equal(saved.reason, expected);
+    const command = await commands.storage.get(key);
+    assert.equal(command.status, "failed");
+    assert.equal(command.error, expected);
+    await relay.webSocketMessage(iphone, signaling("commit_dial"));
     assert.equal(committedDials(agent).length, 0);
   });
 }

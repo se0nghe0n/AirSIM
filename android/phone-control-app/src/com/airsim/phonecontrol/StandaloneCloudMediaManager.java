@@ -15,6 +15,8 @@ import java.util.concurrent.Executors;
 
 final class StandaloneCloudMediaManager implements Closeable {
     private static final long MEDIA_AVAILABLE_WAIT_NANOS = 3_000_000_000L;
+    private static final long PREPARATION_WINDOW_MS = 20_000;
+    private static final long MAX_SLOW_CLOCK_SKEW_MS = 10_000;
     private static volatile StandaloneCloudMediaManager instance;
 
     static StandaloneCloudMediaManager get(android.content.Context context) {
@@ -90,6 +92,14 @@ final class StandaloneCloudMediaManager implements Closeable {
         }
     }
 
+    static long preparationBudgetMillis(Instant now, Instant expires) {
+        // Skew affects admission, not the lifetime of the reservation. Relay gates commit separately.
+        long remaining = java.time.Duration.between(now, expires).toMillis();
+        if (remaining <= 0 || remaining > PREPARATION_WINDOW_MS + MAX_SLOW_CLOCK_SKEW_MS)
+            throw new IllegalStateException("invalid_preparation");
+        return Math.min(PREPARATION_WINDOW_MS, remaining);
+    }
+
     void prepareOutgoing(JSONObject command) throws Exception {
         Descriptor descriptor = Descriptor.from(command.getJSONObject("call"));
         descriptor.preDial = true;
@@ -97,10 +107,8 @@ final class StandaloneCloudMediaManager implements Closeable {
         UUID.fromString(descriptor.commandID);
         descriptor.number = command.optString("number");
         Instant expires = Instant.parse(command.getJSONObject("call").getString("preparation_expires_at"));
-        long remaining = java.time.Duration.between(Instant.now(), expires).toMillis();
-        if (remaining <= 0 || remaining > 21_000 || descriptor.number.isBlank()
-                || !"outgoing".equals(descriptor.direction)) throw new IllegalStateException("invalid_preparation");
-        descriptor.deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.min(20_000, remaining));
+        if (descriptor.number.isBlank() || !"outgoing".equals(descriptor.direction)) throw new IllegalStateException("invalid_preparation");
+        descriptor.deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(preparationBudgetMillis(Instant.now(), expires));
         android.app.role.RoleManager roles = context.getSystemService(android.app.role.RoleManager.class);
         if (CallRepository.hasLiveCalls()) throw new IllegalStateException("call_busy");
         if (roles == null || !roles.isRoleHeld(android.app.role.RoleManager.ROLE_DIALER))
@@ -117,7 +125,7 @@ final class StandaloneCloudMediaManager implements Closeable {
             start(descriptor);
             CloudSession reserved = active;
             sessions.execute(() -> {
-                try { Thread.sleep(Math.max(1, remaining)); }
+                try { java.util.concurrent.TimeUnit.NANOSECONDS.sleep(descriptor.deadline - System.nanoTime()); }
                 catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
                 synchronized (reserved) {
                     if (!reserved.dialCommitted) reserved.abortPreparation("pre_dial_timeout");
@@ -537,7 +545,7 @@ final class StandaloneCloudMediaManager implements Closeable {
                     if (!"reserved".equals(spent.getString(key, ""))
                             || !spent.edit().putString(key, "spent").commit()) throw new IllegalStateException("pre_dial_replayed");
                     // Query the privileged native peer here, not its previously received readiness event.
-                    if (cancelled.get() || !validCommit(owner, command) || !webRTC.transportConnected(negotiation) || cancelled.get())
+                    if (cancelled.get() || !webRTC.transportConnected(negotiation) || cancelled.get() || !validCommit(owner, command))
                         throw new IllegalStateException("pre_dial_transport_lost");
                     dialCommitted = true;
                     pendingCommitted.put(descriptor.callUUID, this);
