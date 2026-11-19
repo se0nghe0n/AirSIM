@@ -8,11 +8,14 @@ enum AppRefreshPolicy {
         cloudModeEnabled: Bool,
         lastAttempt: Date,
         appIsForeground: Bool,
-        beforeLiveActivityCall: Bool = false
+        beforeLiveActivityCall: Bool = false,
+        now: Date = Date()
     ) -> Bool {
         guard cloudModeEnabled, appIsForeground || beforeLiveActivityCall else { return false }
-        // Foreground entry explicitly re-arms this sentinel. Elapsed time alone never polls Relay.
+        // Foreground requests are bounded to once per 30 seconds, including retries.
+        // Background call updates retain their one-shot behavior.
         return lastAttempt == .distantPast
+            || (appIsForeground && now.timeIntervalSince(lastAttempt) >= 30)
     }
 }
 
@@ -348,6 +351,7 @@ final class AppModel {
     // otherwise dependent views will not recompute after refresh/reset (@Observable no longer triggers full-view
     // updates on arbitrary writes like objectWillChange).
     private var lastCloudStatusRefresh = Date.distantPast
+    @ObservationIgnored private var lastCloudStatusAttempt = Date.distantPast
     @ObservationIgnored private var cloudStatusRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var cloudStatusRefreshGeneration = 0
     @ObservationIgnored private var audioWarmupCallID: String?
@@ -465,7 +469,8 @@ final class AppModel {
                 agentKind: item.agentKind,
                 cloudOnline: item.cloudOnline,
                 vowlanOnline: item.vowlanOnline,
-                isCurrent: item.id == currentID
+                isCurrent: item.id == currentID,
+                cloudStatusIsFresh: cloudStatusIsFresh
             )
         }.sorted {
             if $0.isCurrent != $1.isCurrent { return $0.isCurrent }
@@ -604,15 +609,13 @@ final class AppModel {
         guard
             AppRefreshPolicy.shouldQueryCloudStatus(
                 cloudModeEnabled: CloudModePreference.isEnabled(),
-                lastAttempt: lastCloudStatusRefresh,
+                lastAttempt: lastCloudStatusAttempt,
                 appIsForeground: isForeground,
                 beforeLiveActivityCall: beforeBackgroundCall
             )
         else { return }
-        lastCloudStatusRefresh = Date()
-        // A previous foreground's online result must not become fresh again while this request is pending.
-        cloudAgentDirectory = nil
-        cloudAgentStatus = nil
+        guard cloudStatusRefreshTask == nil else { return }
+        lastCloudStatusAttempt = Date()
         let generation = cloudStatusRefreshGeneration
         cloudStatusRefreshTask = Task { [weak self] in
             let status = try? await VoIPPushController.shared.fetchCloudAgentStatus()
@@ -620,14 +623,17 @@ final class AppModel {
                 !Task.isCancelled,
                 generation == self.cloudStatusRefreshGeneration
             else { return }
+            self.cloudStatusRefreshTask = nil
+            guard let status else { return }
+            self.lastCloudStatusRefresh = Date()
             self.cloudAgentDirectory = status
             self.cloudAgentStatus = status
             self.rememberVerifiedDevices()
             if !self.isOnline && !self.vowlan.availability.isOnlineForDisplay {
                 self.connectionSummary = ModuleConnectionPolicy.summary(
                     localControlReachable: false,
-                    cloudHeartbeatFresh: status?.cloudOnline == true,
-                    cellularState: status?.cellularState
+                    cloudHeartbeatFresh: status.cloudOnline,
+                    cellularState: status.cellularState
                 )
             }
         }
@@ -661,10 +667,7 @@ final class AppModel {
             }
             return status
         } catch {
-            cloudAgentStatus = nil
-            if !vowlan.availability.isOnlineForDisplay {
-                connectionSummary = .offline
-            }
+            // A failed request says nothing about the Agent's actual online state.
             return nil
         }
     }
@@ -817,7 +820,7 @@ final class AppModel {
         cloudStatusRefreshTask?.cancel()
         cloudStatusRefreshTask = nil
         cloudStatusRefreshGeneration &+= 1
-        lastCloudStatusRefresh = .distantPast
+        lastCloudStatusAttempt = .distantPast
         backgroundStandby.setApplicationIsBackground(true)
         moduleMetadataTask?.cancel()
         moduleMetadataTask = nil
@@ -852,7 +855,7 @@ final class AppModel {
             cloudStatusRefreshTask?.cancel()
             cloudStatusRefreshTask = nil
             cloudStatusRefreshGeneration &+= 1
-            lastCloudStatusRefresh = .distantPast
+            lastCloudStatusAttempt = .distantPast
             startCloudStatusQueryIfNeeded()
             Task { [weak self] in
                 guard let self else { return }
@@ -880,10 +883,11 @@ final class AppModel {
         cloudStatusRefreshTask?.cancel()
         cloudStatusRefreshTask = nil
         cloudStatusRefreshGeneration &+= 1
-        lastCloudStatusRefresh = .distantPast
+        lastCloudStatusAttempt = .distantPast
         if !policy.startsCloud {
             cloudAgentStatus = nil
             cloudAgentDirectory = nil
+            lastCloudStatusRefresh = .distantPast
         }
         callKit.setEnabled(policy.usesCallKit)
         VoIPPushController.shared.setLocalModeEnabled(!policy.startsCloud)
@@ -936,6 +940,7 @@ final class AppModel {
     }
 
     private func poll(generation: Int) async {
+        startCloudStatusQueryIfNeeded()
         let selectedMode = ConnectionModePreference.selected()
         let preferredRoute = DialRouteSelector.preferred(
             mode: selectedMode,

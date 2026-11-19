@@ -778,59 +778,35 @@ struct AirSIMTests {
         )
     }
 
-    @Test func `Cloud status refresh does not repeat just because time elapsed`() {
+    @Test func `Cloud refresh is bounded in foreground and never polls idle background`() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        #expect(
-            !AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: false,
-                lastAttempt: .distantPast,
-                appIsForeground: true
-            )
-        )
-        #expect(
+        func query(_ age: TimeInterval, foreground: Bool = true, enabled: Bool = true,
+                   beforeCall: Bool = false) -> Bool {
             AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: true,
-                lastAttempt: .distantPast,
-                appIsForeground: true
-            )
-        )
-        #expect(
-            !AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: true,
-                lastAttempt: .distantPast,
-                appIsForeground: false
-            )
-        )
-        #expect(
-            AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: true,
-                lastAttempt: .distantPast,
-                appIsForeground: false,
-                beforeLiveActivityCall: true
-            )
-        )
-        #expect(
-            !AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: true,
-                lastAttempt: now.addingTimeInterval(-5),
-                appIsForeground: true
-            )
-        )
-        #expect(
-            !AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: true,
-                lastAttempt: now.addingTimeInterval(-30),
-                appIsForeground: true
-            )
-        )
-        #expect(
-            !AppRefreshPolicy.shouldQueryCloudStatus(
-                cloudModeEnabled: true,
-                lastAttempt: now.addingTimeInterval(-3_600),
-                appIsForeground: false,
-                beforeLiveActivityCall: true
-            )
-        )
+                cloudModeEnabled: enabled, lastAttempt: now.addingTimeInterval(-age),
+                appIsForeground: foreground, beforeLiveActivityCall: beforeCall, now: now)
+        }
+        #expect(!query(90, enabled: false))
+        #expect(!query(29))
+        #expect(query(30))
+        #expect(query(91))
+        #expect(query(3_600))
+        #expect(!query(3_600, foreground: false))
+        #expect(!query(3_600, foreground: false, beforeCall: true))
+        #expect(AppRefreshPolicy.shouldQueryCloudStatus(
+            cloudModeEnabled: true, lastAttempt: .distantPast, appIsForeground: false,
+            beforeLiveActivityCall: true, now: now))
+        #expect(!AppRefreshPolicy.shouldQueryCloudStatus(
+            cloudModeEnabled: true, lastAttempt: .distantPast, appIsForeground: false, now: now))
+    }
+
+    @Test func `Stale cloud cache is distinct from a confirmed offline agent`() {
+        var agent = AndroidAgentPresentation(id: "agent", deviceName: "Phone", phoneNumber: nil,
+            agentKind: nil, cloudOnline: false, vowlanOnline: false, isCurrent: false)
+        #expect(agent.cloudStatus(cloudModeEnabled: true) == "Cloud Offline")
+        agent.cloudStatusIsFresh = false
+        #expect(agent.cloudStatus(cloudModeEnabled: true) == "Cloud Status unavailable")
+        #expect(agent.cloudStatus(cloudModeEnabled: false) == "Cloud Off")
     }
 
     @Test func `Legacy agent poll fetches pending SMS without event endpoint`() async throws {

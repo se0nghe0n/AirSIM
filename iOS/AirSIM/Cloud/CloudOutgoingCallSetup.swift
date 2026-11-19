@@ -390,3 +390,34 @@ struct CloudPreDialGate {
         relayReady = false
     }
 }
+
+/// Fixed copy only: neither an untrusted Relay reason nor native error text reaches the user.
+enum CloudPreDialFailurePresentation {
+    static func message(for failure: String) -> String {
+        let reason = failure.split(separator: ":").last.map(String.init) ?? failure
+        switch reason {
+        case "call_busy", "telecom_interrupted":
+            return "The Android phone is already handling a call. End that call and try again."
+        case "default_dialer_required":
+            return "Set AirSIM as the default phone app on Android, then try again."
+        case "media_unavailable", "pre_dial_unavailable", "agent_preparation_failed",
+             "agent_unavailable", "agent_media_unavailable", "privileged_request_failed",
+             "privileged_media_unavailable", "privileged_peer_inactive", "agent_media_failed":
+            return "Android call audio is unavailable. Open AirSIM on the Android phone and check its audio service."
+        case "invalid_preparation", "reservation_replayed", "reservation_storage_failed", "commit_invalidated":
+            return "This call preparation is no longer valid. Start a new call and try again."
+        case "audio_record_init_error", "audio_record_start_error", "audio_record_error",
+             "audio_playout_init_error", "audio_playout_start_error", "audio_playout_error",
+             "pcm_capture_format_mismatch", "pcm_playback_format_mismatch", "carrier_route_inactive",
+             "carrier_media_unavailable", "carrier_cleanup_failed", "media_cleanup_failed":
+            return "Android could not start call audio. Check the Android audio service and permissions, then try again."
+        case "transport_timeout_20s", "pre_dial_timeout", "preparation_timeout",
+             "ice_configuration_unavailable", "webrtc_ice_prefetch_unavailable":
+            return "The Android phone did not finish connecting call audio. Check both phones’ internet connections and try again."
+        case "preparation_cancelled", "pre_dial_cancelled", "cancelled":
+            return "Call preparation was cancelled. Start a new call to try again."
+        default:
+            return "Call audio could not be connected. Check that AirSIM is running on the Android phone and try again."
+        }
+    }
+}
