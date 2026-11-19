@@ -2240,7 +2240,7 @@ async function receiveCallState(request, env) {
     // Agent sends call events in order, so a refusal that a retry cannot change must not hold
     // back the events behind it (the next incoming call among them). Only failures that may
     // pass on a retry (rate limit, APNs or network trouble) are reported as such.
-    const status = Number(/^APNs HTTP (\d{3})$/.exec(error?.message || "")?.[1] || 0);
+    const status = error instanceof APNsDeliveryError ? error.status : 0;
     if (status < 400 || status >= 500 || status === 429) {
       return jsonResponse(502, { error: "APNs delivery failed" });
     }
@@ -2420,30 +2420,63 @@ async function authenticate(event, env) {
   return { device };
 }
 
+const APNS_ERROR_REASONS = new Set([
+  "BadCollapseId", "BadDeviceToken", "BadExpirationDate", "BadMessageId", "BadPriority",
+  "BadTopic", "DeviceTokenNotForTopic", "DuplicateHeaders", "IdleTimeout", "InvalidPushType",
+  "MissingDeviceToken", "MissingTopic", "PayloadEmpty", "TopicDisallowed", "BadCertificate",
+  "BadCertificateEnvironment", "ExpiredProviderToken", "Forbidden", "InvalidProviderToken",
+  "MissingProviderToken", "UnrelatedKeyIdInToken", "BadEnvironmentKeyIdInToken", "BadPath",
+  "MethodNotAllowed", "ExpiredToken", "Unregistered", "PayloadTooLarge",
+  "TooManyProviderTokenUpdates", "TooManyRequests", "InternalServerError", "ServiceUnavailable",
+  "Shutdown",
+]);
+
+export class APNsDeliveryError extends Error {
+  constructor(status, reason) {
+    super(`APNs HTTP ${status}`);
+    this.name = "APNsDeliveryError";
+    this.status = status;
+    this.reason = APNS_ERROR_REASONS.has(reason) ? reason : "UnknownReason";
+  }
+}
+
 export async function sendAPNs(env, device, token, options) {
   const body = JSON.stringify(options.payload);
   if (encoder.encode(body).byteLength > MAX_APNS_PAYLOAD_BYTES) {
     throw new Error("APNs payload too large");
   }
-  const providerToken = await createProviderToken(env);
   const origin = device.environment === "sandbox"
     ? "https://api.sandbox.push.apple.com"
     : "https://api.push.apple.com";
-  const response = await fetch(`${origin}/3/device/${token}`, {
-    method: "POST",
-    headers: {
-      authorization: `bearer ${providerToken}`,
-      "content-type": "application/json",
-      "apns-push-type": options.pushType,
-      "apns-priority": options.priority,
-      "apns-topic": options.topic,
-      "apns-expiration": String(options.expiration),
-      "apns-collapse-id": await boundedCollapseID(options.collapseID),
-    },
-    body,
-  });
-  if (!response.ok) {
-    throw new Error(`APNs HTTP ${response.status}`);
+  const collapseID = await boundedCollapseID(options.collapseID);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const providerToken = await createProviderToken(env);
+    const response = await fetch(`${origin}/3/device/${token}`, {
+      method: "POST",
+      headers: {
+        authorization: `bearer ${providerToken}`,
+        "content-type": "application/json",
+        "apns-push-type": options.pushType,
+        "apns-priority": options.priority,
+        "apns-topic": options.topic,
+        "apns-expiration": String(options.expiration),
+        "apns-collapse-id": collapseID,
+      },
+      body,
+    });
+    if (response.ok) return;
+    let reason;
+    try {
+      reason = (await readBoundedJSON(response, 4096)).reason;
+    } catch {}
+    const error = new APNsDeliveryError(response.status, reason);
+    // APNs explicitly rejected this request before delivery. Refresh only an expired JWT;
+    // credentials, environment mismatches and ambiguous network failures need other remedies.
+    if (attempt === 0 && error.status === 403 && error.reason === "ExpiredProviderToken") {
+      if (cachedProviderToken === providerToken) cachedProviderToken = "";
+      continue;
+    }
+    throw error;
   }
 }
 
@@ -2451,9 +2484,9 @@ export async function createProviderToken(env, now = Date.now()) {
   if (!env.APNS_TEAM_ID || !env.APNS_KEY_ID || !env.APNS_P8) {
     throw new Error("APNs credentials are incomplete");
   }
-  const cacheKey = `${env.APNS_TEAM_ID}:${env.APNS_KEY_ID}`;
+  const cacheKey = `${env.APNS_TEAM_ID}:${env.APNS_KEY_ID}:${await sha256Hex(env.APNS_P8)}`;
   if (cachedProviderToken && cachedProviderTokenKey === cacheKey &&
-      now - cachedProviderTokenAt < 50 * 60 * 1000) {
+      now >= cachedProviderTokenAt && now - cachedProviderTokenAt < 50 * 60 * 1000) {
     return cachedProviderToken;
   }
 
@@ -2582,6 +2615,7 @@ function stringValue(value) {
 }
 
 function safeError(error) {
+  if (error instanceof APNsDeliveryError) return { status: error.status, reason: error.reason };
   return error instanceof Error ? error.message.slice(0, 1024) : "unknown error";
 }
 

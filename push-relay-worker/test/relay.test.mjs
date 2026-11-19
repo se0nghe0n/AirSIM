@@ -3438,3 +3438,30 @@ test("committed Android acceptance completes preparation with iOS-compatible res
     generation:3,command_id:relay.preDial.commandID}));
   assert.deepEqual(completion.result,{dialing:true,android_confirmed:true});
 });
+
+test("SMS APNs refusal logs only recognized reason and status and permits delivery retry", async t => {
+  const env = testEnvironment();
+  await worker.fetch(post("/v1/devices/register", registration), env);
+  const logs = t.mock.method(console, "error", () => {});
+  const fetch = t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({
+    reason: "InvalidProviderToken", debug: "private-provider-detail",
+  }), { status: 403 }));
+  const message = { event: "incoming_sms", device_id: registration.device_id,
+    device_secret: registration.device_secret, delivery_id: "auth-refusal-sms",
+    sender: "private-sender", content: "private-message", timestamp: new Date().toISOString() };
+  const failure = await worker.fetch(post("/v1/events/sms", message), env);
+  assert.equal(failure.status, 502);
+  assert.deepEqual(await failure.json(), { error: "APNs delivery failed" });
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.deepEqual(logs.mock.calls.map(call => call.arguments), [
+    ["APNs SMS delivery failed", { status: 403, reason: "InvalidProviderToken" }],
+  ]);
+  assert.equal(await env.DEVICES.get(`dedupe:sms:${registration.device_id}:${message.delivery_id}`), null);
+  fetch.mock.mockImplementation(async () => new Response(null, { status: 200 }));
+  const retried = await worker.fetch(post("/v1/events/sms", message), env);
+  assert.equal(retried.status, 202);
+  assert.equal((await retried.json()).pushed, true);
+  const duplicate = await worker.fetch(post("/v1/events/sms", message), env);
+  assert.equal((await duplicate.json()).duplicate, true);
+  assert.equal(fetch.mock.callCount(), 2);
+});
