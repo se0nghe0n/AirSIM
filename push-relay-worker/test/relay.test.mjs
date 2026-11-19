@@ -3511,3 +3511,72 @@ test("late preparation rejection immediately notifies connected owner and preven
   await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
   assert.equal(committedDials(agent).length, 0);
 });
+
+test("preparation failure retries are bounded, durable before delivery, and preserve earlier alarms", async () => {
+  for (const status of [400, 409, 503, null]) {
+    const state = new MemoryCommandState();
+    const commandID = crypto.randomUUID();
+    const key = `command:${commandID}`;
+    let deliveries = 0;
+    const env = { MEDIA: status === null ? undefined : {
+      idFromName: value => value,
+      get: () => ({ fetch: async () => {
+        deliveries++;
+        const saved = await state.storage.get(key);
+        assert.equal(saved.status, "failed");
+        assert.equal(saved.preparation_failure_pending, true);
+        assert.ok(saved.preparation_failure_deadline > Date.now());
+        return new Response(null, { status });
+      } }),
+    } };
+    await state.storage.put(key, { status: "delivered", command: { command_id: commandID,
+      type: "prepare_dial", call: { call_uuid: crypto.randomUUID(), call_id: "test", generation: 1 } } });
+    const earlier = Date.now() + 100;
+    await state.storage.setAlarm(earlier);
+    const commands = new DeviceCommandSession(state, env);
+    await commands.completeCommand({ command_id: commandID, status: "failed", error: "call_busy" });
+    const record = await state.storage.get(key);
+    if (status === 503) {
+      assert.equal(state.storage.alarmAt, earlier);
+      const deadline = record.preparation_failure_deadline;
+      assert.equal(record.preparation_failure_pending, true);
+      await commands.completeCommand({ command_id: commandID, status: "failed", error: "call_busy" });
+      assert.equal(record.preparation_failure_deadline, deadline);
+      record.preparation_failure_deadline = Date.now() - 1;
+    }
+    const attempts = deliveries;
+    await new DeviceCommandSession(state, env).alarm();
+    assert.equal(deliveries, attempts);
+    assert.equal(record.preparation_failure_stopped, true);
+    assert.equal(record.preparation_failure_pending, undefined);
+    assert.equal(state.storage.alarmAt, null);
+    await commands.completeCommand({ command_id: commandID, status: "failed", error: "call_busy" });
+    assert.equal(deliveries, attempts);
+  }
+});
+
+test("expired preparation and Android expiry rejection deliver a fixed timeout reason", async () => {
+  for (const source of ["alarm", "flush", "availability", "android"]) {
+    const state = new MemoryCommandState();
+    const commandID = crypto.randomUUID();
+    const key = `command:${commandID}`;
+    const messages = [];
+    const env = { MEDIA: { idFromName: value => value, get: () => ({ fetch: async (url, options) => {
+      messages.push(JSON.parse(options.body));
+      return new Response(null, { status: 202 });
+    } }) } };
+    const record = { status: "pending", expires_at_ms: Date.now() - 1, command: { command_id: commandID,
+      type: "prepare_dial", call: { call_uuid: crypto.randomUUID(), call_id: "expired", generation: 1,
+        preparation_expires_at: new Date(Date.now() - 1).toISOString() } } };
+    await state.storage.put(key, record);
+    const commands = new DeviceCommandSession(state, env);
+    if (source === "alarm") await commands.alarm();
+    if (source === "flush") await commands.flushPending(new MemoryMediaSocket("agent"));
+    if (source === "availability") await commands.mediaCommandAvailable(key, record);
+    if (source === "android") await commands.completeCommand({ command_id: commandID,
+      status: "failed", error: "Cloud command expired" });
+    assert.equal(messages.length, 1, source);
+    assert.equal(messages[0].reason, "preparation_timeout", source);
+    assert.equal((await state.storage.get(key)).preparation_failure_delivered, true);
+  }
+});
