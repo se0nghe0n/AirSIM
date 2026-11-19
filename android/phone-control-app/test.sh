@@ -100,6 +100,8 @@ compile_test "$OUT" "" \
   "$ROOT"/src/com/airsim/phonecontrol/CrashReportSharePayload.java \
   "$ROOT"/src/com/airsim/phonecontrol/AgentCommand.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallRepository.java \
+  "$ROOT"/src/com/airsim/phonecontrol/PreparationFailure.java \
+  "$ROOT"/test/com/airsim/phonecontrol/PreparationFailureTests.java \
   "$ROOT"/src/com/airsim/phonecontrol/CloudAnswerReplayPolicy.java \
   "$ROOT"/src/com/airsim/phonecontrol/CallLifecycleConflict.java \
   "$ROOT"/src/com/airsim/phonecontrol/DefaultCallAccount.java \
@@ -139,6 +141,7 @@ compile_test "$OUT" "$OUT" \
   "$ROOT"/src/com/airsim/phonecontrol/AndroidAgentIdentity.java \
   "$ROOT"/test/com/airsim/phonecontrol/AndroidAgentIdentityTests.java
 sh "$ROOT/verify-io-api.sh" "$OUT"
+"$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.PreparationFailureTests
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.CoreTests
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.NotificationUpdateGateTests
 "$JAVA" -cp "$(with_stdlib "$OUT")" com.airsim.phonecontrol.CallRepositoryTests

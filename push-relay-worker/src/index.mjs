@@ -607,7 +607,7 @@ export class DeviceCommandSession {
       if (record?.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) {
         return jsonResponse(400, { error: "invalid call history result" });
       }
-      const updated = await this.completeCommand(value);
+      const updated = await this.completeCommand(value, request.headers.get("x-airsim-preparation-aborted") === "true");
       return updated ? jsonResponse(202, { received: true }) : jsonResponse(404, { error: "command not found" });
     }
     return jsonResponse(404, { error: "not found" });
@@ -643,25 +643,38 @@ export class DeviceCommandSession {
     if (availability.remote_audio_available) return true;
     record.status = "failed";
     record.remote_audio_reason = availability.remote_audio_reason;
-    record.error = "Remote call audio is unavailable; use the Android phone for this call.";
+    record.error = record.command?.type === "prepare_dial" ? availability.remote_audio_reason
+      : "Remote call audio is unavailable; use the Android phone for this call.";
     record.completed_at_ms = Date.now();
     record.completed_at = new Date(record.completed_at_ms).toISOString();
     await this.storage.put(key, record);
+    await this.deliverPreparationFailure(key, record);
     return false;
   }
 
-  async completeCommand(value) {
+  async completeCommand(value, preparationAborted = false) {
     const key = `command:${value.command_id.toLowerCase()}`;
     const record = await this.storage.get(key);
     if (!record) return false;
     if (record.command?.type === "call_history" && !validCallHistoryCompletion(value, record.command.limit)) return false;
-    if (["completed", "failed", "expired"].includes(record.status)) return true;
+    if (["completed", "failed", "expired"].includes(record.status)) {
+      if (preparationAborted && record.command?.type === "prepare_dial") {
+        record.preparation_failure_delivered = true;
+        delete record.preparation_failure_pending;
+        await this.storage.put(key, record);
+        return true;
+      }
+      await this.deliverPreparationFailure(key, record);
+      return true;
+    }
     if (record.command?.type === "prepare_dial" && value.status === "completed" && value.result?.prepared === true) {
       record.prepared = true;
       await this.storage.put(key, record);
       return true;
     }
     record.status = value.status;
+    if (preparationAborted && record.command?.type === "prepare_dial")
+      record.preparation_failure_delivered = true;
     record.completed_at_ms = Date.now();
     record.completed_at = new Date().toISOString();
     if (value.status === "completed" && value.result && typeof value.result === "object") {
@@ -671,9 +684,30 @@ export class DeviceCommandSession {
       record.error = stringValue(value.error).slice(0, 1_024) || "Agent command failed";
     }
     await this.storage.put(key, record);
+    await this.deliverPreparationFailure(key, record);
     await this.propagateLinkedCompletion(record);
     await this.scheduleNextPendingAlarm();
     return true;
+  }
+
+  async deliverPreparationFailure(key, record) {
+    if (record.command?.type !== "prepare_dial" || record.status !== "failed" || record.preparation_failure_delivered) return;
+    record.preparation_failure_pending = true;
+    await this.storage.put(key, record);
+    await this.storage.setAlarm(Date.now() + 1000);
+    try {
+      const call = record.command.call;
+      const stub = this.env.MEDIA.get(this.env.MEDIA.idFromName(call.call_uuid.toLowerCase()));
+      const response = await stub.fetch("https://media.internal/preparation-failed", { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({
+          callUUID: call.call_uuid, callID: call.call_id, generation: call.generation,
+          commandID: record.command.command_id, deviceID: record.device_id,
+          reason: record.error }) });
+      if (!response.ok) return;
+      record.preparation_failure_delivered = true;
+      delete record.preparation_failure_pending;
+      await this.storage.put(key, record);
+    } catch {}
   }
 
   async propagateLinkedCompletion(record) {
@@ -710,7 +744,7 @@ export class DeviceCommandSession {
           record.completed_at_ms = now;
           record.completed_at = new Date(now).toISOString();
           await this.storage.put(key, record);
-        } else if (now - (record.completed_at_ms || now) > 10 * 60_000) {
+        } else if (!record.preparation_failure_pending && now - (record.completed_at_ms || now) > 10 * 60_000) {
           await this.storage.delete(key);
         }
         continue;
@@ -733,6 +767,7 @@ export class DeviceCommandSession {
     const now = Date.now();
     const agents = this.state.getWebSockets("agent");
     for (const [key, record] of records) {
+      if (record.preparation_failure_pending) await this.deliverPreparationFailure(key, record);
       if (!["pending", "delivered"].includes(record?.status)) continue;
       if (!Number.isFinite(record.expires_at_ms) || record.expires_at_ms <= now) {
         record.status = "expired";
@@ -813,12 +848,13 @@ export class DeviceCommandSession {
     if (typeof this.storage.setAlarm !== "function") return;
     const records = await this.storage.list({ prefix: "command:" });
     const pending = [...records.values()].filter((record) =>
-      ["pending", "delivered"].includes(record?.status));
+      ["pending", "delivered"].includes(record?.status) || record.preparation_failure_pending);
     if (pending.length === 0) {
       if (typeof this.storage.deleteAlarm === "function") await this.storage.deleteAlarm();
       return;
     }
     const next = pending.reduce((minimum, record) => {
+      if (record.preparation_failure_pending) return Math.min(minimum, Date.now() + 1000);
       const retries = Math.max(0, Number(record.retry_count || 0));
       const delays = [1_000, 2_000, 4_000, 8_000];
       const candidate = Math.min(
@@ -1047,6 +1083,22 @@ export class CallMediaSession {
     if (request.method === "POST" && new URL(request.url).pathname === "/terminal") {
       return this.receiveTerminal(await readJSON(request));
     }
+    if (request.method === "POST" && new URL(request.url).pathname === "/preparation-failed") {
+      const value = await readJSON(request);
+      if (!UUID_PATTERN.test(value.callUUID || "") || !UUID_PATTERN.test(value.commandID || "") ||
+          !nonEmpty(value.callID) || !Number.isSafeInteger(value.generation) || value.generation <= 0) {
+        return jsonResponse(400, { error: "invalid preparation identity" });
+      }
+      if (this.preDial && ["callUUID", "callID", "generation", "commandID"].some(key => this.preDial[key] !== value[key])) {
+        return jsonResponse(409, { error: "preparation identity mismatch" });
+      }
+      if (!this.preDial) this.preDial = { ...value, phase: "preparing" };
+      const reasons = new Set(["call_busy", "default_dialer_required", "media_unavailable", "invalid_preparation",
+        "reservation_replayed", "reservation_storage_failed", "pre_dial_unavailable", "agent_unavailable",
+        "agent_media_unavailable", "pre_dial_timeout", "preparation_timeout", "pre_dial_cancelled"]);
+      await this.abortPreDial(reasons.has(value.reason) ? value.reason : "pre_dial_unavailable", false);
+      return jsonResponse(202, { received: true });
+    }
     if (request.method === "POST" && new URL(request.url).pathname === "/cancel-preparation") {
       const value = await readJSON(request);
       if (!UUID_PATTERN.test(value.callUUID || "") || !nonEmpty(value.callID) ||
@@ -1124,6 +1176,7 @@ export class CallMediaSession {
     if (role === "agent") await this.flushPendingControls(server);
     this.broadcastStatus("peer_connected", role);
     this.sendPreDialPeerReady();
+    if (this.preDial?.phase === "aborted") this.sendPreDialStatus("pre_dial_aborted", { reason: this.preDial.reason });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -1236,16 +1289,16 @@ export class CallMediaSession {
     }
   }
 
-  async abortPreDial(reason) {
+  async abortPreDial(reason, completeCommand = true) {
     if (!this.preDial || this.preDial.phase === "committed" || this.preDial.phase === "aborted") return;
     this.preDial = { ...this.preDial, phase: "aborted", reason };
     this.clearNegotiation();
     await this.state.storage.put("preDial", this.preDial);
     this.sendPreDialStatus("pre_dial_aborted", { reason });
-    if (this.env.COMMANDS && this.preDial.deviceID) {
+    if (completeCommand && this.env.COMMANDS && this.preDial.deviceID) {
       const stub = this.env.COMMANDS.get(this.env.COMMANDS.idFromName(this.preDial.deviceID));
       await stub.fetch("https://commands.internal/complete", { method: "POST",
-        headers: { "content-type": "application/json" }, body: JSON.stringify({
+        headers: { "content-type": "application/json", "x-airsim-preparation-aborted": "true" }, body: JSON.stringify({
           command_id: this.preDial.commandID, status: "failed", error: reason }) });
     }
   }

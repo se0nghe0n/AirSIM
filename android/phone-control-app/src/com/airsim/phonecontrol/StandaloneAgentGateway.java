@@ -177,7 +177,7 @@ final class StandaloneAgentGateway {
                 StandaloneCloudMediaManager.get(context).prepareOutgoing(command);
                 output.put("status", "completed").put("result", new JSONObject().put("prepared", true));
             } catch (Exception error) {
-                output.put("status", "failed").put("error", "pre_dial_unavailable");
+                output.put("status", "failed").put("error", PreparationFailure.reason(error));
             }
             return rememberCommand(commandKey, output);
         }

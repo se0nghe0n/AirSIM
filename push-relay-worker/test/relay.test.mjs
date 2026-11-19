@@ -3438,3 +3438,76 @@ test("committed Android acceptance completes preparation with iOS-compatible res
     generation:3,command_id:relay.preDial.commandID}));
   assert.deepEqual(completion.result,{dialing:true,android_confirmed:true});
 });
+
+test("Android preparation rejection persists before media sockets and survives restart without redial", async () => {
+  const env = testEnvironment(); env.COMMANDS = new MemoryCommandNamespace(env); env.MEDIA = new MemoryMediaNamespace();
+  await enableReadyMedia(env);
+  const commandID = crypto.randomUUID();
+  const payload = { device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: commandID, type: "prepare_dial", number: "10086", media_transport: "webrtc" };
+  const accepted = await (await worker.fetch(post("/v1/commands/enqueue", payload), env)).json();
+  const commands = env.COMMANDS.session(registration.device_id);
+  const completion = await worker.fetch(post("/v1/commands/complete", {
+    device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: commandID, status: "failed", error: "call_busy" }), env);
+  assert.equal(completion.status, 202);
+  const { session } = env.MEDIA.recreate(accepted.call.call_uuid);
+  await session.ready;
+  assert.equal(session.preDial.phase, "aborted");
+  assert.equal(session.preDial.reason, "call_busy");
+  assert.equal(session.preDial.commandID, commandID);
+  const duplicate = await (await worker.fetch(post("/v1/commands/enqueue", payload), env)).json();
+  assert.equal(duplicate.status, "failed");
+  assert.equal(duplicate.call, undefined);
+  await commands.completeCommand({ command_id: commandID, status: "completed", result: { prepared: true } });
+  assert.equal((await commands.storage.get(`command:${commandID}`)).status, "failed");
+  const iphone = new MemoryMediaSocket("iphone");
+  iphone.attachment = { ...iphone.attachment, callUUID: accepted.call.call_uuid, generation: accepted.call.generation };
+  session.state.sockets.push(iphone);
+  await session.webSocketMessage(iphone, JSON.stringify({ action: "reserve_dial" }));
+  assert.equal(JSON.parse(iphone.sent.at(-1)).reason, "call_busy");
+});
+
+test("preparation failure bridge retries durably and cannot abort a different or committed call", async () => {
+  const env = testEnvironment(); env.COMMANDS = new MemoryCommandNamespace(env); env.MEDIA = new MemoryMediaNamespace();
+  await enableReadyMedia(env);
+  const commandID = crypto.randomUUID();
+  const accepted = await (await worker.fetch(post("/v1/commands/enqueue", {
+    device_id: registration.device_id, device_secret: registration.device_secret,
+    command_id: commandID, type: "prepare_dial", number: "10086", media_transport: "webrtc" }), env)).json();
+  const commands = env.COMMANDS.session(registration.device_id);
+  const media = env.MEDIA;
+  env.MEDIA = { idFromName: x => x, get: () => ({ fetch: async () => { throw new Error("offline"); } }) };
+  await commands.completeCommand({ command_id: commandID, status: "failed", error: "media_unavailable" });
+  assert.equal((await commands.storage.get(`command:${commandID}`)).preparation_failure_pending, true);
+  env.MEDIA = media;
+  const restored = new DeviceCommandSession(commands.state, env);
+  await restored.alarm();
+  assert.equal((await restored.storage.get(`command:${commandID}`)).preparation_failure_delivered, true);
+  const { session } = media.entry(accepted.call.call_uuid);
+  const identity = { callUUID: accepted.call.call_uuid, callID: accepted.call.call_id,
+    generation: accepted.call.generation, commandID, reason: "call_busy" };
+  const failure = body => session.fetch(new Request("https://media.internal/preparation-failed", {
+    method: "POST", body: JSON.stringify(body) }));
+  assert.equal((await failure({ ...identity, commandID: crypto.randomUUID() })).status, 409);
+  assert.equal(session.preDial.reason, "media_unavailable");
+  session.preDial.phase = "committed";
+  assert.equal((await failure(identity)).status, 202);
+  assert.equal(session.preDial.phase, "committed");
+});
+
+test("late preparation rejection immediately notifies connected owner and prevents transport commit", async () => {
+  const { relay, iphone, agent } = await strictPreDialSession();
+  const preparation = relay.preDial;
+  const response = await relay.fetch(new Request("https://media.internal/preparation-failed", {
+    method: "POST", body: JSON.stringify({ ...preparation, reason: "default_dialer_required" }) }));
+  assert.equal(response.status, 202);
+  const failure = JSON.parse(iphone.sent.at(-1));
+  assert.equal(failure.status, "pre_dial_aborted");
+  assert.equal(failure.reason, "default_dialer_required");
+  assert.equal(failure.command_id, preparation.commandID);
+  assert.equal(failure.call_uuid, preparation.callUUID);
+  await relay.webSocketMessage(iphone, signaling("webrtc_transport_ready"));
+  await relay.webSocketMessage(agent, signaling("webrtc_transport_ready"));
+  assert.equal(committedDials(agent).length, 0);
+});
