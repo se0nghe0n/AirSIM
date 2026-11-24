@@ -117,6 +117,13 @@ Settings considered but not yet enabled. Revisit them later.
   `AirSIMTests` opt-outs above; unsigned device `build-for-testing` now passes too,
   and simulator deduplicated warnings are unchanged across the fix (13 unique
   `file:line` warning lines before and after).
+- Mac (Designed for iPad): App Store Connect flagged build 26.47.1 (96) on 2026-11-19
+  with ITMS-91305, because the Live Activity extension's `arm64e` slice cannot launch
+  on Apple silicon Macs below macOS 26.5 while the app declared no macOS minimum.
+  `LSMinimumSystemVersion` = `26.5` in `AirSIM/Info.plist` states that minimum and
+  keeps the slice; the key only applies to the iPhone app running on a Mac. Not
+  confirmed until App Store Connect processes the next upload without the warning.
+  Remove the key only together with the extension's pointer authentication.
 - `AirSIMLiveActivityExtension` hardening is an owner-approved override outside the
   skill's supported product types: `enhanced-security.md` lists applications, XPC
   services, driver/system extensions, and tools, and says to skip other app
