@@ -91,7 +91,7 @@ SOFTWARE.
 
 
 ========================================================================
-swift-collections 1.6.0
+swift-collections 1.7.6
 https://github.com/apple/swift-collections
 
 
@@ -397,7 +397,7 @@ SOFTWARE.
 
 
 ========================================================================
-swift-dependencies 1.17.1
+swift-dependencies 1.17.2
 https://github.com/pointfreeco/swift-dependencies
 
 
@@ -455,7 +455,7 @@ SOFTWARE.
 
 
 ========================================================================
-swift-issue-reporting 2.1.0
+swift-issue-reporting 2.1.2
 https://github.com/pointfreeco/swift-issue-reporting
 
 
